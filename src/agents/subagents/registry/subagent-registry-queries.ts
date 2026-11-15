@@ -61,6 +61,7 @@ export function listRunsForRequesterFromRuns(
     requesterStorePath?: string | null;
   },
   candidates: Iterable<SubagentRunRecord> = runs.values(),
+  preparedLatest?: LatestSubagentRunReadIndex,
 ): SubagentRunRecord[] {
   const key = requesterSessionKey.trim();
   if (!key) {
@@ -79,7 +80,7 @@ export function listRunsForRequesterFromRuns(
   const latestRuns =
     options?.requesterSessionId === undefined
       ? undefined
-      : buildLatestSubagentRunReadIndexFromRuns(runs);
+      : (preparedLatest ?? buildLatestSubagentRunReadIndexFromRuns(runs));
 
   return [...candidates].filter(
     (entry) =>

@@ -218,6 +218,8 @@ export function prependOlderChatItems(
     facts: {
       ...facts,
       history,
+      hasContentBeforeProgress:
+        pageFacts.hasContentBeforeProgress === true || facts.hasContentBeforeProgress === true,
       indexedDividers: [
         ...pageFacts.indexedDividers.filter((message) => pageMessages.has(message)),
         ...facts.indexedDividers,

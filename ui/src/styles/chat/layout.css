@@ -560,11 +560,11 @@ openclaw-pending-session-create {
 .chat-virtual-sizer,
 .chat-virtual-block {
   transition-property: none;
+  width: 100%;
 }
 
 .chat-virtual-sizer {
   position: relative;
-  width: 100%;
 }
 
 .chat-thread-inner--virtual {
@@ -579,7 +579,6 @@ openclaw-pending-session-create {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
 }
 
 /* Browser flow preserves adjacency even when smooth scrolling skips a row's
@@ -592,18 +591,26 @@ openclaw-pending-session-create {
   display: flow-root;
   width: 100%;
   contain: content;
-}
 
-/* Small notice rows must enter at their real height, not the virtual estimate. */
-.chat-virtual-row:has(> .chat-notice) {
-  content-visibility: visible;
-  contain: none;
-}
+  /* WebKit restyles hidden parked subtrees that retain layout boxes.
+     Chromium needs those boxes for timely forecast paint. */
+  @supports (-webkit-nbsp-mode: space) {
+    &[data-prepared-row]:not([data-preparing-row]) {
+      display: none;
+    }
+  }
 
-.chat-virtual-row:focus-within {
-  /* Footer controls use a -4px block margin. Paint containment must clear
-     that overhang plus the 2px focus outline and its 3px offset. */
-  overflow-clip-margin: 10px;
+  /* Small notice rows must enter at their real height, not the virtual estimate. */
+  &:has(> .chat-notice) {
+    content-visibility: visible;
+    contain: none;
+  }
+
+  &:focus-within {
+    /* Footer controls use a -4px block margin. Paint containment must clear
+       that overhang plus the 2px focus outline and its 3px offset. */
+    overflow-clip-margin: 10px;
+  }
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {

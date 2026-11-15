@@ -775,8 +775,19 @@ node are omitted and reported in `unattributedSampleCount` and
 when such references are omitted or a size-capped summary replaces the tree.
 
 The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
-`truncated` is true and `summary` replaces `profile`. Summary entries combine
-identical call stacks and retain up to eight frames in leaf-first order. Repeated
+`truncated` is true and `summary` replaces `profile`. The same sanitized tree and
+samples are also saved as a Chrome DevTools-loadable `.heapprofile` under
+`<stateDir>/diagnostics/`; the response includes its `path` and `sizeBytes`.
+The file preserves all attributed samples and native node sizes, even when their
+rows do not fit in the inline summary. The existing omission of samples without a
+matching node still applies. Files are capped at 64 MiB, created with owner-only
+permissions, and retained until manually removed, like CPU profiles and heap
+snapshots. Insufficient disk space, write failure, cancellation, or an over-cap
+profile fails the capture; partial files are removed and cleanup failures are
+reported. Copy the file from the Gateway host to load it in DevTools' Memory panel.
+
+Summary entries combine
+identical call stacks and retain up to 32 frames in leaf-first order. Repeated
 recursive runs that fit those slots are collapsed, with `×N` on the last frame of
 the repeated run. Longer stacks retain the allocating leaf, the nearest omitted
 OpenClaw caller, and its outermost OpenClaw owner; `[...]` marks skipped frames.
@@ -923,8 +934,10 @@ include that delay; coverage and heap counters describe acquisition. These field
 are not an atomic process snapshot.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Warnings do not retire
-workers. Retirement requests are asynchronous, skip active work, and keep native
+including when diagnostic event collection is disabled. On constrained Node/Linux
+hosts, process memory usage at 80% of the limit also triggers retirement without
+changing diagnostic severity. Other warnings do not retire workers.
+Retirement requests are asynchronous, skip active work, and keep native
 close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.

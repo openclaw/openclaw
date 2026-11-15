@@ -42,7 +42,11 @@ import {
   type ResolvedClawHubSource,
 } from "./clawhub-source-artifact.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
-import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
+import {
+  clawHubTemplateRef,
+  isCanonicalClawHubPackageName,
+  isExactSemVer,
+} from "./schema-portability.js";
 
 export type { ClawHubTemplateCatalogPreview } from "./clawhub-preview-content.js";
 export { ClawHubSourceError };
@@ -134,8 +138,8 @@ function requirePublicTemplatePackage(
   const ownerHandle = detail.owner?.handle;
   if (
     !isPublicTemplatePackage(pkg) ||
-    pkg.name !== requestedName ||
     !matchesTemplatePublisher(pkg.name, ownerHandle) ||
+    (pkg.name !== requestedName && clawHubTemplateRef(pkg.name, ownerHandle) !== requestedName) ||
     (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== ownerHandle)
   ) {
     throw new ClawHubSourceError(
@@ -584,23 +588,26 @@ export async function withResolvedClawHubSource<T>(
     ) => Promise<T>;
   },
 ): Promise<{ value: T } & ClawHubTemplateTrust> {
-  const { packageName } = params.coordinate;
-  requireTemplateName(packageName);
+  const requestedName = params.coordinate.packageName;
+  requireTemplateName(requestedName);
   if (params.coordinate.version !== undefined) {
     requireExactVersion(params.coordinate.version);
   }
   // Exact releases can fetch independent metadata together; latest needs the catalog version first.
   const [detail, exactArtifact] = await Promise.all([
-    fetchClawHubPackageDetail({ ...params, name: packageName }),
+    fetchClawHubPackageDetail({ ...params, name: requestedName }),
     params.coordinate.version === undefined
       ? Promise.resolve(undefined)
       : fetchClawHubPackageArtifact({
           ...params,
-          name: packageName,
+          name: requestedName,
           version: params.coordinate.version,
         }),
   ]);
-  const pkg = requirePublicTemplatePackage(detail, packageName);
+  // `@publisher/slug` may name an unscoped package; exact-release identity, trust
+  // and archive checks all bind to the stored name.
+  const pkg = requirePublicTemplatePackage(detail, requestedName);
+  const packageName = pkg.name;
   const version = params.coordinate.version ?? pkg.latestVersion;
   if (!version) {
     throw new ClawHubSourceError(

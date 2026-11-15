@@ -86,3 +86,9 @@ export function formatHostExitCompletion(
     reason: failed ? "gateway.restart_close_failed" : (reason ?? "stop (process exit)"),
   };
 }
+
+export function combineShutdownFailures(error: unknown, startupFailure?: { error: unknown }) {
+  return startupFailure && startupFailure.error !== error
+    ? new AggregateError([startupFailure.error, error], "Gateway startup and close cleanup failed")
+    : error;
+}

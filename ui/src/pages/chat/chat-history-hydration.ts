@@ -33,7 +33,6 @@ import {
   acceptsHistoryResult,
   resetChatHistoryProjection,
   retireInitialChatSnapshot,
-  setChatError,
   setChatHistoryLoad,
   setChatHistoryRetrying,
 } from "./chat-history-state.ts";
@@ -182,7 +181,6 @@ export async function hydrateChatHistory(
     }
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
-    setChatError(state, null);
     const priorCursor = readChatHistoryCursor(state);
     const { captureHeldHistoryContinuity, readContinuousHeldHistory } =
       priorCursor && state.chatHistoryPagination.hasNewer

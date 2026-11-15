@@ -62,7 +62,6 @@ function preparedGroup(
           },
           options: {
             streamOptions: {},
-            workPreviews: new Map(),
             partDependencies: (part) => [part],
             renderGroupOptions: () => ({ showReasoning: false }),
             isWorkExpanded: () => false,

@@ -121,7 +121,7 @@ export type ChatHistoryPageParams = {
   pageCursor?: ChatHistoryPageCursor;
   continuity?: TranscriptReadContinuity;
   ignoreCliSessionImports?: boolean;
-  cliHistoryHomeDir?: string;
+  cliHistoryProjectsDir?: string;
 };
 
 type SessionHistoryTranscriptMeta = {

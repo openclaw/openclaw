@@ -5,7 +5,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { sendChat } from "./chat-flow-fixtures.test-support.ts";
 import { requireString } from "./chat-flow.test-support.ts";
-import { exactButton } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI composer predictions" });
@@ -50,7 +49,7 @@ suite.define(() => {
         const prediction = await gateway.waitForRequest("chat.predict");
         expect(prediction.params).toMatchObject({ runId });
         await gateway.resolveDeferred("chat.predict", { text: suggestion });
-        await expect.poll(() => ghost.textContent()).toBe(suggestion);
+        await expect.poll(() => ghost.textContent()).toContain(suggestion);
         expect(await textarea.inputValue()).toBe("");
         await textarea.focus();
         await textarea.press("Tab");
@@ -66,10 +65,45 @@ suite.define(() => {
         });
         await expect.poll(async () => (await gateway.getRequests("chat.predict")).length).toBe(2);
         await gateway.resolveDeferred("chat.predict", { text: suggestion });
-        await expect.poll(() => ghost.textContent()).toBe(suggestion);
+        await expect.poll(() => ghost.textContent()).toContain(suggestion);
         await page.setViewportSize({ width: 390, height: 844 });
-        await exactButton(page, "Use suggestion").click();
+        await textarea.blur();
+        const badge = ghost.locator(".agent-chat__composer-prediction-hint");
+        expect(await badge.textContent()).toBe("Tab to complete");
+        expect(await badge.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe(
+          "nowrap",
+        );
+        expect(
+          await ghost.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
+        ).toBe(true);
+        expect(
+          await page.getByRole("button", { name: "Use suggestion", exact: true }).count(),
+        ).toBe(0);
+        expect(
+          await page.getByRole("button", { name: "Dismiss suggestion", exact: true }).count(),
+        ).toBe(0);
+        await textarea.focus();
+        await textarea.press("Tab");
         await expect.poll(() => textarea.inputValue()).toBe(suggestion);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        await textarea.press("ControlOrMeta+z");
+        await expect.poll(() => textarea.inputValue()).toBe("");
+        for (const [nextRun, key] of [
+          ["dismiss-escape", "Escape"],
+          ["dismiss-typing", "x"],
+        ] as const) {
+          await gateway.deferNext("chat.predict");
+          await gateway.emitChatFinal({
+            runId: nextRun,
+            text: "You can continue with an example.",
+          });
+          await gateway.waitForRequest("chat.predict", { match: { runId: nextRun } });
+          await gateway.resolveDeferred("chat.predict", { text: suggestion });
+          await expect.poll(() => ghost.count()).toBe(1);
+          await textarea.press(key);
+          await expect.poll(() => ghost.count()).toBe(0);
+        }
+        expect(await textarea.inputValue()).toBe("x");
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       },
     );

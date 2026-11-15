@@ -712,20 +712,20 @@ Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex ag
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
-| Key                   | Value                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | `claude`                                                                                                                                                                                                      |
-| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
-| `output`              | `jsonl`                                                                                                                                                                                                       |
-| `input`               | `stdin`                                                                                                                                                                                                       |
-| `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
-| `sessionMode`         | `always`                                                                                                                                                                                                      |
-| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                       |
-| `imageArg`            | `@`                                                                                                                                                                                                           |
-| `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
+| Key                   | Value                                                                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`             | `claude`                                                                                                                                                                                                               |
+| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor` |
+| `output`              | `jsonl`                                                                                                                                                                                                                |
+| `input`               | `stdin`                                                                                                                                                                                                                |
+| `modelArg`            | `--model`                                                                                                                                                                                                              |
+| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                                      |
+| `sessionMode`         | `always`                                                                                                                                                                                                               |
+| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                                |
+| `imageArg`            | `@`                                                                                                                                                                                                                    |
+| `imagePathScope`      | `workspace`                                                                                                                                                                                                            |
+| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                          |
+| `systemPromptMode`    | `append`                                                                                                                                                                                                               |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
 `--exclude-dynamic-system-prompt-sections` after a bounded version check on the
@@ -936,8 +936,9 @@ that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for clean
 triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
-exceeds its deadline, OpenClaw refuses replacement, including from a later run.
-Check the cleanup error and the backend's remaining processes before retrying.
+exceeds its deadline, the run waiting for it fails with the cleanup error. The
+next run starts a new process; check `openclaw logs` and the backend's remaining
+processes if the error repeats.
 Command output and process exit alone do not confirm that descendants stopped.
 
 For `claude-cli`, the installed Claude Code process reads and refreshes its own native

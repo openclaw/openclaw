@@ -137,23 +137,25 @@ export class TranscriptReaderAnchor {
     const readerTop = element.getBoundingClientRect().top;
     const compensating = !this.positionOwned();
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
-    const rows = entries
-      .flatMap((entry) => {
-        const row = entry.target;
-        if (
-          !(row instanceof HTMLElement) ||
-          !row.isConnected ||
-          (row.dataset.preparedRow === "true" && row.dataset.preparingRow !== "true") ||
-          !element.contains(row)
-        ) {
-          return [];
-        }
-        const rect = row.getBoundingClientRect();
-        // Observer boxes can predate foreground layout. Read current geometry, including
-        // visibility, so a stale hidden/short box cannot poison the next delivery's baseline.
-        return rect.width ? [{ row, top: rect.top, height: readTranscriptRowHeight(row) }] : [];
-      })
-      .toSorted((left, right) => left.top - right.top);
+    const rows: { row: HTMLElement; top: number; height: number }[] = [];
+    for (const entry of entries) {
+      const row = entry.target;
+      if (
+        !(row instanceof HTMLElement) ||
+        !row.isConnected ||
+        (row.dataset.preparedRow === "true" && row.dataset.preparingRow !== "true") ||
+        !element.contains(row)
+      ) {
+        continue;
+      }
+      const rect = row.getBoundingClientRect();
+      // Observer boxes can predate foreground layout. Read current geometry, including
+      // visibility, so a stale hidden/short box cannot poison the next delivery's baseline.
+      if (rect.width) {
+        rows.push({ row, top: rect.top, height: readTranscriptRowHeight(row) });
+      }
+    }
+    rows.sort((left, right) => left.top - right.top);
     // Newly revealed rows can enter inside the viewport ahead of retained content.
     // Their first measurement preserves that content unless the reader reached native zero.
     const retainedIndex =

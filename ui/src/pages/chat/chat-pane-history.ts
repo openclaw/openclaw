@@ -384,7 +384,11 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
   }
 
   protected handleTranscriptHistoryIntent(event: Event): void {
-    const direction = this.historyInput.readBoundaryDirection(event, CHAT_HISTORY_PREFETCH_EDGE_PX);
+    const direction = this.historyInput.readBoundaryDirection(
+      event,
+      CHAT_HISTORY_PREFETCH_EDGE_PX,
+      this.transcript.scrollElement,
+    );
     if (
       !this.presented ||
       !this.visuallyPresented ||

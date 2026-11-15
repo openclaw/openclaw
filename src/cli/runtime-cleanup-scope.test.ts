@@ -1,16 +1,21 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as postgres from "../infra/postgres-sync/pool.js";
+import * as postgres from "../infra/postgres-sync/pool-state.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
 } from "../infra/runtime-worker-generation.js";
 import * as workers from "../infra/worker-native-lifecycle.js";
+import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import * as database from "../state/openclaw-state-db-cache.js";
+import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import * as lifecycle from "./gateway-cli/run-loop.test-support.js";
 import { withCliCommandCleanup, withCliProcessScope } from "./runtime-cleanup-scope.js";
 import { runCliDisposer, waitForPendingCliDisposers } from "./runtime-cleanup.js";
 
+const resetDatabase = database.closeOpenClawStateDatabaseAsync;
+const resetWorkers = workers.closeDefaultRetainedNativeWorkerSource;
 const closeDatabase = vi.spyOn(database, "closeOpenClawStateDatabaseAsync");
 const closeWorkers = vi.spyOn(workers, "closeDefaultRetainedNativeWorkerSource");
 const closePostgres = vi.spyOn(postgres, "closePostgresPool");
@@ -22,13 +27,28 @@ beforeEach(() => {
   closeDatabase.mockReset().mockImplementation(async () => void events.push("database"));
   closeWorkers.mockReset().mockImplementation(async () => void events.push("workers"));
   closePostgres.mockReset().mockImplementation(async () => void events.push("postgres"));
+  resolveGlobalSingleton(
+    STATE_DATABASE_LIFECYCLE_KEY,
+    () => ({}),
+    () => closeDatabase(),
+    "shared-state",
+  );
+  resolveGlobalSingleton(
+    NATIVE_WORKER_LIFETIMES_KEY,
+    () => ({}),
+    () => closeWorkers(),
+  );
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.mocked(console.error).mockRestore();
 });
-afterAll(() => vi.restoreAllMocks());
+afterAll(() => {
+  vi.restoreAllMocks();
+  resolveGlobalSingleton(STATE_DATABASE_LIFECYCLE_KEY, () => ({}), resetDatabase, "shared-state");
+  resolveGlobalSingleton(NATIVE_WORKER_LIFETIMES_KEY, () => ({}), resetWorkers);
+});
 
 const runCommand = <T>(run: () => T | Promise<T>) =>
   withCliProcessScope(() =>

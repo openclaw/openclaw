@@ -220,9 +220,14 @@ schema 35 does not remove the rollback requirement.
 
 Workspace maintenance advances `workspace.manifest.sweepEpoch` in the existing
 `config_machine_state` owner, marks every accepted and pending checkpoint root
-in one read snapshot, and deletes unreachable packs and path sets older than the
-preceding epoch in bounded batches. Writers stamp the current epoch when
-preparing or reusing content. A writer stalled for more than an epoch can lose
+using reads of at most 256 rows, and deletes unreachable packs and path sets older
+than the preceding epoch in bounded batches. SQLite releases each read between
+pages so maintenance does not pin a checkpoint for the whole graph walk. Immutable
+pack links and the epoch check protect publications between pages; deletion
+rechecks the epoch in its writer transaction. Candidate pages exclude bounded
+ranges of known-live indexed digests before reading epochs, avoiding large payload
+overflow pages for live packs. Writers stamp the current epoch when preparing or
+reusing content. A writer stalled for more than an epoch can lose
 unaccepted packs. Preparation returns its sweep epoch; acceptance checks the
 oldest preparation epoch inside the writer transaction and refuses an expired
 preparation before publishing any root or checkpoint. Retry the session to
@@ -3233,11 +3238,43 @@ distinguish this version phase from any separate maintenance or update backup.
 PostgreSQL keeps its existing exact-predecessor backup owner; this declaration
 does not narrow that engine's backup scope.
 
-Old rows retain their fallback cost until an ordinary write or rebuild covers
-them. A recent 512-event window can become covered after 512 ordinary, well-formed
-appends. Malformed rows retain their fallback, and old dependency candidates can
-remain uncovered indefinitely. A background backfill is a separate storage and
-lifecycle decision.
+After readiness and restart recovery, the Gateway's idle maintenance scheduler
+backfills historical SQLite facts in its existing agent database worker. It
+waits for the existing startup-methods barrier to admit recovered inputs, then
+for the RestartRecovery lane to empty before each batch. It
+prioritizes sessions updated within seven days, largest active path first, then
+older sessions by size, and finishes each session before advancing. Background
+writer admission waits for the foreground FIFO to drain; active runs and other
+background work do not prevent progress. The delay after each batch is at least
+250 ms and twenty times its admitted publication execution, including worker
+preparation and reply delivery and bounded below by the native transaction duration.
+Waiting behind foreground work is excluded. Index-only discovery receives the same
+execution-time charge. Lock contention doubles a
+separate backoff up to five seconds; a clean batch resets it. One worker client
+serves the pass and closes on completion or cancellation. Drain cancels pending work and permits only an already
+admitted bounded transaction to settle. This work never runs during database
+open, migration, or readiness.
+
+A foreground operation arriving after background admission can wait for its whole
+publication, including preparation and reply delivery. An indivisible cold payload
+read, commit, or runtime pause can exceed the soft time budget; the following delay
+limits average writer duty, not the duration of an individual foreground wait.
+
+Each transaction reads the current active rows and derives facts with the same
+helpers as ordinary writers. Cold, rebuilding, and malformed rows retain their
+fallback. Derived-only fills preserve session snapshot tokens while advancing
+database-wide write tracking; actual transcript mutations retain their normal
+session invalidation. Progress comes from the companion primary key: restart scans bounded
+active identity ranges but does not reread covered payloads. No progress table,
+schema change, or new setting is introduced. Progress logs report filled and
+skipped rows, visited sessions, payload bytes, maximum native batch and admitted
+execution durations, and lock contention. A completed pass can leave skipped rows or rows invalidated behind
+its cursor unknown; ordinary writers or the next restart can cover them.
+
+PostgreSQL keeps ordinary writer population and the existing fallback. Its
+background pass reports that it is unsupported: SQLite's immediate transaction
+excludes concurrent payload changes, whereas PostgreSQL would require a separately
+validated source-row locking protocol.
 
 Older binaries refuse agent41 stores: their writers cannot keep these facts
 current, so an additive-table reader exception is unsafe. With writers stopped,
@@ -3371,3 +3408,44 @@ unchanged content hash. Earlier
 editors cannot write to a different same-name file, even with identical bytes.
 Older runtimes do not implement message-qualified prior-file access or this new
 adoption behavior; original files remain in their source without migration.
+
+## Scheduled run parent receipts
+
+A scheduled run whose job is linked to a parent conversation and runs as a
+child (`isolated` or `current` session target) executes in its own hidden
+`:run:` row. The run resolves its memory audience through its admitted parent,
+but sessions it spawns walk their spawn lineage to the run row, which is not the
+parent. Cron run preparation therefore records one private
+`scheduledMemoryParent` relation in that row's existing `entry_json`: the
+parent's session key, session ID, lifecycle revision (when the link recorded
+one), and the occurrence's admitted owner bit.
+
+- **Writer:** only the cron run-continuation write that prepares the `:run:`
+  row, once per attempt, before the agent runs. A retried attempt whose
+  occurrence has no parent clears it. In-session runs execute on their parent's
+  own row and detached runs have no parent, so neither records one.
+- **Not settable elsewhere:** `sessions.create` and `sessions.patch` are closed
+  schemas without this field, spawn parameters never reach it, and the plugin
+  session-store API strips it from reads and writes. The slot key is reserved.
+- **Reader:** memory-audience resolution follows the receipt only from a
+  spawned session's lineage, and only when both the spawn and the occurrence
+  were owner-attributed. The parent hop must still match the recorded session
+  ID and lifecycle revision, so a parent reset or replacement denies the
+  spawned session. Every other combination resolves from the run row exactly
+  as before.
+- **Lifetime:** the relation lives as long as the run row: cron removes the
+  row once the run and its spawned sessions settle, and otherwise session
+  maintenance prunes it after `cron.sessionRetention` (24 hours by default).
+  Reset, rollover, and carry-over never copy it; rotating the row through the
+  public session writer clears it.
+- **Upgrade:** existing run rows and sessions spawned before the upgrade carry
+  no receipt and an earlier non-owner spawn bit, so they keep resolving from
+  the run row. The next occurrence of an existing linked job records the
+  receipt.
+- **Downgrade:** older Gateways keep the unknown optional field but ignore it.
+  A session spawned after this change already recorded the occurrence's owner
+  bit, so until its run row expires it resolves from the run row's copied chat
+  type: owner-private for a direct-chat parent, without the parent-reset
+  check. Sessions spawned by the older Gateway behave as before this change.
+
+There is no SQL migration, table, column, index, or schema-version change.

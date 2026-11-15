@@ -16,6 +16,16 @@ const COPILOT_RUNTIME_PACKAGE = /^@github\/copilot-sdk-(?:darwin|linux|linuxmusl
 const LICENSE = /^(?:licen[cs]e|copying|notice)(?:[.-].*)?$/i;
 const slash = (filename) => filename.split(path.sep).join("/");
 
+function staticString(node) {
+  if (node?.type === "Literal" && typeof node.value === "string") {
+    return node.value;
+  }
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0].value.cooked ?? undefined;
+  }
+  return undefined;
+}
+
 function isCommonJsEntry(filename, packageType) {
   return filename.endsWith(".cjs") || (filename.endsWith(".js") && packageType !== "module");
 }
@@ -533,11 +543,11 @@ export function createStandaloneNativeAdapter({
       return undefined;
     }
     const [specifier, parent, conditions] = node.arguments;
+    const request = staticString(specifier);
     const url = parent?.arguments?.[0];
     const values = conditions?.arguments?.[0];
     if (
-      specifier.type !== "Literal" ||
-      typeof specifier.value !== "string" ||
+      request === undefined ||
       parent?.type !== "NewExpression" ||
       parent.callee.type !== "Identifier" ||
       parent.callee.name !== "URL" ||
@@ -554,15 +564,15 @@ export function createStandaloneNativeAdapter({
       bindings.isBound(conditions.callee) ||
       conditions.arguments.length !== 1 ||
       values?.type !== "ArrayExpression" ||
-      values.elements.some((value) => value?.type !== "Literal" || typeof value.value !== "string")
+      values.elements.some((value) => staticString(value) === undefined)
     ) {
       return undefined;
     }
     try {
       const resolved = moduleResolve(
-        specifier.value,
+        request,
         pathToFileURL(filename),
-        new Set(values.elements.map((value) => value.value)),
+        new Set(values.elements.map(staticString)),
       );
       if (resolved.protocol !== "file:") {
         return undefined;

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import {
@@ -17,7 +18,7 @@ import {
   CommandProcessCleanupError,
   readCommandProcessFailure,
 } from "../../process/exec-result.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSet } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
 import { fetchRemoteDefault } from "./base-fetch.js";
@@ -49,6 +50,16 @@ const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
   Symbol.for("openclaw.worktreeRemoteDefaults"),
 );
 const BASE_FRESHNESS_MS = 30_000;
+const baseObservers = resolveGlobalSet<(repoRoot: string, commit: string) => void>(
+  Symbol.for("openclaw.worktreeBaseObservers"),
+  "shared-state",
+);
+
+/** Background work may retire an obsolete base; accepted foreground requests keep theirs. */
+export function observeWorktreeBase(observer: (repoRoot: string, commit: string) => void) {
+  baseObservers.add(observer);
+  return { [Symbol.dispose]: () => baseObservers.delete(observer) };
+}
 
 export class InvalidWorktreeBaseRefError extends Error {
   constructor(options?: ErrorOptions) {
@@ -145,10 +156,13 @@ export async function resolveWorktreeBase(
   }
   const options = {
     signal,
-    beforeRun: () => {
-      signal?.throwIfAborted();
-      assertCurrent?.();
-    },
+    beforeRun: composeSessionSourceAssertion(
+      assertCurrent ? [assertCurrent] : [],
+      (assertSource) => {
+        signal?.throwIfAborted();
+        assertSource();
+      },
+    ),
     env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
   };
   const commonDir = await fs.realpath(
@@ -197,18 +211,21 @@ export async function withWorktreeBasePreparation<T>(
     let waiting: ReturnType<typeof startWorktreeWait> | undefined;
     const options = {
       signal,
-      beforeRun: () => {
-        try {
-          if (!active) {
-            throw new Error("Worktree base preparation is closed");
+      beforeRun: composeSessionSourceAssertion(
+        assertCurrent ? [assertCurrent] : [],
+        (assertSource) => {
+          try {
+            if (!active) {
+              throw new Error("Worktree base preparation is closed");
+            }
+            options.signal?.throwIfAborted();
+            assertSource();
+          } catch (error) {
+            retirement = { error };
+            throw error;
           }
-          options.signal?.throwIfAborted();
-          assertCurrent?.();
-        } catch (error) {
-          retirement = { error };
-          throw error;
-        }
-      },
+        },
+      ),
       env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
     };
     const settled = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
@@ -263,6 +280,9 @@ export async function withWorktreeBasePreparation<T>(
               options.beforeRun();
               if (base.fetchSucceeded) {
                 started.refreshedAt = Date.now();
+              }
+              for (const observer of baseObservers) {
+                observer(repository.repoRoot, base.commit);
               }
               return base;
             }),

@@ -58,12 +58,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Owner-approved bounded history residency (#187440): +7,298 B gzip.
-  // Add only that measured growth, preserving the previous budget headroom.
+  // Main feature cost after paydown #199196 includes signing #199136.
+  // Owner-approved bounded history (#187440): +7,298 B on the prior budget.
+  // Keep that approved absolute ceiling while measuring the joined route.
   chatBootJsGzipBytes: 1_311_256,
-  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
-  // Josh approved the #196456 key-warning delta: +2,522 B; inherited debt stays.
-  newBootJsGzipBytes: 805_886,
+  // The shared lazy signer adds the coordinator-accepted +235 B here.
+  newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

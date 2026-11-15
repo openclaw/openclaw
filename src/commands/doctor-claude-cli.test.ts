@@ -1,6 +1,5 @@
-import childProcess from "node:child_process";
+import * as childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,6 +8,16 @@ import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: vi.fn(actual.spawnSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+const actualChildProcess =
+  await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
 const resolveCliBackendConfigMock = vi.hoisted(() => vi.fn());
 const resolveModelAgentRuntimeMetadataMock = vi.hoisted(() =>
@@ -39,6 +48,7 @@ let homeDir: string;
 let workspaceDir: string;
 let commandPath: string;
 beforeEach(() => {
+  vi.mocked(childProcess.spawnSync).mockReset().mockImplementation(actualChildProcess.spawnSync);
   const root = tempDirs.make("openclaw-doctor-claude-cli-");
   homeDir = path.join(root, "home");
   workspaceDir = path.join(root, "workspace");
@@ -58,9 +68,7 @@ function authResult(loggedIn: boolean) {
 }
 
 function mockClaudeAuthentication(loggedIn: boolean) {
-  const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValue(authResult(loggedIn));
-  syncBuiltinESMExports();
-  return spawn;
+  return vi.mocked(childProcess.spawnSync).mockReturnValue(authResult(loggedIn));
 }
 
 function noteText(noteFn: ReturnType<typeof vi.fn>, index = 0): string {
@@ -88,7 +96,6 @@ afterEach(() => {
     .mockReturnValue({ id: "openclaw", source: "implicit" });
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  syncBuiltinESMExports();
   clearHealthChecksForTest();
 });
 
@@ -155,9 +162,9 @@ it.each([
   { scenario: "an inconclusive response", result: { ...authResult(true), stdout: "{}" } },
   { scenario: "an unsuccessful status", result: { ...authResult(true), status: 1 } },
 ])("does not report a logged-out login for $scenario", ({ result }) => {
-  vi.spyOn(childProcess, "spawnSync").mockReturnValue(result);
-  syncBuiltinESMExports();
+  const spawn = vi.mocked(childProcess.spawnSync).mockReturnValue(result);
   const body = checkHealth();
+  expect(spawn).toHaveBeenCalledOnce();
   expect(body).toContain("Claude auth: status check unavailable.");
   expect(body).toContain("claude auth status --json");
   expect(body).not.toContain("not logged in");
@@ -236,8 +243,8 @@ it.each(["cyclic project", "native installation"])(
       id: "claude-cli",
       config: { command: scenario === "native installation" ? "claude" : probeCommand },
     });
-    const spawnSync = childProcess.spawnSync;
-    vi.spyOn(childProcess, "spawnSync").mockImplementation((...args) => {
+    const spawnSync = actualChildProcess.spawnSync;
+    vi.mocked(childProcess.spawnSync).mockImplementation((...args) => {
       if (
         args[0] === probeCommand &&
         args[1]?.[0] === "auth" &&
@@ -248,7 +255,6 @@ it.each(["cyclic project", "native installation"])(
       }
       return spawnSync(...args);
     });
-    syncBuiltinESMExports();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     const { runDoctorLintCli } = await import("./doctor-lint.js");

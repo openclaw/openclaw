@@ -343,13 +343,15 @@ function updateChatScrollPosition(
   // Upward keys lock before motion. A detached window's bottom remains history;
   // unlocking follow would jump past its held source as the next page commits.
   if (
-    takeover === false ||
+    (takeover === false && scrollTop > 0) ||
     takeover === "restored-reader" ||
     host.chatHistoryPagination.hasNewer ||
     (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   ) {
     // Taking control before initial history settles must retire its queued
     // force-scroll. Otherwise that delayed commit can overwrite the viewport.
+    // The native wheel movement may arrive after adjacent composer input; its
+    // resize correction must already see that the reader owns this viewport.
     host.chatHasAutoScrolled = true;
     host.chatFollowLocked = true;
     host.chatReadingHistory = true;

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -146,9 +147,20 @@ function classifyProjectGitFailure(
           "The repository was not found or is private. Check the URL, or configure gateway.controlUi.github.token (or the shared Gateway process environment) for private repositories.",
         );
   }
+  // Keep transport output in operator logs, not the shared session transcript.
+  const diagnosticId = randomUUID();
+  log.warn(`Git ${operation} failed (diagnostic ${diagnosticId})`, {
+    diagnosticId,
+    operation,
+    exitCode: result.code,
+    termination: result.termination,
+    signal: result.signal,
+    stderr: result.stderr,
+    stdout: result.stdout,
+  });
   return new ProjectCloneError(
     "clone_failed",
-    `Git could not ${operation === "clone" ? "clone" : "refresh"} that repository. Check the URL and Gateway Git configuration, then retry.`,
+    `Git ${operation === "clone" ? "clone" : "refresh"} failed. Ask the Gateway operator to check projects/clone logs. Diagnostic ID: ${diagnosticId}.`,
   );
 }
 

@@ -100,6 +100,10 @@ struct ChatMessageBubbleEquatableTests {
             contextWindowTokens: contextWindowTokens,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(Self.self),
+                sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                sessionGeneration: 0),
             inlineWidgetResolverReady: resolverReady,
             inlineWidgetResourceResolver: { _, _ in nil },
             mediaArtifactResolverReady: resolverReady,

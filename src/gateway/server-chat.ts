@@ -27,8 +27,6 @@ import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agen
 import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
@@ -52,6 +50,7 @@ import {
   createSessionLifecyclePublisher,
   type SessionEventSnapshotDependencies,
 } from "./server-chat-lifecycle-publication.js";
+import { resolveChatSessionSpawnedBy } from "./server-chat-lineage.js";
 import {
   mergeChatTextPayload,
   cancelPendingLiveTextFlush,
@@ -69,6 +68,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { createAgentToolEventDelivery } from "./server-chat-tool-delivery.js";
 import type { ToolEventRecipientRegistry } from "./server-chat-tool-recipients.js";
 import { createChatTranscriptPublication } from "./server-chat-transcript-publication.js";
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
@@ -294,19 +294,6 @@ export function createAgentEventHandler({
     pendingTerminalLifecycleErrors.delete(runId);
   };
 
-  const resolveSpawnedBy = (sessionKey: string): string | null => {
-    const parsed = parseAgentSessionKey(sessionKey);
-    const isDashboardSession = parsed?.rest.startsWith("dashboard:") === true;
-    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey) && !isDashboardSession) {
-      return null;
-    }
-    const agentId =
-      parsed?.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), sessionKey);
-    return agentId
-      ? (getSessionRowProjection?.()?.readPreparedSpawnedBy({ key: sessionKey, agentId }) ?? null)
-      : null;
-  };
-
   const sessionLifecyclePublisher = createSessionLifecyclePublisher({
     broadcastToConnIds,
     sessionEventSubscribers,
@@ -315,7 +302,6 @@ export function createAgentEventHandler({
     loadGatewaySessionLifecycleSnapshotForEvent,
     resolveSessionActiveRunState,
   });
-  const buildSessionEventSnapshot = sessionLifecyclePublisher.buildSnapshot;
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
     if (sessionKey.trim().toLowerCase() !== "global") {
@@ -486,7 +472,10 @@ export function createAgentEventHandler({
             canvasBlocks.length > 0 &&
             !(run?.rawBuffer ?? run?.buffer ?? "").trim();
           const timestamp = Date.now();
-          const spawnedBy = resolveSpawnedBy(terminalSessionKey);
+          const spawnedBy = resolveChatSessionSpawnedBy(
+            terminalSessionKey,
+            getSessionRowProjection,
+          );
           flushBufferedChatDeltaIfNeeded(terminalDelivery);
           const publishTerminal = () => {
             const terminalBuffer = readBuffer();
@@ -664,7 +653,7 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     run.deltaSentAt = now;
-    const spawnedBy = resolveSpawnedBy(sessionKey);
+    const spawnedBy = resolveChatSessionSpawnedBy(sessionKey, getSessionRowProjection);
     const deliveryKey = JSON.stringify([
       "chat",
       sessionKey,
@@ -838,6 +827,17 @@ export function createAgentEventHandler({
       send: (sessionKey, payload, opts) => sendLivePayload("agent", sessionKey, payload, opts),
     });
 
+  const deliverToolEvent = createAgentToolEventDelivery({
+    broadcastToConnIds,
+    chatRunState,
+    toolEventRecipients,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
+    resolveSessionDeliveryKeys,
+    buildSessionEventSnapshot: sessionLifecyclePublisher.buildSnapshot,
+    sendAgentPayload,
+  });
+
   const resolveToolVerboseLevel = (
     event: AgentEventRuntimePayload,
     sessionKey: string,
@@ -898,7 +898,7 @@ export function createAgentEventHandler({
     }
     const nodePayload = {
       ...channelPayload,
-      ...buildSessionEventSnapshot(sessionKey, undefined, agentId),
+      ...sessionLifecyclePublisher.buildSnapshot(sessionKey, undefined, agentId),
     };
     // Registration is demand only; each send still validates its pairing generation.
     nodeSendToSession(firstDeliveryKey, "agent", nodePayload, { sessionKeys: deliveryKeys });
@@ -959,9 +959,18 @@ export function createAgentEventHandler({
       clearPendingTerminalLifecycleError(evt.runId);
     }
     const publishLifecycle = evt.admitLifecyclePublication?.() ?? true;
+    const last = agentRunSeq.get(evt.runId) ?? 0;
+    const hasSequenceGap = publishLifecycle && last > 0 && evt.seq !== last + 1;
+    const isToolEvent = evt.stream === "tool";
+    const isItemEvent = evt.stream === "item";
+    const outputOnly = isToolEvent && evt.data.phase === "update" && evt.data.outputOnly === true;
 
     // Include sessionKey so Control UI can filter tool streams per session.
-    const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
+    // Output facts need no session lineage; sequence-gap diagnostics still carry the current parent.
+    const spawnedBy =
+      sessionKey && (!outputOnly || hasSequenceGap)
+        ? resolveChatSessionSpawnedBy(sessionKey, getSessionRowProjection)
+        : null;
     const agentPayload = {
       ...eventForClients,
       ...(!isControlUiVisible && {
@@ -981,10 +990,7 @@ export function createAgentEventHandler({
             (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
           )
         : false;
-    const last = agentRunSeq.get(evt.runId) ?? 0;
-    const isToolEvent = evt.stream === "tool";
-    const isItemEvent = evt.stream === "item";
-    if (publishLifecycle && last > 0 && evt.seq !== last + 1) {
+    if (hasSequenceGap) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       if (isControlUiVisible) {
         broadcast(
@@ -1108,58 +1114,15 @@ export function createAgentEventHandler({
         flushBufferedChatDeltaIfNeeded(chatDelivery);
         flushBufferedAgentDeltaIfNeeded(clientRunId);
       }
-      // Always broadcast tool events to registered WS recipients with
-      // tool-events capability, regardless of verboseLevel. The verbose
-      // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.). Carry the
-      // delivery key so scoped clients must also own the session subscription.
-      const runToolRecipients = toolEventRecipients.get(evt.runId);
-      if (isControlUiVisible && runToolRecipients && runToolRecipients.size > 0) {
-        broadcastToConnIds(
-          "agent",
-          sessionKey
-            ? {
-                ...agentPayload,
-                ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),
-              }
-            : agentPayload,
-          runToolRecipients,
-          {
-            sessionKeys: sessionKey
-              ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
-              : undefined,
-            liveText: liveTextDelivery(chatRunState, clientRunId),
-          },
-        );
-      }
-      if (!isControlUiVisible && sessionKey && hasSessionMessageSubscribers) {
-        const toolPayload = {
-          ...agentPayload,
-          ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),
-        };
-        sendAgentPayload(sessionKey, toolPayload, {
-          agentId: sessionAgentId,
-          controlUiVisible: false,
-          dropIfSlow: true,
-        });
-      }
-      // Session subscribers power operator UIs that attach to an existing
-      // in-flight session after the run has already started. Those clients do
-      // not know the runId in advance, so they cannot register as run-scoped
-      // tool recipients. Mirror tool lifecycle onto a session-scoped event so
-      // they can render live pending tool cards without polling history.
-      if (isControlUiVisible && sessionKey) {
-        const sessionSubscribers = new Set(sessionEventSubscribers.getAll());
-        for (const connId of runToolRecipients ?? []) {
-          sessionSubscribers.delete(connId);
-        }
-        if (sessionSubscribers.size > 0) {
-          broadcastToConnIds("session.tool", agentPayload, sessionSubscribers, {
-            dropIfSlow: true,
-            liveText: liveTextDelivery(chatRunState, clientRunId),
-          });
-        }
-      }
+      deliverToolEvent({
+        evt,
+        clientRunId,
+        sessionKey,
+        sessionAgentId,
+        agentPayload,
+        isControlUiVisible,
+        hasSessionMessageSubscribers,
+      });
     } else {
       const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // The runtime error frame drains this text before retry cleanup retires its group.

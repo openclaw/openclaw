@@ -7,6 +7,8 @@ on:
       - "extensions/browser/src/browser/chrome-mcp*"
       - "extensions/browser/src/browser/routes/agent.act.existing-session*"
       - "extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts"
+      - "extensions/browser/src/browser/routes/operator-pages.chromium.test.ts"
+      - "extensions/browser/src/browser/cdp-target-filter.ts"
       - "extensions/browser/package.json"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -78,6 +80,7 @@ jobs:
           OPENCLAW_VITEST_RUNTIME: bun
           OPENCLAW_BROWSER_MCP_E2E: "1"
           OPENCLAW_BROWSER_WAIT_E2E: "1"
+          OPENCLAW_BROWSER_OPERATOR_PAGES_E2E: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
@@ -85,4 +88,5 @@ jobs:
             extensions/browser/src/browser/chrome-mcp-options.test.ts \
             extensions/browser/src/browser/chrome-mcp.chromium.test.ts \
             extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts \
-            extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts
+            extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts \
+            extensions/browser/src/browser/routes/operator-pages.chromium.test.ts

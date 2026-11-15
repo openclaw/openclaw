@@ -20,7 +20,7 @@ type ClaudePreparedExecutionWithSecret = {
 };
 
 const CLAUDE_CLI_DISALLOWED_TOOLS =
-  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
+  "ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor";
 const CLAUDE_CACHE_FLAG = "--exclude-dynamic-system-prompt-sections";
 
 const argv = (...parts: string[]) => parts.flatMap((part) => part.split(" "));
@@ -104,14 +104,8 @@ function backendArgs(adapter: Backend) {
 }
 
 describe("Claude CLI adapter equivalence", () => {
-  const commonArgs = argv(
-    "-p --output-format stream-json --include-partial-messages --verbose",
-    "--setting-sources user --allowedTools mcp__openclaw__* --disallowedTools",
-    CLAUDE_CLI_DISALLOWED_TOOLS,
-  );
-
   it("disables native Bash while retaining native denials for managed shell turns", () => {
-    for (const baseArgs of [commonArgs, [...commonArgs, "--resume", "session"]]) {
+    for (const baseArgs of [backend.config.args ?? [], backend.config.resumeArgs ?? []]) {
       const args = executionArgs({
         modelId: "claude-sonnet-4-6",
         useResume: baseArgs.includes("--resume"),
@@ -121,7 +115,7 @@ describe("Claude CLI adapter equivalence", () => {
       expect(args.filter((arg) => arg === "--disallowedTools")).toHaveLength(1);
       const denials = args[args.indexOf("--disallowedTools") + 1]?.split(",");
       expect(denials).toEqual(
-        expect.arrayContaining(["Bash", "CronCreate", "ScheduleWakeup", "Monitor"]),
+        expect.arrayContaining(["Bash", "CronCreate", "CronList", "ScheduleWakeup", "Monitor"]),
       );
       expect(args).not.toContain("--tools");
     }
@@ -169,7 +163,7 @@ describe("Claude CLI adapter equivalence", () => {
 function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
   expect(disallowedIndex).toBeGreaterThanOrEqual(0);
-  expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
+  expect.soft(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
 }
 
 it.each([

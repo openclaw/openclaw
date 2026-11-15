@@ -4,7 +4,7 @@ import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { selectChatInputDisplay } from "./chat-input-display.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
-import { buildPendingInputItems } from "./chat-pending-inputs.ts";
+import { buildPendingInputItems } from "./chat-pending-input-presentation.ts";
 import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "./chat-progress.ts";
 import {
   buildMessageItems,

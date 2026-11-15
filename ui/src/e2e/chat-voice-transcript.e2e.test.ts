@@ -53,10 +53,7 @@ suite.define(() => {
         await transcript.getByText(backend, { exact: true }).first().waitFor();
         expect(await disclosure.getAttribute("open")).toBeNull();
         await page.locator(".agent-chat__composer-combobox textarea").focus();
-        const shortcut = await page.evaluate(() =>
-          /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
-        );
-        await page.keyboard.press(shortcut);
+        await page.keyboard.press("ControlOrMeta+f");
         const search = page.getByRole("textbox", { name: "Search loaded messages", exact: true });
         await search.fill("code zero");
         await transcript.getByText(speech, { exact: true }).waitFor();

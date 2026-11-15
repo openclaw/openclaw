@@ -67,7 +67,42 @@ export function forwardChatWheelToTranscript(
   transcript.scrollBy({ top: event.deltaY * unit, behavior: "instant" });
 }
 
-export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
+/** Native wheel intent belongs to the transcript only after nested scrollports yield. */
+export function isTranscriptScrollWheel(event: WheelEvent, transcript: HTMLElement): boolean {
+  if (
+    event.defaultPrevented ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.shiftKey ||
+    !event.deltaY ||
+    Math.abs(event.deltaX) > Math.abs(event.deltaY)
+  ) {
+    return false;
+  }
+  for (const target of event.composedPath()) {
+    if (target === transcript) {
+      break;
+    }
+    if (!(target instanceof HTMLElement)) {
+      continue;
+    }
+    const style = getComputedStyle(target);
+    if (
+      /^(auto|scroll)$/.test(style.overflowY) &&
+      ((event.deltaY < 0
+        ? target.scrollTop > 0
+        : target.scrollTop < target.scrollHeight - target.clientHeight) ||
+        style.overscrollBehaviorY === "contain" ||
+        style.overscrollBehaviorY === "none")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function isTranscriptScrollKey(event: KeyboardEvent, transcript: HTMLElement): boolean {
   if (event.defaultPrevented || !SCROLL_KEYS.has(event.key)) {
     return false;
   }
@@ -86,7 +121,9 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
   // Inspect the composed path so native controls inside shadow roots keep
   // their navigation keys without cancelling transcript restoration or follow.
   for (const target of event.composedPath()) {
-    if (target === event.currentTarget) {
+    // Solid's delegated handlers can leave currentTarget naming a nested node.
+    // The transcript owner supplies the native scroll boundary explicitly.
+    if (target === transcript) {
       break;
     }
     if (!(target instanceof HTMLElement)) {
@@ -133,11 +170,16 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
     if (event.key === " " && target.matches("button, summary")) {
       return false;
     }
-    // Native paging stays in a nested scrollport until its directional edge,
-    // then chains to the transcript. Only the latter is transcript input.
+    // Native paging chains at a nested edge only when overscroll permits it.
+    // Contained keys must not cancel transcript restoration or following.
+    const style = getComputedStyle(target);
     if (
-      /^(auto|scroll)$/.test(getComputedStyle(target).overflowY) &&
-      (upward ? target.scrollTop > 0 : target.scrollTop < target.scrollHeight - target.clientHeight)
+      /^(auto|scroll)$/.test(style.overflowY) &&
+      ((upward
+        ? target.scrollTop > 0
+        : target.scrollTop < target.scrollHeight - target.clientHeight) ||
+        style.overscrollBehaviorY === "contain" ||
+        style.overscrollBehaviorY === "none")
     ) {
       return false;
     }
@@ -150,12 +192,16 @@ const HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 const HISTORY_DOWNWARD_KEYS = new Set(["ArrowDown", "PageDown", "End"]);
 
 /** Nested/native controls own their gesture before transcript boundary paging. */
-function ownsTranscriptGesture(event: Event, direction: number): boolean {
+function ownsTranscriptGesture(
+  event: Event,
+  direction: number,
+  transcript: HTMLElement,
+): boolean {
   if (event.defaultPrevented) {
     return false;
   }
   for (const target of event.composedPath()) {
-    if (target === event.currentTarget) {
+    if (target === transcript) {
       break;
     }
     if (!(target instanceof HTMLElement)) {
@@ -191,33 +237,43 @@ export class TranscriptHistoryInput {
     this.touchY = null;
   }
 
-  readBoundaryDirection(event: Event, margin: number): -1 | 0 | 1 {
-    const direction = this.readDirection(event);
-    const root = event.currentTarget;
-    if (!(root instanceof HTMLElement) || direction === 0) {
+  readBoundaryDirection(
+    event: Event,
+    margin: number,
+    transcript: HTMLElement | null,
+  ): -1 | 0 | 1 {
+    const direction = this.readDirection(event, transcript);
+    if (transcript === null || direction === 0) {
       return 0;
     }
     const distance =
-      direction < 0 ? root.scrollTop : root.scrollHeight - root.clientHeight - root.scrollTop;
+      direction < 0
+        ? transcript.scrollTop
+        : transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop;
     return distance <= margin ? direction : 0;
   }
 
-  private readDirection(event: Event): -1 | 0 | 1 {
+  private readDirection(event: Event, transcript: HTMLElement | null): -1 | 0 | 1 {
     if (event instanceof WheelEvent) {
       if (
+        transcript === null ||
         event.ctrlKey ||
         event.metaKey ||
         event.altKey ||
         event.shiftKey ||
         !event.deltaY ||
         Math.abs(event.deltaX) > Math.abs(event.deltaY) ||
-        !ownsTranscriptGesture(event, event.deltaY)
+        !ownsTranscriptGesture(event, event.deltaY, transcript)
       ) {
         return 0;
       }
       return event.deltaY < 0 ? -1 : 1;
     }
-    if (event instanceof KeyboardEvent && isTranscriptScrollKey(event)) {
+    if (
+      event instanceof KeyboardEvent &&
+      transcript !== null &&
+      isTranscriptScrollKey(event, transcript)
+    ) {
       if (HISTORY_UPWARD_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) {
         return -1;
       }
@@ -237,7 +293,7 @@ export class TranscriptHistoryInput {
       if (previousTouchY !== null && Math.abs(touchY - previousTouchY) >= HISTORY_TOUCH_INTENT_PX) {
         this.touchY = touchY;
         const direction = touchY > previousTouchY ? -1 : 1;
-        return ownsTranscriptGesture(event, direction) ? direction : 0;
+        return transcript !== null && ownsTranscriptGesture(event, direction, transcript) ? direction : 0;
       }
     }
     return 0;

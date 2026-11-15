@@ -5,10 +5,15 @@ import { createSendHarness, type SendHarness } from "./send.handoff.test-support
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 vi.mock("./session-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-state.js")>()),

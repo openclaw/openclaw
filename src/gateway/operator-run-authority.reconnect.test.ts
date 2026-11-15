@@ -301,6 +301,7 @@ it("does not merge changed model membership or expand the retained source ceilin
       agents: { defaults: { model: "fixture/a" } },
       gateway: {
         roles: {
+          default: "reconnect",
           definitions: {
             reconnect: {
               agents: "*",

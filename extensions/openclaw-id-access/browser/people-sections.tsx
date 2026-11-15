@@ -5,6 +5,7 @@ import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createEffect, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CreatedInvite } from "./invites.js";
+import { MemberDevices } from "./member-devices.js";
 import type { PeopleError, PeopleOperationError } from "./people-error.js";
 import {
   countDevices,
@@ -16,7 +17,7 @@ import {
   personInitials,
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
-import type { Invite, Member } from "./types.js";
+import type { ExistingProfile, Invite, Member, MemberDevice, OwnerDevice } from "./types.js";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -111,7 +112,7 @@ function RolePicker(props: {
   return <div class="ocid-access__role-picker" ref={(element) => (container = element)} />;
 }
 
-/** Invite one person with a role ceiling (operator at most); shows the link once. */
+/** Invite one person with an exact role; shows the link once. */
 export function InviteForm(props: {
   motion: PeopleMotion;
   components: ControlUiHost["components"];
@@ -119,9 +120,15 @@ export function InviteForm(props: {
   busy?: boolean;
   locale: string;
   error?: PeopleError | null;
-  onCreate: (email: string, role: MemberRole) => Promise<CreatedInvite | undefined>;
+  existingProfiles?: ExistingProfile[];
+  onCreate: (
+    email: string,
+    role: MemberRole,
+    existingProfileId?: string,
+  ) => Promise<CreatedInvite | undefined>;
 }) {
   const [email, setEmail] = createSignal("");
+  const [existingProfileId, setExistingProfileId] = createSignal("");
   const [role, setRole] = createSignal<MemberRole>("operator");
   const [created, setCreated] = createSignal<(CreatedInvite & { role: MemberRole }) | null>(null);
   const [copied, setCopied] = createSignal(false);
@@ -129,12 +136,17 @@ export function InviteForm(props: {
   let inviteAgain!: HTMLButtonElement;
   const submit = async () => {
     const invitedRole = role();
-    const made = await props.onCreate(email().trim().toLowerCase(), invitedRole);
+    const made = await props.onCreate(
+      email().trim().toLowerCase(),
+      invitedRole,
+      existingProfileId() || undefined,
+    );
     if (made) {
       props.motion.update(() => {
         setCreated({ ...made, role: invitedRole });
         setCopied(false);
         setEmail("");
+        setExistingProfileId("");
       });
       onSettled(() => inviteAgain.focus());
     }
@@ -169,6 +181,29 @@ export function InviteForm(props: {
                 }
               }}
             >
+              <label class="ocid-access__profile-select">
+                <span>
+                  Existing person on this claw <span class="ocid-access__hint">(optional)</span>
+                </span>
+                <select
+                  class="settings-input"
+                  aria-label="Existing person on this claw"
+                  value={existingProfileId()}
+                  disabled={props.disabled}
+                  onChange={(event) => setExistingProfileId(event.currentTarget.value)}
+                >
+                  <option value="">Create a new person</option>
+                  <For each={props.existingProfiles ?? []} keyed={(profile) => profile.id}>
+                    {(profile) => (
+                      <option value={profile().id}>{profile().displayName || profile().id}</option>
+                    )}
+                  </For>
+                </select>
+                <span class="ocid-access__hint">
+                  They join as this person after you approve. Their existing conversations stay with
+                  them.
+                </span>
+              </label>
               <input
                 ref={(element) => (emailInput = element)}
                 class="settings-input"
@@ -333,6 +368,13 @@ export function PendingRequests(props: {
                       {pending().reported.locationHint ?? "location unknown"} · decide by{" "}
                       {formatDay(pending().decideBy, props.locale)}
                     </div>
+                    <Show when={invite().existingProfile}>
+                      {(profile) => (
+                        <p class="ocid-access__hint">
+                          Will join as {profile().displayName || profile().id}
+                        </p>
+                      )}
+                    </Show>
                   </div>
                   <Show when={!props.readOnly}>
                     <div class="ocid-access__actions">
@@ -407,6 +449,8 @@ export function PendingRequests(props: {
 function MemberRow(props: {
   motion: PeopleMotion;
   member: Member;
+  ownerDevices: OwnerDevice[];
+  onRemoveDevice: (member: Member, device: MemberDevice) => void;
   disabled: boolean;
   nowMs: number;
   sessionTitle: (sessionKey: string) => string | undefined;
@@ -484,6 +528,15 @@ function MemberRow(props: {
           </div>
         </div>
       </Show>
+      <MemberDevices
+        member={props.member}
+        ownerDevices={props.ownerDevices}
+        motion={props.motion}
+        disabled={props.disabled}
+        readOnly={props.readOnly}
+        nowMs={props.nowMs}
+        onRemove={props.onRemoveDevice}
+      />
       <div class="ocid-access__row-error">
         <OperationError
           error={props.error?.target === `member:${props.member.accountId}` ? props.error : null}
@@ -498,7 +551,8 @@ export function Members(props: {
   motion: PeopleMotion;
   members: Member[];
   invites: Invite[];
-  ownerDevices: number;
+  ownerDevices: OwnerDevice[];
+  onRemoveDevice: (member: Member, device: MemberDevice) => void;
   notice?: RemovedMemberNotice | null;
   disabled: boolean;
   locale: string;
@@ -513,7 +567,8 @@ export function Members(props: {
     <section class="ocid-access__section" aria-labelledby="ocid-access-members">
       <h3 id="ocid-access-members">Members</h3>
       <p class="ocid-access__hint">
-        Who can open this claw. Only you can change this, from one of your own devices.
+        Who can open this claw. Members can approve their own additional devices. Only you can
+        invite or remove people.
       </p>
       <OperationError
         error={
@@ -523,12 +578,24 @@ export function Members(props: {
             : null
         }
       />
+      <For
+        each={props.invites.filter(
+          (invite) => invite.status === "approved" && invite.existingProfile?.fallbackReason,
+        )}
+        keyed={(invite) => invite.inviteId}
+      >
+        {(invite) => (
+          <p class="ocid-access__notice" role="status">
+            {invite().label}: {invite().existingProfile?.fallbackReason}
+          </p>
+        )}
+      </For>
       <ul class="ocid-access__list" ref={props.motion.group()}>
         <li class="ocid-access__row ocid-access__row--owner">
           <Avatar name="You" />
           <div class="ocid-access__person">
             <div class="ocid-access__title">You</div>
-            <div class="ocid-access__hint">{countDevices(props.ownerDevices)}</div>
+            <div class="ocid-access__hint">{countDevices(props.ownerDevices.length)}</div>
           </div>
           <span class="chip">owner</span>
         </li>
@@ -557,6 +624,8 @@ export function Members(props: {
               <MemberRow
                 motion={props.motion}
                 member={member()}
+                ownerDevices={props.ownerDevices}
+                onRemoveDevice={props.onRemoveDevice}
                 error={props.error}
                 readOnly={props.readOnly}
                 disabled={props.disabled}

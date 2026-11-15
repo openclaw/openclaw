@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -16,7 +17,7 @@ import type { SidebarContent } from "../chat/components/chat-sidebar-content-typ
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { showBackgroundSessionCreated } from "./background-session-notice.ts";
 import * as catalog from "./catalog-target.ts";
-import type { NewSessionComposerOptions } from "./composer.tsx";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -235,7 +236,7 @@ export class NewSessionPageOwner {
         (document.activeElement === previousFocus || document.activeElement === document.body) &&
         !document.openClawModalLayers?.size
       ) {
-        this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true });
+        focusComposerInput(this.submission.composerTextarea.getTextarea(), { preventScroll: true });
       }
     });
   }
