@@ -20,11 +20,11 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it.each([
-    { command: "steer", mode: "steer", requested: "Steering requested.", completed: "Steered." },
+    { command: "steer", mode: "steer", requested: "Steering…", completed: "Steered." },
     {
       command: "redirect",
       mode: "interrupt",
-      requested: "Redirect requested.",
+      requested: "Redirecting…",
       completed: "Redirected.",
     },
   ])(

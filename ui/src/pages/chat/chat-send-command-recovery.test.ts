@@ -59,10 +59,10 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
         command === "steer"
           ? status === "ok"
             ? "Steered."
-            : "Steering requested."
+            : "Steering…"
           : status === "ok"
             ? "Redirected."
-            : "Redirect requested.";
+            : "Redirecting…";
       expect(host.chatMessages).toContainEqual(
         expect.objectContaining({ role: "system", content: expectedContent }),
       );
