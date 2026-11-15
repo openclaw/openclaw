@@ -137,17 +137,22 @@ Pin the commit you pushed. A waiter that reads the PR head live can see the old 
 
 ```bash
 # Exit 0: every check passed. 1: a check failed. 11: the PR head moved. 12: no check ran.
+# 2: GitHub API reads failed 5 times in a row.
 pr=55 repo=owner/repo sha=$(git rev-parse HEAD) # the exact commit you pushed
-seen=0 n=0
+seen=0 n=0 e=0
 while :; do
   head=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid)
   if [ "$head" = "$sha" ]; then
     seen=1
-    runs=$(gh api --paginate "repos/$repo/commits/$sha/check-runs" \
-      --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"')
+    if ! runs=$(gh api --paginate "repos/$repo/commits/$sha/check-runs" \
+      --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"') ||
+      ! st=$(gh api "repos/$repo/commits/$sha/status" --jq 'select(.total_count > 0) | .state'); then
+      e=$((e + 1)); [ "$e" -ge 5 ] && { echo "API-ERROR $sha"; exit 2; }
+      n=$((n + 1)); sleep 30; continue
+    fi
+    e=0
     bad=$(printf '%s\n' "$runs" | grep -E '^completed (failure|timed_out|action_required|startup_failure) ')
     [ -n "$bad" ] && { echo "FAIL $sha"; echo "$bad"; exit 1; }
-    st=$(gh api "repos/$repo/commits/$sha/status" --jq 'select(.total_count > 0) | .state')
     case "$st" in failure | error) echo "FAIL $sha commit status: $st"; exit 1 ;; esac
     if [ "$st" != pending ] && { [ -z "$runs" ] ||
       ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) '; }; then
