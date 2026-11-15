@@ -123,21 +123,20 @@ openclaw-chat-summary-automations {
 }
 
 .chat-summary__automation-title {
-  flex: 1 1 0;
   overflow: hidden;
   white-space: nowrap;
 }
 
+/* The next run sits under the name: countdown plus exact time never fits beside it. */
 .chat-summary__automation-state {
   display: flex;
   align-items: center;
   gap: 5px;
-  max-width: 55%;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
-  line-height: 24px;
+  line-height: 16px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -193,7 +192,6 @@ openclaw-chat-summary-automations {
 
 .chat-summary__automation-heading {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
   min-width: 0;
 }

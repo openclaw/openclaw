@@ -108,6 +108,10 @@ export const detailsSnapshotSchema = json.optional(
             disabled: json.optional(json.boolean),
             autoDisabled: json.optional(json.boolean),
             running: json.optional(json.boolean),
+            waiting: json.optional(json.boolean),
+            // Absent for event/stream/on-exit watchers and rows cached before countdown timing.
+            timing: json.optional(json.enumeration(["recurring", "once"])),
+            schedule: optionalText,
             state: json.text,
             nextRunAtMs: json.optional(json.nullable(nonnegative)),
           }),

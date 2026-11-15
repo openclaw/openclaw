@@ -526,6 +526,14 @@
   white-space: nowrap;
 }
 
+/* The saved job's schedule icon is the only graphic in its runtime summary. */
+.cron-detail-sub svg {
+  width: 14px;
+  height: 14px;
+  margin-inline-end: 6px;
+  vertical-align: -2px;
+}
+
 .cron-enabled-toggle {
   display: inline-flex;
   align-items: center;

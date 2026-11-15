@@ -110,10 +110,13 @@ suite.define(() => {
         const subtitle = page.locator(".cron-detail-meta > .cron-detail-sub");
         await subtitle.waitFor();
         const detail = (await subtitle.textContent())?.trim();
+        const cadence = await subtitle.locator('[role="img"]').getAttribute("aria-label");
         const text = cases[index]?.text;
-        expect({ row: rowText, detail }).toEqual({
+        // The header leads with runtime state; the cadence moves to the recurrence icon.
+        expect({ row: rowText, detail, cadence }).toEqual({
           row: text,
-          detail: `${text} · Paused`,
+          detail: "Paused",
+          cadence: text,
         });
         await page.locator('[data-test-id="cron-back"]').click();
         await row.waitFor();

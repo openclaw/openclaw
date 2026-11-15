@@ -1,0 +1,2 @@
+# Countdown-first automation next run: the issue's ten examples plus due, midnight and year boundaries; live countdown and runtime-event deadline updates on Session Details rows and the detail header; watcher and cached-row invariants; and mocked-browser desktop/mobile proof.
+237
