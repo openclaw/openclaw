@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import { AttachInput, ATTACHMENT_CHUNK_BYTES, type AttachOutput } from "./attachment-contract.js";
 import { inspectEvidence } from "./evidence-files.js";
@@ -10,15 +11,16 @@ import { PublicationFiles } from "./publication-files.js";
 import { describeSource, expandEvidence } from "./source-descriptors.js";
 import { readSourceDescriptor } from "./source-records.js";
 
-/** Called under the storage identity/SQLite write fence. Chunks are durable and
- * replayable; publication never exposes a partial file. No original is overwritten. */
+/** Journal chunks before publishing files; settle only after durable publication.
+ * The storage worker serializes uploads, and interrupted uploads retain their bytes. */
 export function attachChunk(
   db: DatabaseSync,
   root: string,
   scope: string,
   input: AttachInput,
   current: () => void,
-  hook: (stage: string) => void = () => {},
+  hook: (stage: string) => void,
+  validate: () => void,
 ): AttachOutput {
   if (
     !Check(AttachInput, input) ||
@@ -41,50 +43,70 @@ export function attachChunk(
     attribution: input.attribution,
   });
   const hash = createHash("sha256").update(bytes).digest("hex");
-  let row = db
-    .prepare("SELECT * FROM attachment_uploads WHERE scope=? AND request=?")
-    .get(scope, input.requestId);
-  if (!row) {
-    if (input.offset !== 0) {
-      throw new Error("Attachment must start at byte offset 0");
-    }
-    db.prepare("INSERT INTO attachment_uploads VALUES (?,?,?,0,NULL)").run(
-      scope,
-      input.requestId,
-      metadata,
-    );
-    row = { metadata, received: 0, receipt: null };
-  }
-  if (row.metadata !== metadata) {
-    throw new Error("Attachment request ID belongs to different metadata");
-  }
-  const prior = db
-    .prepare("SELECT * FROM attachment_chunks WHERE scope=? AND request=? AND offset=?")
-    .get(scope, input.requestId, input.offset);
-  if (prior) {
-    if (prior.hash !== hash || prior.size !== bytes.length || prior.final !== Number(input.final)) {
-      throw new Error("Attachment chunk differs from its original request");
-    }
-  } else {
-    if (row.receipt || input.offset !== row.received) {
-      throw new Error("Attachment offset does not match received bytes");
-    }
-    db.prepare("INSERT INTO attachment_chunks VALUES (?,?,?,?,?,?,?)").run(
-      scope,
-      input.requestId,
-      input.offset,
-      hash,
-      bytes.length,
-      Number(input.final),
-      bytes,
-    );
-    row.received = input.offset + bytes.length;
-    db.prepare("UPDATE attachment_uploads SET received=? WHERE scope=? AND request=?").run(
-      row.received!,
-      scope,
-      input.requestId,
-    );
-  }
+  current();
+  const row = runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      validate();
+      let upload = db
+        .prepare("SELECT * FROM attachment_uploads WHERE scope=? AND request=?")
+        .get(scope, input.requestId);
+      if (!upload) {
+        if (input.offset !== 0) {
+          throw new Error("Attachment must start at byte offset 0");
+        }
+        db.prepare("INSERT INTO attachment_uploads VALUES (?,?,?,0,NULL)").run(
+          scope,
+          input.requestId,
+          metadata,
+        );
+        upload = { metadata, received: 0, receipt: null };
+      }
+      if (upload.metadata !== metadata) {
+        throw new Error("Attachment request ID belongs to different metadata");
+      }
+      const prior = db
+        .prepare("SELECT * FROM attachment_chunks WHERE scope=? AND request=? AND offset=?")
+        .get(scope, input.requestId, input.offset);
+      if (prior) {
+        if (
+          prior.hash !== hash ||
+          prior.size !== bytes.length ||
+          prior.final !== Number(input.final)
+        ) {
+          throw new Error("Attachment chunk differs from its original request");
+        }
+      } else {
+        const last = db
+          .prepare(
+            "SELECT final FROM attachment_chunks WHERE scope=? AND request=? ORDER BY offset DESC LIMIT 1",
+          )
+          .get(scope, input.requestId);
+        if (upload.receipt || last?.final || input.offset !== upload.received) {
+          throw new Error("Attachment offset does not match received bytes");
+        }
+        db.prepare("INSERT INTO attachment_chunks VALUES (?,?,?,?,?,?,?)").run(
+          scope,
+          input.requestId,
+          input.offset,
+          hash,
+          bytes.length,
+          Number(input.final),
+          bytes,
+        );
+        upload.received = input.offset + bytes.length;
+        db.prepare("UPDATE attachment_uploads SET received=? WHERE scope=? AND request=?").run(
+          upload.received!,
+          scope,
+          input.requestId,
+        );
+      }
+      return upload;
+    },
+    { operationLabel: "knowledge.attach" },
+  );
+  hook("attachment-after-chunk");
+  current();
   if (row.receipt) {
     // SAFETY: the receipt column only holds AttachOutput JSON written when this upload completed.
     const receipt = JSON.parse(String(row.receipt)) as AttachOutput;
@@ -116,8 +138,8 @@ export function attachChunk(
         a.nlink === 2
       ) {
         fs.unlinkSync(staged);
-        files.sync(path.dirname(staged));
         fs.rmdirSync(path.dirname(staged));
+        // Persist removal of the staging directory with the destination's parent.
         files.sync(path.dirname(destination));
       }
     } catch (e) {
@@ -134,19 +156,29 @@ export function attachChunk(
     fd = fs.openSync(staging, "wx", 0o600);
   const digest = createHash("sha256");
   try {
-    for (const chunk of db
-      .prepare("SELECT data FROM attachment_chunks WHERE scope=? AND request=? ORDER BY offset")
-      .iterate(scope, input.requestId)) {
+    // Finish each indexed read before touching the filesystem: a live cursor
+    // would otherwise retain a read lock throughout staging.
+    const next = db.prepare(
+      "SELECT offset,data FROM attachment_chunks WHERE scope=? AND request=? AND offset>? ORDER BY offset LIMIT 1",
+    );
+    let offset = -1;
+    for (;;) {
+      const chunk = next.get(scope, input.requestId, offset);
+      if (!chunk) {
+        break;
+      }
       current();
-      // SAFETY: data is a BLOB column; chunks are read before completion clears it, and node:sqlite returns BLOBs as Uint8Array.
+      // SAFETY: data is a BLOB; only acknowledged completion discards chunk bytes.
       const data = chunk.data as Uint8Array;
       digest.update(data);
       fs.writeFileSync(fd, data);
+      offset = Number(chunk.offset);
     }
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
+  hook("attachment-after-stage");
   const evidence: Evidence = {
     path: relative,
     sha256: digest.digest("hex"),
@@ -171,6 +203,7 @@ export function attachChunk(
   // Install the immutable descriptor before discarding recoverable upload bytes.
   const source = describeSource(evidence),
     descriptorPath = `${scope}/${source.path}`;
+  current();
   files.publish(
     {
       path: descriptorPath,
@@ -190,16 +223,38 @@ export function attachChunk(
     receivedBytes: Number(row.received),
     evidence,
   };
-  db.prepare("UPDATE attachment_uploads SET receipt=? WHERE scope=? AND request=?").run(
-    JSON.stringify(receipt),
-    scope,
-    input.requestId,
-  );
-  // Retain per-chunk digests for identical retries, not a second copy of the file.
-  db.prepare("UPDATE attachment_chunks SET data=NULL WHERE scope=? AND request=?").run(
-    scope,
-    input.requestId,
-  );
+  const serialized = JSON.stringify(receipt);
   current();
-  return receipt;
+  const settled = runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      validate();
+      const latest = db
+        .prepare(
+          "SELECT metadata,received,receipt FROM attachment_uploads WHERE scope=? AND request=?",
+        )
+        .get(scope, input.requestId);
+      if (!latest || latest.metadata !== metadata || latest.received !== row.received) {
+        throw new Error("Attachment changed during publication; retry the original request");
+      }
+      if (latest.receipt) {
+        // SAFETY: completed uploads contain the storage owner's AttachOutput JSON.
+        return JSON.parse(String(latest.receipt)) as AttachOutput;
+      }
+      db.prepare("UPDATE attachment_uploads SET receipt=? WHERE scope=? AND request=?").run(
+        serialized,
+        scope,
+        input.requestId,
+      );
+      // Retain per-chunk digests for identical retries, not a second copy of the file.
+      db.prepare("UPDATE attachment_chunks SET data=NULL WHERE scope=? AND request=?").run(
+        scope,
+        input.requestId,
+      );
+      return receipt;
+    },
+    { operationLabel: "knowledge.attach.settle" },
+  );
+  hook("attachment-after-receipt");
+  return settled;
 }

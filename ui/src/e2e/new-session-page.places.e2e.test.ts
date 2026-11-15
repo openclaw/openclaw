@@ -102,9 +102,7 @@ suite.define(() => {
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(projectTrigger, "openclaw");
     await projectTrigger.click();
-    await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
-      "Projects",
-    );
+    await projectSelect.locator(".header-search__input").waitFor();
     await button(projectSelect, "Browse folders").click();
     await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
     await expectValue(page.locator("input.new-session-page__browser-path"), PICKED);
@@ -120,10 +118,8 @@ suite.define(() => {
     await expectLabel(checkoutTrigger, "main");
     await checkoutTrigger.click();
     await expectAttribute(checkoutTrigger, "aria-expanded", "true");
-    await pollLocatorText(checkoutSelect.locator(".new-session-page__menu-title").first()).toBe(
-      "Checkout",
-    );
-    await button(checkoutSelect, "New worktree Isolated copy of the repo", true).click();
+    await expectAttribute(checkoutSelect, "aria-label", "Checkout: main");
+    await button(checkoutSelect, "New worktree", true).click();
     await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
     const afterPointerHide = checkoutSelect.evaluate(
       (element) =>
@@ -222,7 +218,7 @@ suite.define(() => {
     await expectAttribute(trigger, "data-worktree", "true");
     const current = checkout.locator('[data-value="checkout"]');
     expect(await current.isDisabled()).toBe(true);
-    expect(await current.textContent()).toContain(
+    expect(await current.getAttribute("title")).toBe(
       "Use an isolated worktree for this project and agent",
     );
     await page.keyboard.press("Escape");
@@ -302,7 +298,7 @@ suite.define(() => {
     await page.locator("#new-session-checkout-trigger").click();
     await button(
       page.locator(".oc-popover.new-session-page__checkout-popover"),
-      "New worktree Isolated copy of the repo",
+      "New worktree",
       true,
     ).click();
     await page.keyboard.press("Escape");
@@ -352,7 +348,7 @@ suite.define(() => {
     await gateway.waitForRequest("fs.listDir", { match: { path: PICKED } });
     await expectValue(input, PICKED);
     await input.fill(`${WORKSPACE}/zzz`);
-    await place.getByText("No matching folders", { exact: true }).waitFor();
+    await place.getByText("No folders match your search.", { exact: true }).waitFor();
   });
 
   it("returns from the browse root to the place menu", async () => {

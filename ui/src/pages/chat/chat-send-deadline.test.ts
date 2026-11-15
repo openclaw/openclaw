@@ -157,7 +157,7 @@ describe.each(["send", "steer", "redirect"] as const)("%s startup", (command) =>
     expect(fixture.pending.hasPending).toBe(true);
     expect(fixture.writes).toHaveLength(0);
     fixture.ready();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await fixture.sending;
     expect(fixture.writes).toHaveLength(1);
     expect(new Set(fixture.attempts).size).toBe(1);

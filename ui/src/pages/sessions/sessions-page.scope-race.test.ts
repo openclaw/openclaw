@@ -314,7 +314,7 @@ describe("sessions page lifecycle", () => {
       page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
     const [query] = managed.subscribeList.mock.calls[0]!;
     const input = searchInput();
-    const row = page.querySelector("tbody tr");
+    const row = page.querySelector(".session-data-row");
     selectRows(page, target);
     await page.updateComplete;
     const refresh = () => page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")!;
@@ -332,7 +332,7 @@ describe("sessions page lifecycle", () => {
       await vi.waitFor(() => {
         expect(refresh().disabled).toBe(false);
         expect(searchInput()).toBe(input);
-        expect(page.querySelector("tbody tr")).toBe(row);
+        expect(page.querySelector(".session-data-row")).toBe(row);
         expect(page.selectedSessions.has(target.key)).toBe(true);
         if (error) {
           expect(page.textContent).toContain(error);

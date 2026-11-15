@@ -9,6 +9,7 @@ import { prepareReplyTurnRunSource } from "./agent-runner-admission.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
+import { handoffCompletedSourceReply } from "./queue/drain.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
@@ -65,6 +66,9 @@ async function recordAgentTurnExecutionOutcome(
     executionStatus === "ok" ? "completed" : executionStatus === "failed" ? "errored" : "aborted";
   const toolDelivered =
     outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+  if (toolDelivered && executionStatus === "ok" && params.replyOperation) {
+    handoffCompletedSourceReply(params.replyOperation, params.followupRun);
+  }
   const values = {
     runId: result?.runId ?? params.opts?.runId ?? "unknown",
     sessionKey,

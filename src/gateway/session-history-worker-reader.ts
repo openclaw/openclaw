@@ -1,26 +1,14 @@
 import { toUSVString } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
-import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
-import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
-import { resolveCronStoreSelectionInDatabase } from "../cron/store/paths.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { getUserProfileDisplaysNative } from "../state/user-profile-list.native.js";
-import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
-import {
-  projectForwardedMessages,
-  readForwardedCronJobIds,
-} from "./chat-display-projection.history.js";
-import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import type { prepareCliSessionHistoryReader } from "./cli-session-history.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
+import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(
@@ -28,13 +16,14 @@ export async function readSessionHistoryRequest(
   readTarget: PreparedSessionHistoryReadTarget,
 ): Promise<SessionHistoryWorkerResult> {
   const { sourceDiscovery, ...readerTarget } = readTarget;
+  let resolveSourceDatabases: (() => GatewaySessionStoreReadSources) | undefined;
+  if (sourceDiscovery) {
+    const { resolveGatewaySessionStoreReadSources } =
+      await import("./session-utils-store-candidates.js");
+    resolveSourceDatabases = () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources;
+  }
   const options = {
-    readers: createReadonlySessionHistoryReader(
-      readerTarget,
-      sourceDiscovery
-        ? () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources
-        : undefined,
-    ),
+    readers: createReadonlySessionHistoryReader(readerTarget, resolveSourceDatabases),
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
@@ -213,17 +202,36 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "rpc") {
+    const { readTranscriptSenderIdentity } = await import("../chat/sender-identity.js");
+    const { getCliSessionBinding } = await import("../config/sessions/cli-session-binding.js");
+    const { readCronJobNamesInDatabase } = await import("../cron/store/job-name.kernel.js");
+    const { resolveCronStoreSelectionInDatabase } = await import("../cron/store/paths.js");
+    const { runInScopedOpenClawAgentReadSnapshot } =
+      await import("../state/openclaw-agent-db-readonly-scope.js");
+    const { withExistingOpenClawStateDatabaseReadOnly } =
+      await import("../state/openclaw-state-db-readonly.js");
+    const { getUserProfileDisplaysNative } = await import("../state/user-profile-list.native.js");
+    const { createCurrentUserProfileMessageProjector } =
+      await import("./chat-display-projection.core.js");
+    const { projectForwardedMessages, readForwardedCronJobIds } =
+      await import("./chat-display-projection.history.js");
+    const { projectChatHistoryWithReplies } = await import("./chat-history-reply-messages.js");
+    const { resolveCurrentUserProfileDisplay } = await import("./current-user-profile-display.js");
     const { readChatHistoryPageKernel } = await import("./chat-history-page-kernel.js");
     const { encodeChatHistoryResponsePage } = await import("./chat-history-response-page.js");
-    const cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
-      ? await (
-          await import("./cli-session-history.js")
-        ).prepareCliSessionHistoryReader(request.params, options.readers)
-      : undefined;
+    let cli: Awaited<ReturnType<typeof prepareCliSessionHistoryReader>>;
     try {
-      const page = await readChatHistoryPageKernel(request.params, {
-        ...options,
-        ...(cli ? { readers: cli.readers, readMessageSequence: cli.sequence } : {}),
+      // One PostgreSQL snapshot serves the CLI import check and every transcript read of this page.
+      const page = await runInScopedOpenClawAgentReadSnapshot(async () => {
+        cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
+          ? await (
+              await import("./cli-session-history.js")
+            ).prepareCliSessionHistoryReader(request.params, options.readers)
+          : undefined;
+        return readChatHistoryPageKernel(request.params, {
+          ...options,
+          ...(cli ? { readers: cli.readers, readMessageSequence: cli.sequence } : {}),
+        });
       });
       cli?.applyPagination(page);
       const messages = page.messages.filter(

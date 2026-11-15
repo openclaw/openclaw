@@ -149,6 +149,9 @@ it.each([true, false])("isolates cached credentials (native=%s)", async (structu
   });
   const accountA = createTool(structured, "perplexity-account-a");
   const accountB = createTool(structured, "perplexity-account-b");
+  expect(accountA.parameters).toBe(accountB.parameters);
+  expect(accountA.parameters).not.toBe(createTool(!structured).parameters);
+  expect(accountA.parameters).toBe(createTool(structured).parameters);
   const args = { query: `Perplexity credential-scoped answers ${structured}` };
   const first = await accountA.execute(args);
   const second = await accountB.execute(args);

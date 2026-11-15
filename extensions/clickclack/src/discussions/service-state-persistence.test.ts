@@ -12,6 +12,7 @@ import type {
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
+  importPluginStateEntriesForDoctorForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -300,11 +301,16 @@ it("denies synchronous access until legacy SQLite revocations are adopted", asyn
   const f = generationFixture();
   const channel = { serverBaseUrl: "https://clickclack.example", channelId: "chn_legacy" };
   const legacyKey = `${channel.serverBaseUrl}\0${channel.channelId}`;
-  nativeRevocations(f.env).register(legacyKey, {
-    accountId: "default",
-    ...channel,
-    revokedAt: 1,
-  });
+  importPluginStateEntriesForDoctorForTests(
+    "clickclack",
+    {
+      namespace: "discussion-revoked-channels",
+      maxEntries: 100_000,
+      overflowPolicy: "reject-new",
+      env: f.env,
+    },
+    [{ key: legacyKey, value: { accountId: "default", ...channel, revokedAt: 1 }, createdAt: 1 }],
+  );
   const unrevoked = { ...channel, channelId: "chn_unrevoked" };
   captureDiscussionRegistration(f.runtime);
   expect(isClickClackDiscussionChannelRevoked({ runtime: f.runtime, ...channel })).toBe(true);

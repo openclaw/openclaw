@@ -135,7 +135,7 @@ async function buildTtsAudioReply(params: {
   log.warn(`Audio generation failed: ${result.error ?? "unknown error"}`);
   return {
     error: stopWithText(
-      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ),
   };
 }

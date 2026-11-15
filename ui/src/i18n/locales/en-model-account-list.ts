@@ -5,7 +5,7 @@ const catalog = {
   profilePage: {
     modelAccounts: {
       loadMore: "Load more saved accounts",
-      inventoryFailed: "Could not load saved accounts. Refresh to retry.",
+      inventoryFailed: "Couldn’t load saved accounts. Refresh to try again.",
     },
   },
 } satisfies TranslationMap;

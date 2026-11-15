@@ -53,6 +53,45 @@ async function captureTransportRequest(
 
 describe("openai completions transport", () => {
   it.each([
+    ["dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1", "max_tokens"],
+    ["qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "max_tokens"],
+    ["qwen", "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1", "max_tokens"],
+    ["qwen", "https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", "max_tokens"],
+    ["qwen", "https://coding-intl.dashscope.aliyuncs.com/v1", "max_completion_tokens"],
+    ["qwen", "https://proxy.example/compatible-mode/v1", "max_completion_tokens"],
+    [
+      "qwen",
+      "https://dashscope.aliyuncs.com.evil.example/compatible-mode/v1",
+      "max_completion_tokens",
+    ],
+    ["openai", "https://api.openai.com/v1", "max_completion_tokens"],
+  ] as const)("sends the output budget as %s at %s using %s", async (provider, baseUrl, field) => {
+    const model = makeCompletionsModel({ provider, baseUrl, maxTokens: 1_234 });
+    const { request, terminal } = await captureTransportRequest(model, [], { maxTokens: 1_234 });
+    expect(terminal?.type).toBe("done");
+    const body = await request.json();
+    expect(body[field]).toBe(1_234);
+    expect(body).not.toHaveProperty(
+      field === "max_tokens" ? "max_completion_tokens" : "max_tokens",
+    );
+  });
+
+  it("preserves an explicit output token field override on Model Studio", async () => {
+    const overridden = await captureTransportRequest(
+      makeCompletionsModel({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        compat: { maxTokensField: "max_completion_tokens" },
+      }),
+      [],
+      { maxTokens: 1_234 },
+    );
+    const overriddenBody = await overridden.request.json();
+    expect(overriddenBody.max_completion_tokens).toBe(1_234);
+    expect(overriddenBody).not.toHaveProperty("max_tokens");
+  });
+
+  it.each([
     { field: "reasoning", answer: "OK", reasoning: false, finish: "stop", terminal: "done" },
     { field: "reasoning_content", answer: "", reasoning: false, finish: "stop", terminal: "error" },
     { field: "reasoning_text", answer: "", reasoning: false, finish: "length", terminal: "error" },

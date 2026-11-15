@@ -58,7 +58,6 @@ function admitAgent({
     runId: "run-local-operator",
     resolvedSessionKey: "agent:main:main",
     client: createClient(),
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
     ...overrides,
     request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
@@ -67,12 +66,10 @@ function admitAgent({
 
 it.each([
   ["missing Gateway client", { client: null }],
-  ["non-local client", { client: createClient({ isLocalClient: undefined }) }],
-  ["non-admin client", { client: createClient({}, ["operator.write"]) }],
+  ["read-only client", { client: createClient({}, ["operator.read"]) }],
   ["ephemeral run", { resolvedSessionKey: "" }],
   ["spawned run", { spawnedBy: "agent:main:parent" }],
   ["external provenance", { inputProvenance: { kind: "external_user" } }],
-  ["cron continuation", { hasRestoredCronContinuation: true }],
   ["model run", { isOneShotModelRun: true }],
   ["internal handoff", { request: { internalRuntimeHandoffId: "handoff-1" } }],
   ["model-run request", { request: { modelRun: true } }],
@@ -198,12 +195,14 @@ it("does not derive Control UI authority from a claimed client name or session r
     version: "test",
     platform: "web",
   };
-  expect(
-    admitChat({ client, resolvedSessionKey: "agent:main:telegram:direct:operator" }),
-  ).toBeUndefined();
+  expect(admitChat({ client, resolvedSessionKey: "agent:main:telegram:direct:operator" })).toEqual({
+    runId: "run-local-chat",
+    callerOrigin: { kind: "unknown" },
+    callerScopedCreation: true,
+  });
 });
 
-it.each(["operator.read", "operator.write"])(
+it.each(["operator.read", "operator.sessions.write"])(
   "rejects a Control UI connection narrowed to %s",
   (scope) => {
     expect(admitChat({ client: createClient({ controlUiAdmin: true }, [scope]) })).toBeUndefined();
@@ -232,9 +231,7 @@ it.each([
   ["persisted cron continuation", { hasRestoredCronContinuation: true }],
   ["spawned lineage", { spawnedBy: "agent:main:parent" }],
   ["input provenance", { inputProvenance: { kind: "external_user" } }],
-  ["remote client", { client: createClient({ isLocalClient: undefined }) }],
-  ["non-admin client", { client: createClient({}, ["operator.write"]) }],
-  ["cron continuation client", { client: createClient({ cronRunContinuation: true }) }],
+  ["read-only client", { client: createClient({}, ["operator.read"]) }],
 ] as const)("rejects chat ingress from %s", (_label, overrides) => {
   expect(admitChat(overrides)).toBeUndefined();
 });

@@ -22,7 +22,7 @@
 ## Create, then link
 
 You can't predict paths. Publish a new page with its evidence first, then use the
-returned path for self-citations and cross-links in a follow-up edit. Link to
+returned ID for self-citations and cross-links in a follow-up edit. Link to
 other pages only after they exist. Reread revision/hash before each follow-up
 edit.
 
@@ -32,10 +32,12 @@ edit.
   `knowledge_record` content read, the replacement, a reason and the
   vault/revision/hash/ontology fences. Equal offsets insert; empty replacement
   deletes.
-- Full replacement: read the entire body first (follow `content.nextOffset`;
-  compare hashes across pages). Never edit from a truncated read.
-- Request `metadataView: "full"` before changing domain fields. Preserve
-  unrelated prose and metadata.
+- Full replacement: read the entire body first (follow `nextOffset` with
+  `offset`; compare hashes across pages). Never edit from a truncated read.
+- The record read includes domain fields, aliases, tags and dependencies; send
+  the complete set you want when changing one. Preserve unrelated prose and
+  metadata. If the read's `omitted` lists `metadata.fields`, the fields were
+  too large to return: omit `fields` so they are preserved.
 
 ## Page budgets
 
@@ -49,12 +51,19 @@ Claims have no budget.
   with `start` offsets, and connected pages each section links to or names.
 - Edits that keep a body the same size or smaller always succeed, even on a page
   already over budget. Such a page can only shrink.
-- On rejection, don't truncate, summarize away detail, or park the text on an
-  unrelated nearby page. If the page has a written `## Timeline` section, retire
-  it ([retire a written Timeline](profiles.md#retire-a-written-timeline)); never
-  extract it. Otherwise move a whole section that has its own subject with
-  `knowledge_extract_section`, to a listed candidate it is about or to a new page,
-  then reread and retry your edit.
+- On rejection, don't cut text to fit or park it on an unrelated nearby page.
+  Work in this order, then reread and retry your edit:
+  1. Retire a written `## Timeline` section
+     ([retire a written Timeline](retire-dated.md#retire-a-written-timeline));
+     never extract it.
+  2. Retire sections that are dated or named for a source, and rewrite
+     superseded text into the State topics it bears on
+     ([retire a dated section](retire-dated.md#retire-a-dated-section)). This
+     usually brings the page under budget.
+  3. Move a whole section that has its own subject with
+     `knowledge_extract_section`, to a listed candidate it is about or to a new
+     page. Extraction moves text verbatim, so it relocates a poor section
+     without improving it.
 - A rejected page edit never blocks a fact: save it with `knowledge_remember` or
   a claim.
 - Integrate into an existing topic before adding one. A page near its budget

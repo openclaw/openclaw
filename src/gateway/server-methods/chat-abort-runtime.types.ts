@@ -25,6 +25,7 @@ export type ChatSessionAbortParams = {
   defaultAgentId?: string;
   abortOrigin: ChatAbortOrigin;
   stopReason?: string;
+  userInitiated?: boolean;
   stopSource: SessionStopSource;
   hookContext?: SessionStopHookContext;
   controllerTargets?: readonly SessionTarget[];
@@ -32,6 +33,8 @@ export type ChatSessionAbortParams = {
   assertCurrent?: () => void;
   /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
   beforeAbort?: () => Promise<void>;
+  /** Explicit user Stop: announce the stopped runs through `notifySessionRunStopped`. */
+  announceRunStopped?: true;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
   /** Current session lifecycle owner; reporting only, never descendant selection. */

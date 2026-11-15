@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { useExecutorFixture } from "../cli/update-cli/update-command-executor.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-state-context.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { buildUpdateRestartSentinelPayload } from "../infra/update-restart-sentinel-payload.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
@@ -16,7 +20,11 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
+import { loadPluginCohortRecovery } from "../infra/update-run-recovery-store.js";
+import { beginUpdatePluginCohort } from "../plugins/update-cohort-recovery.js";
+import * as exec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
 
@@ -29,6 +37,7 @@ vi.mock("../version.js", async (importOriginal) => ({
 }));
 
 const directories = createTempDirTracker();
+const executorFixture = useExecutorFixture("restart-cohort-command-");
 function prepareRestartState(prefix: string) {
   vi.stubEnv("OPENCLAW_STATE_DIR", directories.make(prefix));
   setRuntimeConfigSnapshot({});
@@ -71,6 +80,85 @@ afterEach(() => {
 });
 
 describe("update restart verification ownership", () => {
+  it.each(["state-only", "split"] as const)(
+    "launches post-ready cohort settlement with its private command environment (%s config)",
+    async (layout) => {
+      const { root } = executorFixture();
+      await withOpenClawTestState({ layout, applyEnv: true }, async (state) => {
+        await state.writeConfig({ plugins: { enabled: false } });
+        await fs.mkdir(state.home, { recursive: true, mode: 0o700 });
+        for (const key of ["HOME", "USERPROFILE", "OPENCLAW_HOME"]) {
+          vi.stubEnv(key, state.home);
+        }
+        const scratch = state.path("scratch");
+        await fs.mkdir(scratch, { mode: 0o1700 });
+        for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+          vi.stubEnv(key, scratch);
+        }
+        setRuntimeConfigSnapshot({});
+        const version = resolveRuntimeServiceVersion();
+        const run = createUpdateRun({ trigger: "api", target: { version } });
+        recordUpdateRunPhase(run.runId, "restarting", { after: { version } });
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          const fence = await executor.enter(root);
+          const runtime = { root, nodePath: process.execPath, version, buildId: null };
+          await beginUpdatePluginCohort({
+            runId: run.runId,
+            installKey: root,
+            env: process.env,
+            fence,
+            from: runtime,
+            to: runtime,
+          });
+        });
+        const context = captureDeliveryQueueStateContext();
+        // A state reader's projection pins its database, but is not a subprocess environment.
+        vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("unrelated-restart-state-"));
+        const expected = {
+          HOME: state.home,
+          TMPDIR: scratch,
+          OPENCLAW_STATE_DIR: state.stateDir,
+          OPENCLAW_CONFIG_PATH: state.configPath,
+        };
+        const execute = exec.runUtf8CommandWithTimeout;
+        vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation(async (_argv, options) =>
+          execute(
+            [
+              process.execPath,
+              "-e",
+              `process.stdin.resume(); process.stdin.on('end', () => {
+                const assert = require('node:assert/strict');
+                const expected = JSON.parse(process.argv[1]);
+                for (const [key, value] of Object.entries(expected)) {
+                  assert.equal(process.env[key], value, key);
+                }
+                process.stderr.write('command environment verified');
+                process.exitCode = 23;
+              });`,
+              JSON.stringify(expected),
+            ],
+            options,
+          ),
+        );
+        const payload = buildUpdateRestartSentinelPayload({
+          result: { status: "ok", mode: "npm", after: { version }, steps: [], durationMs: 1 },
+          meta: { runId: run.runId },
+        });
+        // The process fixture refuses settlement after observing its actual environment.
+        // This must retain the pair and avoid falsely completing the update.
+        await expect(finalizeRestartUpdateRun(payload, false, context)).rejects.toThrow(
+          "command environment verified",
+        );
+        expect(loadPluginCohortRecovery(run.runId, { env: state.env })).toBeDefined();
+        expect(getUpdateRun(run.runId, { env: state.env })).toMatchObject({
+          status: "running",
+          phase: "verifying",
+        });
+        expect(getUpdateRun(run.runId)).toBeUndefined();
+      });
+    },
+  );
+
   it.each(["foreground", "managed", "foreign", "explicit"] as const)(
     "preserves replacement completion ownership during %s history reconciliation",
     async (kind) => {

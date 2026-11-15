@@ -37,8 +37,10 @@ import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projectio
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
+import { createPreparedWorkerRefresh } from "./prepared-worker-refresh.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 import { requireWorkerProfile } from "./service-validation.js";
 import type {
@@ -191,13 +193,17 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     ...options,
     store,
-    getCleanupError: (record) => sessionAttachments.getCleanupError(record),
     readStartStatus: providerLifecycle.readStartStatus,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
     isStopping: () => stopping,
     providerFor: providerLifecycle.providerFor,
+    withLock,
+  });
+  const refreshPreparedEnvironment = createPreparedWorkerRefresh({
+    ...options,
+    signal: scope.signal,
     withLock,
   });
 
@@ -562,6 +568,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     readPreparedPoolSummary: preparedPool.summary,
     readReadyWorkerTarget: preparedPool.target,
     readRuntimeRefresh: providerLifecycle.readRuntimeRefresh,
+    resumeNode: providerLifecycle.resumeNode,
+    ensureRetainedRunning: providerLifecycle.ensureRetainedRunning,
+    suspendRetained: providerLifecycle.suspendRetained,
+    inspectTurnLease: (params: Parameters<typeof providerLifecycle.inspectTurnLease>[0]) => {
+      const signal = params.signal ? AbortSignal.any([scope.signal, params.signal]) : scope.signal;
+      const operation = trackOperation(
+        withLock(params.environmentId, async () => {
+          signal.throwIfAborted();
+          await store.ready();
+          await providerLifecycle.inspectTurnLease({ ...params, signal });
+        }),
+      );
+      // A cancelled waiter cannot detach accepted cleanup from the service lifetime.
+      return racePromiseWithAbortSignal(operation, signal);
+    },
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
@@ -595,6 +616,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     listMachineOptions: providerLifecycle.listMachineOptions,
     listOperatingSystems: providerLifecycle.listOperatingSystems,
     bindPreparedWorkspace: environmentAccess.bindPreparedWorkspace,
+    refreshPreparedEnvironment: async (
+      request: Parameters<ReturnType<typeof createPreparedWorkerRefresh>>[0],
+    ) => environmentAccess.project(await refreshPreparedEnvironment(request)),
     runProjectLifecycleCommand: async (
       environmentId: string,
       ownerEpoch: number,
@@ -611,6 +635,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           !record ||
           record.ownerEpoch !== ownerEpoch ||
           record.state !== "attached" ||
+          !isWorkerRetainedWindowOpen(record, now()) ||
           record.destroyRequestedAtMs !== null ||
           !record.leaseId
         ) {
@@ -625,7 +650,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       const result = await trackOperation(
         provider.runSetupCommand(
-          { leaseId, profile: requireWorkerProfile(record.profileSnapshot.settings) },
+          {
+            leaseId,
+            profile: requireWorkerProfile(record.profileSnapshot.settings),
+            ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
+            ...(record.retention ? { retention: record.retention.policy } : {}),
+          },
           { ...command, signal, assertCurrent },
         ),
       );
@@ -648,9 +678,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentId: string,
       abandonment?: WorkerEnvironmentAbandonment,
       forceAbandon?: () => Promise<void>,
+      authorize?: () => void,
     ) =>
       environmentAccess.project(
-        await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon }),
+        await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon, authorize }),
       ),
     reclaim: async (environmentId: string) =>
       environmentAccess.project(await providerLifecycle.reclaim(environmentId)),
@@ -658,10 +689,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
-    destroyUnattached: async (environmentId: string) => {
-      await preparedPool.cancelPreparation(environmentId);
+    destroyUnattached: async (environmentId: string, authorize?: () => void) => {
+      await preparedPool.cancelPreparation(environmentId, authorize);
       return environmentAccess.project(
-        await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
+        await providerLifecycle.destroy(environmentId, { requireUnattached: true, authorize }),
       );
     },
     observeDesktop: environmentAccess.observeDesktop,

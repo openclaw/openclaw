@@ -31,7 +31,7 @@ import {
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.async.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
@@ -293,13 +293,15 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
   let transferred = false;
   try {
     const stores = lease.snapshot.createStores();
-    const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
-      agentId,
-      workspaceDir,
-      authStorage: stores.authStorage,
-      modelRegistry: stores.modelRegistry,
-      preparedModelRuntime: lease.snapshot,
-    });
+    const resolved = await lease.run(() =>
+      resolveModelAsync(provider, modelId, agentDir, params.cfg, {
+        agentId,
+        workspaceDir,
+        authStorage: stores.authStorage,
+        modelRegistry: stores.modelRegistry,
+        preparedModelRuntime: lease.snapshot,
+      }),
+    );
     const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
     if (!runtimeModel) {
       return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
@@ -312,7 +314,9 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
         if (released) {
           throw new Error("Tool inventory model context has been released");
         }
-        return withPluginRuntimeGenerationScope(lease.snapshot, () => project(context));
+        return lease.run(() =>
+          withPluginRuntimeGenerationScope(lease.snapshot, () => project(context)),
+        );
       },
       [Symbol.asyncDispose]() {
         released = true;
@@ -388,6 +392,8 @@ export async function resolveEffectiveToolInventory(
         ...params,
         conversationCapabilityProfile: capabilityProfile,
         githubPublicationPreview: true,
+        githubPublicationConfigurationAware:
+          !params.agentRuntime || params.agentRuntime === "openclaw" ? true : undefined,
         authProfileStoreSource,
         agentId,
         workspaceDir,

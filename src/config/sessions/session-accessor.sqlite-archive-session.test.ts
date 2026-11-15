@@ -7,11 +7,13 @@ import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -33,7 +35,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -162,7 +163,7 @@ describe("SQLite transcript archive sessions", () => {
   function expectArchivedEvent(archivePath: string | undefined, event: unknown) {
     expect(archivePath).toBeTruthy();
     expect(
-      readSessionArchiveContentSync(archivePath ?? "")
+      readSessionArchiveText(archivePath ?? "")
         .trim()
         .split("\n"),
     ).toEqual([JSON.stringify(event)]);
@@ -902,7 +903,7 @@ describe("SQLite transcript archive sessions", () => {
         replaced = true;
         release.resolve();
         await expect(deletion).rejects.toThrow(/replaced|file identity changed/);
-        expect(fs.readFileSync(database.path)).toEqual(replacementBytes);
+        expectBytesEqual(fs.readFileSync(database.path), replacementBytes, database.path);
       } finally {
         release.resolve();
         await Promise.allSettled([deletion]);

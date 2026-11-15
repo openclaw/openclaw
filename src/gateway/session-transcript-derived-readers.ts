@@ -52,9 +52,7 @@ function extractTranscriptUsageSnapshot(
   // Legacy artifacts still need their existing completeness evidence.
   const totalTokens = legacyCliUsage
     ? undefined
-    : source === "sqlite" && usage?.contextUsage?.state === "available"
-      ? usage.contextUsage.promptTokens
-      : deriveSessionTotalTokens({ usage });
+    : deriveSessionTotalTokens({ lastCallUsage: usage });
   const modelProvider = typeof record.provider === "string" ? record.provider.trim() : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : undefined;
   const costUsd =

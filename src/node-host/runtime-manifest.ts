@@ -21,6 +21,19 @@ export const preferMacAppExecHost =
 
 export type NodeHostManifest = ReturnType<typeof buildNodeHostManifest>;
 
+export function requireRequestedCommands(
+  manifest: NodeHostManifest,
+  commandAllowlist?: ReadonlySet<string>,
+) {
+  if (commandAllowlist && manifest.commands.length === 0) {
+    const requested = [...commandAllowlist].toSorted().join(", ") || "(empty allowlist)";
+    throw new Error(
+      `Node command allowlist retained no available commands. Unknown or unavailable ids: ${requested}. Check --commands and enable the plugin that provides each command.`,
+    );
+  }
+  return manifest;
+}
+
 export function buildNodeHostManifest(params: {
   pluginManifest: ReturnType<typeof listRegisteredNodeHostCapsAndCommands>;
   commandAllowlist?: ReadonlySet<string>;

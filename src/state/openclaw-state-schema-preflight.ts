@@ -1,8 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseCleanCloseRefusal,
+} from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { readSqliteUserVersion, readSqliteWriterAppVersion } from "../infra/sqlite-user-version.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
@@ -12,7 +15,10 @@ import type {
 } from "./agent-deletion-journal.types.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
-import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import type {
+  AgentDatabasePreflightStats,
+  OpenClawDatabaseSchemaPreflight,
+} from "./openclaw-database-preflight.types.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
@@ -44,6 +50,12 @@ export type StateSchemaInspection = {
   registeredDatabases?: { agentId: string; path: string }[];
   deletionJournal?: AgentDeletionJournalDisposition;
   inspectionErrors: unknown[];
+  startupMetrics?: {
+    stateIntegrityCheckCount: number;
+    stateIntegrityMs: number;
+    stateSealCount: number;
+    stateIntegrityReason?: AgentDatabasePreflightStats["stateIntegrityReason"];
+  };
 };
 
 /** Boot/Doctor and restart readers inspect the same captured bytes under their existing owner. */
@@ -54,11 +66,20 @@ export function inspectStateDatabaseSchema(
   const { pathname, supportedVersion } = input;
   const schemas: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const inspection: StateSchemaInspection = { schemas, inspectionErrors: [] };
-  const cleanClose =
-    input.purpose === "runtime" &&
-    readSqliteDatabaseCleanClose(pathname) &&
-    getStateRuntimeSchemaAdmission(database)?.startupReady === true;
   try {
+    let cleanClose = false;
+    if (input.purpose === "runtime" && readSqliteDatabaseCleanClose(pathname)) {
+      // Cold readers open before the seal loads; adopt its catalog before consuming its proof.
+      admitSqliteSchema(database);
+      cleanClose = getStateRuntimeSchemaAdmission(database)?.startupReady === true;
+    }
+    const metrics: StateSchemaInspection["startupMetrics"] = input.requireStartupMigrationReadiness
+      ? (inspection.startupMetrics = {
+          stateIntegrityCheckCount: 0,
+          stateIntegrityMs: 0,
+          stateSealCount: Number(cleanClose),
+        })
+      : undefined;
     const admittedVersion =
       input.purpose === "maintenance" && input.verifyCurrentSchemaShape
         ? undefined
@@ -108,6 +129,14 @@ export function inspectStateDatabaseSchema(
       input.requireStartupMigrationReadiness &&
       contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION
     ) {
+      const integrityStartedAt = performance.now();
+      if (metrics) {
+        metrics.stateIntegrityCheckCount++;
+        metrics.stateIntegrityReason =
+          input.purpose === "maintenance"
+            ? "maintenance"
+            : (readSqliteDatabaseCleanCloseRefusal(database) ?? "startup-not-ready");
+      }
       assertSqliteIntegrity(
         database,
         pathname,
@@ -119,6 +148,9 @@ export function inspectStateDatabaseSchema(
             })
           : undefined,
       );
+      if (metrics) {
+        metrics.stateIntegrityMs = performance.now() - integrityStartedAt;
+      }
       assertCanonicalStateSchemaShape(database, pathname);
       // Readiness must reject malformed ownership even when startup has no pending writes.
       inspectOpenClawStateOwnershipFromDatabase(database, pathname);

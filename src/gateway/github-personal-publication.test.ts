@@ -244,6 +244,21 @@ describe("personal publication authority and recovery", () => {
     },
   );
 
+  it("issues each offered account image from that account's GitHub host", async () => {
+    client.connect.scopes = ["operator.read"];
+    mocks.prepareIdentity.mockResolvedValueOnce({
+      source: "system-configured",
+      host: "ghe.example.test",
+      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
+    });
+    const response = await rpc("sessions.github.options");
+    expect(response[0]).toBe(true);
+    expect(response[1].avatarUrls).toEqual({
+      shared: "https://ghe.example.test/avatars/u/42",
+      personal: `https://avatars.githubusercontent.com/u/${account.accountId}?v=4`,
+    });
+  });
+
   it.each(["hidden", "sync-failed", "stale", "demoted"] as const)(
     "does not disguise %s options authorization as absent personal identity",
     async (change) => {

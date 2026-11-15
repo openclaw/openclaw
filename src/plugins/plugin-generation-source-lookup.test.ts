@@ -55,6 +55,7 @@ describe("plugin generation source lookup", () => {
       capturedRoot: alias,
       boundaryRoot: alias,
       capturedPaths: new Map([[aliasedSource, source]]),
+      capturedDirectories: new Set(),
       hardlinkedSources: new Set(),
       assertModuleAvailable,
     });
@@ -80,6 +81,7 @@ describe("plugin generation source lookup", () => {
       capturedRoot: sourceRoot,
       boundaryRoot: sourceRoot,
       capturedPaths: new Map([[source, source]]),
+      capturedDirectories: new Set(),
       hardlinkedSources: new Set(),
       assertModuleAvailable: vi.fn(),
     });

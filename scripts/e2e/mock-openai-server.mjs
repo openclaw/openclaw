@@ -1,6 +1,6 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
@@ -26,6 +26,8 @@ const port =
 const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+// Benchmark timing only: arrival and close times, never request content.
+const timingLog = process.env.MOCK_TIMING_LOG;
 // Absolute record ordinal, stamped at the producer: consumers expose a bounded
 // tail of the log, so entries must carry their own position. The server starts
 // once per run, so the counter spans the whole session.
@@ -844,6 +846,15 @@ const server = http.createServer((req, res) => {
               : "other";
     requests.ingress[route] += 1;
     const scriptedRoute = route === "responses" || route === "chatCompletions";
+    if (timingLog && scriptedRoute) {
+      const receivedAtMs = Date.now();
+      res.once("close", () => {
+        appendFileSync(
+          timingLog,
+          `${JSON.stringify({ route, receivedAtMs, closedAtMs: Date.now() })}\n`,
+        );
+      });
+    }
     // Reserve before body reads or hold waits so concurrent turns consume the script
     // in arrival order. The explicit version survives hold-only control rewrites.
     const controlSelection = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;

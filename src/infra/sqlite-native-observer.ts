@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isSqliteLockError, sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
@@ -13,36 +13,8 @@ declare module "node:sqlite" {
   }
 }
 
-export type SqliteIteratorBehavior = Readonly<{
-  nextAfterDoneIsTerminal: boolean;
-  returnAfterDoneIsInert: boolean;
-}>;
-export type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync"> & {
-  iteratorBehavior: SqliteIteratorBehavior;
-};
+export type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync">;
 
-/** The runtime owner reuses its prepared one-row library probe, once per process load. */
-export function probeSqliteIteratorBehavior(statement: StatementSync) {
-  const previous = statement.iterate();
-  const row = previous.next().value;
-  previous.next();
-  const nextAfterDoneIsTerminal = previous.next().done === true;
-  previous.return?.();
-  const current = statement.iterate();
-  try {
-    current.next();
-    previous.return?.();
-    return {
-      row,
-      iteratorBehavior: {
-        nextAfterDoneIsTerminal,
-        returnAfterDoneIsInert: current.next().done === true,
-      },
-    };
-  } finally {
-    current.return?.();
-  }
-}
 const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteNativeExecution"),
   () => new WeakMap<DatabaseSync, number>(),
@@ -326,14 +298,18 @@ export function observeSqliteNativeOperations(
         "bind",
       );
       const reference = new WeakRef(rows);
-      let done = false;
       const lifetime = createIteratorLifetime(active, activeIterators);
       // oxlint-disable-next-line typescript/unbound-method -- Wrappers pass the native receiver unchanged.
       const nativeNext = rows.next;
       // oxlint-disable-next-line typescript/unbound-method -- Wrappers pass the native receiver unchanged.
       const nativeReturn = rows.return;
+      // Completed native iterators can restart or reset a successor on older Node bindings.
+      let terminal: ReturnType<typeof nativeNext> | undefined;
       rows.next = function (this: typeof rows, ...args) {
-        if (this !== reference.deref() || lifetime.invalidated || done || !database.isOpen) {
+        if (terminal && this === reference.deref() && database.isOpen) {
+          return { ...terminal };
+        }
+        if (this !== reference.deref() || lifetime.invalidated || !database.isOpen) {
           return nativeNext.apply(this, args);
         }
         if (lifetime.finished) {
@@ -344,12 +320,9 @@ export function observeSqliteNativeOperations(
         activeIterators.add(lifetime);
         const result = nativeNext.apply(this, args);
         if (result.done) {
-          done = native.iteratorBehavior.nextAfterDoneIsTerminal;
-          if (done) {
-            lifetime.finish(true);
-          } else {
-            lifetime.stopObservation(true);
-          }
+          nativeReturn?.call(this);
+          terminal = { ...result };
+          lifetime.finish(true);
         } else {
           lifetime.observed?.stepped?.();
         }
@@ -357,11 +330,10 @@ export function observeSqliteNativeOperations(
       };
       if (nativeReturn) {
         rows.return = function (this: typeof rows, ...args) {
-          if (
-            this !== reference.deref() ||
-            (done && native.iteratorBehavior.returnAfterDoneIsInert) ||
-            !database.isOpen
-          ) {
+          if (terminal && this === reference.deref() && database.isOpen) {
+            return { ...terminal };
+          }
+          if (this !== reference.deref() || !database.isOpen) {
             return nativeReturn.apply(this, args);
           }
           const result = execute(
@@ -372,7 +344,9 @@ export function observeSqliteNativeOperations(
             bindingMutation,
             "bind",
           );
-          done = result.done === true;
+          if (result.done) {
+            terminal = { ...result };
+          }
           lifetime.finish();
           return result;
         };

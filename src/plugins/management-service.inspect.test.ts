@@ -463,7 +463,7 @@ describe("managed plugin inspection", () => {
           entries: {
             "community-plugin": {
               enabled: false,
-              hooks: { allowPromptInjection: false, allowConversationAccess: true },
+              hooks: { allowPromptModification: false, allowConversationAccess: true },
               llm: { allowModelOverride: true },
             },
           },

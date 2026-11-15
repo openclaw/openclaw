@@ -1,25 +1,11 @@
-import { randomUUID } from "node:crypto";
-import {
-  decisionBatchV1ToV2,
-  decisionBatchV2ToV1,
-  decodeSystemOneResponse,
-  validateDecisionBatchV2,
-  validateDecisionResultV2,
-} from "openclaw/plugin-sdk/decisions";
-import type {
-  DecisionBatch,
-  DecisionBatchV2,
-  DecisionProviderV2,
-  DecisionProviderContextV2,
-} from "openclaw/plugin-sdk/decisions";
+import type { DecisionProviderV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { hasCredentials, providerBaseUrl, type RuntimeConfig } from "./config.js";
-import { decisionFailure } from "./errors.js";
-import type { Evaluation, ImageAssets } from "./schema.js";
+import { translateTypeSafeDecisionBatch } from "./decision-codec.js";
 
 const loadClient = createLazyRuntimeModule(() => import("./client.js"));
 const models = manifest.modelCatalog.providers.typesafe.models;
@@ -118,56 +104,6 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
   };
 }
 
-/** Preserve the text input bridge; only tagged image state adds separate assets. */
-function translateBatch(
-  batch: DecisionBatchV2,
-): { batch: DecisionBatch; assets?: ImageAssets } | undefined {
-  // Admit the full envelope before removing image bytes for the existing text translation.
-  if (!validateDecisionBatchV2(batch)) {
-    return undefined;
-  }
-  if (batch.state.type !== "image") {
-    const text = decisionBatchV2ToV1(batch);
-    return text ? { batch: text } : undefined;
-  }
-  const match = /^data:image\/(png|jpeg);base64,/.exec(batch.state.dataUri);
-  if (
-    !match ||
-    Object.values(batch.questions).some(
-      (question) =>
-        question.type !== "boolean" && question.type !== "choice" && question.type !== "score",
-    )
-  ) {
-    return undefined;
-  }
-  // TypeSafe replaces references inside strings; a UUID must not occur in caller text.
-  const callerText = JSON.stringify([batch.state.text, batch.questions]);
-  let ref = randomUUID();
-  while (callerText.includes(ref)) {
-    ref = randomUUID();
-  }
-  const translated = decisionBatchV2ToV1({
-    state:
-      batch.state.text === undefined
-        ? { type: "text", text: ref }
-        : { type: "json", value: [batch.state.text, ref] },
-    questions: batch.questions,
-  });
-  if (!translated) {
-    return undefined;
-  }
-  return {
-    batch: translated,
-    assets: {
-      [ref]: {
-        type: "image",
-        format: match[1] === "png" ? "png" : "jpg",
-        data_base64: batch.state.dataUri.slice(match[0].length),
-      },
-    },
-  };
-}
-
 /** The shared provider owns the same credential and full configured route as V1. */
 export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV2 {
   const common = models[0]!.inference.decision;
@@ -214,7 +150,10 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
           mode: "api-key",
         };
       },
-      normalizeTransport: () => {
+      normalizeTransport: ({ provider }) => {
+        if (provider !== "typesafe") {
+          return undefined;
+        }
         return { baseUrl: effectiveBaseUrl(getConfig()) };
       },
       augmentModelCatalog: ({ entries }) =>
@@ -234,11 +173,10 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
           ),
     },
     async evaluate(batch, context) {
-      const request = translateBatch(batch);
+      const request = translateTypeSafeDecisionBatch(batch);
       if (!request || (context.reasoning !== undefined && context.reasoning !== "auto")) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const v1 = request.batch;
       if (
         request.assets &&
         !models.some(
@@ -248,101 +186,15 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const original = getConfig();
-      const providerConfig = original.providerConfig
-        ? {
-            ...original.providerConfig,
-            baseUrl: context.model.baseUrl ?? original.providerConfig.baseUrl,
-            headers:
-              omitNullRequestHeaders(context.model.headers) ?? original.providerConfig.headers,
-          }
-        : undefined;
-      const prepared: RuntimeConfig = {
-        ...original,
-        providerConfig,
-        apiKey:
-          original.baseUrl && !providerConfig
-            ? undefined
-            : context.auth.apiKey === "typesafe-local"
-              ? undefined
-              : context.auth.apiKey,
-      };
-      const readPreparedConfig = () => {
-        const current = getConfig();
-        // Reuse the exact prepared object only while the underlying config owner remains unchanged.
-        return current.baseUrl === original.baseUrl &&
-          current.providerConfig === original.providerConfig &&
-          current.apiKey === original.apiKey &&
-          current.credentialsUnavailable === original.credentialsUnavailable
-          ? prepared
-          : { ...current, credentialsUnavailable: true };
-      };
-      const model = context.model.id;
-      const { signal, deadlineMonotonicMs, isAdmissible } = context;
-      signal.throwIfAborted();
+      context.signal.throwIfAborted();
       // Registration and readiness do not need the transport or compiled validators.
-      // Sample configuration and the remaining deadline after the cold import settles.
-      const { evaluate: evaluateTypeSafe } = await loadClient();
-      signal.throwIfAborted();
-      const config = readPreparedConfig();
+      const { evaluateTypeSafeDecision } = await loadClient();
+      context.signal.throwIfAborted();
+      const config = getConfig();
       if (!hasCredentials(config)) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
-      const remaining = deadlineMonotonicMs - performance.now();
-      if (remaining <= 0) {
-        return { status: "unavailable", reason: "transport" };
-      }
-      const questions = Object.fromEntries(
-        Object.entries(v1.questions).map(([id, q]) => [
-          id,
-          q.type === "boolean" ? { ...q, type: "noul" } : q,
-        ]),
-      );
-      let evaluation: Evaluation;
-      try {
-        const response = await evaluateTypeSafe(
-          { state: v1.state, questions, model },
-          { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
-          signal,
-          deadlineMonotonicMs,
-          () => {
-            if (!isAdmissible()) {
-              return false;
-            }
-            // DNS and capture admission may await; only the current owner may authorize egress.
-            const current = readPreparedConfig();
-            return (
-              current.baseUrl === config.baseUrl &&
-              current.providerConfig === config.providerConfig &&
-              current.apiKey === config.apiKey &&
-              !current.credentialsUnavailable
-            );
-          },
-          request.assets,
-        );
-        signal.throwIfAborted();
-        evaluation = response.evaluation;
-      } catch (error) {
-        signal.throwIfAborted();
-        return decisionFailure(error);
-      }
-      // Validate against the bounded text/UUID batch, not the separately admitted image bytes.
-      const offered = decisionBatchV1ToV2(v1);
-      if (!offered) {
-        return { status: "unavailable", reason: "invalid-response" };
-      }
-      // Native metadata is not part of the decision accounting contract.
-      const result = decodeSystemOneResponse(offered, {
-        model: evaluation.model,
-        answers: evaluation.answers,
-        usage: {
-          input_tokens: evaluation.usage.input_tokens,
-          output_tokens: evaluation.usage.output_tokens,
-        },
-      });
-      return validateDecisionResultV2(offered, result)
-        ? { status: "ok", result }
-        : { status: "unavailable", reason: "invalid-response" };
+      return evaluateTypeSafeDecision(request.batch, request.assets, context, config);
     },
   };
 }

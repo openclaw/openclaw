@@ -36,11 +36,16 @@ const snapshot: ProviderUsageSnapshot = {
   displayName: "OpenAI",
   windows: [{ label: "5h", usedPercent: 9 }],
 };
-const expected = { updatedAt: usageNow, providers: [snapshot] };
+const expected = {
+  updatedAt: usageNow,
+  providers: [{ ...snapshot, authProfileId: "openai:quota" }],
+};
 const env = { HTTP_PROXY: "", HTTPS_PROXY: "http://proxy.test:8080" };
 const url = "https://chatgpt.com/backend-api/wham/usage";
 const options = {
-  auth: [{ provider: "openai", token: "codex-token", accountId: "acc-1" }],
+  auth: [
+    { provider: "openai", token: "codex-token", accountId: "acc-1", authProfileId: "openai:quota" },
+  ],
   env,
 };
 
@@ -67,7 +72,10 @@ it("routes synthetic usage to the Codex hook with the original OpenAI account co
     env: {},
     auth: [{ ...auth, hookProvider: "codex" }],
   });
-  expect(result).toEqual(expected);
+  expect(result).toEqual({
+    updatedAt: usageNow,
+    providers: [{ ...snapshot, authProfileId: "openai:work" }],
+  });
   expect(mocks.resolve.mock.calls).toMatchObject([[{ provider: "codex", context: auth }]]);
 });
 

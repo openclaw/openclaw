@@ -48,8 +48,6 @@ import {
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
@@ -191,15 +189,6 @@ export type ExpectedSessionMutationTarget = Readonly<{
 }>;
 
 export type { PreparedMutationSharing } from "./session-sharing-read.js";
-
-export type SessionSharingLookupCaches = {
-  storeCache: GatewaySessionStoreCache;
-  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-};
-
-export function createSessionSharingLookupCaches(): SessionSharingLookupCaches {
-  return { storeCache: new Map(), targetDiscoveryCache: new Map() };
-}
 
 // docs/gateway/protocol.md gives these handlers visibility-based authorization.
 // The router still prevents view/suggest-capped callers from reassigning foreign sessions.

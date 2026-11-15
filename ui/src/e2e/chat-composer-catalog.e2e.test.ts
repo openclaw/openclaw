@@ -8,7 +8,7 @@ import {
   navigateToControlUiSession,
   type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
-import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
@@ -65,7 +65,7 @@ async function expectText(target: Locator, text: string) {
 }
 
 suite.define(() => {
-  it.each(["config.changed", "chat.metadata.changed"])(
+  it.each(["chat.metadata.changed"])(
     "recovers the retained composer after %s without reloading",
     async (event) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -108,7 +108,7 @@ suite.define(() => {
           commands: [],
           models: [{ ...model, available: true }],
         });
-        await gateway.emitGatewayEvent(event, {});
+        await gateway.emitGatewayEvent(event, { modelCatalogChanged: true });
         await gateway.waitForRequest("models.list", { after: 1 });
         expect(await textarea.isDisabled()).toBe(false);
         expect(await textarea.inputValue()).toBe(draft);
@@ -194,14 +194,11 @@ suite.define(() => {
         .toEqual(["OpenAI"]);
       await expectText(composer.locator('[data-chat-model-provider-group="openai"]'), "GPT-5.5");
       await expectCount(composer.locator('[data-chat-model-provider-group="codex"]'), 0);
-      // The advertised default stays visible as a setup action while the usable
+      // The advertised default stays visible but disabled while the usable
       // model remains selectable.
       const unavailableDefault = composer.locator('[data-chat-model-default="true"]');
       await expectCount(unavailableDefault, 1);
-      await expect.poll(() => unavailableDefault.getAttribute("disabled")).toBeNull();
-      await expect
-        .poll(() => unavailableDefault.getAttribute("data-chat-model-setup"))
-        .toBe("true");
+      await expect.poll(() => unavailableDefault.isDisabled()).toBe(true);
       await expectCount(composer.locator('[data-chat-model-option=""]'), 0);
     });
   });
@@ -235,7 +232,7 @@ suite.define(() => {
       await textarea.fill(draft);
       const picker = composer.locator("details.chat-controls__model-picker");
       const options = picker.locator(
-        "button[data-chat-model-option]:not([data-chat-model-target])",
+        '[role="option"][data-chat-model-option]:not([data-chat-model-target])',
       );
       await picker.locator("summary").click();
       await gateway.waitForRequest("models.list");
@@ -248,10 +245,8 @@ suite.define(() => {
         .poll(() =>
           options.evaluateAll((rows) =>
             rows.every((row) => {
-              const warning = row.querySelector("[data-chat-model-auth-warning]");
               return (
-                warning?.textContent?.trim() === "Sign-in needed" &&
-                warning.querySelector("svg") !== null &&
+                row.getAttribute("aria-label")?.includes("Sign-in needed") &&
                 row.querySelector(".chat-controls__model-option-meta") === null &&
                 !row.textContent?.includes("1M")
               );
@@ -261,23 +256,18 @@ suite.define(() => {
         .toBe(true);
       await expect
         .poll(() =>
-          options.evaluateAll(
-            (rows) =>
-              rows.every((row) => !row.hasAttribute("disabled")) &&
-              rows.every((row) => row.getAttribute("data-chat-model-setup") === "true"),
+          options.evaluateAll((rows) =>
+            rows.every((row) => row.getAttribute("aria-disabled") === "true"),
           ),
         )
         .toBe(true);
-      await expectText(
-        composer.locator(".chat-controls__model-catalog-state"),
-        "No models available",
-      );
+      await expectText(composer.locator("[data-chat-model-auth-state]"), "Sign-in needed");
       expect(await textarea.isDisabled()).toBe(false);
       expect(await textarea.inputValue()).toBe(draft);
       await expect.poll(() => send.isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await selectChatModelOption(picker, "openai/gpt-5.6-sol", { default: true });
+      await picker.locator('[data-chat-model-auth-state] [data-chat-model-setup="true"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
     });
@@ -418,7 +408,7 @@ suite.define(() => {
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expectText(
         composer.locator("[data-chat-model-catalog-state]"),
-        "Some models could not be refreshed.",
+        "Couldn’t refresh some models.",
       );
       await expectVisible(modelOption(composer, "openai/startup-model"));
 

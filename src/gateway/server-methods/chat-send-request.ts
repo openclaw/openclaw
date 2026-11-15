@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Static } from "typebox";
+import type { ChatAppContextAttachment } from "../../../packages/gateway-protocol/src/chat-app-context.js";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -82,6 +84,9 @@ export type NormalizedChatSendRequest = {
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
   requestIdentity?: string;
   mentions?: HumanMention[];
+  /** Selected people are the recipients; the agent records the message without a turn. */
+  humanAddressed?: true;
+  appContext?: ChatAppContextAttachment[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
@@ -131,6 +136,7 @@ export function normalizeChatSendRequest(params: {
       p.queueMode ||
       p.toolBindings ||
       p.workContext ||
+      p.appContext ||
       p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
       p.suppressCommandInterpretation !== undefined ||
@@ -273,8 +279,11 @@ export function normalizeChatSendRequest(params: {
       !ordinaryChat)
   ) {
     return reject(
-      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+      "Human mentions require a signed-in chat in the OpenClaw app. Remove the selected mentions to use this mode.",
     );
+  }
+  if (p.appContext && !ordinaryChat) {
+    return reject("App context is only supported for ordinary chat messages.");
   }
   if (p.workContext && !ordinaryChat) {
     return reject("Working context is only supported for ordinary chat messages.");
@@ -292,6 +301,7 @@ export function normalizeChatSendRequest(params: {
     p.message,
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
+    ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
   ]);
 
@@ -307,6 +317,7 @@ export function normalizeChatSendRequest(params: {
     explicitOrigin: explicitOriginResult.value,
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
+    ...(p.appContext ? { appContext: p.appContext } : {}),
     systemInputProvenance,
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,

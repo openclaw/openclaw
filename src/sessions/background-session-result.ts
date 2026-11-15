@@ -36,8 +36,11 @@ export type BackgroundSessionResultProvenance =
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
   sessionKey: string;
-  /** Pins output to the conversation generation that admitted the background run. */
-  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
+  /**
+   * Ends delivery when the conversation was reset or recreated. The result follows message
+   * edits and branch switches to the current transcript; undefined follows the key alone.
+   */
+  expectedLifecycleRevision?: string;
   text: string;
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
@@ -58,14 +61,7 @@ export async function commitBackgroundResultToSession(params: {
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
-  if (!expectedSessionId) {
-    return { ok: false, reason: "background session result has an invalid expected generation" };
-  }
-  const expectedLifecycleRevision = normalizeOptionalString(
-    params.expectedGeneration.lifecycleRevision,
-  );
-  const identities = [sessionKey, expectedSessionId];
+  const expectedLifecycleRevision = normalizeOptionalString(params.expectedLifecycleRevision);
 
   params.assertCurrent?.();
   return await runSessionMutation({
@@ -74,8 +70,6 @@ export async function commitBackgroundResultToSession(params: {
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
-      aliases: identities,
-      incarnation: expectedSessionId,
       agentId: params.agentId,
     }),
     signal: params.signal,
@@ -100,13 +94,15 @@ export async function commitBackgroundResultToSession(params: {
           }
           const current = read.value;
           if (
-            current?.sessionId !== expectedSessionId ||
-            normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
+            !current?.sessionId ||
+            (expectedLifecycleRevision !== undefined &&
+              normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision)
           ) {
             return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
           }
+          const sessionId = current.sessionId;
           const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-            expectedSessionId,
+            expectedSessionId: sessionId,
             purpose: "accepted-result-settlement",
           });
           if (unavailable) {
@@ -115,15 +111,17 @@ export async function commitBackgroundResultToSession(params: {
           const scope = {
             agentId: params.agentId,
             sessionKey,
-            sessionId: expectedSessionId,
+            sessionId,
             storePath,
           };
           // A retry owns the original committed payload, including its managed-media IDs.
           // Restaging media would conflict with the transcript's exact replay contract.
-          const prior = await findTranscriptEvent(scope, {
-            kind: "idempotency",
-            key: idempotencyKey,
-          });
+          const prior = await findTranscriptEvent(
+            scope,
+            { kind: "idempotency", key: idempotencyKey },
+            undefined,
+            "background-result",
+          );
           const priorMessage = prior && readTranscriptEventMessage(prior.event);
           const priorId = prior && readTranscriptEventId(prior.event);
           if (prior && (!priorMessage || !priorId)) {
@@ -143,7 +141,7 @@ export async function commitBackgroundResultToSession(params: {
             stopReason: "stop",
             timestamp: Date.now(),
             idempotencyKey,
-            ...(isSessionControllerWorkActive(storePath, identities, params.agentId)
+            ...(isSessionControllerWorkActive(storePath, [sessionKey, sessionId], params.agentId)
               ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
               : {}),
             ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
@@ -156,8 +154,8 @@ export async function commitBackgroundResultToSession(params: {
           params.assertCurrent?.();
           const committed = await persistSessionTranscriptTurn(scope, {
             cwd: current.spawnedCwd,
-            expectedSessionId,
-            expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+            expectedSessionId: sessionId,
+            expectedLifecycleRevision: current.lifecycleRevision ?? null,
             assertCurrent: () => {
               owner.assertCurrent();
               params.assertCurrent?.();

@@ -14,6 +14,8 @@ import {
 } from "../../llm-core/src/model-data.js";
 import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
 
+export type { DecisionAnswerCapabilities } from "./decision-answer-capabilities.js";
+
 export type {
   ModelInferenceCapabilities,
   ModelDecisionCapabilities,

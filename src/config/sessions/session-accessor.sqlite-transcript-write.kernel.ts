@@ -161,7 +161,11 @@ export function appendTranscriptMessageSync<TMessage>(
 
 export function appendTranscriptMessageSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
+  options: TranscriptMessageAppendOptions<TMessage> &
+    Pick<
+      import("./session-accessor.types.js").SessionTranscriptTurnMessageAppend,
+      "mentionInvitation"
+    >,
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   workerOptions?: {
     scheduleProjectionReconcile?: boolean;

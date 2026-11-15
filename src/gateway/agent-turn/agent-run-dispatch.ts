@@ -14,7 +14,6 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type {
   FollowupCompletionOwner,
   FollowupReply,
@@ -91,7 +90,6 @@ export function dispatchAgentRunFromGateway(params: {
   cleanupAbortController: () => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
-  canonicalSkillWorkspaceDir?: string;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   /** Privacy classification carried from the resolved session entry. */
   isIncognito?: boolean;
@@ -334,15 +332,13 @@ export function dispatchAgentRunFromGateway(params: {
       readAgentRunDispatchExecutionIdentity(params),
     );
     const invoke = () =>
-      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-        agentCommandFromGatewayIngress(
-          cronCreatorAuthorityCapability
-            ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
-            : ingressOptsWithSpawnFacts,
-          diagnostics.runtime,
-          params.context.deps,
-          params.commandRuntimeContext,
-        ),
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
+          : ingressOptsWithSpawnFacts,
+        diagnostics.runtime,
+        params.context.deps,
+        params.commandRuntimeContext,
       );
     if (followupCompletion) {
       if (

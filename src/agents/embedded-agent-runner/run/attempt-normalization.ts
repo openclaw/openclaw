@@ -42,7 +42,6 @@ import {
   type IdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
-import { resolveRunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -316,6 +315,16 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const lastRunPromptUsage = contextMutatedByMidTurnTruncation
     ? { contextUsage: { state: "unavailable" as const } }
     : callUsage.latest;
+  const nativeContext = attempt.attemptUsage?.contextUsage;
+  if (runtime.pluginHarnessOwnsTransport && nativeContext) {
+    // The native producer orders its final context observation against its own compactions.
+    input.contextRecoveryState.currentContextSnapshot = {
+      tokens:
+        !contextMutatedByMidTurnTruncation && nativeContext.state === "available"
+          ? nativeContext.totalTokens
+          : undefined,
+    };
+  }
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
@@ -399,16 +408,11 @@ export async function normalizeEmbeddedRunAttempt(input: {
       if ((preflightRecovery.truncatedCount ?? 0) > 0) {
         sessionPromptState.markOwnedTranscriptRetry();
       }
-      sessionPromptState.continueFromCurrentTranscript();
+      sessionPromptState.continueFromCurrentTranscript({ replayCurrentUserTurn: true });
     }
-    const retryKind = resolveRunRetryKind({
-      preflightRecovery,
-      retryingFromTranscript,
-      toolMetas: attempt.toolMetas,
-    });
     return {
       action: "retry" as const,
-      retryKind,
+      retryKind: "recovery" as const,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
       replayState,

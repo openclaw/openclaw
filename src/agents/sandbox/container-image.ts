@@ -63,10 +63,10 @@ export async function ensureContainerImage(engine: SandboxContainerEngine, image
   if (image === DEFAULT_SANDBOX_IMAGE) {
     const setup =
       engine.id === "docker"
-        ? "scripts/sandbox-setup.sh before enabling Docker sandboxing"
-        : `podman build -t ${image} -f scripts/docker/sandbox/Dockerfile . before enabling container sandboxing`;
+        ? "Run openclaw doctor --fix to build it before enabling Docker sandboxing"
+        : `Build it with podman build -t ${image} -f scripts/docker/sandbox/Dockerfile . before enabling container sandboxing`;
     throw new Error(
-      `${missingImage} Build it with ${setup}. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:trixie-slim.`,
+      `${missingImage} ${setup}. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:trixie-slim.`,
     );
   }
   throw new Error(`${missingImage} Build or pull it first.`);

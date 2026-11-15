@@ -294,6 +294,12 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
         },
       },
       pluginGeneration,
+      run<T>(run: () => T): T {
+        if (!open) {
+          throw new Error("Prepared model runtime lease is closed");
+        }
+        return run();
+      },
       [Symbol.asyncDispose]: vi.fn(async () => {
         open = false;
       }),

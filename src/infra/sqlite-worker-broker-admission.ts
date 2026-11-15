@@ -8,8 +8,14 @@ import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "./boundary-path.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
+import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -27,6 +33,10 @@ import {
 } from "./sqlite-worker-state-context.js";
 
 export const SQLITE_WORKER_ADMISSION_TIMEOUT_MS = 10_000;
+
+export function waitForSqliteOpen<T>(pending: Promise<T>, signal?: AbortSignal) {
+  return racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+}
 
 export function createSqliteWorkerAdmissionWarning() {
   let nextWarning = 0;
@@ -142,6 +152,7 @@ export function captureSqliteWorkerOpen(
   const carrierUrl = resolveRuntimeWorkerGenerationUrl(carrier, options.runtimeGeneration);
   return {
     ...native,
+    carrierClass: custody.carrierClass ?? options.isolation,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
     maintenanceScope: custody.cleanupAccess
       ? undefined
@@ -193,7 +204,24 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
   validateSqliteWorkerModuleUrl(options.moduleUrl);
   const databasePath = path.resolve(options.databasePath);
   const inputHash = createHash("sha256").update(options.input).digest("hex");
-  const identity = await readDatabasePathIdentity(databasePath);
+  const identity = await prepareSqliteDatabaseAdmissionAsync({
+    location: databasePath,
+    ...(options.expectedIdentity
+      ? {
+          expectedIdentity: {
+            key: options.expectedIdentity,
+            birthtime: options.expectedBirthtime,
+          },
+        }
+      : {}),
+    assertCurrent: () => {
+      options.signal?.throwIfAborted();
+      options.assertCurrent?.();
+    },
+  });
+  if (!identity) {
+    throw new Error("SQLite worker database path must identify a regular file");
+  }
   options.assertCurrent?.();
   if (
     options.expectedIdentity &&
@@ -399,4 +427,56 @@ export function prepareSqliteWorkerActorContext(
     return delivered;
   }
   return undefined;
+}
+
+/** The captured opening and companion locators own the exact file-creation allowlist. */
+export function captureSqliteWorkerCreationPaths(source: {
+  opening?: readonly string[];
+  companions?: { primary: string; paths: readonly string[] };
+}) {
+  const select = (resolved: ReadonlyMap<string, string>, location: string) => {
+    const allowed = new Set(source.opening?.map((entry) => resolved.get(entry)));
+    if (source.companions) {
+      const primary = resolved.get(source.companions.primary);
+      for (const companion of source.companions.paths) {
+        const target = resolved.get(companion);
+        if (target !== primary) {
+          allowed.add(target);
+        }
+      }
+    }
+    if (!allowed.has(resolved.get(location))) {
+      throw new SqliteWorkerError(
+        "SQLite creation target differs from its captured database",
+        "closed",
+      );
+    }
+  };
+  const locations = (location: string) =>
+    new Set([
+      ...(source.opening ?? []),
+      ...(source.companions ? [source.companions.primary, ...source.companions.paths] : []),
+      location,
+    ]);
+  return {
+    assertCreate(location: string) {
+      select(
+        new Map(
+          [...locations(location)].map((entry) => [
+            entry,
+            resolveIdentityPathViaExistingAncestorSync(entry),
+          ]),
+        ),
+        location,
+      );
+    },
+    async prepareCreate(location: string) {
+      const resolved = await Promise.all(
+        [...locations(location)].map(
+          async (entry) => [entry, await resolveIdentityPathViaExistingAncestor(entry)] as const,
+        ),
+      );
+      select(new Map(resolved), location);
+    },
+  };
 }

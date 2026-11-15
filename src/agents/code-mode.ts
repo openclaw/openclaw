@@ -32,21 +32,29 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
+import { describeRequiredHumanActionTool } from "./tool-description-presets.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   applyToolCatalogCompaction,
   compactToolSearchCatalogEntry,
   isDirectVisibleCatalogTool,
 } from "./tool-search-catalog.js";
-import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
+import {
+  hasToolUsageRanking,
+  selectUsageRankedToolRows,
+  type ToolUsageRankingSnapshot,
+} from "./tool-usage-ranking.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
@@ -108,26 +116,47 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
   ].join("\n");
 }
 
-function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+function formatCodeModeCatalogIndex(
+  bindings: readonly CodeModeCatalogBinding[],
+  usageRanking?: ToolUsageRankingSnapshot,
+): string {
   const priority = (entry: CodeModeCatalogBinding) =>
     entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
       ? 0
       : entry.output
         ? 1
         : 2;
-  const lines = bindings
+  const rows = bindings
     // Keep the same core file/shell contracts visible as Tool Search, even without
     // declared outputs. Otherwise catalog growth hides their input argument names.
     .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
-    .map(
-      (entry) => `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
-    );
+    .map((entry) => ({
+      id: entry.id,
+      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+      pinned: priority(entry) === 0,
+    }));
+  const lines = rows.map((row) => row.line);
   if (lines.length === 0) {
     return "";
   }
   const fullIndex = renderCodeModeCatalogIndex(lines, lines.length);
   if (fullIndex.length <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
     return fullIndex;
+  }
+  if (hasToolUsageRanking(usageRanking)) {
+    const selected = selectUsageRankedToolRows(
+      rows,
+      usageRanking,
+      MAX_CODE_MODE_CATALOG_INDEX_CHARS,
+      (included) =>
+        CODE_MODE_CATALOG_INDEX_HEADING.length +
+        2 +
+        codeModeCatalogIndexFooter(included, lines.length).length,
+    );
+    return renderCodeModeCatalogIndex(
+      selected.map((row) => row.line),
+      lines.length,
+    );
   }
 
   // Skip oversized entries instead of letting one blank the remaining index.
@@ -152,6 +181,7 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
 export function buildCodeModeCatalogPrompt(
   ctx: CodeModeToolContext,
   catalog: readonly ToolSearchCatalogEntry[],
+  usageRanking?: ToolUsageRankingSnapshot,
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
   // Native tools have schema-derived declarations too; keep remote schemas deferred.
@@ -182,23 +212,31 @@ export function buildCodeModeCatalogPrompt(
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
       : "") +
     (hasSkillTool("skills_read")
-      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly."
+      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly. For local skill companions use `await skills.read(name, relativePath)`; restricted placements are instruction-only."
       : "");
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
+  // MCP tools bind through namespaces, so skip rendering their compact hints here.
   const bindings = createCodeModeCatalogBindings(
-    catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
+    catalog
+      .filter((entry) => entry.source !== "mcp")
+      .map((entry) => compactToolSearchCatalogEntry(entry)),
   );
-  const catalogIndex = formatCodeModeCatalogIndex(bindings);
+  const catalogIndex = formatCodeModeCatalogIndex(bindings, usageRanking);
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
     ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
+    : "";
+  const askUserTool = bindings.find((entry) => entry.id === "openclaw:core:ask_user");
+  const humanActionGuidance = askUserTool
+    ? describeRequiredHumanActionTool(askUserTool.callableName)
     : "";
   return [
     [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
       .join("")
       .trim(),
     namespacePrompt,
+    humanActionGuidance,
     catalogIndex,
   ]
     .filter(Boolean)
@@ -229,7 +267,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     markCodeModePermissionChangeResult(result, signal);
     const controlResult = formatToolSearchControlResult(result, runtime, {
       terminalBatchStatus: result.status,
-      compact: true,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
     return recordCodeModeToolOutcome(

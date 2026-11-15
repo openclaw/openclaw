@@ -53,7 +53,7 @@ beforeEach(async () => {
 });
 
 it("forbids cross-agent targets outside the requester's allowlist", async () => {
-  setConfig({ subagents: { allowAgents: ["alpha"] } });
+  setConfig({ subagents: { allowAgents: ["alpha"] } }, { alpha: {}, beta: {} });
   expectRejected(await spawn("beta"));
 });
 

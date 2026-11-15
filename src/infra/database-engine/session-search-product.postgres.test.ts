@@ -203,6 +203,10 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect((await search("& | ! ()")).hits).toEqual([]);
     expect((await search("x".repeat(4096))).hits).toEqual([]);
     expect((await search("x ".repeat(2048).trim())).hits).toEqual([]);
+    await append("cjk", "cjk-hit", "明天开会议讨论 cat");
+    expect(await hitIds("会议 -")).toEqual(["cjk-hit"]);
+    expect(await hitIds("会议 cat -")).toEqual(["cjk-hit"]);
+    expect(await hitIds("会议 missing -")).toEqual([]);
   });
 
   it("snippets the passage holding a punctuation-joined match and keeps its punctuation", async () => {

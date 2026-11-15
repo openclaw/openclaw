@@ -100,12 +100,12 @@ export function emitToolExecutionStart(
   });
 }
 
-export async function emitToolExecutionEnd(
+export function emitToolExecutionEnd(
   finalized: FinalizedToolCallOutcome,
   batch: { emit: AgentEventSink; assistantMessage: AssistantMessage },
-): Promise<void> {
+): ReturnType<AgentEventSink> {
   const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
-  await batch.emit({
+  return batch.emit({
     type: "tool_execution_end",
     toolCallId: finalized.toolCall.id,
     ...(assistantTurnId ? { assistantTurnId } : {}),

@@ -3,21 +3,35 @@
 .people-menu__search {
   position: sticky;
   top: 0;
-  z-index: 1;
-  padding: 6px 8px;
+  /* Focused menu rows use layer 1; they must not cover the search field. */
+  z-index: 2;
+  margin-block-end: 4px;
+  padding: 6px 8px 0;
   background: var(--popover);
 }
 
-.people-menu__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
+/* Cover the menu gutters too, including a focused row's outline. */
+.oc-menu > .people-menu__search:first-child {
+  top: calc(-1 * var(--menu-padding));
+  margin-block-start: calc(-1 * var(--menu-padding));
+  margin-inline: calc(-1 * var(--menu-padding));
+  padding-block-start: calc(6px + var(--menu-padding));
+  padding-inline: calc(8px + var(--menu-padding));
+}
+
+/* Owner rows lead with a 24px avatar slot. The divider is the sticky edge, so scrolled rows
+   tuck under it instead of showing as fragments below it. */
+.people-menu__search > .header-search {
+  --header-search-icon-slot: 24px;
+  --header-search-gap: 6px;
+
+  margin-block-end: 0;
+  padding-inline-start: 0;
+}
+
+/* Group rows have no leading icon, so the search icon starts on their text. */
+.session-menu__group-search > .header-search {
+  --header-search-icon-slot: 14px;
 }
 
 .people-menu__status {
@@ -26,11 +40,15 @@
   font-size: 11px;
 }
 
-.people-menu__submenu + .oc-menu {
-  width: min(320px, calc(100vw - 24px));
-  max-height: min(420px, 60vh);
+/* Long session-menu lists share one cap; about ten rows and half of the next show it scrolls. */
+.session-menu__list-submenu + .oc-menu {
+  max-height: min(366px, 60vh);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.people-menu__submenu + .oc-menu {
+  width: min(320px, calc(100vw - 24px));
 }
 
 .session-menu__advanced + .oc-menu {
@@ -41,11 +59,9 @@
   padding: 2px 8px;
 }
 
-.session-menu__communication-heading {
-  margin: 4px 0 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
+/* The section already insets its rows, so its heading starts on that inset. */
+.oc-menu-heading.session-menu__communication-heading {
+  padding-inline: 0;
 }
 
 .session-menu__communication-row {
@@ -99,11 +115,7 @@
 .session-menu__snooze-picker {
   width: 300px;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   color: var(--text);
-  box-shadow: var(--shadow-lg);
 }
 
 .session-menu__snooze-picker .field {
@@ -136,9 +148,8 @@
   min-width: 0;
   max-width: calc(100dvw - 20px);
   padding: 4px;
-  border-radius: 16px;
+  border-radius: var(--menu-radius);
   background: var(--popover);
-  corner-shape: round;
 }
 
 .chat-header-session-menu--mobile.session-menu .oc-menu .oc-menu {
@@ -151,7 +162,7 @@
   min-height: 40px;
   gap: 10px;
   padding: 5px 12px;
-  border-radius: 12px;
+  border-radius: var(--menu-item-radius);
   font-size: var(--control-ui-text-md);
   line-height: calc(20px * var(--control-ui-text-scale));
 }
@@ -240,7 +251,7 @@
   gap: 10px;
   padding: 10px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   text-align: start;
@@ -290,7 +301,7 @@
   gap: 8px;
   min-height: 44px;
   padding: 0 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--muted);
 }
@@ -315,7 +326,7 @@
 
 .session-actions-page__group {
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
 }
 
@@ -353,7 +364,7 @@
 .session-actions-page .session-menu__color-choice {
   min-height: 44px;
   width: 100%;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
 }
 
@@ -377,33 +388,8 @@
 }
 
 .session-actions-page--advanced .session-actions-page__row > .session-actions-page__switch {
-  position: relative;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--border-strong);
-}
-
-.session-actions-page__switch::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--text);
-  content: "";
-}
-
-.session-actions-page--advanced
-  .session-actions-page__row
-  > .session-actions-page__switch[data-checked="true"] {
-  background: var(--accent);
-}
-
-.session-actions-page__switch[data-checked="true"]::after {
-  transform: translateX(12px);
+  display: inline-flex;
+  flex: none;
 }
 
 .session-actions-page__communication .session-menu__communication {
@@ -478,14 +464,9 @@
   height: 26px;
 }
 
-.session-menu__appearance--mobile .session-menu__icon-section-label {
-  text-transform: none;
-  letter-spacing: normal;
-  margin: 0 12px 8px;
-  padding: 0;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 400;
-  color: var(--muted);
+.session-menu__appearance--mobile .oc-menu-heading.session-menu__icon-section-label {
+  margin-inline: 12px;
+  padding-inline: 0;
 }
 
 .session-actions-page .session-menu__appearance--mobile .session-menu__colors,
@@ -578,24 +559,10 @@
 .oc-menu.sidebar-customize-menu {
   position: fixed;
   z-index: 120;
-  min-width: 224px;
+  min-width: 220px;
   max-width: 264px;
   max-height: 420px;
   overflow-y: auto;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
-.sidebar-customize-menu__title {
-  padding: 6px 8px 8px;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 /* Keep expanded state separate from :hover so hover media scoping preserves
@@ -634,29 +601,17 @@
   text-overflow: ellipsis;
 }
 
-.sidebar-customize-menu__separator {
-  margin: 6px 4px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-.sidebar-session-sort-menu__title {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .session-menu__info {
   padding: 4px 8px 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
+/* Also used by compact sheets and plain panels outside the shared menu surface. */
 .session-menu__separator {
+  height: 1px;
   margin: 4px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: var(--border);
 }
 
 .session-menu__appearance {
@@ -679,7 +634,6 @@
 .session-menu__color-choice {
   display: grid;
   place-items: center;
-  box-sizing: border-box;
   width: 28px;
   height: 28px;
   padding: 2px;
@@ -733,18 +687,12 @@
   gap: 3px;
 }
 
-.session-menu__icon-section-label {
-  padding: 4px 4px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  text-transform: uppercase;
+/* The label starts on the swatch grid's edge rather than a row's text inset. */
+.oc-menu-heading.session-menu__icon-section-label {
+  padding-inline: 4px;
 }
 
 .session-menu__icon-choice {
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -911,7 +859,7 @@
 .sidebar-agent-menu__agent-switch,
 .sidebar-agent-menu__create {
   flex: none;
-  min-height: 44px;
+  min-height: 36px;
   min-width: 0;
   padding: 0 !important;
   color: var(--muted) !important;
@@ -931,14 +879,22 @@
   color: var(--text-strong) !important;
 }
 
+.oc-menu-item.sidebar-agent-menu__agent-switch--active {
+  background: var(--menu-selected);
+}
+
+.oc-menu-item.sidebar-agent-menu__agent-switch--active:is(:hover, :focus-visible) {
+  background: var(--surface-selected-hover) !important;
+}
+
 .sidebar-agent-menu__agent-row {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px;
+  min-height: 36px;
+  padding: 6px 8px;
 }
 
 .sidebar-agent-menu__agent-avatar {
@@ -1121,9 +1077,10 @@
 }
 
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
+/* Agent rows: 36 tall around a 24px avatar. */
 .sidebar-agent-menu {
-  --agent-avatar-size: 28px;
-  --agent-avatar-glyph-size: 18px;
+  --agent-avatar-size: 24px;
+  --agent-avatar-glyph-size: 16px;
 }
 
 .oc-menu.sidebar-agent-menu {
@@ -1137,7 +1094,7 @@
 }
 
 .sidebar-agent-menu > .sidebar-customize-menu__item,
-.sidebar-agent-menu > .sidebar-customize-menu__title {
+.sidebar-agent-menu > .oc-menu-heading {
   flex: none;
 }
 
@@ -1149,25 +1106,26 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
-  scrollbar-width: thin;
 }
 
 .oc-menu.sidebar-identity-menu {
-  min-width: max(224px, var(--sidebar-identity-menu-min-width, 224px));
-  border-color: transparent;
-  border-radius: var(--radius-md);
-  box-shadow:
-    0 0 0 1px var(--overlay-border),
-    var(--overlay-shadow);
+  width: max(304px, var(--sidebar-identity-menu-min-width, 304px));
+  min-width: 0;
+  max-width: calc(100dvw - 16px);
+  max-height: calc(100dvh - 16px);
+}
+
+/* On touch the identity menu keeps compact 36px rows. */
+@media (pointer: coarse) {
+  .oc-menu.sidebar-identity-menu {
+    --menu-item-height: 36px;
+  }
 }
 
 .sidebar-identity-menu__avatar {
   display: inline-grid;
-  width: 20px;
   height: 26px;
   place-items: center;
-  overflow: visible;
 }
 
 .sidebar-identity-menu__avatar .viewer-avatar--footer {
@@ -1186,7 +1144,6 @@
 
 .sidebar-identity-menu__name {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -1198,34 +1155,24 @@
 
 .sidebar-identity-menu .sidebar-customize-menu__text {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
-.sidebar-identity-menu .sidebar-customize-menu__item {
-  padding-inline: 4px;
-}
-
-.sidebar-identity-menu .sidebar-customize-menu__separator {
-  margin-block: 4px;
-}
-
-.sidebar-identity-menu .nav-item__icon,
-.sidebar-identity-menu .sidebar-gateway-health-slot {
-  width: 20px;
-  height: 20px;
+/* One leading column: every label starts on one x, and the avatar fills it. */
+.sidebar-identity-menu
+  :is(.nav-item__icon, .sidebar-gateway-health-slot, .sidebar-identity-menu__avatar) {
+  flex: 0 0 26px;
+  width: 26px;
 }
 
 .sidebar-gateway-health-slot {
   display: flex;
-  flex: none;
   align-items: center;
   justify-content: center;
 }
 
-.sidebar-identity-menu__help .oc-menu-item__submenu-icon {
-  inset-inline-end: 4px;
-  width: 16px;
-  height: 16px;
+.sidebar-identity-menu__space {
+  flex: none;
+  height: 10px;
 }
 
 .sidebar-identity-menu__footer {
@@ -1234,7 +1181,7 @@
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  padding: 2px 4px;
+  padding: 2px 8px;
 }
 
 .sidebar-identity-menu__update-badge {
@@ -1252,6 +1199,8 @@
   flex: none;
   width: 28px;
   height: 28px;
+  /* The 28px hit area overhangs the 24px avatar line so the row stays 36. */
+  margin-block: -2px;
   padding: 6px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -1303,7 +1252,6 @@
 }
 
 .sidebar-session-sort-menu.oc-menu {
-  box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
 }
 
@@ -1327,12 +1275,6 @@
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-}
-
-.session-menu__shortcut.sidebar-session-owner-count {
-  min-width: 0;
-  margin-inline-end: -2px;
-  text-align: right;
 }
 
 .session-menu__shortcut.sidebar-session-owner-selection {
@@ -1374,8 +1316,6 @@
   max-width: calc(100dvw - var(--space-6));
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
   line-height: 1.55;
 }
@@ -1389,36 +1329,20 @@
   display: grid;
 }
 
-.sidebar-session-menu-section + .sidebar-session-menu-section,
-.sidebar-session-menu-footer {
-  margin-block-start: var(--space-2);
-  padding-block-start: var(--space-2);
-  border-block-start: 1px solid var(--border);
-}
-
-/* The header keeps its height with or without Reset, so its label never moves. */
-.sidebar-session-menu-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  box-sizing: border-box;
-  min-height: var(--sidebar-filter-row-height);
-  padding: 0 var(--sidebar-filter-row-inset);
-}
-
-.sidebar-session-menu-heading h3 {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
-  text-transform: uppercase;
+/* Sections meet at the menu divider: a hairline on the rows' text inset. */
+.sidebar-session-menu-section + .sidebar-session-menu-section::before,
+.sidebar-session-menu-footer::before {
+  content: var(--sidebar-filter-divider, "");
+  display: block;
+  height: 1px;
+  margin: var(--space-1) var(--sidebar-filter-row-inset);
+  background: var(--border);
 }
 
 .sidebar-session-menu-row,
 .sidebar-session-menu-switch,
 .sidebar-session-filter-footer,
 .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
-  box-sizing: border-box;
   min-height: var(--sidebar-filter-row-height);
   padding: 0 var(--sidebar-filter-row-inset);
   border-radius: var(--menu-item-radius);
@@ -1426,16 +1350,6 @@
 
 .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
   border: 0;
-}
-
-/* Boxed-control rows pin the label to the control's line so an inline owner
-   list can grow below it on the mobile sheet. */
-.sidebar-session-menu-row {
-  display: grid;
-  grid-template-columns: calc(var(--space-6) * 4) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-2);
-  padding-block: calc((var(--sidebar-filter-row-height) - var(--settings-control-height)) / 2);
 }
 
 .sidebar-session-menu-row > :is(label, span) {
@@ -1451,8 +1365,10 @@
    move the whole control onto its own full-width line instead of clipping. */
 .sidebar-session-menu-row--segmented {
   display: flex;
+  align-items: start;
   flex-wrap: wrap;
-  row-gap: var(--space-1);
+  gap: var(--space-1) var(--space-2);
+  padding-block: calc((var(--sidebar-filter-row-height) - var(--settings-control-height)) / 2);
 }
 
 .sidebar-session-menu-row--segmented > span {
@@ -1476,23 +1392,13 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.sidebar-session-menu-row .picker-select__trigger {
-  height: var(--settings-control-height);
-  padding-inline: var(--space-2);
-}
-
-.sidebar-session-menu-row .picker-select__label {
-  font-weight: var(--control-ui-font-weight-normal);
-}
-
 .sidebar-session-filter-panel :is(.picker-select, .picker-select__trigger, .picker-select__option) {
   font-size: inherit;
   line-height: inherit;
 }
 
 .sidebar-session-menu-switch,
-.sidebar-session-filter-footer,
-.sidebar-session-menu-reset {
+.sidebar-session-filter-footer {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1506,12 +1412,11 @@
 }
 
 .sidebar-session-menu-switch:hover,
-.sidebar-session-filter-footer:hover,
-.sidebar-session-menu-reset:hover {
+.sidebar-session-filter-footer:hover {
   background: var(--bg-hover);
 }
 
-.sidebar-session-filter-panel :is(button, a, input):focus-visible {
+.sidebar-session-filter-panel :is(button:not(.picker-select__trigger), a, input):focus-visible {
   outline: var(--control-ui-focus-ring);
   outline-offset: var(--control-ui-focus-ring-offset);
 }
@@ -1525,47 +1430,15 @@
   box-shadow: none;
 }
 
-.sidebar-session-filter-panel
-  .picker-select
-  > :not([data-keyboard])
-  .picker-select__option[data-active] {
-  outline: none;
-}
-
 /* Choice lists read like the session menus: plain left-aligned rows, the
    neutral hover background, and a trailing accent check for the selection. */
-.sidebar-session-filter-panel .picker-select__menu {
-  padding: var(--menu-padding);
-}
-
 .sidebar-session-filter-panel .picker-select__option {
   min-height: var(--menu-item-height);
-  padding: 0 8px;
-  border-radius: var(--menu-item-radius);
-}
-
-.sidebar-session-filter-panel .picker-select__option[aria-selected="true"] {
-  background: transparent;
-  box-shadow: none;
-}
-
-.sidebar-session-filter-panel
-  :is(.picker-select__option:hover, [data-keyboard] .picker-select__option[data-active]) {
-  background: var(--bg-hover);
+  padding: 5px 8px;
 }
 
 .sidebar-session-filter-panel .picker-select__option .picker-select__copy {
   flex: 1 1 auto;
-}
-
-.sidebar-session-filter-panel .picker-select__option .picker-select__label {
-  font-weight: var(--control-ui-font-weight-normal);
-}
-
-.sidebar-session-filter-panel .picker-select__check {
-  flex-basis: 14px;
-  width: 14px;
-  color: var(--accent);
 }
 
 .sidebar-session-menu-switch > span:first-child {
@@ -1574,16 +1447,6 @@
 
 .sidebar-session-menu-switch .settings-toggle {
   pointer-events: none;
-}
-
-/* Reset's text ends on the controls' edge; its padded hover surface extends past it. */
-.sidebar-session-menu-reset {
-  width: auto;
-  min-height: 0;
-  margin-inline-end: calc(-1.5 * var(--space-1));
-  padding: var(--space-1) calc(1.5 * var(--space-1));
-  border-radius: var(--menu-item-radius);
-  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session-filter-footer > span {
@@ -1615,7 +1478,7 @@
   height: 100%;
   padding: 0;
   border: 0;
-  background: color-mix(in srgb, black 42%, transparent);
+  background: var(--overlay-modal-backdrop);
   animation: fade-in var(--motion-sheet);
 }
 
@@ -1659,7 +1522,7 @@
   padding-inline: var(--chat-mobile-edge-inset);
   padding-block-end: calc(var(--menu-padding) + var(--shell-safe-area-bottom));
   border-width: 1px 0 0;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
   animation: sidebar-sheet-in var(--motion-sheet);
 }
 
@@ -1667,9 +1530,40 @@
   margin-inline: auto;
 }
 
-/* An open choice page owns scrolling until Back returns to the sheet. */
+/* The active page contributes its own content height, rather than inheriting
+   the root's row count. The sheet cap still leaves scrolling to its option list. */
 .sidebar-session-filter-panel:has(.picker-select--sheet [aria-expanded="true"]) {
+  --sidebar-filter-divider: none;
+
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+
+  .sidebar-session-menu-section {
+    display: contents;
+
+    & > :not(.picker-select--sheet:has([aria-expanded="true"])) {
+      display: none;
+    }
+  }
+
+  .picker-select--sheet {
+    &,
+    & > div {
+      display: contents;
+    }
+  }
+
+  .sidebar-session-menu-footer,
+  .picker-select__trigger {
+    display: none;
+  }
+
+  .picker-select__menu {
+    position: static;
+    min-height: 0;
+    padding: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1704,8 +1598,266 @@
   display: none;
 }
 
-.sidebar-customize-menu__trigger {
+/* OpenClaw ID uses the same columns and type scale as every sidebar menu. */
+.sidebar-openclaw-id__initial {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-accent);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.oc-menu.sidebar-identity-menu .sidebar-openclaw-id__card {
+  flex: none;
+  margin-block: 4px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  font-size: var(--control-ui-text-sm);
+  overflow: hidden;
+  transition: background 140ms ease;
+
+  &:hover,
+  &.oc-menu-item:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  &:active,
+  &.oc-menu-item:active {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  & .oc-menu-item__details {
+    color: var(--muted);
+    transition: color 140ms ease;
+  }
+
+  &:hover .oc-menu-item__details {
+    color: var(--text-strong);
+  }
+
+  & .oc-menu-item__details svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* The card owns its hover fill, including cards containing a native menu row. */
+.oc-menu.sidebar-identity-menu .sidebar-openclaw-id__card:is(:hover, :active) .oc-menu-item {
+  background: transparent;
+}
+
+.sidebar-openclaw-id__card .sidebar-customize-menu__item {
+  min-height: 36px;
+  font-weight: 500;
+}
+
+.sidebar-identity-menu .sidebar-openclaw-id__status {
   display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 14px 10px;
+
+  & > .nav-item__icon {
+    flex: 0 0 15px;
+    width: 15px;
+  }
+}
+
+.sidebar-openclaw-id__lines {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+  line-height: 18px;
+}
+
+.sidebar-openclaw-id__detail {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 16px;
+}
+
+.sidebar-openclaw-id__pill {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  line-height: 18px;
+}
+
+.sidebar-openclaw-id__pill::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--muted);
+  content: "";
+}
+
+.sidebar-openclaw-id__pill[data-online="true"]::before {
+  background: var(--ok);
+  box-shadow: none;
+}
+
+.sidebar-openclaw-id__linked.oc-menu-item {
+  padding: 9px 14px 10px;
+  font-weight: 500;
+  letter-spacing: inherit;
+
+  & .sidebar-openclaw-id__linked-content {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr) auto;
+    gap: 3px 12px;
+    align-items: center;
+    width: 100%;
+  }
+
+  & .nav-item__icon {
+    width: 15px;
+    height: 18px;
+    color: var(--muted);
+  }
+
+  & .sidebar-openclaw-id__detail {
+    grid-column: 2 / 4;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.sidebar-openclaw-id__label {
+  color: var(--text-strong);
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-openclaw-id__trailing {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+
+  & > * {
+    grid-area: 1 / 1;
+    transition: opacity 140ms ease;
+  }
+
+  & .sidebar-openclaw-id__pill {
+    font-weight: 400;
+  }
+}
+
+.sidebar-openclaw-id__copy {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    color 140ms ease;
+
+  & svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+@media (hover: hover) {
+  .sidebar-openclaw-id__linked:is(:hover, :focus-visible, [data-copied="true"])
+    .sidebar-openclaw-id__pill {
+    opacity: 0;
+  }
+}
+
+.sidebar-openclaw-id__linked:is(:hover, :focus-visible, [data-copied="true"]) {
+  & .sidebar-openclaw-id__copy {
+    opacity: 1;
+  }
+}
+
+.sidebar-openclaw-id__linked:hover .sidebar-openclaw-id__copy {
+  color: var(--text-strong);
+}
+
+.sidebar-openclaw-id__copy-a,
+.sidebar-openclaw-id__copy-b {
+  display: grid;
+  place-items: center;
+  grid-area: 1 / 1;
+  transition:
+    opacity 160ms ease,
+    scale 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.sidebar-openclaw-id__copy-b {
+  opacity: 0;
+  scale: 0.6;
+  color: var(--ok);
+}
+
+.sidebar-openclaw-id__linked[data-copied="true"] {
+  & .sidebar-openclaw-id__copy-a {
+    opacity: 0;
+    scale: 0.6;
+  }
+
+  & .sidebar-openclaw-id__copy-b {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-identity-menu .sidebar-openclaw-id__card,
+  .sidebar-identity-menu .sidebar-openclaw-id__card * {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-delay: 0.01ms !important;
+  }
+}
+
+@media (hover: none) {
+  .sidebar-openclaw-id__trailing {
+    grid-auto-flow: column;
+    column-gap: 10px;
+
+    & > * {
+      grid-area: auto;
+    }
+  }
+
+  .sidebar-openclaw-id__linked .sidebar-openclaw-id__pill,
+  .sidebar-openclaw-id__linked .sidebar-openclaw-id__copy {
+    opacity: 1;
+  }
+}
+
+.sidebar-openclaw-id__sign-in.oc-menu-item {
+  margin-bottom: 0;
+  font-weight: 500;
+  letter-spacing: inherit;
+
+  & .sidebar-openclaw-id__detail {
+    padding-bottom: 1px;
+    text-wrap: pretty;
+  }
+}
+
+.sidebar-openclaw-id__sign-in:disabled {
+  color: var(--muted);
+  font-weight: 400;
+  opacity: 1;
 }

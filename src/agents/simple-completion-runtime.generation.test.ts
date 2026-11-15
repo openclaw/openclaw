@@ -1,3 +1,4 @@
+import { AsyncLocalStorage as InvocationStore } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -13,18 +14,25 @@ import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js
 import {
   assertPrepared,
   completionConfig,
+  completionContext,
   completionModel,
 } from "./simple-completion.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntimeLease: vi.fn(),
   disposeRuntime: vi.fn(async () => {}),
+  complete: vi.fn(),
   getApiKeyForModel: vi.fn(),
   prepareProviderRuntimeAuth: vi.fn(),
   resolvePluginMetadataSnapshot: vi.fn(),
   publishedGeneration: "A",
   readGeneration: (() => "unscoped") as () => string,
 }));
+
+// mock-isolation: generation assertions use a synthetic completion without provider I/O.
+vi.mock("../llm/stream.js", () => ({ completeSimple: mocks.complete }));
+// mock-isolation: injected registries own the test; do not install process-wide transport hooks.
+vi.mock("./ai-transport-runtime-host.js", () => ({}));
 
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireRuntimeLease,
@@ -76,6 +84,7 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
 import {
   prepareSimpleCompletionModel,
   acquireSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModel,
 } from "./simple-completion-runtime.js";
 
 function createOllamaModelResolver(): SimpleCompletionModelResolver {
@@ -87,11 +96,13 @@ function createOllamaModelResolver(): SimpleCompletionModelResolver {
 }
 
 let preparedModelRuntime: PreparedModelRuntimeSnapshot & { testGeneration: string };
+const invocation = new InvocationStore<boolean>();
 
 beforeEach(() => {
   mocks.publishedGeneration = "A";
   mocks.acquireRuntimeLease.mockReset();
   mocks.disposeRuntime.mockReset();
+  mocks.complete.mockReset().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
   mocks.getApiKeyForModel.mockReset().mockResolvedValue({
     apiKey: "ollama-local",
     source: "local marker",
@@ -114,9 +125,42 @@ beforeEach(() => {
     workspaceDir: "/tmp/runtime-workspace",
   };
   mocks.acquireRuntimeLease.mockResolvedValue({
+    run: <T>(run: () => T): T => invocation.run(true, run),
     snapshot: preparedModelRuntime,
     [Symbol.asyncDispose]: mocks.disposeRuntime,
   });
+});
+
+it("keeps acquired completion execution on its admitted generation until release", async () => {
+  const acquired = await acquireSimpleCompletionModelForAgent({
+    cfg: {},
+    agentId: "main",
+    modelRef: "ollama/fixture-model",
+    modelResolver: createOllamaModelResolver(),
+  });
+  assertPrepared(acquired);
+  mocks.publishedGeneration = "B";
+  const observed: unknown[] = [];
+  mocks.complete.mockImplementation(async () => {
+    await Promise.resolve();
+    observed.push([mocks.readGeneration(), invocation.getStore()]);
+    return { content: [{ type: "text", text: "ok" }] };
+  });
+  const execute = () =>
+    completeWithPreparedSimpleCompletionModel({
+      model: acquired.model,
+      auth: acquired.auth,
+      context: completionContext("describe the fixture"),
+    });
+  try {
+    await execute();
+    expect(observed).toEqual([["A", true]]);
+  } finally {
+    await acquired[Symbol.asyncDispose]();
+  }
+  await expect(execute()).rejects.toThrow("Prepared completion model has been released");
+  expect(mocks.complete).toHaveBeenCalledOnce();
+  expect(mocks.disposeRuntime).toHaveBeenCalledOnce();
 });
 
 it("keeps route rematerialization and runtime auth on the supplied generation", async () => {

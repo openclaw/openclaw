@@ -163,6 +163,7 @@ module.exports = {
         cache: false,
       });
       expect(pluginIds(root)).toEqual([providerPluginId, toolPluginId]);
+      const toolInstance = getPluginInstance(root.plugins.find(({ id }) => id === toolPluginId)!)!;
       const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
       const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
@@ -181,7 +182,7 @@ module.exports = {
             cfg: inventoryConfig,
             ...inventoryParams,
           });
-          return await acquired.run((runtime) =>
+          const toolInventory = await acquired.run((runtime) =>
             resolveEffectiveToolInventory({
               cfg: inventoryConfig,
               ...inventoryParams,
@@ -191,9 +192,15 @@ module.exports = {
               runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
             }).then((inventory) => inventory.groups.flatMap((group) => group.tools)),
           );
+          // Projection released its inventory hold; the model lease still owns resolved tools.
+          expect(toolInstance.retainedWorkCount).toBe(
+            toolInventory.some(({ id }) => id === toolName) ? 1 : 0,
+          );
+          return toolInventory;
         });
       try {
         const inventory = await resolveInventory(config);
+        expect(toolInstance.retainedWorkCount).toBe(0);
         expect(inventory).toContainEqual(
           expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
         );
@@ -242,7 +249,8 @@ module.exports = {
         generation: [providerPluginId],
         gateway: [providerPluginId, toolPluginId],
         ownerCurrent: [providerPluginId, toolPluginId],
-        retainedWork: 1,
+        // The inventory scope and selected-model lease each retain the resolved tool.
+        retainedWork: 2,
       });
       expect(probes.find((probe) => probe.event === "normalize")).toMatchObject({
         generation: [providerPluginId],

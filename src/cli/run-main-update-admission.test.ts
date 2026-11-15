@@ -8,6 +8,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
+import { updatePreflightCommand } from "./update-cli/update-command-preflight.js";
+import { updateRehearseCommand } from "./update-cli/update-command-rehearse.js";
 
 // The real command's inspection is covered by update-command-admit tests and the published-driver cell.
 // mock-isolation: emits the SQLite budget debug line admission logs mid-inspection, then the verdict.
@@ -20,6 +22,40 @@ vi.mock("./update-cli/update-command-admit.js", () => ({
   }),
 }));
 
+// mock-isolation: exercises early protocol routing without launching the isolated candidate Gateway.
+vi.mock("./update-cli/update-command-preflight.js", () => ({
+  updatePreflightCommand: vi.fn(async () => {
+    createSubsystemLogger("state/sqlite").debug("preflight snapshot inspection");
+    defaultRuntime.writeJson({ protocol: 1, mode: "preflight", status: "ready" });
+  }),
+}));
+
+// mock-isolation: exercises early protocol routing without running a candidate rehearsal.
+vi.mock("./update-cli/update-command-rehearse.js", () => ({
+  updateRehearseCommand: vi.fn(async () => {
+    createSubsystemLogger("state/sqlite").debug("rehearsal snapshot inspection");
+    defaultRuntime.writeJson({ protocol: 1, result: { status: "ok" } });
+  }),
+}));
+
+const protocols = {
+  admit: {
+    input: "--context",
+    stdout: { protocol: 1, verdict: "admit" },
+    stderr: "[state/sqlite] SQLite read-only snapshot for /fixture/",
+  },
+  preflight: {
+    input: undefined,
+    stdout: { protocol: 1, mode: "preflight", status: "ready" },
+    stderr: "[state/sqlite] preflight snapshot inspection",
+  },
+  rehearse: {
+    input: "--request",
+    stdout: { protocol: 1, result: { status: "ok" } },
+    stderr: "[state/sqlite] rehearsal snapshot inspection",
+  },
+} as const;
+
 const initialExitCode = process.exitCode;
 const initialRouting = loggingState.forceConsoleToStderr;
 
@@ -28,48 +64,131 @@ afterEach(() => {
   loggingState.forceConsoleToStderr = initialRouting;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.clearAllMocks();
   resetLogger();
 });
 
-it("routes raised-level console logs to stderr so stdout carries only the verdict", async () => {
+it.each(["admit", "preflight", "rehearse"] as const)(
+  "keeps $0 protocol stdout separate from raised-level logs",
+  async (command) => {
+    for (const key of Object.keys(process.env)) {
+      if (isUpdateAdmissionAuthorityEnvKey(key)) {
+        vi.stubEnv(key, undefined);
+      }
+    }
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
+    vi.stubEnv("OPENCLAW_LOG_LEVEL", "debug");
+    let stdout = "";
+    let stderr = "";
+    const toStdout = (...args: unknown[]) => {
+      stdout += `${args.join(" ")}\n`;
+    };
+    const toStderr = (...args: unknown[]) => {
+      stderr += `${args.join(" ")}\n`;
+    };
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout += String(chunk);
+      return true;
+    });
+    // Subsystem logging writes through the console (or its saved raw sink), not the stream spies.
+    vi.spyOn(console, "log").mockImplementation(toStdout);
+    vi.spyOn(console, "error").mockImplementation(toStderr);
+    if (loggingState.rawConsole) {
+      vi.spyOn(loggingState.rawConsole, "log").mockImplementation(toStdout);
+      vi.spyOn(loggingState.rawConsole, "error").mockImplementation(toStderr);
+    }
+    loggingState.forceConsoleToStderr = false;
+    resetLogger();
+    const inputPath = path.resolve("/fixture/private-input.json");
+    const { input } = protocols[command];
+
+    await expect(
+      tryRunUpdateAdmissionBeforeStartup(
+        resolveCliArgvInvocation([
+          "node",
+          "openclaw",
+          "update",
+          command,
+          ...(input ? [input, inputPath] : ["--json"]),
+        ]),
+      ),
+    ).resolves.toBe(true);
+
+    expect(JSON.parse(stdout)).toEqual(protocols[command].stdout);
+    // CI colorizes the subsystem prefix.
+    expect(stripAnsi(stderr)).toContain(protocols[command].stderr);
+    expect(process.exitCode).toBe(initialExitCode);
+  },
+);
+
+it.each([
+  { args: ["update", "--timeout", "120", "preflight", "--json"] },
+  { args: ["update", "preflight", "--json", "--timeout=120"] },
+])("forwards timeout across the early preflight boundary: $args", async ({ args }) => {
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
       vi.stubEnv(key, undefined);
     }
   }
-  vi.stubEnv("OPENCLAW_PROFILE", undefined);
-  vi.stubEnv("OPENCLAW_LOG_LEVEL", "debug");
-  let stdout = "";
-  let stderr = "";
-  const toStdout = (...args: unknown[]) => {
-    stdout += `${args.join(" ")}\n`;
-  };
-  const toStderr = (...args: unknown[]) => {
-    stderr += `${args.join(" ")}\n`;
-  };
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-    stdout += String(chunk);
-    return true;
-  });
-  // Subsystem logging writes through the console (or its saved raw sink), not the stream spies.
-  vi.spyOn(console, "log").mockImplementation(toStdout);
-  vi.spyOn(console, "error").mockImplementation(toStderr);
-  if (loggingState.rawConsole) {
-    vi.spyOn(loggingState.rawConsole, "log").mockImplementation(toStdout);
-    vi.spyOn(loggingState.rawConsole, "error").mockImplementation(toStderr);
-  }
-  loggingState.forceConsoleToStderr = false;
-  resetLogger();
-  const contextPath = path.resolve("/fixture/admission-context.json");
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(["node", "openclaw", ...args]));
+  expect(updatePreflightCommand).toHaveBeenCalledWith({ timeout: "120" });
+});
 
+it.each(["malformed", "authority"])(
+  "returns one unverified receipt for early %s rejection",
+  async (mode) => {
+    for (const key of Object.keys(process.env)) {
+      if (isUpdateAdmissionAuthorityEnvKey(key)) {
+        vi.stubEnv(key, undefined);
+      }
+    }
+    if (mode === "authority") {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    }
+    let stdout = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout += String(chunk);
+      return true;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await tryRunUpdateAdmissionBeforeStartup(
+      resolveCliArgvInvocation([
+        "node",
+        "openclaw",
+        "update",
+        "preflight",
+        mode === "malformed" ? "--unknown" : "--json",
+      ]),
+    );
+    expect(updatePreflightCommand).not.toHaveBeenCalled();
+    expect(JSON.parse(stdout)).toMatchObject({
+      protocol: 1,
+      mode: "preflight",
+      status: "unverified",
+      reason: "preflight-execution-failed",
+    });
+    expect(process.exitCode).toBe(2);
+  },
+);
+
+it.each([
+  ["a relative request path", ["--request", "request.json"], undefined],
+  ["an unknown option", ["--request", path.resolve("/fixture/request.json"), "--force"], undefined],
+  ["inherited updater authority", ["--request", path.resolve("/fixture/request.json")], "1"],
+] as const)("refuses a rehearsal with %s before startup", async (_name, args, authority) => {
+  for (const key of Object.keys(process.env)) {
+    if (isUpdateAdmissionAuthorityEnvKey(key)) {
+      vi.stubEnv(key, undefined);
+    }
+  }
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", authority);
+  vi.spyOn(console, "error").mockImplementation(() => {});
   await expect(
     tryRunUpdateAdmissionBeforeStartup(
-      resolveCliArgvInvocation(["node", "openclaw", "update", "admit", "--context", contextPath]),
+      resolveCliArgvInvocation(["node", "openclaw", "update", "rehearse", ...args]),
     ),
   ).resolves.toBe(true);
-
-  expect(JSON.parse(stdout)).toEqual({ protocol: 1, verdict: "admit" });
-  // CI colorizes the subsystem prefix.
-  expect(stripAnsi(stderr)).toContain("[state/sqlite] SQLite read-only snapshot for /fixture/");
-  expect(process.exitCode).toBe(initialExitCode);
+  expect(updateRehearseCommand).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(2);
 });

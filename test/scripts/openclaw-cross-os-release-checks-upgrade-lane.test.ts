@@ -171,7 +171,7 @@ function expectUpdateEnv(env: NodeJS.ProcessEnv) {
 
 const updateTimeout = () =>
   new Error(
-    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 1200",
   );
 
 function expectPhases(
@@ -566,7 +566,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       mocks.runCommand.mockImplementationOnce(realProcess.runCommand);
       mocks.runOpenClaw.mockImplementationOnce(realRuntime.runOpenClaw);
       const running = runUpgradeLane(upgradeParams());
-      await vi.advanceTimersByTimeAsync(1_320_000);
+      await vi.advanceTimersByTimeAsync(2_520_000);
       expect(spawnSync).toHaveBeenCalledWith(
         expect.stringMatching(/taskkill\.exe$/u),
         ["/PID", "4242", "/T", "/F"],

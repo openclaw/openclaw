@@ -11,7 +11,7 @@ type CapacityWait = {
 
 type CapacityOwner = {
   active: boolean;
-  outside: <T>(operation: () => Promise<T>) => Promise<T>;
+  outside?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 const capacityOwner = new AsyncContext<CapacityOwner>(Symbol("executionCapacityOwner"));
@@ -75,11 +75,18 @@ export async function withReleasableExecutionCapacity<T>(
     throw error;
   } finally {
     owner.active = false;
+    // Scheduled request contexts can outlive the task captured by this callback.
+    owner.outside = undefined;
   }
 }
 
 /** Suspend only the designated wait; continuation and cleanup reacquire capacity. */
 export function outsideExecutionCapacity<T>(operation: () => Promise<T>): Promise<T> {
   const owner = capacityOwner.getStore();
-  return owner ? owner.outside(operation) : operation();
+  if (!owner) {
+    return operation();
+  }
+  return owner.outside
+    ? owner.outside(operation)
+    : Promise.reject(new Error("Execution capacity is not held"));
 }

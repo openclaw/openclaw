@@ -1,32 +1,71 @@
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
-import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
-import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
-import { replaceWorkspaceAttestation, type WorkspaceAttestation } from "./workspace-state-store.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  validateWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "./workspace-state-guard.js";
+import {
+  mergeWorkspaceSetupState,
+  replaceWorkspaceAttestation,
+  type WorkspaceAttestation,
+} from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 
-const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
+const preparation = resolveGlobalSingleton(
   Symbol.for("openclaw.workspacePreparationQueues"),
+  () => ({
+    queues: new Map<string, StoreWriterQueue>(),
+    admissionTail: Promise.resolve(),
+  }),
 );
 
-/** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
-export function runWorkspacePreparation<T>(
+// The initializer owns seeding even when ordinary turns use this workspace.
+// Persist that custody with setup state so a restart cannot seed defaults.
+export async function deferWorkspaceBootstrap(
   dir: string,
-  prepare: (assertFilesystem: () => void) => Promise<T>,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<() => Promise<void>> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, undefined, options);
+  return () => settleWorkspaceBootstrapDeferral(dir, options);
+}
+
+export async function settleWorkspaceBootstrapDeferral(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<void> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
+}
+
+/** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
+export async function runWorkspacePreparation<T>(
+  dir: string,
+  prepare: (filesystem: WorkspaceFilesystemEvidence) => Promise<T>,
 ): Promise<T> {
-  const assertFilesystem = captureWorkspaceStateFilesystemGuard(dir, false);
-  const canonicalDir = resolveCanonicalWorkspacePath(dir);
-  assertFilesystem();
-  return runQueuedStoreWrite({
-    queues: preparationQueues,
-    storePath: canonicalDir,
-    label: "Workspace preparation",
-    fn: async () => {
-      assertFilesystem();
-      return await prepare(assertFilesystem);
-    },
+  const admission = preparation.admissionTail.then(async () => {
+    const filesystem = await captureWorkspaceFilesystemEvidence(dir);
+    // Preserve invocation order through discovery, but never hold other directories
+    // behind an admitted operation. The wrapper keeps promise adoption out of the tail.
+    return {
+      completion: runQueuedStoreWrite({
+        queues: preparation.queues,
+        storePath: filesystem.canonical,
+        label: "Workspace preparation",
+        fn: async () => {
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          const result = await prepare(filesystem);
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          return result;
+        },
+      }),
+    };
   });
+  preparation.admissionTail = admission.then(
+    () => {},
+    () => {},
+  );
+  return (await admission).completion;
 }
 
 export async function maybeWriteWorkspaceAttestation(
@@ -64,6 +103,8 @@ export async function maybeWriteWorkspaceAttestation(
       assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
       beforeLegacyApply: guard?.beforeLegacyApply,
+      filesystem: guard?.filesystem,
+      stateOwnerPath: guard?.stateOwnerPath,
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
@@ -73,4 +114,13 @@ export async function maybeWriteWorkspaceAttestation(
     // the auxiliary disappearance evidence could not be refreshed.
   }
   assertHost?.();
+}
+
+export function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
+  return (
+    guard && {
+      ...guard,
+      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
+    }
+  );
 }

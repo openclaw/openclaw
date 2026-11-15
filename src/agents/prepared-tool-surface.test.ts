@@ -102,6 +102,69 @@ describe("prepared core tool policy", () => {
       await expect(fs.readFile(path.join(root, "inside.txt"), "utf8")).resolves.toBe("permitted");
     },
   );
+
+  it.each(["session", "required-root"] as const)(
+    "keeps %s recovery within the recorded root when cwd selects another repository",
+    async (source) => {
+      const parent = await fs.realpath(tempDirs.make("prepared-tool-root-recovery-"));
+      const root = path.join(parent, "coordinator");
+      const cwd = path.join(parent, "target");
+      await fs.mkdir(root);
+      await fs.mkdir(cwd);
+      const target = path.join(cwd, "note.txt");
+      await fs.writeFile(target, "unchanged\n");
+      const policy = structuredClone(
+        prepareCoreToolPolicy({
+          sessionPermissionPolicy: { root, mode: source === "session" ? "workspace" : "full" },
+          requireWorkspaceOnly: source === "required-root" ? true : undefined,
+        }),
+      );
+      const tools = createCoreCodingTools({
+        ...policy,
+        codingRoot: cwd,
+        containmentRoot: root,
+        includeBaseCodingTools: true,
+        shellTools: "patch-only",
+        execDefaults: {},
+        processDefaults: {},
+      });
+      const guidance =
+        source === "session"
+          ? /sessions_spawn.*inherits this root.*operator.*session.*recorded root.*target/i
+          : /required root/i;
+      for (const [name, args] of [
+        ["read", { path: "note.txt" }],
+        ["write", { path: "note.txt", content: "changed\n" }],
+        ["edit", { path: "note.txt", edits: [{ oldText: "unchanged", newText: "changed" }] }],
+        ["ls", { path: "." }],
+        [
+          "apply_patch",
+          { input: "*** Begin Patch\n*** Add File: added.txt\n+changed\n*** End Patch" },
+        ],
+      ] as const) {
+        const tool = tools.find((entry) => entry.name === name)!;
+        const failure = await tool.execute(name, args).then(
+          () => {
+            throw new Error(`${name} unexpectedly escaped the recorded root`);
+          },
+          (error: unknown) => error,
+        );
+        expect(failure).toHaveProperty("message", expect.stringMatching(guidance));
+        expect(failure).toHaveProperty("message", expect.not.stringContaining("set cwd"));
+      }
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("unchanged\n");
+      await expect(fs.readdir(cwd)).resolves.toEqual(["note.txt"]);
+      await tools
+        .find((tool) => tool.name === "write")!
+        .execute("inside", {
+          path: path.join(root, "permitted.txt"),
+          content: "permitted",
+        });
+      await expect(fs.readFile(path.join(root, "permitted.txt"), "utf8")).resolves.toBe(
+        "permitted",
+      );
+    },
+  );
 });
 
 it("issues byte-identical definitions to the local session adapter", () => {

@@ -19,17 +19,19 @@ import {
   type ModelPricingSource,
 } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
-import { ModelInferenceCapabilitiesSchema } from "../packages/model-catalog-core/src/model-inference-capabilities.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogBundleV2,
+  RemoteModelCatalogBundleV3,
   RemoteModelCatalogPricing,
   RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { catalogRowCount, catalogSchemaVersion } from "./lib/catalog-compare-released-gate.mts";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { publishModelCatalogPair } from "./lib/publish-model-catalog-files.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -45,6 +47,7 @@ type ModelCatalogManifestInput = {
       suppressions?: Array<{ provider?: string; model?: string; when?: unknown }>;
     };
     modelPricing?: { providers?: Record<string, unknown> };
+    providerAuthChoices?: Array<{ provider?: unknown; onboardingScopes?: unknown }>;
   };
 };
 
@@ -87,8 +90,13 @@ const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 // models.dev serves every provider's metadata in one document (5.1 MiB in October 2026).
 const MAX_MODELS_DEV_CATALOG_BYTES = 32 * 1024 * 1024;
-const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
+// About two weeks of row growth ahead of the cap at the late-2026 rate (~60 rows/week,
+// ~3 KiB per v1 row), and well above the steady v2/v3 size (~45%).
+const CLIENT_BUNDLE_WARNING_RATIO = 0.9;
+// Above the largest drop over 400 scheduled publishes (3.9%), below the share of each of
+// the four largest providers (6-24% of rows). Smaller providers are caught by name.
+const MAX_SHRINK_RATIO = 0.05;
 const RECOMMENDED_MODELS_FILE = "scripts/lib/recommended-models.json";
 const MAX_RECOMMENDED_MODELS = 200;
 // Catalog rows carry no release dates, so recency falls back to version order.
@@ -117,10 +125,36 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   let pricing = false;
   let out: string | undefined;
   let outV2: string | undefined;
+  let outV3: string | undefined;
+  let skipOversizedV1 = false;
+  let allowShrink = false;
+  const previous: { v1?: string; v2?: string; v3?: string } = {};
+  const previousFlags = {
+    "--previous": "v1",
+    "--previous-v2": "v2",
+    "--previous-v3": "v3",
+  } as const;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") {
       dryRun = true;
+      continue;
+    }
+    if (arg === "--skip-oversized-v1") {
+      skipOversizedV1 = true;
+      continue;
+    }
+    if (arg === "--allow-shrink") {
+      allowShrink = true;
+      continue;
+    }
+    if (arg && Object.hasOwn(previousFlags, arg)) {
+      previous[previousFlags[arg as keyof typeof previousFlags]] = requireOptionValue(
+        args,
+        index,
+        arg,
+      );
+      index += 1;
       continue;
     }
     if (arg === "--pricing") {
@@ -137,6 +171,11 @@ export function parsePublishModelCatalogArgs(args: string[]) {
       index += 1;
       continue;
     }
+    if (arg === "--out-v3") {
+      outV3 = requireOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!dryRun && !out) {
@@ -145,8 +184,12 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   return {
     dryRun,
     pricing,
+    skipOversizedV1,
+    allowShrink,
+    previous,
     ...(out ? { out } : {}),
     ...(outV2 ? { outV2 } : {}),
+    ...(outV3 ? { outV3 } : {}),
   };
 }
 
@@ -171,19 +214,66 @@ export function readModelCatalogManifests(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function loadClientBundleValidator(version: 1 | 2 = 1) {
+async function loadClientBundleValidator(version: 1 | 2 | 3 = 1) {
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
   const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
-  const name = version === 1 ? "parseRemoteModelCatalogBundle" : "parseRemoteModelCatalogBundleV2";
+  const name =
+    version === 1 ? "parseRemoteModelCatalogBundle" : `parseRemoteModelCatalogBundleV${version}`;
   const parse = module[name];
   const sanitize = module.sanitizeRemoteModelCatalogBundle;
   if (typeof parse !== "function" || typeof sanitize !== "function") {
     throw new Error("remote catalog bundle validator export is unavailable");
   }
   return (bundle: unknown) => sanitize(parse(bundle));
+}
+
+/** Field paths Zod stripped while parsing `input`; strict publishing refuses them. */
+function strippedKeys(input: unknown, parsed: unknown, at: string): string[] {
+  if (Array.isArray(input)) {
+    return Array.isArray(parsed)
+      ? input.flatMap((value, index) => strippedKeys(value, parsed[index], `${at}[${index}]`))
+      : [];
+  }
+  if (!isRecord(input) || !isRecord(parsed)) {
+    return [];
+  }
+  return Object.entries(input).flatMap(([key, value]) =>
+    Object.hasOwn(parsed, key)
+      ? strippedKeys(value, parsed[key], `${at}.${key}`)
+      : value === undefined
+        ? []
+        : [`${at}.${key}`],
+  );
+}
+
+/**
+ * Providers a manifest offers only on non-chat surfaces, with those surfaces. Auth
+ * choices default to text inference; a provider whose every choice names other scopes
+ * (image or music generation) serves no chat route.
+ */
+function nonChatProviders(manifest: ModelCatalogManifestInput["manifest"]): Map<string, string[]> {
+  const scopes = new Map<string, Set<string>>();
+  for (const choice of manifest.providerAuthChoices ?? []) {
+    if (typeof choice?.provider !== "string") {
+      continue;
+    }
+    const declared = Array.isArray(choice.onboardingScopes)
+      ? choice.onboardingScopes.filter((scope): scope is string => typeof scope === "string")
+      : [];
+    const providerScopes = scopes.get(choice.provider) ?? new Set<string>();
+    for (const scope of declared.length > 0 ? declared : ["text-inference"]) {
+      providerScopes.add(scope);
+    }
+    scopes.set(choice.provider, providerScopes);
+  }
+  return new Map(
+    [...scopes]
+      .filter(([, providerScopes]) => !providerScopes.has("text-inference"))
+      .map(([provider, providerScopes]) => [provider, [...providerScopes]]),
+  );
 }
 
 export async function assembleModelCatalogBundle(options: {
@@ -199,9 +289,25 @@ export async function assembleModelCatalogBundle(options: {
     if (!isRecord(declaredProviders)) {
       continue;
     }
+    const nonChat = nonChatProviders(entry.manifest);
     for (const [providerId, provider] of Object.entries(declaredProviders)) {
       if (Object.hasOwn(providers, providerId)) {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
+      }
+      // Every released and current reader treats a row without `inference` as chat.
+      const surfaces = nonChat.get(providerId);
+      const chatRow =
+        surfaces && isRecord(provider) && Array.isArray(provider.models)
+          ? provider.models.find(
+              (model: unknown) =>
+                !isRecord(model) || !isRecord(model.inference) || model.inference.chat !== false,
+            )
+          : undefined;
+      if (surfaces && chatRow !== undefined) {
+        const id = isRecord(chatRow) ? String(chatRow.id) : "(invalid row)";
+        throw new Error(
+          `${entry.pluginId}: provider ${providerId} is offered only for ${surfaces.join(", ")}; model ${providerId}/${id} must declare inference.chat: false`,
+        );
       }
       if (isRecord(provider)) {
         // Credential ownership belongs to the installed manifest, never a downloaded catalog.
@@ -259,7 +365,7 @@ export async function assembleModelCatalogBundle(options: {
     const declarations = new Map(
       source.models.flatMap((model) =>
         isRecord(model) && typeof model.id === "string" && model.inference !== undefined
-          ? [[model.id.trim(), ModelInferenceCapabilitiesSchema.parse(model.inference)] as const]
+          ? [[model.id.trim(), parseInferenceDeclaration(id, model.id, model.inference)] as const]
           : [],
       ),
     );
@@ -272,6 +378,19 @@ export async function assembleModelCatalogBundle(options: {
   }
   assertModelCatalogCompleteness(validated);
   return validated;
+}
+
+/**
+ * Readers drop inference fields they do not know, so a typo here would publish as a
+ * missing capability. Like row, provider and pricing fields, unknown keys fail publish.
+ */
+function parseInferenceDeclaration(provider: string, modelId: string, inference: unknown) {
+  const parsed = ModelInferenceCapabilitiesSchema.parse(inference);
+  const unknown = strippedKeys(inference, parsed, "inference");
+  if (unknown.length > 0) {
+    throw new Error(`model ${provider}/${modelId.trim()}: unknown field ${unknown.join(", ")}`);
+  }
+  return parsed;
 }
 
 function assertModelCatalogCompleteness(bundle: PublishedModelCatalogBundle) {
@@ -1342,15 +1461,16 @@ export function projectRecommendedModels(
  * A provider's featured models lead its recommendations as listed, so the global family
  * rule never hides a provider pick; the global projection follows without repeats.
  */
-export async function assembleModelCatalogBundleV2(
+export async function assembleVersionedModelCatalogBundle(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
   recommendedModels: readonly string[] = [],
   featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
-): Promise<RemoteModelCatalogBundleV2> {
+  version: 2 | 3 = 2,
+): Promise<RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3> {
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
-  const models: RemoteModelCatalogBundleV2["models"] = [];
+  const models: RemoteModelCatalogBundleV3["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
     const chatModels = provider.models.filter((model) => model.inference?.chat !== false);
     const featured = (featuredModels[providerId]?.ids ?? []).filter((id) =>
@@ -1376,12 +1496,22 @@ export async function assembleModelCatalogBundleV2(
           : provider.defaultUtilityModel,
       ...(recommended.length > 0 ? { recommendedModels: recommended } : {}),
     };
+    if (version === 3) {
+      if (!chatModels.some((model) => model.id === provider.defaultModel)) {
+        delete providers[providerId].defaultModel;
+      }
+      if (!chatModels.some((model) => model.id === provider.defaultUtilityModel)) {
+        delete providers[providerId].defaultUtilityModel;
+      }
+    }
     for (const model of provider.models) {
-      if (model.inference?.chat === false) {
+      if (version === 2 && model.inference?.chat === false) {
         continue;
       }
       const { cost, ...metadata } = model;
-      delete metadata.inference;
+      if (version === 2) {
+        delete metadata.inference;
+      }
       delete metadata.baseUrl;
       delete metadata.headers;
       delete metadata.upstreamModel;
@@ -1402,12 +1532,12 @@ export async function assembleModelCatalogBundleV2(
       models.push({ ...metadata, provider: providerId, pricing });
     }
   }
-  const validateBundle = await loadClientBundleValidator(2);
+  const validateBundle = await loadClientBundleValidator(version);
   // schemaVersion gates admission; never copy v1's older client floor onto newer wires.
   const upstreamPricing = serializeStandalonePricing(standalonePricing?.upstream);
   const providerPricing = serializeStandalonePricing(standalonePricing?.provider);
   return validateBundle({
-    schemaVersion: 2,
+    schemaVersion: version,
     generatedAt: bundle.generatedAt,
     sourceCommit: bundle.sourceCommit,
     providers,
@@ -1417,7 +1547,9 @@ export async function assembleModelCatalogBundleV2(
   });
 }
 
-export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2): string {
+export function serializeVersionedModelCatalogBundle(
+  bundle: RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
+): string {
   const models = bundle.models
     .toSorted(
       (left, right) =>
@@ -1444,6 +1576,48 @@ export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2
   )}\n`;
 }
 
+function catalogProviders(bundle: unknown): string[] {
+  const providers = (bundle as { providers?: unknown } | null)?.providers;
+  return isRecord(providers) ? Object.keys(providers) : [];
+}
+
+/**
+ * Refuses a feed that lost more than MAX_SHRINK_RATIO of its rows, or any provider,
+ * against its last published file: an upstream outage must not publish as removals.
+ */
+function checkCatalogShrink(params: {
+  feed: "v1" | "v2" | "v3";
+  next: unknown;
+  previousFile: string | undefined;
+  allowShrink: boolean;
+}): string | undefined {
+  const { feed, next, previousFile, allowShrink } = params;
+  if (!previousFile) {
+    return undefined;
+  }
+  if (!fs.existsSync(previousFile)) {
+    return `shrink guard ${feed}: no previous file ${previousFile}; not compared`;
+  }
+  const previous: unknown = JSON.parse(fs.readFileSync(previousFile, "utf8"));
+  if (`v${catalogSchemaVersion(previous)}` !== feed) {
+    throw new Error(`--previous ${feed} file ${previousFile} is not a ${feed} catalog`);
+  }
+  const [before, after] = [catalogRowCount(previous), catalogRowCount(next)];
+  const kept = new Set(catalogProviders(next));
+  const lostProviders = catalogProviders(previous).filter((provider) => !kept.has(provider));
+  const change = before > 0 ? ((after - before) / before) * 100 : 0;
+  const line = `shrink guard ${feed}: ${before} -> ${after} rows (${change.toFixed(1)}%)${lostProviders.length > 0 ? `, lost providers ${lostProviders.join(",")}` : ""}`;
+  if (after >= before * (1 - MAX_SHRINK_RATIO) && lostProviders.length === 0) {
+    return line;
+  }
+  if (allowShrink) {
+    return `${line}; allowed by --allow-shrink`;
+  }
+  throw new Error(
+    `${line}; refusing to publish a shrink above ${MAX_SHRINK_RATIO * 100}% or a lost provider. Rerun with --allow-shrink if the removal is intended`,
+  );
+}
+
 function resolveSourceCommit(rootDir: string): string {
   return execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: rootDir,
@@ -1463,11 +1637,11 @@ export async function runPublishModelCatalog(
 ) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
-  const outputPaths = [args.out, args.outV2]
+  const outputPaths = [args.out, args.outV2, args.outV3]
     .filter((file): file is string => Boolean(file))
     .map((file) => path.resolve(rootDir, file));
   if (new Set(outputPaths).size !== outputPaths.length) {
-    throw new Error("--out and --out-v2 must name different files");
+    throw new Error("--out, --out-v2 and --out-v3 must name different files");
   }
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
@@ -1491,9 +1665,8 @@ export async function runPublishModelCatalog(
     }
   }
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
-  const featuredResult = args.outV2
-    ? await resolveProviderFeaturedModels({ bundle, loadSource })
-    : {};
+  const featuredResult =
+    args.outV2 || args.outV3 ? await resolveProviderFeaturedModels({ bundle, loadSource }) : {};
   const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({
@@ -1504,13 +1677,25 @@ export async function runPublishModelCatalog(
         standalonePricing,
       })
     : { modelsEnriched: 0, pricingEntries: 0 };
+  // Capture task metadata before the released-wire projection mutates the rows.
+  // Keep model identity here: pricing selections are keyed by the enriched objects.
+  const bundleV3 = args.outV3
+    ? await assembleVersionedModelCatalogBundle(
+        bundle,
+        pricingSelections,
+        standalonePricing,
+        recommendedModels,
+        featuredResult,
+        3,
+      )
+    : undefined;
   projectReleasedModelInputs(bundle);
   // Validate after all enrichment so metadata-only and dry-run output obey the
   // same client contract as priced catalogs.
   const validateBundle = await loadClientBundleValidator();
   // Project while selection facts still refer to the assembled model objects.
   const bundleV2 = args.outV2
-    ? await assembleModelCatalogBundleV2(
+    ? await assembleVersionedModelCatalogBundle(
         bundle,
         pricingSelections,
         standalonePricing,
@@ -1522,21 +1707,45 @@ export async function runPublishModelCatalog(
   const summary = assertModelCatalogCompleteness(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
-  const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
+  const serializedV2 = bundleV2 ? serializeVersionedModelCatalogBundle(bundleV2) : undefined;
   const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
-  if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
-    process.stderr.write(
-      `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
-    );
+  const serializedV3 = bundleV3 ? serializeVersionedModelCatalogBundle(bundleV3) : undefined;
+  const bundleV3Bytes = serializedV3 ? Buffer.byteLength(serializedV3) : 0;
+  for (const [feed, bytes] of [
+    ["v1", bundleBytes],
+    ["v2", bundleV2Bytes],
+    ["v3", bundleV3Bytes],
+  ] as const) {
+    if (bytes > CLIENT_BUNDLE_LIMIT_BYTES * CLIENT_BUNDLE_WARNING_RATIO) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${feed} bundle ${bytes} bytes is ${((bytes / CLIENT_BUNDLE_LIMIT_BYTES) * 100).toFixed(1)}% of the ${CLIENT_BUNDLE_LIMIT_BYTES}-byte client limit (warns above ${CLIENT_BUNDLE_WARNING_RATIO * 100}%)\n`,
+      );
+    }
   }
-  if (bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+  // Released clients reject an oversized v1, so it is never written. With
+  // --skip-oversized-v1 the newer wires still publish and the served v1 stays as it was.
+  const skipV1 =
+    bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES &&
+    args.skipOversizedV1 &&
+    Boolean(serializedV2 || serializedV3);
+  if (bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES && !skipV1) {
     throw new Error(
       `catalog bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  if (skipV1) {
+    process.stderr.write(
+      `[${SCRIPT_LABEL}] warning: v1 bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes; v1 not written, the previous v1 stays served\n`,
     );
   }
   if (bundleV2Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
     throw new Error(
       `catalog v2 bundle ${bundleV2Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  if (bundleV3Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog v3 bundle ${bundleV3Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
   const hydrationSummary = Object.entries(hydrationResult)
@@ -1558,24 +1767,55 @@ export async function runPublishModelCatalog(
         `[${SCRIPT_LABEL}] featured provider=${providerId} matched=${ids.length}${skipped.length > 0 ? ` skipped=${skipped.join(",")}` : ""}\n`,
     )
     .join("");
+  const shrinkSummary = (
+    [
+      ["v1", bundle],
+      ["v2", bundleV2],
+      ["v3", bundleV3],
+    ] as const
+  )
+    .flatMap(([feed, next]) => {
+      const line =
+        next &&
+        checkCatalogShrink({
+          feed,
+          next,
+          previousFile: args.previous[feed],
+          allowShrink: args.allowShrink,
+        });
+      return line ? [`[${SCRIPT_LABEL}] ${line}\n`] : [];
+    })
+    .join("");
   const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
     process.stdout.write(
-      `[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,
+      `[${SCRIPT_LABEL}] dry-run ${stats}\n${shrinkSummary}${hydrationSummary}${retirementSummary}${featuredSummary}`,
     );
-    return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
+    return {
+      bundle,
+      summary,
+      pricingEnriched: pricingResult.modelsEnriched,
+      wrote: false,
+      v1Skipped: skipV1,
+    };
   }
   if (!args.out) {
     throw new Error("output path is required outside dry-run mode");
   }
   const outputFile = path.resolve(rootDir, args.out);
   const outputs = [
-    { file: outputFile, content: serialized },
+    ...(skipV1 ? [] : [{ file: outputFile, content: serialized }]),
     ...(args.outV2 && serializedV2
       ? [{ file: path.resolve(rootDir, args.outV2), content: serializedV2 }]
       : []),
+    ...(args.outV3 && serializedV3
+      ? [{ file: path.resolve(rootDir, args.outV3), content: serializedV3 }]
+      : []),
   ];
-  if (outputs.length > 1) {
+  // The v1-only run keeps its direct writer (#160157). Versioned outputs, including a
+  // lone v2/v3 left by --skip-oversized-v1, replace the previous file through the
+  // temp-file publisher so an interrupted write never destroys it.
+  if (outputs.length > 1 || skipV1) {
     await publishModelCatalogPair(outputs, (message) =>
       process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
     );
@@ -1588,10 +1828,21 @@ export async function runPublishModelCatalog(
       `[${SCRIPT_LABEL}] published schemaVersion=2 models=${bundleV2.models.length} recommendedProviders=${Object.values(bundleV2.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
     );
   }
+  if (bundleV3) {
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=3 models=${bundleV3.models.length} bundleBytes=${bundleV3Bytes} out=${args.outV3}\n`,
+    );
+  }
   process.stdout.write(
-    `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,
+    `[${SCRIPT_LABEL}] ${skipV1 ? "skipped oversized" : "published"} ${stats} out=${args.out}\n${shrinkSummary}${hydrationSummary}${retirementSummary}${featuredSummary}`,
   );
-  return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
+  return {
+    bundle,
+    summary,
+    pricingEnriched: pricingResult.modelsEnriched,
+    wrote: true,
+    v1Skipped: skipV1,
+  };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -31,7 +31,6 @@ registerNewSessionSetupEnglish();
 // silently eat an Enter press again.
 type SilentSubmitGate = "submitting" | "empty-draft";
 type ReasonedSubmitGate =
-  | "initial-turn-rejected"
   | "preference-restore"
   | "model-setup"
   | "route-pending"
@@ -69,9 +68,13 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
 export function repositoryIssueText(repository: DraftRepositoryState): string | undefined {
   switch (repository.kind) {
     case "forbidden":
-      return repository.missingScope
-        ? t("newSession.folderRequiresScope", { scope: repository.missingScope })
-        : t("newSession.gitCheckAccessDenied");
+      return repository.missingScope === "operator.admin"
+        ? t("newSession.folderRequiresScope")
+        : repository.missingScope === "operator.write"
+          ? t("newSession.folderRequiresWrite")
+          : repository.missingScope === "operator.read"
+            ? t("newSession.folderRequiresRead")
+            : t("newSession.gitCheckAccessDenied");
     case "unavailable":
       return t("newSession.gitCheckUnavailable");
     default:

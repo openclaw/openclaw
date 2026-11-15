@@ -2,7 +2,7 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { StorageProvider } from "../storage/types.js";
 import type {
@@ -71,6 +71,7 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
   WidgetPresenter,
@@ -79,6 +80,7 @@ import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
   ContextEngineFactory,
+  LearnContribution,
   MemoryCorpusSupplement,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
@@ -268,6 +270,7 @@ export type OpenClawPluginApi = {
   };
   /**
    * Register a gateway RPC method for this plugin.
+   * Return a payload for automatic completion, or call `respond(...)` explicitly.
    *
    * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
    * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
@@ -275,7 +278,7 @@ export type OpenClawPluginApi = {
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: (opts: GatewayRequestHandlerOptions) => unknown,
     opts?: {
       scope?: OperatorScope;
       profileAccess?: "independent" | "required";
@@ -285,6 +288,10 @@ export type OpenClawPluginApi = {
       shareInvalidationEvents?: readonly string[];
       shareMaxAgeMs?: number;
     },
+  ) => void;
+  /** Register repository preparation policy, selected by gateway.repositoryIntegration. */
+  registerRepositoryIntegration: (
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
   ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
@@ -312,7 +319,8 @@ export type OpenClawPluginApi = {
   registerService: {
     (service: OpenClawPluginService): void;
     (service: OpenClawPluginServiceV2): void;
-    (service: OpenClawPluginService | OpenClawPluginServiceV2): void;
+    (service: OpenClawPluginServiceV3): void;
+    (service: OpenClawPluginService | OpenClawPluginServiceV2 | OpenClawPluginServiceV3): void;
   };
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;
@@ -445,6 +453,8 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: OpenClawPluginSessionWorkflowApi["registerSessionSchedulerJob"];
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
+  /** Contribute a medium, guidance and subcommands to /learn turns (non-exclusive). */
+  registerLearnContribution: (contribution: LearnContribution) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
   registerMemoryPromptSupplement: (builder: MemoryPromptSectionBuilder) => void;
   /** Register an async memory prompt preparation step (non-exclusive). */

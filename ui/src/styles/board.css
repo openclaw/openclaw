@@ -37,7 +37,7 @@ openclaw-board-view {
 .board-view__error {
   background: color-mix(in srgb, var(--danger) 8%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   color: var(--danger);
   font-size: 12px;
   padding: 9px 12px;
@@ -112,7 +112,7 @@ openclaw-board-view {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: var(--cursor-action);
   display: inline-flex;
@@ -133,12 +133,7 @@ openclaw-board-view {
 
 .board-tabs__overflow-panel,
 .board-widget__menu-panel {
-  --oc-overlay-distance: 0px;
-
   min-width: 190px;
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .board-widget__menu-panel {
@@ -191,7 +186,7 @@ openclaw-board-widget-cell {
 .board-widget {
   background: var(--board-surface);
   border: 1px solid var(--board-line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 1px 1px rgb(0 0 0 / 12%);
   display: grid;
   grid-template-rows: 38px minmax(0, 1fr);
@@ -242,7 +237,7 @@ openclaw-board-widget-cell {
 
 .board-widget__drag-handle {
   align-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: grab;
   display: inline-flex;
   font-size: 17px;
@@ -290,32 +285,14 @@ openclaw-board-widget-cell {
   width: 27px;
 }
 
-.board-widget__menu-heading {
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  padding: 7px 9px 3px;
-  text-transform: uppercase;
-}
-
 .board-widget__menu-empty {
   color: var(--muted);
   font-size: 11px;
   padding: 5px 9px;
 }
 
-.board-widget__menu .oc-menu-item {
-  font-size: 11px;
-  min-height: var(--menu-item-height);
-}
-
 .board-widget__menu .oc-menu-item__check {
   color: inherit;
-}
-
-.board-widget__menu-separator {
-  border-top: 1px solid var(--board-line);
-  margin: 5px 3px;
 }
 
 .board-widget__menu-danger,
@@ -336,7 +313,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__body--card {
-  box-sizing: border-box;
   padding: var(--widget-frame-inset);
 }
 
@@ -355,7 +331,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__body--scrollable .board-widget__grant {
-  box-sizing: border-box;
   height: auto;
   min-height: 100%;
 }
@@ -662,7 +637,7 @@ openclaw-board-widget-cell {
   }
 
   .board-widget__body {
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 }
 
@@ -712,7 +687,7 @@ openclaw-board-widget-cell {
     padding: 0;
   }
 
-  .board-tabs {
+  > .board-view > .board-tabs {
     padding-left: 16px;
   }
 
@@ -744,7 +719,7 @@ openclaw-board-widget-cell {
       min-height: 0;
     }
 
-    .board-grid {
+    > .board-view > .board-grid {
       flex: 1 1 0;
       min-height: 0;
       grid-auto-rows: minmax(0, 1fr);
@@ -871,7 +846,7 @@ openclaw-board-widget-cell {
 .board-empty {
   align-items: center;
   border: 1px dashed color-mix(in srgb, var(--muted) 38%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   color: var(--muted);
   display: flex;
   flex-direction: column;

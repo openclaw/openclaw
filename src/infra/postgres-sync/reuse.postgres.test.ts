@@ -201,10 +201,11 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {
     const first = open();
     const killedPid = pid(first);
+    using now = vi.spyOn(performance, "now").mockReturnValue(0);
     close(first);
     await admin.query("SELECT pg_terminate_backend($1)", [killedPid]);
-    // The server's termination notification is ordered before this next command response.
-    await admin.query("SELECT 1");
+    // Exercise long-idle validation without depending on worker error-event timing.
+    now.mockReturnValue(1000);
     const recovered = open();
     expect(pid(recovered)).not.toBe(killedPid);
   });

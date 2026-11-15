@@ -107,10 +107,53 @@ describe("Solid shell chrome", () => {
     expect(find(".control-ui-environment-pill")?.textContent).toBe("edge");
     expect(find(".topbar-nav-toggle")).toBe(drawer);
     expect(drawer.getAttribute("aria-expanded")).toBe("true");
-    expect(find('[slot="content"] kbd')?.textContent).toBe("⌘K");
+    expect(
+      search.closest("openclaw-tooltip")?.querySelector('[slot="content"] kbd')?.textContent,
+    ).toBe("⌘K");
 
     await update(() => setEnvironment(null));
     expect(find(".control-ui-environment-pill")).toBeNull();
+  });
+
+  it("floats with the page title, no brand or status dot, and chat's connection notice", async () => {
+    const [gatewayStatus, setGatewayStatus] = createSignal<GatewayStatusProps | null>({
+      kind: "connected",
+    });
+    const retry = vi.fn();
+    const release = vi.fn();
+    const register = vi.fn(() => release);
+    const view = mountSolid(() => (
+      <openclaw-app-topbar
+        prop:floating={true}
+        prop:pageTitle="Sessions"
+        prop:gatewayStatus={gatewayStatus()}
+        prop:registerPageActions={register}
+      />
+    ));
+    const find = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+    const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    await topbar.updateComplete;
+    flush();
+
+    expect(find(".mobile-header__notices")).toBeNull();
+    const slot = find(".topnav-shell__actions > .topnav-shell__page-actions");
+    expect(register).toHaveBeenCalledExactlyOnceWith(slot);
+
+    setGatewayStatus({ kind: "reconnecting" });
+    flush();
+    await topbar.updateComplete;
+    expect(find(".mobile-header__notice")?.textContent).toBe("Reconnecting…");
+    expect(find(".mobile-header__spinner")).not.toBeNull();
+
+    setGatewayStatus({ kind: "offline", onRetry: retry });
+    flush();
+    await topbar.updateComplete;
+    find(".mobile-header__retry")!.click();
+    expect(retry).toHaveBeenCalledOnce();
+
+    view.unmount();
+    await Promise.resolve();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("releases topbar toggle registrations on repeated mount and unmount", async () => {

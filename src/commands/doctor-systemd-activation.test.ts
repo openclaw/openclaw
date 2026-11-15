@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { resolveCliStartupPolicy } from "../cli/command-startup-policy.js";
 import { bootstrapGatewayRun } from "../cli/gateway-cli/run-command.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
@@ -16,6 +17,13 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import * as schemaMigrations from "./doctor-schema-migrations.js";
 
+// The copy-and-swap upgrade at Gateway start brings these databases current before the
+// activation repair can see them. This file covers the repair path that remains for starts the
+// upgrade skips (for example a database under a symlinked directory), so the upgrade is off here.
+// mock-isolation: the startup upgrade must not run so the in-place activation repair stays reachable.
+vi.mock("../state/state-upgrade-startup.js", () => ({
+  upgradeStateOnGatewayStart: vi.fn(async () => {}),
+}));
 vi.mock("../cli/run-main-service-installation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof serviceInstallation>()),
   readOwnGatewayServiceCommand: vi.fn(),
@@ -158,7 +166,7 @@ it.each(["ordinary", "child", "newer", "corrupt", "foreign"])(
       }
       const before = await fs.readFile(pathname);
       await expect(bootstrap()).rejects.toThrow();
-      expect(await fs.readFile(pathname)).toEqual(before);
+      expectBytesEqual(await fs.readFile(pathname), before, pathname);
       expect((await fs.readdir(path.dirname(pathname))).some((file) => file.includes(".bak"))).toBe(
         false,
       );
@@ -176,7 +184,7 @@ test("parks failed activation repair without migrating unbacked state", async ()
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain("synthetic pre-migration backup refusal");
     expect(resolveGatewayStartupFailureExitCode(failure)).toBe(78);
-    expect(await fs.readFile(pathname)).toEqual(before);
+    expectBytesEqual(await fs.readFile(pathname), before, pathname);
     expect((await fs.readdir(path.dirname(pathname))).some((file) => file.includes(".bak"))).toBe(
       false,
     );

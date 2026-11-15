@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
 import { SESSION_ENTRY_NUMERIC_FIELDS } from "../config/sessions/session-entry-numeric-snapshot.js";
 import {
@@ -9,16 +10,21 @@ import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-en
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   projectExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { isSqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   createLegacyStateMigrationStepReceipt,
@@ -31,7 +37,7 @@ import {
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
 import { backupDoctorSqliteDatabases } from "./doctor-migration-backup.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import {
@@ -44,7 +50,9 @@ import {
   type SessionEntryStateRepair,
 } from "./doctor/shared/session-entry-shape.js";
 
-export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
+export type SessionDeliveryStateRepairReport = Awaited<
+  ReturnType<typeof repairCanonicalSessionEntries>
+>;
 
 type CanonicalSessionRepairOptions = Omit<
   Parameters<typeof repairCanonicalSessionEntries>[0],
@@ -93,7 +101,8 @@ type PreparedSessionEntryRepairParams =
       deferToMediaPreparation?: boolean;
     });
 
-function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
+async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
+  const signal = resolveSqliteInspectionSignal();
   const targets = (
     params.targets ??
     projectExistingAgentDatabaseTargets(
@@ -106,13 +115,21 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
     )
   ).filter((target) => !params.excludedDatabasePaths?.has(target.sqlitePath));
   const inspectedTargets: Array<ExistingAgentDatabaseTarget & { canonicalPath: string }> = [];
-  const pending = targets.flatMap((target) => {
+  const pending: Array<{
+    target: ExistingAgentDatabaseTarget;
+    scope: { agentId: string; env: NodeJS.ProcessEnv; storePath: string };
+    sessionKeys: string[];
+    identity: ReturnType<typeof readDatabasePathIdentitySync>;
+  }> = [];
+  const deferredWarnings: string[] = [];
+  for (const target of targets) {
+    signal?.throwIfAborted();
     const sessionKeys: string[] = [];
     const scope = { agentId: target.agentId, env: params.env, storePath: target.sqlitePath };
-    const scan = () => {
+    const scan = async () => {
       const identity = readDatabasePathIdentitySync(target.sqlitePath);
       if (params.source === "raw") {
-        scanDoctorSessionEntryRecords(
+        await scanDoctorSessionEntryRecords(
           scope,
           ({ entry, sessionKey }) => {
             if (params.rawNeedsRepair(entry, sessionKey)) {
@@ -122,6 +139,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
           identity,
         );
       } else {
+        await prepareArtifactPreservingSqliteRead(target.sqlitePath, signal);
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, recoveredFromProjections, sessionKey }) => {
@@ -140,26 +158,32 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
     try {
       const operation =
         params.source === "raw"
-          ? { ok: true, value: scan() }
-          : runDoctorAgentDatabaseOperation({
+          ? { ok: true, value: await scan() }
+          : await runDoctorAgentDatabaseOperationAsync({
               agentId: target.agentId,
               path: target.sqlitePath,
               run: scan,
             });
+      signal?.throwIfAborted();
       if (!operation.ok) {
-        return [];
+        continue;
       }
       inspectedTargets.push({
         ...target,
         canonicalPath: operation.value.identity.canonicalPath,
       });
-      return sessionKeys.length > 0 ? [operation.value] : [];
+      if (sessionKeys.length > 0) {
+        pending.push(operation.value);
+      }
     } catch (error) {
+      signal?.throwIfAborted();
       if (
         params.source === "raw" &&
         (params.deferToMediaPreparation ||
           (params.deferSchemaRepair &&
             (error instanceof SqliteSchemaMismatchError ||
+              (error instanceof StartupMaintenanceRequiredError &&
+                error.kind === "state-migrations") ||
               error instanceof AgentDatabaseMaintenanceRequiredError ||
               error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)))
       ) {
@@ -170,15 +194,27 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
           `- Session entry inspection awaits ${owner}: ${formatErrorMessage(error)}`,
           "Session SQLite",
         );
-        return [];
+        continue;
+      }
+      if (
+        params.source === "raw" &&
+        isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+        isSqliteSnapshotCapacityError(error)
+      ) {
+        // Missing disposable snapshot space says nothing about the source, which stays unchanged.
+        const warning = `Session entry state inspection deferred for agent ${target.agentId}: ${formatErrorMessage(error)}. Free temporary snapshot space, then run ${formatCliCommand("openclaw doctor --fix")} after the update.`;
+        note(warning, "Doctor warning");
+        deferredWarnings.push(warning);
+        continue;
       }
       throw error;
     }
-  });
+  }
   return {
     targets,
     inspectedTargets,
     pending,
+    deferredWarnings,
     found: pending.reduce((count, item) => count + item.sessionKeys.length, 0),
     scannedStores: targets.length,
     apply(assertCurrent?: (target: ExistingAgentDatabaseTarget) => void): number {
@@ -211,10 +247,10 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
   };
 }
 
-export function repairCanonicalSessionEntries(
+export async function repairCanonicalSessionEntries(
   params: SessionEntryRepairParams & { apply: boolean },
 ) {
-  const plan = prepareSessionEntryRepairs({ ...params, source: "canonical" });
+  const plan = await prepareSessionEntryRepairs({ ...params, source: "canonical" });
   return {
     found: plan.found,
     repaired: params.apply ? plan.apply() : 0,
@@ -245,16 +281,17 @@ export async function repairLegacySessionEntryStates(params: {
   onInspectedTargets?: (
     targets: readonly (ExistingAgentDatabaseTarget & { canonicalPath: string })[],
   ) => void;
-}): Promise<SessionDeliveryStateRepairReport> {
+}): Promise<SessionDeliveryStateRepairReport & { warnings?: string[] }> {
   try {
-    const recoveredTombstones = new Set<string>();
+    let repairedIsoEndedAt = 0;
+    const recoveredTombstones = new Map<string, string>();
     const retainedWarnings = new Map<string, string>();
     const reportRetained = () => {
       for (const [sessionKey, warning] of retainedWarnings) {
         note(`${sessionKey}: ${warning}`, "Session recovery warning");
       }
     };
-    const plan = prepareSessionEntryRepairs({
+    const plan = await prepareSessionEntryRepairs({
       ...params,
       source: "raw",
       rawNeedsRepair: (entry, sessionKey) => {
@@ -269,10 +306,18 @@ export async function repairLegacySessionEntryStates(params: {
           return { entry };
         }
         const next = migrateLegacySessionEntryState(entry, updatedAt);
+        if (next.repairedIsoEndedAt) {
+          repairedIsoEndedAt += 1;
+        }
         const tombstone = inspectLegacyRestartTombstone(entry);
         retainedWarnings.delete(sessionKey);
         if (tombstone?.retire) {
-          recoveredTombstones.add(sessionKey);
+          recoveredTombstones.set(
+            sessionKey,
+            tombstone.doctorOnly
+              ? `${sessionKey}: ${tombstone.warning}`
+              : `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          );
         } else if (tombstone) {
           retainedWarnings.set(sessionKey, tombstone.warning);
         }
@@ -285,7 +330,12 @@ export async function repairLegacySessionEntryStates(params: {
       },
       updateDeliveryProjection: true,
     });
-    const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
+    const report = {
+      found: plan.found,
+      repaired: 0,
+      scannedStores: plan.scannedStores,
+      ...(plan.deferredWarnings.length > 0 ? { warnings: plan.deferredWarnings } : {}),
+    };
     if (!params.apply || plan.found === 0) {
       reportRetained();
       params.onInspectedTargets?.(plan.inspectedTargets);
@@ -315,12 +365,15 @@ export async function repairLegacySessionEntryStates(params: {
       assertCurrent();
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
-      reportRetained();
-      for (const sessionKey of recoveredTombstones) {
+      if (repairedIsoEndedAt > 0) {
         note(
-          `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          `Normalized ISO-8601 endedAt timestamps for ${repairedIsoEndedAt} durable session row(s).`,
           "Session recovery warning",
         );
+      }
+      reportRetained();
+      for (const warning of recoveredTombstones.values()) {
+        note(warning, "Session recovery warning");
       }
       params.onInspectedTargets?.(plan.inspectedTargets);
       note(

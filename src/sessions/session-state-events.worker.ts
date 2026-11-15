@@ -1,11 +1,9 @@
-import { readAcpSessionControlInWorker } from "../acp/runtime/session-meta-source.worker.js";
 import {
   requestSessionEntriesCurrentAdmission,
   requestSessionEntryCurrentAdmission,
 } from "../config/sessions/session-entry-current-admission.worker.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { SESSION_WATCH_PROVENANCE_EXPLICIT } from "../state/session-watch-cursor-provenance.js";
 import type {
   WorkerOperationHandlers,
@@ -13,14 +11,10 @@ import type {
 } from "../state/worker-operation-registry.js";
 import {
   getSessionStateKysely,
-  hasSessionStateWatchersInDatabase,
   isAmbientGroupWatchCursor,
-  isSessionStateUpstreamCurrentInDatabase,
   pruneSessionStateEventsInDatabase,
   readCursor,
-  recordSessionStateEventsInDatabase,
   upsertSeedCursor,
-  type SessionStateEventInput,
   type SessionStateNotice,
 } from "./session-state-events.kernel.js";
 import { readSessionStateSequence } from "./session-state-events.read.worker.js";
@@ -241,41 +235,6 @@ export const sessionStateOperations = {
     return context.write(({ db }) => {
       pruneSessionStateEventsInDatabase(db, input.now);
       admit("commit");
-    });
-  },
-  "sessionState.record": (
-    input: SessionStateWorkerOperations["sessionState.record"]["input"],
-    context,
-  ) => {
-    const database = context.open();
-    const admit = (stage: "transaction" | "commit") =>
-      requestSessionEntryCurrentAdmission(input.sessionEntryCurrentSource, {
-        stage,
-        facts: undefined,
-      });
-    const { events, now, onlyIfWatched, expectedUpstream, acpControl } = input;
-    const assertAcpControl = () => {
-      if (acpControl && !readAcpSessionControlInWorker(database, acpControl).row) {
-        throw new Error("ACP task owner could not be verified.");
-      }
-    };
-    const current = (db: OpenClawStateDatabase["db"], event: SessionStateEventInput) =>
-      (!onlyIfWatched || hasSessionStateWatchersInDatabase(db, event.sessionKey)) &&
-      (!expectedUpstream || isSessionStateUpstreamCurrentInDatabase(db, expectedUpstream));
-    // Unwatched human turns stay write-free; queued writes repeat the check under the lock.
-    if (!events.some((event) => current(database.db, event))) {
-      return { rows: [], notices: [] };
-    }
-    admit("transaction");
-    return context.write(({ db }) => {
-      assertAcpControl();
-      const recorded = recordSessionStateEventsInDatabase(
-        db,
-        events.filter((event) => current(db, event)).map((event) => ({ event, now })),
-      );
-      admit("commit");
-      assertAcpControl();
-      return recorded;
     });
   },
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

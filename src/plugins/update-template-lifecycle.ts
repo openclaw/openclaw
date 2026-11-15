@@ -1,4 +1,5 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 
 type ClawHubInstallRecord = {
@@ -38,9 +39,10 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
       },
     );
   } catch (error) {
+    // Normalize only after the lease settles, so cleanup retains the initiating failure.
     return {
       kind: "exception",
-      message: `Failed to update ${params.pluginId}: ${error instanceof Error ? error.message : String(error)}`,
+      message: `Failed to ${params.dryRun ? "check" : "update"} ${params.pluginId}: ${formatErrorMessage(error)}`,
       error,
     };
   }

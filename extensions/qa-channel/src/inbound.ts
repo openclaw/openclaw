@@ -12,6 +12,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -40,7 +41,7 @@ function isHttpMediaUrl(value: string): boolean {
 }
 
 function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+  return value.replace(/[=]+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
 }
 
 function decodeAttachmentBase64(value: string): Buffer | null {
@@ -225,6 +226,7 @@ export async function handleQaInbound(params: {
         ...message,
         mediaUrls,
         mediaLocalRoots,
+        mediaAccess: resolveOutboundMediaAccessForConfig(config),
       });
     } else {
       await sendQaChannelText(message);
@@ -475,6 +477,8 @@ export async function handleQaInbound(params: {
     replyOptions: {
       onFollowupQueueDisposition: (disposition) => {
         queueDisposition = disposition;
+        // A policy discard never executes, so no delivery scope will settle it.
+        queuedDelivery.resolve(false);
       },
       queuedDeliveryCorrelations: [
         {

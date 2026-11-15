@@ -23,6 +23,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import {
+  configureProofModelProvider,
   holdExecution,
   installAuthorityProofKernel,
 } from "./server.agent-runtime-authority-proof.test-support.js";
@@ -36,6 +37,8 @@ import {
 const { kernel } = installAuthorityProofKernel();
 
 it("rejects retained agent and independent-creation input after acceptance", async ({ signal }) => {
+  // Visible creation validates its inherited model against the Gateway catalog.
+  await configureProofModelProvider();
   await prepareGatewayReplyRuntimeForTest();
   const { gatewayRequestContext: context, gatewayInstanceRuntime: runtime } = kernel();
   const runId = randomUUID();
@@ -46,6 +49,11 @@ it("rejects retained agent and independent-creation input after acceptance", asy
   await sessionAccessor.upsertSessionEntryCore(
     { agentId: "main", sessionKey: childKey },
     { sessionId, updatedAt: Date.now() },
+  );
+  // Like production tool construction, creation inherits from the stored requester session.
+  await sessionAccessor.upsertSessionEntryCore(
+    { agentId: "main", sessionKey: parentKey },
+    { sessionId: `parent-${runId}`, updatedAt: Date.now() },
   );
   const sessionScope = async (sessionKey: string, id: string) => ({
     agentId: "main",
@@ -156,7 +164,10 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
       () =>
         withGatewayToolCallerIdentity(creationCaller, () =>
-          expectDefined(createSessionsCreateTool(), "creation tool").execute("create-retirement", {
+          expectDefined(
+            createSessionsCreateTool({ agentSessionKey: parentKey }),
+            "creation tool",
+          ).execute("create-retirement", {
             message: "Continue independently",
           }),
         ),
@@ -197,7 +208,7 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     expect(createdAdmission).toBeDefined();
     expect(createdRecorder.getPersistedMessage?.()).toMatchObject({
       content: "Continue independently",
-      provenance: { kind: "inter_session", sourceTool: "sessions_create" },
+      provenance: { kind: "inter_session", sourceTool: "sessions_spawn" },
     });
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     expect(() => creationGuard()).not.toThrow();

@@ -55,8 +55,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export { resolveProviderToolPolicy };
 
 /**
- * Default hard denies for sub-agents regardless of depth. Visible spawned
- * sessions retain message delivery; all other hard denies still apply.
+ * Default hard denies for hidden sub-agents regardless of depth. Visible spawned
+ * sessions are interactive and skip these defaults.
  */
 const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
@@ -75,7 +75,10 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "conversations_turn",
 ];
 
-/** Tools that only make sense for orchestrator sub-agents that can spawn children. */
+/**
+ * Tools that only make sense for orchestrator sub-agents that can spawn children.
+ * Visible spawned sessions keep them; spawn admission still enforces depth and child caps.
+ */
 const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
@@ -96,17 +99,16 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store: opts?.store,
   });
-  const capabilities = resolveStoredSubagentCapabilities(sessionKey, {
-    cfg,
-    store,
-  });
   const allow = configured?.allow;
   const alsoAllow = configured?.alsoAllow;
+  // Operator-configured sub-agent policy applies to every spawned session; the
+  // built-in defaults only constrain hidden delegated workers.
+  const visibleSpawn = isVisibleSpawnedSession(sessionKey, { cfg, store });
+  const leaf =
+    !visibleSpawn && resolveStoredSubagentCapabilities(sessionKey, { cfg, store }).role === "leaf";
   const deny = [
-    ...SUBAGENT_TOOL_DENY_ALWAYS.filter(
-      (tool) => tool !== "message" || !isVisibleSpawnedSession(sessionKey, { cfg, store }),
-    ),
-    ...(capabilities.role === "leaf" ? SUBAGENT_TOOL_DENY_LEAF : []),
+    ...(visibleSpawn ? [] : SUBAGENT_TOOL_DENY_ALWAYS),
+    ...(leaf ? SUBAGENT_TOOL_DENY_LEAF : []),
     ...(configured?.deny ?? []),
   ];
   const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
@@ -161,28 +163,18 @@ export function resolveConfiguredToolPolicies(params: {
   return policies;
 }
 
-function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
-  const raw = groupId?.trim();
-  if (!raw) {
-    return [];
-  }
-  const topicSenderMatch = raw.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
-  if (topicSenderMatch) {
-    const [, chatId, topicId] = topicSenderMatch;
-    // Sender-scoped sessions still inherit topic/base group tool policies.
-    return normalizeUniqueSingleOrTrimmedStringList([raw, `${chatId}:topic:${topicId}`, chatId]);
-  }
-  const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
-  if (topicMatch) {
-    const [, chatId, topicId] = topicMatch;
-    return normalizeUniqueSingleOrTrimmedStringList([`${chatId}:topic:${topicId}`, chatId]);
-  }
-  const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
-  if (senderMatch) {
-    const [, chatId] = senderMatch;
-    return normalizeUniqueSingleOrTrimmedStringList([raw, chatId]);
-  }
-  return [raw];
+// The channel owns any topic or sender scope encoded in the id; scoped sessions
+// inherit the policies of every parent conversation it reports.
+function resolveScopedGroupIds(channel: string, kind: "group" | "channel", rawId: string) {
+  const resolved = resolveSessionConversation({ channel, kind, rawId });
+  return normalizeUniqueSingleOrTrimmedStringList([
+    rawId,
+    resolved?.id,
+    // Parents are ordered narrowest first (topic before group); the first matching
+    // policy wins, so the base conversation must come last.
+    ...(resolved?.parentConversationCandidates ?? []),
+    resolved?.baseConversationId,
+  ]);
 }
 
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
@@ -197,19 +189,9 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   const conversationKey = threadId ? baseSessionKey : raw;
   const conversation = parseRawSessionConversationRef(conversationKey);
   if (conversation) {
-    const resolvedConversation = resolveSessionConversation({
-      channel: conversation.channel,
-      kind: conversation.kind,
-      rawId: conversation.rawId,
-    });
     return {
       channel: conversation.channel,
-      groupIds: normalizeUniqueSingleOrTrimmedStringList([
-        ...buildScopedGroupIdCandidates(conversation.rawId),
-        resolvedConversation?.id,
-        resolvedConversation?.baseConversationId,
-        ...(resolvedConversation?.parentConversationCandidates ?? []),
-      ]),
+      groupIds: resolveScopedGroupIds(conversation.channel, conversation.kind, conversation.rawId),
     };
   }
   const parts = (conversationKey ?? raw).split(":").filter(Boolean);
@@ -228,9 +210,10 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
+  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
   return {
-    channel: normalizeLowercaseStringOrEmpty(channel),
-    groupIds: buildScopedGroupIdCandidates(groupId),
+    channel: normalizedChannel,
+    groupIds: resolveScopedGroupIds(normalizedChannel, kind, groupId),
   };
 }
 
@@ -529,13 +512,15 @@ export function resolveGroupToolPolicy(params: {
   });
   // Keep server-derived ids first so a caller cannot use a trusted parent
   // candidate to skip a more-specific session group policy.
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
+  const channel = normalizeMessageChannel(channelRaw);
+  const trustedGroupId = trustedGroup.groupId?.trim();
   const groupIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
-    ...buildScopedGroupIdCandidates(trustedGroup.groupId),
+    ...(trustedGroupId && channel ? resolveScopedGroupIds(channel, "group", trustedGroupId) : []),
+    trustedGroupId,
   ]);
-  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
-  const channel = normalizeMessageChannel(channelRaw);
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID

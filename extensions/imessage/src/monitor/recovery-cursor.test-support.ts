@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import {
+  importIMessageLegacyPluginStateForTest,
+  installIMessageStateRuntimeForTest,
+} from "../test-support/runtime.js";
 import {
   advanceIMessageRecoveryCursor as advanceCursor,
   loadIMessageRecoveryCursor as loadCursor,
@@ -34,7 +37,10 @@ function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
 }
 
 function writeNulKeyedRecoveryCursor(accountId: string, dbIdentity: string, lastRowid: number) {
-  recoveryCursorStore().register(`${accountId}\u0000${dbIdentity}`, { lastRowid });
+  importIMessageLegacyPluginStateForTest(
+    { namespace: "imessage.recovery-cursor", maxEntries: 64 },
+    [{ key: `${accountId}\u0000${dbIdentity}`, value: { lastRowid }, createdAt: Date.now() }],
+  );
 }
 
 describe("iMessage recovery cursor", () => {

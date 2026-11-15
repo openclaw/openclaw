@@ -6,7 +6,8 @@ import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { createCanvasWidget, type CanvasWidgetViewProps } from "./canvas-widget-view-owner.ts";
+import { createCanvasWidget } from "./canvas-widget-view-owner.ts";
+import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 registerEnglishCatalog(registerBoardEnglish);
@@ -77,7 +78,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
     };
     const source = createMemo(() => {
       const view = read().view;
-      if (!view || !context) {
+      if (!view || !context || (props.allowScripts && !read().scriptFrameAdmitted)) {
         return undefined;
       }
       try {
@@ -115,7 +116,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
           when={Boolean(source())}
           fallback={
             <Show
-              when={read().pending}
+              when={read().pending || Boolean(read().view)}
               fallback={
                 // Preserve the empty reserved box across the lazy element's upgrade.
                 <div
@@ -130,11 +131,13 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
                 role="status"
                 style={{ "min-height": `${height()}px` }}
               >
-                {t(
-                  read().awaitingResult
-                    ? "board.widget.waitingForResult"
-                    : "board.widget.waitingForConnection",
-                )}
+                {read().view
+                  ? t("common.loading")
+                  : t(
+                      read().awaitingResult
+                        ? "board.widget.waitingForResult"
+                        : "board.widget.waitingForConnection",
+                    )}
               </div>
             </Show>
           }

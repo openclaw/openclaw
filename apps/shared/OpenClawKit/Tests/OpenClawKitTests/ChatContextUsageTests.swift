@@ -294,6 +294,18 @@ struct ChatContextUsageTests {
         #expect(presentation.accessibilityValue.contains("Warning"))
     }
 
+    @Test func `usage footer belongs to the reply a run ends on, not its tool steps`() throws {
+        let usage = #""usage":{"input":59,"output":13}"#
+        for (reason, shows) in [("toolUse", false), ("tool_use", false), ("tool_calls", false), ("stop", true)] {
+            let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+            {"role":"assistant","content":[{"type":"text","text":"Reply"}],"timestamp":1,
+             "stopReason":"\(reason)",\(usage)}
+            """.utf8))
+            let presentation = ChatMessageUsagePresentation.make(message: message, contextWindowTokens: nil)
+            #expect((presentation != nil) == shows)
+        }
+    }
+
     @Test func `usage footer sizes context from the marker and keeps whole-turn counters`() throws {
         let marked = try self.message(usage: self.wholeTurnUsage(
             contextUsage: ["state": "available", "promptTokens": 74000, "totalTokens": 75000]))

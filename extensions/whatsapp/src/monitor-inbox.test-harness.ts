@@ -36,6 +36,7 @@ export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 type MockSock = {
+  authState: { creds: { accountSyncCounter: number } };
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };
@@ -188,6 +189,7 @@ function createAcceptedSendMessageMock() {
 function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
+    authState: { creds: { accountSyncCounter: 0 } },
     ev,
     end: vi.fn(),
     ws: { close: vi.fn() },

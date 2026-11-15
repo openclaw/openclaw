@@ -164,25 +164,30 @@ it("starts expensive standalone UI work early without crossing serial phase barr
     [50, 100, "ui-e2e-serial", 1],
     [60, 200, "ui-e2e-serial", 1],
     [70, 300, "ui-e2e-real-gateway", 2],
+    [80, 20, "ui-e2e-real-gateway", 2],
+    [60, 400, "ui-e2e-real-gateway-standalone", 2],
   ]);
   const sequencer = uiSequencer();
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   const ordered = await sequencer.sort(specs);
-  expect(ordered).toEqual([specs[2], specs[0], specs[1], specs[4], specs[3], specs[5]]);
+  expect(ordered).toEqual([2, 0, 1, 4, 3, 7, 5, 6].map((index) => specs[index]));
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   expect(await sequencer.sort(specs.toReversed())).toEqual(ordered);
 });
 
-it("keeps native failed-first and observed-duration ordering for warm UI runs", async () => {
-  const specs = uiSpecs([
-    [100, 100, "ui-e2e-bundled", 0],
-    [80, 1, "ui-e2e-bundled", 0],
-    [20, 50, "ui-e2e-bundled", 0],
-  ]);
-  const results = new Map(
-    specs.map((file, index) => [file, { failed: index === 1, duration: [500, 1, 90][index]! }]),
-  );
-  const sequencer = uiSequencer((file) => results.get(file));
-  // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
-  expect(await sequencer.sort(specs)).toEqual([specs[1], specs[0], specs[2]]);
-});
+it.each([0, 2])(
+  "keeps native failed-first and observed-duration ordering for warm UI phase %i",
+  async (groupOrder) => {
+    const specs = uiSpecs([
+      [100, 100, "parallel", groupOrder],
+      [80, 1, "parallel", groupOrder],
+      [20, 50, "parallel", groupOrder],
+    ]);
+    const results = new Map(
+      specs.map((file, index) => [file, { failed: index === 1, duration: [500, 1, 90][index]! }]),
+    );
+    const sequencer = uiSequencer((file) => results.get(file));
+    // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
+    expect(await sequencer.sort(specs)).toEqual([specs[1], specs[0], specs[2]]);
+  },
+);

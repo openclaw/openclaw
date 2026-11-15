@@ -10,7 +10,10 @@ import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sq
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
-import { readDeferredPluginSessionImportReceipt } from "../infra/deferred-plugin-session-source-read.js";
+import {
+  databaseIdentity,
+  readDeferredPluginSessionImportReceipt,
+} from "../infra/deferred-plugin-session-source-read.js";
 import { rebuildDeferredPluginSessionSourceIndex } from "../infra/deferred-plugin-session-source-recovery.js";
 import * as sessionVerification from "../infra/deferred-plugin-session-verification.js";
 import * as migrationArtifacts from "../infra/session-sqlite-migration-artifact.js";
@@ -273,9 +276,7 @@ it.each(["receipt", "physical", "foreign"] as const)(
       const original = readDeferredPluginSessionImportReceipt(params)!;
       const recorded = JSON.parse(original.reportJson);
       recorded.databaseIdentity =
-        binding === "foreign"
-          ? "123:456"
-          : sessionVerification.databaseIdentity(sqlitePath, binding);
+        binding === "foreign" ? "123:456" : databaseIdentity(sqlitePath, binding);
       writeState(state.env, [
         "UPDATE migration_sources SET report_json = ? WHERE source_key = ?",
         JSON.stringify(recorded),

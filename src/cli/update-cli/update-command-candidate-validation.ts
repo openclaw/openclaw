@@ -6,12 +6,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
+import { runDelegatedUpdateCandidateRehearsal } from "../../infra/update-candidate-delegated-rehearsal.js";
 import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -23,11 +25,14 @@ import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { assertUpdatePostgresOwnerReleasable } from "./update-command-database-backup.js";
 import type { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
+import { parksForegroundUpdateBeforeActivation } from "./update-command-handoff.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 export async function preflightUpdateCandidatePlugins(
   execution: Pick<MutableUpdateExecutionParams, "channel" | "opts" | "updateStepTimeoutMs">,
@@ -70,6 +75,8 @@ export async function validateUpdateCandidateWithProgress(
     writeOptions: ReturnType<
       ReturnType<typeof createUpdateCommandExecutionGuards>["captureWriteOptions"]
     >;
+    /** The service the updater will stop before activation, if any. */
+    ownerService?: Pick<PreManagedServiceStop, "running" | "serviceUpdateVerdict">;
   },
   execution: {
     packageUpdateNodeRunner?: string;
@@ -79,6 +86,15 @@ export async function validateUpdateCandidateWithProgress(
   },
   run: UpdateCommandOptions["run"],
 ) {
+  const { ownerService, ...candidate } = params;
+  await assertUpdatePostgresOwnerReleasable({
+    config: params.config,
+    env: params.env,
+    hasRun: Boolean(run),
+    parksBeforeActivation: parksForegroundUpdateBeforeActivation(run),
+    service: ownerService,
+  });
+  params.assertCurrent();
   // Canary owns size-aware snapshot and per-check budgets. Only the admitted
   // operator deadline may limit their combined duration; keep its cancellation
   // and process settlement through the progress writer and raw canary children.
@@ -117,37 +133,56 @@ export async function validateUpdateCandidateWithProgress(
             throw new Error("Candidate progress lost its original state source.");
           }
         }
-        const validate = () =>
-          validateUpdateCandidateCanary({
-            ...params,
-            sourceBundledPlugins: params.sourcePackageRoot
-              ? {
-                  packageRoot: params.sourcePackageRoot,
-                  directory: resolveBundledPluginsDir(params.env),
-                }
-              : undefined,
-            assertCurrent,
-            stateDir: resolveStateDir(params.env),
-            nodeRunner: execution.packageUpdateNodeRunner,
-            timeoutMs: execution.timeoutMs,
-            signal,
-            fullIntegrityCheck: execution.opts.fullIntegrityCheck,
-            onProgress: async (step) => {
-              assertCurrent();
-              if (run) {
-                await recordUpdateRunStepAsync(run.runId, step, {
-                  ...writeOptions,
-                  context: source?.workerContext(),
-                });
+        const rehearsal: Parameters<typeof validateUpdateCandidateCanary>[0] = {
+          ...candidate,
+          sourceBundledPlugins: params.sourcePackageRoot
+            ? {
+                packageRoot: params.sourcePackageRoot,
+                directory: resolveBundledPluginsDir(params.env),
               }
-              assertCurrent();
-              defaultRuntime[execution.opts.json ? "error" : "log"](
-                `${step.step}: ${step.detail ?? step.status}`,
-              );
-            },
-            onStep: (step) =>
-              reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
-          });
+            : undefined,
+          assertCurrent,
+          stateDir: resolveStateDir(params.env),
+          nodeRunner: execution.packageUpdateNodeRunner,
+          timeoutMs: execution.timeoutMs,
+          signal,
+          fullIntegrityCheck: execution.opts.fullIntegrityCheck,
+          onProgress: async (step) => {
+            assertCurrent();
+            if (run) {
+              await recordUpdateRunStepAsync(run.runId, step, {
+                ...writeOptions,
+                context: source?.workerContext(),
+              });
+            }
+            assertCurrent();
+            defaultRuntime[execution.opts.json ? "error" : "log"](
+              `${step.step}: ${step.detail ?? step.status}`,
+            );
+          },
+          onStep: (step) =>
+            reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
+        };
+        const validate = async () => {
+          const delegated = await runDelegatedUpdateCandidateRehearsal(rehearsal);
+          if (delegated.owner === "candidate") {
+            defaultRuntime[execution.opts.json ? "error" : "log"](
+              "The candidate release ran its own update checks.",
+            );
+            return delegated.result;
+          }
+          if (delegated.fallbackReason !== "unsupported-target") {
+            // The candidate advertised its own rehearsal and did not deliver one.
+            defaultRuntime[execution.opts.json ? "error" : "log"](
+              `Candidate rehearsal did not return a valid result (${delegated.fallbackReason}); the installed updater will run its own checks.${
+                delegated.diagnostic
+                  ? ` ${redactSupportDiagnosticLine(delegated.diagnostic, { env: params.env, stateDir: rehearsal.stateDir })}`
+                  : ""
+              }`,
+            );
+          }
+          return await validateUpdateCandidateCanary(rehearsal);
+        };
         const validation =
           source && run
             ? await runOpenClawStateWorkerOperation(
@@ -210,6 +245,7 @@ export async function assertUpdateCandidateExecutor(params: {
       "Starting the update requires its original update process.",
     );
   }
+  let unsupported = "unreported";
   const supported = await isUpdatedInstallGatewayExecutorSupported({
     root: params.root,
     env: resolveUpdatedInstallCommandEnv({
@@ -219,12 +255,15 @@ export async function assertUpdateCandidateExecutor(params: {
     executor,
     timeoutMs: params.timeoutMs,
     nodeRunner: params.nodeRunner,
+    onUnsupported: (condition) => {
+      unsupported = condition;
+    },
   });
   params.assertCurrent();
   if (!supported) {
     throw new UpdatePreMutationError(
       "target-native-unsupported",
-      "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
+      `Target runtime cannot fence update-owned native commands (executor check: ${unsupported}); refusing before Gateway stop or package activation.`,
     );
   }
 }

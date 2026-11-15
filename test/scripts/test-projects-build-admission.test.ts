@@ -259,6 +259,7 @@ describe("CLI runtime admission", () => {
           "server-sidecar-retention.test.ts",
           "server.config-patch.test.ts",
           "server-runtime-subscriptions.test.ts",
+          "server-runtime-config.test.ts",
         ].flatMap((file) => ["--exclude", file]),
       ),
     ],
@@ -490,6 +491,21 @@ async function start(args: string[]) {
 }
 
 describe("full-suite timing metadata", () => {
+  it.each([
+    { extra: [], preset: "runtime" },
+    { extra: [modelTarget], preset: "full" },
+  ])(
+    "prepares the $preset worker owner before lending selected test artifacts",
+    async ({ extra, preset }) => {
+      await start(["src/auto-reply/reply/dispatch-from-config.delivery.test.ts", ...extra]);
+      await expectPassed();
+      expect(commands.reader.mock.calls.length).toBeGreaterThan(0);
+      for (const [spec] of commands.reader.mock.calls) {
+        expect(spec.workerRun?.descriptor.preset).toBe(preset);
+      }
+    },
+  );
+
   it("records inherited include selections without replacing whole-config history", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_TIMINGS", "1");
     const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
@@ -542,13 +558,18 @@ describe("full-suite timing metadata", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "carries chunk targets without changing launch selection (inherited=%s)",
-    async (inherited) => {
+  it.each([
+    { inherited: false, maglev: "0" },
+    { inherited: true, maglev: "0" },
+    { inherited: false, maglev: "1" },
+    { inherited: true, maglev: "1" },
+  ])(
+    "carries chunk targets from the invocation environment (inherited=$inherited, maglev=$maglev)",
+    async ({ inherited, maglev }) => {
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
       vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "1");
       vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "same-parent");
-      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", "0");
+      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", maglev === "0" ? "1" : "0");
       const planner = await import("../../scripts/test-projects.test-support.mts");
       const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
@@ -566,22 +587,26 @@ describe("full-suite timing metadata", () => {
       const writeTimings = vi.spyOn(timings, "writeShardTimings");
       commands.reader.mockImplementation(() => completedReader());
 
-      await runTestProjects(noExit, []);
+      await runTestProjects(noExit, [], {
+        ...process.env,
+        OPENCLAW_VITEST_ENABLE_MAGLEV: maglev,
+      });
 
       expect(commands.reader).toHaveBeenCalledTimes(2);
       const launches = commands.reader.mock.calls.map(([input]) => input);
       expect(launches.map((input) => input.pnpmArgs)).toEqual(
-        files.map((file) => [
-          "exec",
-          "node",
-          "--no-maglev",
-          "--no-concurrent-sparkplug",
-          resolveVitestCliEntry(),
-          "run",
-          "--config",
-          config,
-          file,
-        ]),
+        files.map((file) =>
+          ["exec", "node"].concat(maglev === "0" ? ["--no-maglev"] : [], [
+            "--no-concurrent-sparkplug",
+            "--js-base-64",
+            "--expose-gc",
+            resolveVitestCliEntry(),
+            "run",
+            "--config",
+            config,
+            file,
+          ]),
+        ),
       );
       for (const input of launches) {
         if (includeFile) {
@@ -1153,6 +1178,15 @@ describe("cache lease completion", () => {
           configs.map((config) => runPlan(config)),
         );
       }
+      const workerCompiler = createControlledWorkerCompiler(
+        tempDirs.make("scheduler-worker-"),
+        process.env,
+      );
+      commands.prepare.mockImplementation((command) =>
+        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+          : Promise.resolve(0),
+      );
       const selections: unknown[] = [];
       await assertSchedulerDrain({
         args: focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,
@@ -1383,6 +1417,7 @@ describe("test-projects build admission", () => {
     build: boolean;
   }>([
     { args: [avatarTarget], build: true },
+    { args: ["ui/src/e2e/home-readonly.real-gateway.e2e.test.ts"], build: true },
     { args: [uiConfig], include: [avatarTarget], build: true },
     {
       args: [uiConfig],
@@ -1415,6 +1450,12 @@ describe("test-projects build admission", () => {
     await start(args);
     await expectPassed();
     expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
+    if (build) {
+      expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
+        args: currentRuntimeArgs,
+        env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
+      });
+    }
     expect(commands.uiAssets).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(
       commands.prepare.mock.calls.some(([command]) => command.args[0] === "scripts/ui.js"),

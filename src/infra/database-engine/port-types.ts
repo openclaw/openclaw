@@ -48,6 +48,7 @@ export type PortDescriptor = PortSchema & {
     version: number;
     migrationRequired: boolean;
     pendingColumns: Readonly<Record<string, readonly string[]>>;
+    pendingTables?: readonly string[];
   };
   /** Caller supplies an exclusively owned private copy, never the live source. */
   migrateSqliteSource?: (

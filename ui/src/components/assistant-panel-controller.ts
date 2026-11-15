@@ -356,7 +356,16 @@ export function createAssistantPanel(
 
   function restoreSuppressed(): boolean {
     // Home follows the visible Settings context; automatic diagnostic restores yield to it.
-    return suppressed() || (destination === "custodian" && isSettingsTakeover(props.pageRouteId));
+    return (
+      suppressed() ||
+      (destination === "custodian" &&
+        isSettingsTakeover(
+          props.pageRouteId,
+          props.context?.gateway.snapshot.hello?.controlUiTabs,
+          props.context?.router.getState().location,
+          props.context?.basePath,
+        ))
+    );
   }
 
   function openSession(

@@ -3,6 +3,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { navigateWithRouteTransition } from "../../app/route-transition.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
@@ -108,7 +109,7 @@ export class StartedSessionNavigation {
       await this.navigate(context, { client, key: submission.key, agentId: submission.agentId });
     } catch (error) {
       if (isCurrent() && submission.canDisplay()) {
-        failure = error instanceof Error ? error.message : String(error);
+        failure = formatUiError(error);
       }
     } finally {
       if (isCurrent()) {

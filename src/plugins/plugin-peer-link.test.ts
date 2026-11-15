@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   auditDeclaredOpenClawHostDependency,
@@ -334,6 +336,98 @@ describe("plugin peer links", () => {
       }
     },
   );
+
+  it("preserves pending cohort peers while repairing fresh managed and registered siblings", async () => {
+    const root = makeTempDir();
+    const priorManaged = peerFixture("stale-link", false, path.join(root, "npm"));
+    const priorRegistered = peerFixture("stale-link", true, root);
+    const freshManaged = peerFixture("missing-modules", false, path.join(root, "fresh-npm"));
+    const freshRegistered = path.join(priorRegistered.extensionsDir, "z-peer-plugin");
+    peerPackage(freshRegistered);
+    const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
+    const { createUpdateRun } = await import("../infra/update-run-ledger.js");
+    const { beginPluginCohortRecovery, deletePluginCohortRecovery } =
+      await import("../infra/update-run-recovery-store.js");
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../state/openclaw-state-db-cache.js");
+    const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+    const { sha256Hex } = await import("../infra/crypto-digest.js");
+    try {
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const transactionId = randomUUID();
+      const fence = { assertCurrent() {} };
+      const pair = beginPluginCohortRecovery(
+        {
+          runId: run.runId,
+          transactionId,
+          revision: 0,
+          claimId: randomUUID(),
+          claimKind: "initial",
+          handoff: null,
+          source: { stateDir: root, configPath: path.join(root, "openclaw.json") },
+          from: { root, nodePath: process.execPath, version: "2026.10.9", buildId: "old" },
+          to: { root, nodePath: process.execPath, version: "2026.10.10", buildId: "new" },
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          effects: [],
+          restore: null,
+          verification: null,
+          primaryFailure: null,
+        },
+        {
+          runId: run.runId,
+          transactionId,
+          revision: 0,
+          disposition: "pending",
+          installKey: root,
+          priorArtifacts: [priorManaged, priorRegistered].map(({ packageDir }) => {
+            const stat = fs.statSync(packageDir, { bigint: true });
+            return {
+              pluginId: "peer-plugin",
+              packageDir,
+              identity: {
+                realPath: fs.realpathSync(packageDir),
+                dev: String(stat.dev),
+                ino: String(stat.ino),
+                manifestSha256: sha256Hex(fs.readFileSync(path.join(packageDir, "package.json"))),
+              },
+              markerBefore: null,
+              markerAfter: null,
+            };
+          }),
+          artifacts: [],
+          publications: [],
+          settledPublications: 0,
+        },
+        fence,
+        options,
+      );
+      const repair = () =>
+        repairInstalledOpenClawHostLinks({
+          ...options,
+          ...registeredRepair(priorRegistered.packageDir, freshRegistered),
+          managedNpmRoots: [priorManaged.root, freshManaged.root],
+          logger: {},
+        });
+      expect(await repair()).toEqual({ managedRepaired: 1, registeredRepaired: 1 });
+      expect(fs.readlinkSync(priorManaged.linkPath)).toBe(priorManaged.oldHost);
+      expect(fs.readlinkSync(priorRegistered.linkPath)).toBe(priorRegistered.oldHost);
+      expectHostLink(freshManaged.linkPath);
+      expectHostLink(path.join(freshRegistered, "node_modules", "openclaw"));
+      expect(
+        auditOpenClawPeerDependencyLinkSync({ packageDir: priorManaged.packageDir }),
+      ).not.toBeNull();
+      expect(
+        auditOpenClawPeerDependencyLinkSync({ packageDir: priorRegistered.packageDir }),
+      ).not.toBeNull();
+      deletePluginCohortRecovery(pair, fence, options);
+      expect(await repair()).toEqual({ managedRepaired: 1, registeredRepaired: 1 });
+      expectHostLink(priorManaged.linkPath);
+      expectHostLink(priorRegistered.linkPath);
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(options.env));
+    }
+  });
 
   it.each([
     ["managed", false],

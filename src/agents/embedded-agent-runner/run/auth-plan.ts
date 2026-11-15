@@ -220,6 +220,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     const unrecorded =
       runParams.trigger === "cron" &&
       !runParams.authProfileBinding &&
+      !runParams.scheduledLiveProviderAuth &&
       !runParams.scheduledRuntimeAuthority
         ? prepared.attempts.find(({ plan }) => {
             const source = plan.credentialSource;

@@ -85,7 +85,7 @@ export function boundHistoryAnchorPageRange(
     const size = byteSize(position, maxBytes - bytes);
     if (bytes + size > maxBytes) {
       if (rejectOversized && start === endExclusive) {
-        throw new Error(`Transcript history message exceeds the ${maxBytes}-byte page limit`);
+        throw new Error(`Chat history message exceeds the ${maxBytes}-byte page limit`);
       }
       return false;
     }

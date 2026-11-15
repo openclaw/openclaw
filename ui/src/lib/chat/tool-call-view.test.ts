@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import type { DiffLine } from "./tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "./tool-call-view.ts";
 
@@ -33,6 +34,8 @@ it.each([
   ["edit", { oldText: "a", newText: "b" }, "generic"],
   ["apply_patch", {}, "generic"],
   ["fetch", {}, "generic"],
+  ["mcp__openclaw__apply_patch", { changes: [{ path: "a", kind: "update", diff: "+x" }] }, "edit"],
+  ["mcp__openclaw__tool_call", { id: "exec", args: { command: "ls" } }, "command"],
 ] as const)("classifies %s with args %o as %s", (name, args, kind) => {
   expect(resolve(name, args).kind).toBe(kind);
 });
@@ -223,4 +226,22 @@ it("keeps tool-name presentation authoritative when calls share args", () => {
   });
   check(resolve("write", editArgs), { kind: "write", target: "a.ts" });
   expect(resolve("READ", editArgs).kind).toBe("read");
+});
+
+it("routes synthesized patch headings through whole-sentence templates", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    patchView(
+      "*** Begin Patch\n*** Add File: added.ts\n+new\n*** Delete File: removed.ts\n*** Update File: old.ts\n*** Move to: new.ts\n@@\n-old\n+new\n*** Update File: kept.ts\n@@\n-old\n+new\n*** End Patch",
+    );
+    expect(translate).toHaveBeenCalledWith("chat.toolCards.patch.add", { path: "added.ts" });
+    expect(translate).toHaveBeenCalledWith("chat.toolCards.patch.delete", { path: "removed.ts" });
+    expect(translate).toHaveBeenCalledWith("chat.toolCards.patch.move", {
+      source: "old.ts",
+      path: "new.ts",
+    });
+    expect(translate).toHaveBeenCalledWith("chat.toolCards.patch.update", { path: "kept.ts" });
+  } finally {
+    translate.mockRestore();
+  }
 });

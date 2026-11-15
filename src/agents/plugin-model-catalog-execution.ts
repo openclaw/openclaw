@@ -5,6 +5,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { getArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -12,7 +13,7 @@ import {
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,
@@ -65,7 +66,7 @@ export async function withPluginModelCatalogWorker<T>(
     scope: Pick<SqliteWorkerStore<PluginModelCatalogCredentialOperations>, "execute">,
   ) => Promise<T>,
 ): Promise<T> {
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   let worker: OpenClawAgentSqliteWorkerStore<PluginModelCatalogCredentialOperations> | undefined;
   try {
     if (prepare) {
@@ -131,9 +132,12 @@ export async function loadPersistedPluginModelCatalogs(
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
   try {
+    const inspection = getArtifactPreservingSqliteRead(options.path);
     reading = readPluginModelCatalogsInWorker(
       {
         ...options,
+        path: inspection?.canonicalPath ?? options.path,
+        expectedIdentity: inspection,
         env: { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) },
         pluginIds: pluginIds && [...pluginIds],
       },

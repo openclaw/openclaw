@@ -17,7 +17,7 @@ import type {
   LlmCompleteErrorCode,
   LlmCompleteParams,
   LlmIsolatedAgentRuntimeCompleteParams,
-} from "./types-core.js";
+} from "./runtime-llm.types.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const ISOLATED_COMPLETION_ERRORS = new Map<unknown, readonly [LlmCompleteErrorCode, string]>([

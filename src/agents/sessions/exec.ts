@@ -142,6 +142,7 @@ export async function execCommand(
   const completion = (async () => {
     try {
       const startup = await createChildAdapter({
+        executionIntent: "agent-tool",
         argv,
         cwd,
         env: resolveCommandEnv({ argv }),

@@ -458,7 +458,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
     const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
     writeFileSync(
       path.join(root, "selected.test.mjs"),
-      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Uint8Array.fromBase64(Uint8Array.of(255).toBase64()).toHex()).toBe('ff');expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
     );
     for (const name of ["excluded", "unrelated"]) {
       writeFileSync(

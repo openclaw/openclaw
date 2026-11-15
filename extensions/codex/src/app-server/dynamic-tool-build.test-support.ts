@@ -8,10 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { cleanupSessionStateForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import { buildDynamicTools } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
@@ -109,25 +106,29 @@ export function createRuntimeDynamicTool(name: string): AnyAgentTool {
   };
 }
 
-export function setupDynamicToolBuildFixture(): Promise<string> {
+export async function setupDynamicToolBuildFixture(): Promise<string> {
   hoisted.loadNodeExecAvailability.mockResolvedValue({
     cacheKey: "eligible",
     isAvailable: () => true,
   });
   hoisted.normalizeAgentRuntimeTools.mockClear();
   setRuntimeConfigSnapshot({});
-  return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
+  const tempDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-")),
+  );
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  return tempDir;
 }
 
 export async function cleanupDynamicToolBuildFixture(
   tempDir: string,
   hostCapabilityClosers: Array<() => void>,
 ): Promise<void> {
+  const stateDir = process.env.OPENCLAW_STATE_DIR ?? tempDir;
   try {
     hostCapabilityClosers.splice(0).forEach((close) => close());
     vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
+    await cleanupSessionStateForTest({ stateDir, rootPath: tempDir });
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   } finally {

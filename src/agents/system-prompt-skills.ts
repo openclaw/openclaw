@@ -17,9 +17,13 @@ export function buildSkillsSection(params: {
   const canAccess = params.codeModeActive
     ? visibleTools.has("exec") && installedSkillRead
     : visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
-  const skillsPrompt = canAccess ? (params.skillsPrompt?.trim() ?? "") : "";
-  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
   const installedSkillSearch = availableTools.has("skills_search");
+  // Code Mode searches the admitted skill catalog; listing it again only consumes context.
+  const skillsPrompt =
+    canAccess && !(params.codeModeActive && installedSkillSearch)
+      ? (params.skillsPrompt?.trim() ?? "")
+      : "";
+  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
   if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
     return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
   }

@@ -257,8 +257,7 @@ export default definePluginEntry({
             });
           })
           .finally(() => {
-            const timer = setTimeout(() => continueOperations.delete(operationId), 5 * 60 * 1000);
-            timer.unref?.();
+            setTimeout(() => continueOperations.delete(operationId), 5 * 60 * 1000).unref();
           });
         return operation;
       },

@@ -110,10 +110,17 @@ export function dispatchInputsDigest(inputs: DispatchInputs): string {
 }
 
 export function formatDispatchSelection(
-  request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
+  request: Pick<
+    DispatchRequest,
+    "targetSha" | "workflowSha" | "inputs" | "effectiveSoak" | "trustedWorkflowRef"
+  >,
 ): string {
   const { inputs } = request;
-  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  const selection = `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  if (request.targetSha === request.workflowSha || request.trustedWorkflowRef === "candidate") {
+    return selection;
+  }
+  return `${selection}\nWARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts. Release verification may fail even when workloads succeed. Use the admitted candidate route for publication qualification, with Q=C by default or an explicit reviewed Q.`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
@@ -436,7 +443,7 @@ export function observeQualificationAdmission(
       isDeepStrictEqual(authenticated.request, admission.request),
       "Retained admission differs from the original frozen request",
     );
-    return { descriptor: admission.descriptor, run: admission.run };
+    return { descriptor: admission.descriptor, run: admission.run, authenticated };
   }
   const inventory: unknown = JSON.parse(
     client.readApi("repos/" + REPOSITORY + "/actions/workflows/" + admission.workflowId + "/runs", [
@@ -511,7 +518,7 @@ export function observeQualificationAdmission(
     isDeepStrictEqual(authenticated.request, admission.request),
     "Admission returned a different frozen request",
   );
-  return { descriptor, run: { id: Number(run.id), attempt: 1 } };
+  return { descriptor, run: { id: Number(run.id), attempt: 1 }, authenticated };
 }
 
 export async function qualifyAdmission(
@@ -617,13 +624,22 @@ export async function qualifyAdmission(
   do {
     const observed = observeQualificationAdmission(record, client);
     if (observed) {
+      if (admission.phase === "observed") {
+        // Reauthenticate without repacking the already frozen workflow input bytes.
+        return { record, authenticated: observed.authenticated };
+      }
       const envelope = decodePublicationDispatchEnvelope(
         String(record.request.inputs.trusted_workflow_json),
       );
       const packed = JSON.stringify({ ...envelope, qualificationAdmission: observed.descriptor });
       record = {
         ...record,
-        admission: { ...admission, ...observed, phase: "observed" },
+        admission: {
+          ...admission,
+          descriptor: observed.descriptor,
+          run: observed.run,
+          phase: "observed",
+        },
         request: {
           ...record.request,
           inputs: { ...record.request.inputs, trusted_workflow_json: packed },
@@ -631,7 +647,7 @@ export async function qualifyAdmission(
         },
       };
       retain(record);
-      return record;
+      return { record, authenticated: observed.authenticated };
     }
     await sleep(15_000);
   } while (Date.now() < deadline);

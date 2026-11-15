@@ -260,11 +260,17 @@ export function publishRetainedSessionEntryChange(
   known: boolean,
   metadataEntry?: SessionEntry,
   fullEntry?: SessionEntry,
+  membership?: ReadonlySet<string>,
 ): void {
   recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
     publishRetainedSessionEntryPredicate(read, metadataEntry, known, { fullEntry });
     recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
+    if (read.acquisition && membership) {
+      // A complete actor postimage supersedes older deltas and an in-flight read's membership.
+      read.acquisition.membershipPostimage = membership;
+      read.acquisition.membership.clear();
+    }
     publishRetainedSessionGeneration(read, entry, known);
     const previous = read.facts;
     read.facts =
@@ -273,7 +279,7 @@ export function publishRetainedSessionEntryChange(
       ((previous.entry.sessionId === entry.sessionId &&
         (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)) ||
         (read.followTranscript && previous.entry.lifecycleRevision === entry.lifecycleRevision))
-        ? { entry, membership: previous.membership }
+        ? { entry, membership: membership ?? previous.membership }
         : undefined;
   }
 }

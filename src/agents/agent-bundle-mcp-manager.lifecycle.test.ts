@@ -26,6 +26,7 @@ import {
 } from "./agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
+import * as sessionMcpConfig from "./agent-bundle-mcp-runtime-config.js";
 import {
   SESSION_MCP_RUNTIME_MANAGER_KEY,
   type CreateSessionMcpRuntime,
@@ -35,7 +36,6 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
 } from "./agent-bundle-mcp-types.js";
-import * as embeddedMcp from "./embedded-agent-mcp.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -131,8 +131,8 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
-  it("prepares static MCP declarations once per acquisition and observes changed config", async () => {
-    using load = vi.spyOn(embeddedMcp, "loadEmbeddedAgentMcpConfig");
+  it("prepares static MCP config once per acquisition and observes changed config", async () => {
+    using load = vi.spyOn(sessionMcpConfig, "loadSessionMcpConfig");
     const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
     const manager = createManager(factory);
     const input = {

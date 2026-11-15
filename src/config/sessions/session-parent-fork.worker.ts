@@ -28,7 +28,7 @@ import {
   type ParentForkSourceTranscript,
 } from "./session-accessor.sqlite-parent-fork.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import {
   formatLegacySqliteSessionMarkerForScope,
   type ResolvedSqliteScope,

@@ -1,3 +1,4 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -11,8 +12,10 @@ import { assertRequiredWorkerSelection } from "../../config/required-worker-prof
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { assertOperatorCloudProfileDispatchAllowed } from "../operator-role-policy.js";
+import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import {
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionTarget,
@@ -209,6 +212,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     context,
     client,
     signal,
+    hasCurrentClientAuthority,
     sessionMutationAuthorization,
   }) => {
     if (
@@ -487,9 +491,22 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
                 ...candidateTarget,
                 ...(devicePlacement ? { devicePlacement } : {}),
               };
+              if (workspace.kind === "repository") {
+                request.readNativeCredential = repositoryDispatchCredentialReader({
+                  ...session,
+                  client,
+                  hasCurrentClientAuthority,
+                  requestDigest: sha256Hex(JSON.stringify(request)),
+                  assertCurrent: authorizeDispatch,
+                });
+              }
               const placement = await dispatchService.dispatch(
                 request,
                 (observed) => {
+                  if (request.readNativeCredential && observed.state === "requested") {
+                    // The durable placement retains the original authenticated source.
+                    acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+                  }
                   attemptedPlacement = { ...observed };
                   emitSessionsChanged(context, {
                     reason: "dispatch",

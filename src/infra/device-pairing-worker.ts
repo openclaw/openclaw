@@ -64,7 +64,9 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
           typeof entry.credentialDigest !== "string" ||
           typeof entry.provisionOperationId !== "string" ||
           typeof entry.ownerEpoch !== "number")) ||
-      ((entry.kind === "bootstrap.consume" || entry.kind === "bootstrap.token") &&
+      ((entry.kind === "bootstrap.consume" ||
+        entry.kind === "bootstrap.token" ||
+        entry.kind === "browser-pair.decision") &&
         typeof entry.expiresAtMs !== "number")
     ) {
       throw new Error("Invalid pairing admission facts");
@@ -105,10 +107,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    // Join codes and retained setup cleanup cannot change paired-device authority.
+    // Join codes, browser requests before a decision, and retained setup cleanup
+    // cannot change paired-device authority.
     const publication =
       captured.type === "devicePairing.registerJoinCode" ||
       captured.type === "devicePairing.redeemJoinCode" ||
+      captured.type === "devicePairing.startBrowserRequest" ||
+      captured.type === "devicePairing.collectBrowserRequest" ||
+      captured.type === "devicePairing.cancelBrowserRequest" ||
+      captured.type === "devicePairing.inspectBrowserRequest" ||
       captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);
@@ -216,7 +223,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
       }
     }
-  });
+  }, captured.type);
   const onAuthorityRefused = options.onAuthorityRefused;
   return onAuthorityRefused
     ? operation.catch((error: unknown) => {
@@ -241,6 +248,6 @@ export async function withCurrentDevicePairingSnapshot<T>(
     }
     const action = prepare(paired);
     return { value: action?.start() };
-  });
+  }, "devicePairing.list");
   return begun.value;
 }

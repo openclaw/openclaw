@@ -4,14 +4,12 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isRetryableGatewayReadError,
-} from "./gateway-errors.ts";
+import { isRetryableGatewayReadError } from "./gateway-errors.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import { formatMissingOperatorReadScopeMessage } from "./permission-error.ts";
 import { listen } from "./reactive/listener.ts";
-import { areUiSessionKeysEquivalent, scopedSessionArtifactKey } from "./sessions/session-key.ts";
+import { areUiSessionKeysEquivalent } from "./sessions/session-key.ts";
 import { requestSessionUsage } from "./sessions/usage.ts";
 
 type SessionContextReportTarget = {
@@ -22,8 +20,17 @@ type SessionContextReportTarget = {
   provider?: string;
   used: number;
 };
+/** Lifetime spend for the bound session instance; the session row only carries the latest run. */
+export type SessionCostTotal = {
+  usd: number;
+  /** Some usage is still being summarized or lacks a price: the total is a lower bound. */
+  partial: boolean;
+  /** Usage exists but none of it has a price; never present that as $0. */
+  unpriced: boolean;
+};
 type SessionContextReportSnapshot = {
   report: SessionSystemPromptReport | null;
+  cost: SessionCostTotal | null;
   loading: boolean;
   failed: boolean;
   offline: boolean;
@@ -41,7 +48,7 @@ type Entry = {
 const stores = new WeakMap<ApplicationGateway, ReturnType<typeof createSessionContextReports>>();
 const keyFor = (target: SessionContextReportTarget) =>
   JSON.stringify([
-    scopedSessionArtifactKey(target.sessionKey, target.agentId),
+    target.sessionKey.trim(),
     target.agentId,
     target.sessionId,
     target.model,
@@ -65,6 +72,7 @@ function createSessionContextReports(gateway: ApplicationGateway) {
   const visible = () => document.visibilityState !== "hidden";
   const empty = (): SessionContextReportSnapshot => ({
     report: null,
+    cost: null,
     loading: canRead(),
     failed: false,
     offline: gateway.snapshot.phase !== "connected",
@@ -99,13 +107,13 @@ function createSessionContextReports(gateway: ApplicationGateway) {
       canRead() &&
       gatewayPresentationScope(gateway).key === requestScope;
     const target = entry.target;
-    const sessionKey = scopedSessionArtifactKey(target.sessionKey, target.agentId);
-    const today = new Date().toISOString().slice(0, 10);
+    // Usage accepts the stored key and agent separately; raw and literal rows can coexist.
+    const sessionKey = target.sessionKey.trim();
+    // One whole-history read serves the context breakdown and the session's total cost.
     const promise = requestSessionUsage(
       receipt.client,
       {
-        startDate: today,
-        endDate: today,
+        range: "all",
         timeZone: "utc",
         scope: "instance",
         agentId: target.agentId,
@@ -120,16 +128,24 @@ function createSessionContextReports(gateway: ApplicationGateway) {
         const row = response.sessions.find((item) =>
           areUiSessionKeysEquivalent(item.key, sessionKey),
         );
+        const sameInstance = !target.sessionId || row?.sessionId === target.sessionId;
+        const usage = sameInstance ? row?.usage : undefined;
         const report = row?.contextWeight;
         const matches =
           report &&
-          (!target.sessionId ||
-            (row?.sessionId === target.sessionId &&
-              (!report.sessionId || report.sessionId === target.sessionId))) &&
+          sameInstance &&
+          (!target.sessionId || !report.sessionId || report.sessionId === target.sessionId) &&
           (!report.model || !target.model || report.model === target.model) &&
           (!report.provider || !target.provider || report.provider === target.provider);
         entry.snapshot = {
           report: matches ? report : null,
+          cost: usage
+            ? {
+                usd: usage.totalCost,
+                partial: Boolean(response.partial || row?.computing || usage.missingCostEntries),
+                unpriced: usage.totalCost === 0 && usage.missingCostEntries > 0,
+              }
+            : null,
           loading: false,
           failed: false,
           offline: false,
@@ -144,6 +160,7 @@ function createSessionContextReports(gateway: ApplicationGateway) {
         const transient = isRetryableGatewayReadError(error, "sessions.usage");
         entry.snapshot = {
           report: transient ? entry.snapshot.report : null,
+          cost: transient ? entry.snapshot.cost : null,
           loading: false,
           failed: true,
           offline: false,

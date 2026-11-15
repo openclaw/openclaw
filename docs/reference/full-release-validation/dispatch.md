@@ -216,6 +216,17 @@ coverage, soak, platform requirements, and exact scope of any existing policy
 grants; failed or missing required work must rerun. New P admission and a fresh
 successful FRV with its immutable plan and final verification are mandatory.
 
+The admitted candidate route supports Q differing from C and produces candidate-sealed
+evidence for that exact tuple. Only the separate cross-revision diagnostic route
+warns that it cannot supply candidate publication evidence; do not use that route
+as a substitute for independent-Q admission.
+
+The candidate checklist still defaults fresh qualification to Q=C. After an
+explicit independent-Q run succeeds, consume it with
+`pnpm release:candidate -- --full-release-validation-run-id <run> --skip-dispatch`
+and the original candidate/tag, publication scope, and pinned P options. The
+checklist's `--workflow-sha` selects P, not Q.
+
 ## Exact frozen-target test omissions
 
 Admitted candidate qualification, including independent Q, rejects test omissions.
@@ -276,9 +287,20 @@ node scripts/full-release-validation-at-sha.mjs \
 An existing `--request-file` also enters read-only reconciliation; conflicting
 target, tooling, or input arguments are rejected. An explicitly selected
 `--resume-request <file>` may continue an admitted candidate request only before
-its qualification ref mutation or workflow POST. It retains the original tuple
-and never repeats an uncertain write. Recovery performs no ref
-creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
+its first qualification workflow POST. If ref creation succeeded but its readback
+failed, explicit resume verifies the existing ref still points to admitted Q and that
+its exact workflow inventory is empty, then reuses it without another ref POST.
+After recovery inventory reads, it revalidates the authenticated admission
+and current signer authority, then reads the ref again immediately before
+recording attempted intent and dispatching. A missing or moved ref, an uncertain inventory, or any
+existing run refuses continuation. An attempted workflow POST remains
+observation-only and is never repeated. Read-only reconciliation verifies an
+uncertain prepared ref before suggesting resume and never rewrites the request.
+The candidate checklist and stable wrapper relay the canonical helper’s recovery
+advice; raw prepared/uncertain state alone never proves resume is safe. Run the
+helper’s explicit resume command when offered, then rerun the wrapper.
+Reconciliation performs no ref creation/deletion, dispatch, rerun, cancellation,
+Git fetch, or request rewrite.
 `dispatch=observed` reports the exact run URL and attempt, not successful
 validation. A newer attempt cannot replace the retained attempt.
 

@@ -58,16 +58,19 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     // A fixed width/font makes reconnection cross a wrapping boundary.
     const { host, input, props, renderInput } = mountInput(
       "Keep this prompt and its caret while changing preferences.",
-      { actions: <button type="button">Settings</button> },
+      {},
       "width: 740px; font-family: monospace;",
     );
     await document.fonts.ready;
     // ResizeObserver's initial delivery schedules another layout frame.
     await threeFrames();
     const originalHeight = input.clientHeight;
-    expect([host.clientWidth, originalHeight]).toEqual([740, 24]);
+    expect([host.clientWidth, originalHeight]).toEqual([
+      740,
+      Number.parseFloat(getComputedStyle(input).lineHeight),
+    ]);
     const measureContent = vi.spyOn(input, "scrollHeight", "get");
-    const settings = host.querySelector("button")!;
+    const settings = host.appendChild(document.createElement("button"));
     input.focus();
     input.setSelectionRange(5, 11, "backward");
     settings.focus();
@@ -132,45 +135,44 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     expect(input.scrollTop).toBe(0);
   });
 
-  it("grows down through three lines, keeps actions fixed and fades clear of the far-right scrollbar", async () => {
-    const { host, input, entry } = mountInput("One line", {
-      actions: (
-        <button type="button" class="cmd-palette__create">
-          New session<kbd>Ctrl+Enter</kbd>
-        </button>
-      ),
-    });
-    const actions = host.querySelector<HTMLElement>(".cmd-palette__input-actions")!;
+  it("grows Compose through eight lines, then scrolls without moving its top edge", async () => {
+    const { input } = mountInput("One line", { maxLines: 8 });
+    await nextFrame();
+    edit(input, input.value);
+    const top = input.getBoundingClientRect().top;
+    const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
+    for (const lines of [2, 8, 12]) {
+      edit(input, Array(lines).fill("Prompt line").join("\n"));
+      expect(input.getBoundingClientRect().top).toBe(top);
+      expect(Number.parseFloat(input.style.height)).toBe(lineHeight * Math.min(lines, 8));
+    }
+  });
+
+  it("grows down through three lines and fades clear of the far-right scrollbar", async () => {
+    const { host, input, entry } = mountInput("One line");
     const textScroll = host.querySelector<HTMLElement>(".cmd-palette__input-scroll")!;
     await nextFrame();
     edit(input, input.value);
     const top = input.getBoundingClientRect().top;
-    const actionTop = actions.getBoundingClientRect().top;
     const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
-    expect(input.clientHeight).toBe(24);
+    expect(input.clientHeight).toBe(lineHeight);
 
     for (const lines of [2, 5]) {
       edit(input, Array(lines).fill("Prompt line").join("\n"));
-      expect([
-        input.clientHeight,
-        input.getBoundingClientRect().top,
-        actions.getBoundingClientRect().top,
-      ]).toEqual([lineHeight * Math.min(lines, 3), top, actionTop]);
+      expect([input.clientHeight, input.getBoundingClientRect().top]).toEqual([
+        lineHeight * Math.min(lines, 3),
+        top,
+      ]);
     }
     const inputRect = input.getBoundingClientRect();
-    const actionsRect = actions.getBoundingClientRect();
     const inputStyle = getComputedStyle(input);
     expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
     expect(inputStyle.overflowY).toBe("auto");
     expect(inputStyle.scrollbarWidth).not.toBe("none");
-    expect(inputRect.right).toBeGreaterThan(actionsRect.right + 8);
-    expect(inputRect.right - Number.parseFloat(inputStyle.paddingRight)).toBeLessThan(
-      actionsRect.left,
-    );
     const fadeRight =
       textScroll.getBoundingClientRect().right -
       Number.parseFloat(getComputedStyle(textScroll, "::after").right);
-    expect(fadeRight).toBeLessThan(actionsRect.left);
+    expect(fadeRight).toBeLessThan(inputRect.right);
     // Autofocus keeps an edited caret visible; explicitly inspect the top edge.
     for (const scrollTop of [0, input.scrollHeight, 0]) {
       input.scrollTop = scrollTop;
@@ -179,14 +181,16 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     }
 
     edit(input, "A short task");
-    expect(input.clientHeight).toBe(24);
+    expect(input.clientHeight).toBe(lineHeight);
     expectFades(entry, false, false);
     expect(input.getBoundingClientRect().top).toBe(top);
 
-    edit(input, "A wrapping task with enough text to grow after the available width changes.");
+    edit(
+      input,
+      "A wrapping task with enough text to grow after the available width changes. ".repeat(3),
+    );
     host.style.width = "320px";
     await vi.waitFor(() => expect(input.clientHeight).toBe(lineHeight * 3));
-    expect(actions.getBoundingClientRect().top).toBe(actionTop);
 
     await document.fonts.ready;
     const styleChanges: MutationRecord[] = [];

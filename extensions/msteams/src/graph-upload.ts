@@ -1,4 +1,5 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   createProviderHttpError,
@@ -6,26 +7,105 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import type { MSTeamsSdkCloudOptions } from "./cloud.js";
+import type { StoredConversationReference } from "./conversation-store.js";
 import {
   resolveMSTeamsSharePointUploadTimeoutMs,
   withMSTeamsAbortableRequestTimeout,
   withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
+import { getMSTeamsTeamDetailsWithReference } from "./sdk-proactive.js";
+import type { MSTeamsApp } from "./sdk.js";
 import { assertMSTeamsSendHandoff, type MSTeamsSendHandoff } from "./send-handoff.js";
+import { resolveTeamGroupId } from "./team-identity.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
-export function requireMSTeamsSharePointSiteId(siteId?: string): string {
-  const normalized = siteId?.trim();
-  if (!normalized) {
+// Sites are stable team metadata. Bound retained entries and refresh on process restart.
+const teamSiteIds = new Map<string, string>();
+const TEAM_SITE_CACHE_MAX_ENTRIES = 500;
+
+export async function resolveMSTeamsSharePointSiteId(
+  params: {
+    siteId?: string;
+    accountId?: string | null;
+    app: MSTeamsApp;
+    conversationRef: StoredConversationReference;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    serviceUrlBoundary?: MSTeamsSdkCloudOptions;
+  } & MSTeamsSendHandoff,
+): Promise<string> {
+  if (params.siteId !== undefined) {
+    const siteId = params.siteId.trim();
+    if (!siteId) {
+      throw new Error("channels.msteams.sharePointSiteId must not be blank");
+    }
+    return siteId;
+  }
+  const ref = params.conversationRef;
+  const conversation = ref.conversation;
+  const conversationId = conversation?.id;
+  if (
+    conversation?.conversationType?.toLowerCase() !== "channel" ||
+    !conversationId ||
+    !ref.teamId
+  ) {
     throw new Error(
       "channels.msteams.sharePointSiteId is required to send files to group chats or channels",
     );
   }
-  return normalized;
+  assertMSTeamsSendHandoff(params);
+  const teamId = await resolveTeamGroupId({
+    conversationTeamId: ref.teamId,
+    getTeamDetails: (conversationTeamId) =>
+      getMSTeamsTeamDetailsWithReference(
+        params.app,
+        { ...ref, conversation: { ...conversation, id: conversationId } },
+        conversationTeamId,
+        params,
+      ),
+  });
+  if (!teamId) {
+    throw new Error("Unable to resolve the Teams group; set channels.msteams.sharePointSiteId");
+  }
+  const channelId = conversationId.split(";")[0] ?? conversationId;
+  const channel = await requestSharePointJson<{ membershipType?: string }>(params, {
+    url: `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}?$select=membershipType`,
+    error: "Get Teams channel failed; verify the existing ChannelSettings.Read.Group RSC grant",
+    label: "msteams.graph-upload.channel",
+  });
+  // Private/shared channels have a separate audience and must never use the parent team's site.
+  if (channel.membershipType !== "standard") {
+    throw new Error(
+      "Automatic SharePoint site discovery supports standard channels only; set channels.msteams.sharePointSiteId",
+    );
+  }
+  const cacheKey = JSON.stringify([
+    params.accountId ?? "default",
+    ref.tenantId ?? conversation.tenantId,
+    (ref.agent ?? ref.bot)?.id,
+    teamId,
+  ]);
+  const cached = teamSiteIds.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const site = await requestSharePointJson<{ id?: string }>(params, {
+    url: `${GRAPH_ROOT}/groups/${encodeURIComponent(teamId)}/sites/root`,
+    error: "Resolve Teams SharePoint site failed",
+    label: "msteams.graph-upload.teamSite",
+  });
+  if (!site.id?.trim()) {
+    throw new Error(
+      "Teams SharePoint site response missing id; set channels.msteams.sharePointSiteId",
+    );
+  }
+  teamSiteIds.set(cacheKey, site.id);
+  pruneMapToMaxSize(teamSiteIds, TEAM_SITE_CACHE_MAX_ENTRIES);
+  return site.id;
 }
 
 const SHAREPOINT_REQUEST_TIMEOUT_LABEL = "MS Teams SharePoint request";

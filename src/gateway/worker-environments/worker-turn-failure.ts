@@ -21,6 +21,7 @@ export type WorkerTurnEnvironmentService = Pick<
   | "acquireTurnCredential"
   | "destroy"
   | "get"
+  | "inspectTurnLease"
   | "startTunnel"
   | "stopTunnel"
 > &

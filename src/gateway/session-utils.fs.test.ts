@@ -239,7 +239,7 @@ describe("artifact usage", () => {
       inputTokens: 4200,
       outputTokens: 650,
       cacheRead: 1500,
-      totalTokens: 3300,
+      totalTokens: 3550,
       totalTokensFresh: true,
     });
     expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
@@ -283,7 +283,7 @@ describe("artifact usage", () => {
       unavailable,
       cliUsage({ input: 67_932, output: 2000, cacheRead: 18_944, totalTokens: 88_876 }),
     ]);
-    expect(await usage()).toMatchObject({ totalTokens: 86_876, totalTokensFresh: true });
+    expect(await usage()).toMatchObject({ totalTokens: 88_876, totalTokensFresh: true });
   });
 
   test("estimates transcript context when local model telemetry is missing", async () => {

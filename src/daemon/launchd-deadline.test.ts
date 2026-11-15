@@ -8,8 +8,9 @@ import {
   createTestLaunchAgentPlist,
   launchAgentControlFixture,
 } from "./launchd-install.test-support.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
-import { resolveLaunchAgentPlistPath, restartLaunchAgent } from "./launchd.js";
+import { restartLaunchAgent } from "./launchd.js";
 
 it("rejects a hung bootout at the caller's shared deadline without starting recovery", async () => {
   const env = createLaunchdEnvWithGatewayPort("18789");

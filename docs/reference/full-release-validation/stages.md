@@ -55,9 +55,11 @@ empty-string inputs equal absent inputs because GitHub omits them from
 `github.event.inputs`. The child's Q must equal the current parent's Q, or
 authenticated Git tree comparison must prove an identical workload closure:
 owning/reusable workflows, local actions, the complete scripts tree, and root
-configuration/dependency files. Normal CI excludes Q-only product directories
-because its product checkout is C; other roles conservatively retain all workflows and the full
-root tree. Unrelated parent workflow changes alone do not invalidate normal CI,
+configuration/dependency files. Normal CI additionally retains the complete
+`config`, `packages`, `src`, and `test` trees because its Q-owned harness imports
+files from them. This conservatively invalidates reuse even for unrelated changes
+inside those trees; other product directories come from C and are excluded.
+Other roles conservatively retain all workflows and the full root tree. Unrelated parent workflow changes alone do not invalidate normal CI,
 but changes to shared scripts currently invalidate every child. A differing Q
 must have verified main ancestry. Missing, unsupported, or changed workload
 closure blocks reuse; a control-only intent does not prove compatibility. Dispatch logs explain each evaluated rejection,
@@ -94,6 +96,15 @@ before passing. Prepared publication adopts those exact artifact IDs, digests,
 producer run, and attempt; it does not repack plugin npm candidates after Full
 Release Validation. Source-only files and fixtures therefore cannot trigger the
 artifact checks unless npm actually includes them in a shipped tarball.
+
+Normal publication instead repacks plugins with the admitted publisher tooling
+P and scans them with P's reviewed inventory. When P differs from this run's
+tooling, `Prepare exact plugin npm artifacts` does the same while the child runs:
+it packs every selected plugin with reviewed findings using P's packer and scans
+with P's scanner. A reviewed hash, path, or count that P's toolchain changes
+fails that job minutes into the run, not at publish. The failure names the
+package, packed file, and new `contentSha256`. Review that file before you record
+the new value in `scripts/plugin-npm-security-scan.mts` on `main`.
 
 For directly dispatched `OpenClaw NPM Release` preflight-only runs, if qualification
 fails after source checks and package preparation succeed, rerun the failed

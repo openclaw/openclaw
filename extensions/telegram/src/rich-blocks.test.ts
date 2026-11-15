@@ -1,3 +1,4 @@
+import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import { assert, describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import {
@@ -9,6 +10,11 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
+import {
+  buildTelegramRichBlocksPlan,
+  buildTelegramRichMarkdownPlan,
+  splitTelegramRichMessageTextChunks,
+} from "./rich-message.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
 const paragraph = (text: RichText): InputRichBlock => ({ type: "paragraph", text });
@@ -218,7 +224,10 @@ describe("splitTelegramRichBlocks", () => {
   it("does not split surrogate pairs at oversized-block boundaries", () => {
     const text = `${"a".repeat(63)}😀tail`;
     const chunks = splitTelegramRichBlocks([{ type: "pre", text }], { textLimit: 64 });
-    for (const piece of chunks.flat().filter((block) => block.type === "pre")) {
+    const pieces = chunks.flat().filter((block) => block.type === "pre");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(pieces.map((piece) => piece.text).join("")).toBe(text);
+    for (const piece of pieces) {
       expect(piece.text).not.toMatch(/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/);
     }
   });
@@ -228,11 +237,13 @@ describe("splitTelegramRichBlocks", () => {
       `${"x".repeat(60)} [docs](https://example.com/${"y".repeat(40)}) tail`,
     );
     const chunks = splitTelegramRichBlocks(blocks, { textLimit: 64 });
+    expect(chunks.length).toBeGreaterThan(1);
     const urls = chunks
       .flat()
       .flatMap((block) => (block.type === "paragraph" ? collectLinkTargets(block.text) : []));
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((url) => url.startsWith("https://example.com/"))).toBe(true);
+    expect(urls.every((url) => url === `https://example.com/${"y".repeat(40)}`)).toBe(true);
   });
 
   it("splits oversized tables at inner boundaries", () => {
@@ -250,6 +261,13 @@ describe("splitTelegramRichBlocks", () => {
       { textLimit: 64 },
     );
     expectBudget(chunks, "chars", 64);
+    expect(
+      chunks
+        .flat()
+        .flatMap((block) =>
+          block.type === "table" ? block.cells.map((row) => row.map((cell) => cell.text)) : [],
+        ),
+    ).toEqual([["h".repeat(40)], ["c".repeat(40)], ["d".repeat(40)]]);
   });
 
   it("enforces recursive block limits for details children", () => {
@@ -299,6 +317,60 @@ describe("splitTelegramRichBlocks", () => {
 });
 
 describe("rich message plan wiring", () => {
+  it.each<[string, string, string]>([
+    ["A\n\nB", "A\n\nB", "\n"],
+    ["A\n\n\nB", "A\n\nB", "\n"],
+    ["A\n \n\nB", "A\n\nB", "\n"],
+    ["A\n\t\n\nB", "A\n\nB", "\n"],
+    ["A&#10;&#10;&#10;B", "A\n\n\nB", "\n\n"],
+    ["A&#10; &#10; &#10;B", "A\n \n \nB", "\n\n"],
+    ["A&#10; &#10;&#9;&#10;B", "A\n \n\t\nB", "\n\n"],
+  ])("preserves the parsed paragraph separator in %j", (markdown, parsedText, paragraphBreak) => {
+    // Raw blank lines normalize; decoded entities can retain additional rows.
+    expect(markdownToIRWithMeta(markdown).ir.text).toBe(parsedText);
+    const [page] = pagesFor(markdown);
+    expect(page?.richMessage?.blocks).toEqual([paragraph("A"), paragraph([paragraphBreak, "B"])]);
+    expect(page?.plainText).toBe(`A\n${paragraphBreak}B`);
+  });
+
+  it("preserves Markdown paragraph gaps in rich delivery and plain recovery", () => {
+    const [page] = pagesFor("**A**\n\n[B](https://example.com)");
+    expect(page?.plainText).toBe("A\n\nB");
+    expect(page?.richMessage?.blocks).toEqual([
+      paragraph({ type: "bold", text: "A" }),
+      paragraph(["\n", { type: "url", text: "B", url: "https://example.com" }]),
+    ]);
+  });
+
+  it("documents chunk-start separators without trimming authored native RichText", () => {
+    const styledLink = (text: string): RichText => ({
+      type: "bold",
+      text: { type: "url", text, url: "https://example.com" },
+    });
+    const continuation: RichText = ["\n", styledLink("BC")];
+    const plans = [
+      buildTelegramRichMarkdownPlan("A\n\n**[BC](https://example.com)**"),
+      buildTelegramRichBlocksPlan([paragraph("A"), paragraph(continuation)]),
+    ];
+    for (const plan of plans) {
+      const original = structuredClone(plan.richMessage.blocks);
+      const chunks = splitTelegramRichMessageTextChunks({ plan, textLimit: 2 });
+      // Diagnostic: the synthesized gap currently starts page two. Its client
+      // rendering is unverified; a generic trim would also erase native content.
+      expect(chunks.map((chunk) => chunk.plainText)).toEqual(["A", "\nB", "C"]);
+      expect(chunks.slice(1).map((chunk) => chunk.richMessage.blocks)).toEqual([
+        [paragraph(["\n", styledLink("B")])],
+        [paragraph(styledLink("C"))],
+      ]);
+      expect(plan.richMessage.blocks).toEqual(original);
+      expectBudget(
+        chunks.map((chunk) => chunk.richMessage.blocks),
+        "chars",
+        2,
+      );
+    }
+  });
+
   it("preserves media sources beyond HTML depth 61", () => {
     const text =
       "<details><summary>s</summary>".repeat(61) +

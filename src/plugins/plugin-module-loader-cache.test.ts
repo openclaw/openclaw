@@ -148,29 +148,99 @@ it.each(["cold", "legacy-cache"] as const)(
   },
 );
 
+async function bundleModuleLoader(root: string) {
+  const ownerPath = path.join(root, "loader.mjs");
+  await build({
+    stdin: {
+      contents:
+        'export { getCachedPluginModuleLoader } from "./src/plugins/plugin-module-loader-cache.ts"; export { openPluginRootFileSync } from "./src/plugins/path-safety.ts";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    packages: "external",
+    platform: "node",
+    format: "esm",
+    outfile: ownerPath,
+    logLevel: "silent",
+  });
+  // Bundling the loader relocates its adjacent runtime schema asset.
+  fs.copyFileSync(
+    path.resolve("src/state/openclaw-state-schema.sql"),
+    path.join(root, "openclaw-state-schema.sql"),
+  );
+  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+  return ownerPath;
+}
+
+it.skipIf(!fs.existsSync(import.meta.dirname.toUpperCase()))(
+  "shares host publications with a natively admitted plugin across path casing",
+  async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-host-casing-"));
+    try {
+      const ownerPath = await bundleModuleLoader(root);
+      const result = spawnNodeEvalSync(
+        `import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { getCachedPluginModuleLoader, openPluginRootFileSync } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+const root = ${JSON.stringify(root)}, host = path.join(root, "MixedCaseHost");
+const write = (file, source) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, source); };
+write(path.join(host, "package.json"), JSON.stringify({ name: "openclaw", type: "module", exports: { "./plugin-sdk/fixture": "./dist/plugin-sdk/fixture.js" } }));
+write(path.join(host, "dist/host.mjs"), "");
+write(path.join(host, "dist/state.mjs"), "export const snapshot = new Map();");
+write(path.join(host, "dist/plugin-sdk/fixture.js"), 'export { snapshot } from "../state.mjs";');
+write(path.join(root, "foreign.mjs"), 'export const snapshot = new Map([["profile", "foreign"]]);');
+write(path.join(host, "dist/dep.cjs"), 'module.exports = [require("./dir"), require(".hidden-package")];');
+write(path.join(host, "dist/dir/package.json"), '{"main":"index.cjs"}');
+write(path.join(host, "dist/dir/index.cjs"), 'module.exports = "directory";');
+write(path.join(host, "dist/.hidden-package"), 'module.exports = "wrong-local-file";');
+write(path.join(host, "node_modules/.hidden-package/package.json"), '{"main":"index.cjs"}');
+write(path.join(host, "node_modules/.hidden-package/index.cjs"), 'module.exports = "package";');
+const entry = path.join(host, "dist/extensions/demo/index.mjs");
+write(entry, 'export { snapshot as relative } from "../../state.mjs"; export { snapshot as sdk } from "openclaw/plugin-sdk/fixture"; export { default as dependencies } from "../../dep.cjs"; export { snapshot as foreign } from ' + JSON.stringify(pathToFileURL(path.join(root, "foreign.mjs")).href) + ';');
+const alias = host.toUpperCase();
+assert.equal(fs.statSync(alias, { bigint: true }).ino, fs.statSync(host, { bigint: true }).ino);
+const publisher = await import(pathToFileURL(path.join(alias, "dist/state.mjs")).href);
+const foreignPublisher = await import(pathToFileURL(path.join(root, "foreign.mjs")).href);
+publisher.snapshot.set("profile", "published");
+const opened = openPluginRootFileSync({ filePath: entry, rootPath: path.dirname(entry), boundaryLabel: "plugin root", rejectHardlinks: false });
+assert.equal(opened.ok, true); fs.closeSync(opened.fd);
+const load = getCachedPluginModuleLoader({ modulePath: opened.path, importerUrl: pathToFileURL(path.join(alias, "dist/host.mjs")).href, devSourceRoot: null, pluginSdkResolution: "dist", tryNative: true });
+const plugin = load(opened.path);
+assert.equal(plugin.relative, publisher.snapshot);
+assert.equal(plugin.sdk, publisher.snapshot);
+assert.equal(plugin.relative.get("profile"), "published");
+plugin.sdk.set("profile", "updated");
+assert.equal(publisher.snapshot.get("profile"), "updated");
+assert.notEqual(plugin.foreign, publisher.snapshot);
+assert.equal(plugin.foreign, foreignPublisher.snapshot);
+assert.equal(plugin.foreign.get("profile"), "foreign");
+assert.deepEqual(plugin.dependencies, ["directory", "package"]);
+console.log("host snapshot shared");`,
+        {
+          timeout: 30_000,
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            HOME: root,
+            USERPROFILE: root,
+            NODE_OPTIONS: "",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("host snapshot shared");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 it("keeps source SDK evaluation native and preserves terminal failures", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-graph-"));
   try {
-    const ownerPath = path.join(root, "loader.mjs");
-    await build({
-      stdin: {
-        contents:
-          'export { getCachedPluginModuleLoader } from "./src/plugins/plugin-module-loader-cache.ts";',
-        resolveDir: process.cwd(),
-      },
-      bundle: true,
-      packages: "external",
-      platform: "node",
-      format: "esm",
-      outfile: ownerPath,
-      logLevel: "silent",
-    });
-    // Bundling the loader relocates its adjacent runtime schema asset.
-    fs.copyFileSync(
-      path.resolve("src/state/openclaw-state-schema.sql"),
-      path.join(root, "openclaw-state-schema.sql"),
-    );
-    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const ownerPath = await bundleModuleLoader(root);
     const childOptions = {
       timeout: 30_000,
       env: {

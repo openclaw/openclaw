@@ -8,7 +8,14 @@ import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./all
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
-import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
+import {
+  commandError,
+  listGitWorktrees,
+  requireGit,
+  requireGitBuffer,
+  requireGitPath,
+  runGit,
+} from "./git.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
 import {
   createWorktreeRemovalClaimsGuard,
@@ -293,14 +300,14 @@ async function recoverRemovalWithAllocation(params: {
         ...options,
         env: { ...options.env, GIT_DIR: gitdir, GIT_INDEX_FILE: path.join(gitdir, "index") },
       };
-      const sharedIndex = await requireGit(
+      const sharedIndex = await requireGitPath(
         record.repoRoot,
         ["rev-parse", "--shared-index-path"],
         indexOptions,
       );
       const metadataNames = ["HEAD", "gitdir", "commondir", "index"];
       if (sharedIndex) {
-        const shared = path.resolve(record.repoRoot, normalizeGitPathForFilesystem(sharedIndex));
+        const shared = path.resolve(record.repoRoot, sharedIndex);
         if (
           path.dirname(shared) !== gitdir ||
           !/^sharedindex\.[a-f0-9]+$/u.test(path.basename(shared))

@@ -5,17 +5,13 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type {
-  WorkerOperationContext,
   WorkerOperationHandlers,
   WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import type { PlacementLifecycleReceipt } from "./placement-lifecycle.types.js";
-import {
-  createPlacementMoveOps,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-intent.js";
-import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   nextGeneration,
   normalizeIdentity,
@@ -27,22 +23,12 @@ import {
   retireWorkerSessionPlacement,
   type WorkerSessionPlacementRetirement,
 } from "./placement-retirement.js";
-import {
-  ensureLocal,
-  find,
-  getRequired,
-  query,
-  readWorkerPlacementsInDatabase,
-  readWorkerPlacementIdentitiesInDatabase,
-  readWorkerPlacementsForReconcileInDatabase,
-  updateTransition,
-} from "./placement-row-codec.js";
+import { ensureLocal, find, getRequired, query, updateTransition } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
-import { clearLocalTurnClaimsInDatabase } from "./placement-turn-claims.js";
 import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { consumePreparedEnvironment } from "./prepared-environment-store.js";
@@ -87,37 +73,6 @@ function operation<Input extends { sessionId: string }>(
     );
   };
 }
-
-export const placementReadOperations = {
-  "workerPlacements.readIdentities": (
-    _input: Record<string, never>,
-    { open }: WorkerOperationContext,
-  ) => readWorkerPlacementIdentitiesInDatabase(open().db),
-  "workerPlacements.read": (
-    input: { sessionIds?: readonly string[] },
-    { open }: WorkerOperationContext,
-  ) => readWorkerPlacementsInDatabase(open().db, input.sessionIds),
-  "workerPlacements.readWithMove": (
-    input: { sessionId: string },
-    { open }: WorkerOperationContext,
-  ) => {
-    const { projection } = readWorkerSessionPlacementProjectionInDatabase(
-      open().db,
-      [input.sessionId],
-      [],
-    );
-    return {
-      placement: projection.placements.get(input.sessionId),
-      move: projection.moves.get(input.sessionId),
-    };
-  },
-  "workerPlacements.readMove": (input: { sessionId: string }, { open }: WorkerOperationContext) =>
-    readWorkerPlacementMovesReadOnly(open().db, [input.sessionId]).get(input.sessionId),
-  "workerPlacements.readReconcile": (
-    input: { sessionKey?: string },
-    { open }: WorkerOperationContext,
-  ) => readWorkerPlacementsForReconcileInDatabase(open().db, input.sessionKey),
-} satisfies WorkerOperationHandlers;
 
 function startWorkerPlacementDispatch(
   runtime: PlacementStoreRuntime,
@@ -209,13 +164,6 @@ function startWorkerPlacementDispatch(
 }
 
 export const placementLifecycleOperations = {
-  "workerPlacements.clearLocalTurnClaims": (
-    input: { nowMs?: number },
-    { write }: WorkerWriteOperationContext,
-  ) =>
-    write(({ db, path }) => clearLocalTurnClaimsInDatabase(db, path, input.nowMs ?? Date.now()), {
-      operationLabel: "workerPlacements.clearLocalTurnClaims",
-    }),
   "workerPlacements.startDispatch": operation(
     "workerPlacements.startDispatch",
     (

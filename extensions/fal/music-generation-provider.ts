@@ -124,6 +124,9 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         provider: "fal",
         requestFailedMessage: "fal generated music download failed",
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        validateBinaryResponse: true,
+        // Preserve fal's deadline-only timing when enabling the shared binary reader.
+        chunkTimeoutMs: 0,
       });
       const record = isRecord(payload) ? payload : undefined;
       const lyrics = normalizeOptionalString(record?.lyrics);

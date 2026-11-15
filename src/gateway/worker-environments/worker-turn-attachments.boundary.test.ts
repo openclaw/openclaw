@@ -15,6 +15,7 @@ import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-se
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
@@ -177,13 +178,14 @@ it.each(["worker-turn", "remote-exec"] as const)(
           path.join(remoteHome, ".openclaw-worker", "manifests", `${manifestRef.slice(7)}.json`),
           "utf8",
         );
+        const current = parseWorkerWorkspaceManifest(raw, manifestRef);
         const result = await applyStagedWorkerWorkspace({
           root: local,
           stagingRoot: remote,
           baseManifestRef: request.baseManifestRef,
           currentManifestRef: manifestRef,
-          base: base.manifest,
-          current: parseWorkerWorkspaceManifest(raw, manifestRef),
+          reconciliation: prepareWorkspaceReconciliation(base.manifest, current),
+          current,
           acceptance: { kind: "reconcile" },
           journal: request.source.journal,
         });

@@ -9,7 +9,7 @@ import {
 import { promptReport } from "../../src/config/sessions/system-prompt-report.test-support.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
-type Setup = { uiRoot: string; sessions: number; port: number };
+type Setup = { uiRoot: string; sessions: number; port: number; endDate: string };
 export type UsageBenchFixture = {
   channel: "usage-volume-fixture";
   action: "seeded";
@@ -50,7 +50,7 @@ const state = await createOpenClawTestState({
 });
 let handedOff = false;
 const dayMs = 86_400_000;
-const end = Date.parse(new Date().toISOString().slice(0, 10));
+const end = Date.parse(setup.endDate);
 const start = end - 179 * dayMs;
 const model = (index: number) => `fixture-model-${String(index).padStart(2, "0")}-end`;
 const totals = new Map<string, { sessions: number; tokens: number }>();

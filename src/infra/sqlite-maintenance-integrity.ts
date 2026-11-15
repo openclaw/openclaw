@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -10,6 +11,8 @@ import { hasUncommittedSqliteWrites } from "./sqlite-schema-facts.js";
 
 export type SqliteIntegrityCheckOptions = {
   check?: "quick" | "full";
+  /** Constraint-only migration admission; never a full database verification. */
+  schemaOnly?: true;
   /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
   tables?: readonly string[];
   /**
@@ -22,6 +25,7 @@ export type SqliteIntegrityCheckOptions = {
 };
 
 type CapturedIntegrity = {
+  schemaOnly: boolean;
   source: FileMutationFingerprint;
   tables: ReadonlySet<string>;
 };
@@ -52,12 +56,8 @@ export function captureSqliteMaintenanceIntegrity(
   // The raw-copy owner compares every byte before returning this image. Record
   // its successful QUICK before any private normalization or transform runs.
   return () => {
-    let receipts = capturedIntegrity.get(scope);
-    if (!receipts) {
-      receipts = new Map();
-      capturedIntegrity.set(scope, receipts);
-    }
-    receipts.set(key, { source, tables });
+    const receipts = getOrCreateWeakOwnerMap(capturedIntegrity, scope);
+    receipts.set(key, { source, tables, schemaOnly: options.schemaOnly === true });
   };
 }
 
@@ -90,6 +90,7 @@ export function consumeSqliteMaintenanceIntegrity(
     (suffix) => (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
   );
   return (
+    receipt.schemaOnly === (options.schemaOnly === true) &&
     source !== undefined &&
     sameFileMutationFingerprint(receipt.source, source) &&
     !hasRecoveryData &&
