@@ -71,27 +71,41 @@ describe("cron view run history", () => {
     expect(entryText(entry ?? undefined, "facts")).toBe("");
     expect(entryText(entry ?? undefined, "meta")).not.toContain("403");
     expect(entry?.textContent?.split(error)).toHaveLength(2);
-    expect(entry?.querySelector(".cron-run-entry__error--clamped")).not.toBeNull();
+    expect(entry?.querySelector(".cron-error--clamped")).not.toBeNull();
     expect(
       [...(entry?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim()),
     ).toEqual(["Show details"]);
   });
 
-  it("shows a separate delivery failure only when the run was not delivered", async () => {
+  it("keeps distinct delivery explanations and drops copies of the run error", async () => {
     const container = await renderView({
       runs: [
         createRun({
-          ts: 2,
+          ts: 3,
           summary: "Report ready",
           deliveryStatus: "not-delivered",
           deliveryError: "Telegram chat not found",
         }),
-        createRun({ ts: 1, summary: "Report ready", deliveryError: "stale copy" }),
+        createRun({
+          ts: 2,
+          summary: "Report ready",
+          deliveryStatus: "unknown",
+          deliveryError: "Send returned no message id",
+        }),
+        createRun({
+          ts: 1,
+          status: "error",
+          error: "boom",
+          deliveryStatus: "unknown",
+          deliveryError: "boom",
+        }),
       ],
     });
-    const [failed, delivered] = container.querySelectorAll(".cron-run-entry");
+    const [failed, uncertain, copied] = container.querySelectorAll(".cron-run-entry");
     expect(entryText(failed, "delivery-error")).toBe("Delivery failed: Telegram chat not found");
-    expect(delivered?.querySelector(".cron-run-entry__delivery-error")).toBeNull();
+    expect(entryText(uncertain, "delivery-error")).toBe("Delivery: Send returned no message id");
+    expect(entryText(uncertain, "facts")).toContain("Unknown");
+    expect(copied?.querySelector(".cron-run-entry__delivery-error")).toBeNull();
   });
 
   it("formats run token counts and durations in the rendered entry", async () => {

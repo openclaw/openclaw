@@ -358,6 +358,7 @@ const enCron = {
       runAt: "Started at",
       conditionCheckFailed: "Condition check failed",
       deliveryFailed: "Delivery failed: {error}",
+      deliveryNote: "Delivery: {error}",
       showDetails: "Show details",
       hideDetails: "Hide details",
       transcript: "Conversation",

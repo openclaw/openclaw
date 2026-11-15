@@ -398,10 +398,7 @@ function RunError(props: { error: string }) {
   const long = () => props.error.length > RUN_ERROR_PREVIEW_CHARS || props.error.includes("\n");
   return (
     <div class="cron-run-entry__error">
-      <div
-        class={["muted", { "cron-run-entry__error--clamped": long() && !expanded() }]}
-        title={props.error}
-      >
+      <div class={["muted", { "cron-error--clamped": long() && !expanded() }]} title={props.error}>
         {props.error}
       </div>
       <Show when={long()}>
@@ -437,7 +434,8 @@ function Run(props: {
   const delivery = () => {
     const deliveryStatus = props.entry.deliveryStatus ?? "not-requested";
     const label = RUN_DELIVERY_LABELS.get(deliveryStatus);
-    return deliveryStatus === "unknown" || !label ? null : t(label);
+    // An unknown outcome is only worth a label when it carries its own explanation.
+    return !label || (deliveryStatus === "unknown" && !deliveryError()) ? null : t(label);
   };
   const usageSummary = createMemo(() => {
     const usage = props.entry.usage;
@@ -453,10 +451,7 @@ function Run(props: {
   const error = () => formatUiExternalText(props.entry.error);
   // Older history copied the run error into the delivery error; show each error once.
   const deliveryError = () => {
-    const text =
-      props.entry.deliveryStatus === "not-delivered"
-        ? formatUiExternalText(props.entry.deliveryError)
-        : "";
+    const text = formatUiExternalText(props.entry.deliveryError);
     return text === error() ? "" : text;
   };
   const suppressionReason = () => formatUiExternalText(props.entry.deliverySuppressionReason);
@@ -543,7 +538,12 @@ function Run(props: {
       </Show>
       <Show when={deliveryError()}>
         <div class="muted cron-run-entry__delivery-error">
-          {t("cron.runEntry.deliveryFailed", { error: deliveryError() })}
+          {t(
+            props.entry.deliveryStatus === "not-delivered"
+              ? "cron.runEntry.deliveryFailed"
+              : "cron.runEntry.deliveryNote",
+            { error: deliveryError() },
+          )}
         </div>
       </Show>
     </div>
