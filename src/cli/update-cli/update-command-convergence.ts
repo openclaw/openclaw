@@ -10,6 +10,7 @@ import {
   retireDeferredUpdateStepWarnings,
 } from "../../infra/deferred-update-warnings.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
   hasDeferredUpdateModelRetirement,
@@ -83,6 +84,11 @@ export async function convergeUpdatePlugins(params: {
   const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
+  // A Git release's own Gateway upgrades state and plugins when it starts; the
+  // previous Gateway still serves and owns state here, so nothing converges now.
+  if (params.result.mode === "git" && readPackageReleaseSlotSync(postUpdateRoot)) {
+    return { resultWithPostUpdate: params.result };
+  }
   // Uncommitted target finalization cannot authorize a detached helper restart.
   const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
     ...result,
