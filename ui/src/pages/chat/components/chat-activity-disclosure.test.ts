@@ -48,7 +48,6 @@ it("commits a cached activity summary with its transcript row", () => {
   ]);
   activityRoot.render([group], visibleTools);
   const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
-  expect(row).not.toBeNull();
   expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain(
     "Attempted file reads",
   );
@@ -427,8 +426,7 @@ it("keeps recorded child operations visible beside their execution's missing per
     expect(summaryContainer.querySelector(".chat-permission-card")).not.toBeNull(),
   );
   const childRow = summaryContainer.querySelector(".chat-tool-row");
-  expect(childRow).not.toBeNull();
-  expect(childRow!.textContent).toContain("retained.ts");
+  expect(childRow?.textContent).toContain("retained.ts");
   expect(
     summaryContainer.querySelector(".chat-permission-card")?.closest(".chat-activity-group"),
   ).toBeNull();
