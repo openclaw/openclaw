@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parseJsonc } from "../jsonc/parse.js";
 import { parseJsonl } from "../jsonl/parse.js";
@@ -69,15 +68,17 @@ describe("resolveOcPath", () => {
     expect(resolve(ast, uri)).toMatchObject({ kind: "insertion-point", container });
   });
 
-  it("returns null when insertion target is not a container", () => {
-    const ast = parseJsonc('{ "k": 42 }');
-    expect(resolve(ast, "oc://config/k/+")).toBeNull();
+  it.each([
+    [parseJsonc('{ "k": 42 }'), "oc://config/k/+"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added"],
+  ])("returns null for an invalid target at %s %s", (ast, uri) => {
+    expect(resolve(ast, uri)).toBeNull();
   });
   it("preserves source line lookup for numeric map keys", () => {
     const ast = parseYaml("name: x\n1: one\n");
     const m = resolve(ast, "oc://workflow.yaml/1");
-    expectLeaf(m, "one");
-    expect(m?.line).toBe(2);
+    expect(m).toMatchObject({ kind: "leaf", leafType: "string", valueText: "one", line: 2 });
   });
 });
 
@@ -131,6 +132,8 @@ describe("setOcPath", () => {
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+9name", "y", "not-writable"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name.dot", "y", "not-writable"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+café", "y", "not-writable"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent", "y", "unresolved"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added", "y", "not-writable"],
     [parseJsonc('{"plugins":{"github":"x"}}'), "oc://config/plugins/+github", '"y"', "unresolved"],
     [parseJsonc('{"items":[1,2]}'), "oc://config/items/+abc", "3", "type-mismatch"],
     [parseJsonl(""), "oc://log/+", "not json", "parse-error"],
@@ -214,20 +217,17 @@ describe("setOcPath", () => {
     expect(md).toEqual(before);
   });
 
-  it("appends a JSON line with `+`", () => {
-    const ast = parseJsonl('{"event":"start"}\n');
-    const { raw } = edit(ast, "oc://log/+", '{"event":"step","n":1}');
-    const lines = raw.split("\n").filter((l) => l.length > 0);
-    expect(lines).toHaveLength(2);
-    const appended = expectDefined(lines[1], "appended JSONL line");
-    expect(JSON.parse(appended)).toEqual({ event: "step", n: 1 });
-  });
-
   it.each([
     [parseMd("---\nn: x\n---\n"), "oc://X.md/[frontmatter]/n", "new", "---\nn: new\n---\n"],
     [parseJsonc('{"k":1}'), "oc://config/k", "99", '{"k":99}'],
     [parseJsonl('{"a":1}\n'), "oc://log/L1/a", "99", '{"a":99}\n'],
     [parseJsonl('{"a":1}\n'), "oc://log/L1", '{"event":"replaced"}', '{"event":"replaced"}\n'],
+    [
+      parseJsonl('{"event":"start"}\n'),
+      "oc://log/+",
+      '{"event":"step","n":1}',
+      '{"event":"start"}\n{"event":"step","n":1}\n',
+    ],
   ])("writes expected bytes without mutating %s at %s", (ast, uri, value, expected) => {
     const before = JSON.stringify(ast);
     expect(edit(ast, uri, value).raw).toBe(expected);

@@ -126,20 +126,20 @@ async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
   }
   const filename = basename(filePath);
   const requested = filename.toLowerCase();
-  const maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
+  let maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
   const matches: { entry: string; distance: number }[] = [];
   for (const entry of entries) {
     const distance = levenshteinDistance(requested, entry.toLowerCase(), maxDistance);
     if (entry !== filename && distance !== null) {
       matches.push({ entry, distance });
+      matches.sort(
+        (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
+      );
+      matches.length = Math.min(matches.length, 3);
+      maxDistance = matches[2]?.distance ?? maxDistance;
     }
   }
-  return matches
-    .toSorted(
-      (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
-    )
-    .slice(0, 3)
-    .map(({ entry }) => entry);
+  return matches.map(({ entry }) => entry);
 }
 
 interface CompactReadClassification {

@@ -114,43 +114,36 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
-  it.each([true])(
-    "places stable current sender provenance beside the request (history: %s)",
-    async (withHistory) => {
-      const prompt = "i am Bea coded wdym";
-      const currentUserMessage = {
-        ...senderAttributedTextMessage(prompt, {
-          senderId: "bea-id",
-          senderName: "Bea",
-          senderUsername: "bea",
+  it("places stable current sender provenance beside the request with history", async () => {
+    const prompt = "i am Bea coded wdym";
+    const currentUserMessage = {
+      ...senderAttributedTextMessage(prompt, {
+        senderId: "bea-id",
+        senderName: "Bea",
+        senderUsername: "bea",
+      }),
+      idempotencyKey: "current:user",
+    };
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        senderAttributedTextMessage("Alice asked about the roster.", {
+          senderId: "alice-id",
+          senderName: "Alice",
         }),
-        idempotencyKey: "current:user",
-      };
-      const result = await projectContextEngineAssemblyForCodex({
-        assembledMessages: withHistory
-          ? [
-              senderAttributedTextMessage("Alice asked about the roster.", {
-                senderId: "alice-id",
-                senderName: "Alice",
-              }),
-              textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
-              currentUserMessage,
-            ]
-          : [currentUserMessage],
-        prompt,
+        textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
         currentUserMessage,
-        currentUserTurnIdempotencyKey: "current:user",
-      });
+      ],
+      prompt,
+      currentUserMessage,
+      currentUserTurnIdempotencyKey: "current:user",
+    });
 
-      if (withHistory) {
-        expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
-      }
-      expect(result.promptText).toMatch(
-        /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
-      );
-      expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
-    },
-  );
+    expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
+    expect(result.promptText).toMatch(
+      /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
+    );
+    expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
+  });
 
   it("does not infer current sender identity from display names without a stable ID", async () => {
     const prompt = "Current direct request";
@@ -411,23 +404,20 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
   });
 
-  it.each(["user"] as const)(
-    "retains complete %s text that fits the continuity window without a runtime budget",
-    async (type) => {
-      const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
-      const result = await projectContextEngineAssemblyForCodex({
-        assembledMessages: [{ role: type, content: text, timestamp: 1 }],
-        prompt: "next",
-        maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
-      });
+  it("retains complete user text that fits the continuity window without a runtime budget", async () => {
+    const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [{ role: "user", content: text, timestamp: 1 }],
+      prompt: "next",
+      maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
+    });
 
-      expect(result.promptText).toContain(`\n${text}\n</conversation_context>`);
-      expect(result.promptText).not.toContain("[truncated ");
-      expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
-        24_000,
-      );
-    },
-  );
+    expect(result.promptText).toContain(`\n${text}\n</conversation_context>`);
+    expect(result.promptText).not.toContain("[truncated ");
+    expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
+      24_000,
+    );
+  });
 
   it("reports omitted history within a marker-sized budget", async () => {
     const messages = [

@@ -1,4 +1,5 @@
 import { createMemo, Errored, For, isPending, latest, Loading } from "solid-js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import type { AgentReadOutcome } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
@@ -18,9 +19,9 @@ export function AgentReadNotice(props: { request: AgentRead; style?: { "margin-t
       {(request) => (
         <Errored
           fallback={(error) => (
-            <div class="callout danger" role="alert" style={props.style}>
+            <InlineAlert tone="danger" role="alert" style={props.style}>
               {formatUiError(error())}
-            </div>
+            </InlineAlert>
           )}
         >
           <Loading>

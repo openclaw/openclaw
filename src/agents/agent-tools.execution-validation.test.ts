@@ -1,8 +1,8 @@
 import { rejects } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
+import { forceFullGc } from "../test-utils/retention.js";
 import {
   runWithToolExecutionValidation,
   validateToolExecutionParams,
@@ -36,7 +36,7 @@ it.each([false, true])(
     // JSC can conservatively retain the last rejected frame on a resumed microtask stack.
     await new Promise<void>((resolve) => {
       setTimeout(() => {
-        queryObjects(WeakRef);
+        forceFullGc();
         resolve();
       }, 0);
     });

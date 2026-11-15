@@ -15,9 +15,7 @@ function runNode(source: string, cwd?: string, signal?: AbortSignal) {
 
 describe("runCommand", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(vi.restoreAllMocks);
 
   it("does not revoke an already-launched native command", async () => {
     let allowed = true;
@@ -66,80 +64,65 @@ describe("runCommand", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("preserves signal termination diagnostics", async () => {
-    const result = await runNode("process.kill(process.pid, 'SIGTERM')");
-
-    expect(result).toMatchObject({
-      exitCode: undefined,
-      timedOut: false,
-      success: false,
-      stdout: "",
-      stderr: "",
-      error: "Command terminated by signal SIGTERM",
-    });
-  });
-
-  it.runIf(process.platform !== "win32")("force-kills cancelled command trees", async () => {
-    const controller = new AbortController();
-    const run = processExec.runCommandWithTimeout;
-    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) =>
-      run(argv, {
-        ...(typeof options === "number" ? { timeoutMs: options } : options),
-        // Cancel only once the real child has installed its signal handler.
-        onOutputChunk: () => controller.abort(),
-      }),
-    );
-    const result = await runNode(
-      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')",
-      undefined,
-      controller.signal,
-    );
-
-    expect(result).toMatchObject({
-      timedOut: false,
-      success: false,
-      stdout: "ready",
-      error: "Command terminated by signal SIGKILL",
-    });
-  });
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "preserves signal diagnostics (cancelled tree: %s)",
+    async (cancelled) => {
+      const controller = new AbortController();
+      if (cancelled) {
+        const run = processExec.runCommandWithTimeout;
+        vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) =>
+          run(argv, {
+            ...(typeof options === "number" ? { timeoutMs: options } : options),
+            // Cancel after the real child installs its SIGTERM handler.
+            onOutputChunk: () => controller.abort(),
+          }),
+        );
+      }
+      const result = await runNode(
+        cancelled
+          ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')"
+          : "process.kill(process.pid, 'SIGTERM')",
+        undefined,
+        controller.signal,
+      );
+      expect(result).toMatchObject({
+        exitCode: undefined,
+        timedOut: false,
+        success: false,
+        stderr: "",
+        stdout: cancelled ? "ready" : "",
+        error: `Command terminated by signal ${cancelled ? "SIGKILL" : "SIGTERM"}`,
+      });
+    },
+  );
 
   describe("Windows cmd.exe shell envelope", () => {
     const shellCommand = 'claude -p "Quel est le rôle du dossier checks ?" --permission-mode plan';
 
-    async function captureLaunch(platform: NodeJS.Platform, argv: string[]) {
+    const shell = "C:\\Windows\\System32\\CMD.EXE";
+    it.each([
+      ["absolute mixed-case shell", "win32", [shell, "/d", "/s", "/c", shellCommand], true],
+      ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"], false],
+      ["another program", "win32", ["powershell.exe", "/d", "/s", "/c", shellCommand], false],
+      ["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"], false],
+      ["uppercase switches", "win32", ["cmd.exe", "/D", "/S", "/C", shellCommand], false],
+      ["another platform", "linux", ["cmd.exe", "/d", "/s", "/c", shellCommand], false],
+    ] as const)("launches %s", async (_name, platform, argv, verbatim) => {
       mockProcessPlatform(platform);
       const launch = vi
         .spyOn(processExec, "runCommandWithTimeout")
         .mockResolvedValueOnce(createCommandResult());
-      await runCommand(argv, undefined, undefined, undefined);
+      await runCommand([...argv], undefined, undefined, undefined);
       expect(launch).toHaveBeenCalledTimes(1);
-      const [launchedArgv, options] = launch.mock.calls[0] ?? [];
-      return { launchedArgv, options };
-    }
-
-    it("quotes an absolute cmd.exe path regardless of case", async () => {
-      const shell = "C:\\Windows\\System32\\CMD.EXE";
-      const { launchedArgv, options } = await captureLaunch("win32", [
-        shell,
-        "/d",
-        "/s",
-        "/c",
-        shellCommand,
-      ]);
-      expect(launchedArgv).toEqual([shell, "/d", "/s", "/c", `"${shellCommand}"`]);
-      expect(options).toMatchObject({ windowsVerbatimArguments: true });
-    });
-
-    it.each([
-      ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"]],
-      ["another program", "win32", ["powershell.exe", "/d", "/s", "/c", shellCommand]],
-      ["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"]],
-      ["uppercase switches", "win32", ["cmd.exe", "/D", "/S", "/C", shellCommand]],
-      ["another platform", "linux", ["cmd.exe", "/d", "/s", "/c", shellCommand]],
-    ] as const)("launches %s unchanged", async (_name, platform, argv) => {
-      const { launchedArgv, options } = await captureLaunch(platform, [...argv]);
-      expect(launchedArgv).toEqual(argv);
-      expect(options).not.toHaveProperty("windowsVerbatimArguments");
+      expect(launch.mock.calls[0]?.[0]).toEqual(
+        verbatim ? [shell, "/d", "/s", "/c", `"${shellCommand}"`] : argv,
+      );
+      const options = launch.mock.calls[0]?.[1];
+      if (verbatim) {
+        expect(options).toHaveProperty("windowsVerbatimArguments", true);
+      } else {
+        expect(options).not.toHaveProperty("windowsVerbatimArguments");
+      }
     });
 
     const prompt = "Quel est le rôle du dossier checks ?";
@@ -167,12 +150,7 @@ describe("runCommand", () => {
   });
 
   describe("working directory failures", () => {
-    const enoent = (message: string) => Object.assign(new Error(message), { code: "ENOENT" });
-
-    async function runCommandError(error: NodeJS.ErrnoException, cwd?: string) {
-      vi.spyOn(processExec, "runCommandWithTimeout").mockRejectedValueOnce(error);
-      return (await runCommand([process.execPath], cwd, undefined, undefined)).error;
-    }
+    const errno = (message: string, code = "ENOENT") => Object.assign(new Error(message), { code });
 
     it.each(["is not a directory", "does not exist"])("clarifies a cwd that %s", async (reason) => {
       const cwd = path.join(tempDirs.make("openclaw-node-cwd-"), "cwd");
@@ -186,22 +164,21 @@ describe("runCommand", () => {
       );
     });
 
-    it("preserves executable and unrelated errors", async () => {
-      const missingExecutable = "spawn /usr/bin/does-not-exist ENOENT";
-      expect(await runCommandError(enoent(missingExecutable), os.tmpdir())).toBe(missingExecutable);
-      expect(await runCommandError(enoent("spawn /bin/sh ENOENT"), undefined)).toBe(
-        "spawn /bin/sh ENOENT",
+    it.each([
+      ["missing executable", errno("spawn /usr/bin/does-not-exist ENOENT"), os.tmpdir(), false],
+      ["absent cwd", errno("spawn /bin/sh ENOENT"), undefined, false],
+      ["unrelated error", errno("spawn EACCES", "EACCES"), "/missing", false],
+      ["unreadable cwd", errno("spawn /bin/sh ENOENT"), "/unreadable", true],
+    ] as const)("preserves %s", async (_name, error, cwd, unreadable) => {
+      if (unreadable) {
+        vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        });
+      }
+      vi.spyOn(processExec, "runCommandWithTimeout").mockRejectedValueOnce(error);
+      expect((await runCommand([process.execPath], cwd, undefined, undefined)).error).toBe(
+        error.message,
       );
-      const denied = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
-      expect(await runCommandError(denied, "/missing")).toBe("spawn EACCES");
-    });
-
-    it("preserves the spawn error when the cwd cannot be inspected", async () => {
-      const message = "spawn /bin/sh ENOENT";
-      vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
-        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-      });
-      expect(await runCommandError(enoent(message), "/unreadable")).toBe(message);
     });
   });
 });

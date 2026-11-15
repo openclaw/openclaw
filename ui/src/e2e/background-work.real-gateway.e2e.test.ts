@@ -318,11 +318,15 @@ suite.define(() => {
         });
         await capture(page, "desktop-process-output", processStop);
         await assertParent();
-        const switchTab = async (label: string) => {
-          await parent
-            .locator(".side-panel__header .tabstrip-tab")
-            .filter({ hasText: label })
+        const switchMobileTab = async (label: string) => {
+          const panels = parent.locator(
+            '.sidebar-region--mobile-host > .chat-mobile-host[aria-label="Panels"]',
+          );
+          await panels
+            .locator(":scope > .chat-mobile-host__header")
+            .getByRole("button", { name: "Panels", exact: true })
             .click();
+          await panels.getByRole("tab").filter({ hasText: label }).click();
         };
         expect(await parent.locator(".side-panel__header .tabstrip-tab").allTextContents()).toEqual(
           expect.arrayContaining([
@@ -334,7 +338,7 @@ suite.define(() => {
         proof.stage = "mobile child Stop through history-owned exact run";
         await page.setViewportSize({ width: 390, height: 844 });
         await openChatPanels(page, "mobile");
-        await switchTab("Subagents");
+        await switchMobileTab("Subagents");
         const mobileChildStop = detail.getByRole("button", {
           name: `Stop ${fixture.childLabel}`,
           exact: true,
@@ -398,7 +402,7 @@ suite.define(() => {
           .waitFor();
 
         proof.stage = "mobile exact process Stop and retained terminal output";
-        await switchTab("Processes");
+        await switchMobileTab("Processes");
         await processStop.waitFor();
         await capture(page, "mobile-process-output", processStop);
         const beforeProcessStop = wire.completed.length;
@@ -446,7 +450,7 @@ suite.define(() => {
         expect(terminal.tail).toContain(fixture.output);
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
-        await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
+        await processes.getByRole("button", { name: "Back to processes", exact: true }).click();
         const finishedToggle = processes.getByRole("button", { name: "Finished 1", exact: true });
         await finishedToggle.waitFor();
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
@@ -457,7 +461,7 @@ suite.define(() => {
         await capture(
           page,
           "mobile-process-stopped-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          processes.getByRole("button", { name: "Back to processes", exact: true }),
         );
         await assertParent();
         proof.processStop = {
@@ -483,9 +487,9 @@ suite.define(() => {
         await capture(
           page,
           "desktop-reloaded-process-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          processes.getByRole("button", { name: "Back to processes", exact: true }),
         );
-        await switchTab("Subagents");
+        await openChatSidePanelType(parent, "Subagents");
         await childOpen.click();
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
         await assertParent();

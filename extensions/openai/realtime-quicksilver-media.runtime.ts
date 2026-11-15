@@ -407,8 +407,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       } catch (error) {
         this.fail(error);
       }
-    }, INBOUND_REORDER_DEPTH * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS);
-    state.flushTimer.unref?.();
+    }, INBOUND_REORDER_DEPTH * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS).unref();
   }
 
   private clearInboundFlushTimer(state: InboundRtpState): void {

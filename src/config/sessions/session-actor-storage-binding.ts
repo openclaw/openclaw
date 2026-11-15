@@ -65,6 +65,11 @@ export function runWithSessionActorStorage<T>(
   return currentBinding.run(binding, run);
 }
 
+/** Independent work acquires its own actor instead of retaining the caller's admission. */
+export function runWithoutSessionActorStorage<T>(run: () => T): T {
+  return currentBinding.exit(run);
+}
+
 /** Borrow the selected actor for an exact logical session, never a native fallback. */
 export function getSessionActorStorageBinding(
   scope: SessionActorStorageScope,

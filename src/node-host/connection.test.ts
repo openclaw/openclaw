@@ -142,6 +142,7 @@ function startConnectionFixture(
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn<() => Promise<void>>(async () => undefined),
+    setLocalMcpAllowed: vi.fn(),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
@@ -551,6 +552,7 @@ it.each([
             disabled: { reason: disabledReason },
             workspace: {
               workspaceResultVersion: 2,
+              publicationIntegration: 1,
               ...((platform === "linux" || platform === "win32") && !bun
                 ? { workspaceQuiescence: 1 }
                 : {}),

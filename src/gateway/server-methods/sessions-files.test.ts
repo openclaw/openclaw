@@ -22,6 +22,7 @@ import {
   visibleMessageEvent,
   createSessionFilesHandlerInvoker,
   createSessionFilesClient,
+  createSessionFileDownloadClient,
   createVisibleMessagesMock,
   expectError,
   expectOkPayload,
@@ -967,5 +968,32 @@ describe("sessions.files touched-file folds", () => {
     ]) {
       expect(payload.files).toContainEqual(expect.objectContaining(expected));
     }
+  });
+
+  it("labels missing scratch in Files and explains an expired scratch preview", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-expired-scratch");
+    const filePath = ".openclaw/tmp/proof/report.txt";
+    writeWorkspace(filePath, "proof");
+    mockVisibleMessages([assistantToolCall("read", { path: filePath })]);
+    await expectText(filePath, "proof");
+    using connection = createSessionFileDownloadClient();
+    const { url } = await files.ok("download", filePath, undefined, { client: connection.client });
+    fs.unlinkSync(workspacePath(filePath));
+    expect((await listTouched()).files).toContainEqual(
+      expect.objectContaining({
+        path: filePath,
+        name: "file expired (scratch cleaned after 24 h): report.txt",
+        missing: true,
+      }),
+    );
+    expect(await files.error("get", filePath)).toMatchObject({
+      message: "file expired (scratch cleaned after 24 h)",
+      details: { type: "artifact_file_expired" },
+    });
+    const download = await connection.fetch(url);
+    expect(download.response.statusCode).toBe(410);
+    expect(Buffer.from(download.body ?? []).toString()).toBe(
+      "file expired (scratch cleaned after 24 h)",
+    );
   });
 });

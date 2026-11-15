@@ -62,19 +62,30 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
 export class PluginInvocationScope {
   private readonly bindings: Map<PluginInstanceHandle, PluginInvocationBinding>;
   private readonly consumers?: Map<PluginInstanceHandle, PluginInstanceConsumer>;
+  private readonly work?: {
+    instances: ReadonlySet<PluginInstanceHandle>;
+    retain: (instance: PluginInstanceHandle) => void;
+  };
+  private readonly parent?: PluginInvocationContext;
+  private readonly registryByInstance?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
   private closed = false;
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
     options: {
-      retained?: boolean;
+      retained?: boolean | ((instance: PluginInstanceHandle) => boolean);
+      work?: PluginInvocationScope["work"];
       parent?: PluginInvocationContext;
       kind?: "work" | "custody";
       registryByInstance?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
     } = {},
   ) {
-    this.bindings = options.retained ? (this.consumers = new Map()) : new Map();
+    this.bindings = new Map();
+    this.consumers = options.retained ? new Map() : undefined;
+    this.work = options.work;
+    this.parent = options.parent ?? pluginInvocationContext.getStore();
+    this.registryByInstance = options.registryByInstance;
     const consumerKind = options.kind ?? "work";
     const invoke = <T>(run: () => T): T => this.run(run);
     try {
@@ -83,7 +94,10 @@ export class PluginInvocationScope {
           continue;
         }
         const instanceRegistry = options.registryByInstance?.get(instance) ?? registry;
-        if (this.consumers) {
+        if (
+          this.consumers &&
+          (typeof options.retained !== "function" || options.retained(instance))
+        ) {
           const acquire = () =>
             instance.retainConsumer(invoke, instanceRegistry, consumerKind, {
               reason: "invocation-scope",
@@ -91,7 +105,8 @@ export class PluginInvocationScope {
           const parent = options.parent?.lookup(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
-        } else {
+          this.bindings.set(instance, consumer);
+        } else if (!this.work) {
           this.bindings.set(instance, {
             run: (run) => this.run(() => instance.runInRegistry(instanceRegistry, run)),
             wrap: instance.createRegistryView(instanceRegistry, invoke),
@@ -110,21 +125,51 @@ export class PluginInvocationScope {
     }
   }
 
-  get pendingReplacementInstances(): readonly PluginInstanceHandle[] {
-    return this.closed || !this.consumers
+  get retainedInstances(): readonly PluginInstanceHandle[] {
+    return this.closed
       ? []
-      : [...this.consumers.keys()].filter((instance) => instance.replacementPending);
+      : [
+          ...new Set([
+            ...(this.consumers?.keys() ?? []),
+            ...(this.work?.instances ?? []),
+            ...(this.parent?.retainedInstances ?? []),
+          ]),
+        ];
+  }
+
+  get pendingReplacementInstances(): readonly PluginInstanceHandle[] {
+    return this.retainedInstances.filter((instance) => instance.replacementPending);
   }
 
   get holdsPendingReplacement(): boolean {
     return this.pendingReplacementInstances.length > 0;
   }
 
+  /** Nested capability scopes record use without inheriting callable admission. */
+  retainInvocation(instance: PluginInstanceHandle): void {
+    if (!this.closed) {
+      if (!this.consumers?.has(instance)) {
+        this.work?.retain(instance);
+      }
+      this.parent?.retainInvocation?.(instance);
+    }
+  }
+
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
-    const binding = this.bindings.get(instance);
+    let binding = this.bindings.get(instance);
+    const registry = this.registryByInstance?.get(instance);
+    if (!binding && this.work && registry) {
+      this.assertOpen();
+      binding = {
+        run: (run) => this.run(() => instance.runInRegistry(registry, run)),
+        wrap: instance.createRegistryView(registry, (run) => this.run(run)),
+      };
+      this.bindings.set(instance, binding);
+    }
     if (binding) {
       this.assertOpen();
     }
+    this.retainInvocation(instance);
     return binding;
   }
 
@@ -154,7 +199,7 @@ export class PluginInvocationScope {
     // Retained scopes install teardown bindings below, not temporary ordinary views.
     const cleanup = new PluginInvocationScope(
       this.registry,
-      this.consumers?.size ? [] : this.bindings.keys(),
+      [...this.bindings.keys()].filter((instance) => !this.consumers?.has(instance)),
     );
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks

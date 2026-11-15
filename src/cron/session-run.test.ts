@@ -1,15 +1,14 @@
 import { StatementSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { createOperatorRecoveryAuthority } from "../agents/operator-recovery.test-support.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
+import { operatorRecoverySnapshotFixture } from "../gateway/server/client-fixtures.test-support.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -118,13 +117,10 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
           agentId: "main",
           ...target,
           sourceRunId: "original-request",
-          snapshot: {
-            ...expectDefined(
-              createOperatorRecoveryAuthority("requester", "original-grant").recoverySnapshot,
-              "operator recovery fixture",
-            ),
+          snapshot: operatorRecoverySnapshotFixture("requester", "original-grant", {
+            sourceIngress: "control-ui",
             controlUiAdmin: true,
-          },
+          }),
         },
       },
     },

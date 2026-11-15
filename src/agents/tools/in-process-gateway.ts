@@ -58,6 +58,10 @@ type InProcessGatewayCallOptions = {
   sessionMutationCommitGuard?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number | null;
+  /** False when a committed result belongs to its target rather than the requesting turn. */
+  revalidateOnCompletion?: boolean;
+  /** Spawn creation only: the requesting tool's fence, checked by the Gateway at commit. */
+  requesterCommitGuard?: () => void;
 };
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
@@ -469,7 +473,12 @@ async function callInProcessGatewayToolBound<T>(
           executionIdentityToken: caller.executionIdentityToken,
           requesterOrigin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
             .requesterOrigin,
-          assertCurrent: assertCallerCurrent,
+          assertCurrent: options.requesterCommitGuard
+            ? () => {
+                assertCallerCurrent();
+                options.requesterCommitGuard?.();
+              }
+            : assertCallerCurrent,
         }
       : undefined;
   return await callAgentToolGatewayRequestBound<T>(
@@ -485,7 +494,7 @@ async function callInProcessGatewayToolBound<T>(
     undefined,
     assertCallerCurrent,
     false,
-    true,
+    options.revalidateOnCompletion ?? true,
     {
       sessionCreation: options.sessionCreation,
       onExecution: options.onExecution,

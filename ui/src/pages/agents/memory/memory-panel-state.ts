@@ -193,7 +193,7 @@ export function createAgentMemory(
     } catch (error) {
       // Expected failures already use the runtime owner's toast contract.
       if (isTaskScopeCurrent(scope)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   });
@@ -457,11 +457,14 @@ export function createAgentMemory(
 
   function read() {
     const configState = context.runtimeConfig.state;
-    const configuredDreaming = resolveConfiguredDreaming(currentConfigObject(configState));
+    const configObject = currentConfigObject(configState);
+    const configuredDreaming = resolveConfiguredDreaming(configObject);
     // The status RPC can complete after config switches the engine Off. Keep the
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
-    const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
+    // Defaults apply to an accepted config, not an unavailable or stale snapshot.
+    const dreamingOn =
+      dreamingStatus?.enabled ?? (configObject !== null && configuredDreaming.enabled);
     const loading =
       (dreaming.resourceReads.dreamingStatus?.pending ?? false) || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
@@ -660,10 +663,12 @@ export function createAgentMemory(
   };
   const statusDataRead = createMemo(() => {
     config.read();
-    const status = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
+    const result = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
       .engineOff
-      ? null
-      : resourceReads.dreamingStatus().value;
+      ? { value: null }
+      : resourceReads.dreamingStatus();
+    // Retain accepted status after refresh failures, not invented empty lists after a first failure.
+    const status = result.value ?? readResource(result);
     return {
       shortTermCount: status?.shortTermCount ?? 0,
       promotedCount: status?.promotedToday ?? 0,

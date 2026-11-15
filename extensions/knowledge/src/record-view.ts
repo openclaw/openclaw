@@ -58,7 +58,7 @@ export async function showDetail(
     renderToolbar,
   } = ui;
   const pending: Promise<unknown>[] = [];
-  const result = await feature.invoke("record", {
+  const result = await feature.invoke("record_detail", {
     id,
     maxChars: 65536,
     includeEvidence: true,
@@ -254,7 +254,7 @@ export async function showDetail(
     const readMore = async () => {
       more.disabled = true;
       try {
-        const page = await feature.invoke("record", {
+        const page = await feature.invoke("record_detail", {
           id,
           offset: next,
           metadataView: "none",
@@ -579,7 +579,7 @@ export async function showDetail(
         ids.map(
           async (entityId) =>
             result.references?.find((ref) => ref.id === entityId) ??
-            (await feature.invoke("record", { id: entityId, view: "summary" })).record,
+            (await feature.invoke("record_detail", { id: entityId, view: "summary" })).record,
         ),
       )
         .then((records) => {
@@ -627,7 +627,7 @@ export async function showDetail(
         (async () => {
           const target =
             result.references?.find((ref) => ref.id === endpointId) ??
-            (await feature.invoke("record", { id: endpointId, view: "summary" })).record;
+            (await feature.invoke("record_detail", { id: endpointId, view: "summary" })).record;
           if (!live(n)) {
             return;
           }

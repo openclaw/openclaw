@@ -119,7 +119,7 @@ export function admitStoreSearchExtension(
     });
     // Publish the new revision before its facts; admission owns rollback too.
     retainPostgresSchema(db, next);
-    publishPostgresSearchExtensionFacts(db, facts, after.catalog);
+    publishPostgresSearchExtensionFacts(db, facts, after.catalog, next);
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
       (candidate) => candidate !== undefined,
     )) {

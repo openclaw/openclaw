@@ -25,8 +25,8 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { captureWarningLogger } from "./loading.test-support.js";
 import {
   loadVisibleSkills,
@@ -429,11 +429,20 @@ describe("loadWorkspaceSkills", () => {
     };
     const scoped = (executionWorkspaceDir: string) => ({ ...options, executionWorkspaceDir });
     const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const accesses = vi.spyOn(fs, "access");
     const completePassiveScan = async () => {
       tasks.mockClear();
+      accesses.mockClear();
       let settledTasks = 0;
+      let settledAccesses = 0;
       for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
         await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
+        // Reconciliation must finish before the clock advances through its scan debounce.
+        while (settledAccesses < accesses.mock.results.length) {
+          const pending = accesses.mock.results.slice(settledAccesses);
+          settledAccesses += pending.length;
+          await withinTest(Promise.allSettled(pending.map((result) => result.value)), signal);
+        }
         while (settledTasks < tasks.mock.results.length) {
           const pending = tasks.mock.results.slice(settledTasks);
           settledTasks += pending.length;
@@ -483,6 +492,7 @@ describe("loadWorkspaceSkills", () => {
       }
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
     } finally {
+      accesses.mockRestore();
       tasks.mockRestore();
     }
   });

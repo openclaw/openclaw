@@ -220,20 +220,25 @@ export async function readOwnGitHubPullRequest(params: {
   const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
   const hasReadEndpoint =
     host === "github.com" || Boolean(config.gateway?.github?.apiBaseUrl?.trim());
+  let checkedConfig = config;
   const assertIdentityCurrent = () => {
     params.reader.assertCurrent();
+    // Retained readers outlive config/secrets reloads; only an API base change revokes them.
+    const currentConfig = currentGitHubPublicationConfig();
     if (
       (identity.host ?? "github.com") !== host ||
-      resolveConfiguredGitHubApiBaseUrl(currentGitHubPublicationConfig()) !== apiBaseUrl ||
+      (currentConfig !== checkedConfig &&
+        resolveConfiguredGitHubApiBaseUrl(currentConfig) !== apiBaseUrl) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
       (publicContinuation &&
         (!publication || !matchesGitHubPublicationIdentityRow(publication.publisher, identity)))
     ) {
       throw new Error("The GitHub publisher changed; retry inspection.");
     }
+    checkedConfig = currentConfig;
   };
   const assertCurrent = () => {
-    assertRequester();
+    params.assertCurrent();
     assertIdentityCurrent();
   };
   assertCurrent();

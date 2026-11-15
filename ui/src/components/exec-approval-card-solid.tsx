@@ -5,6 +5,7 @@ import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import {
   compactApprovalCommand,
+  formatApprovalDecisionShortcut,
   summarizeApprovalScopeLabel,
 } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
@@ -164,14 +165,6 @@ function approvalDecisionLabel(decision: ExecApprovalDecision, approval: ExecApp
 
 function decisionClass(decision: ExecApprovalDecision) {
   return decision === "allow-once" ? "btn primary" : decision === "deny" ? "btn danger" : "btn";
-}
-
-function decisionShortcut(decision: ExecApprovalDecision) {
-  return decision === "allow-once"
-    ? "Ctrl/Cmd+Enter"
-    : decision === "allow-always"
-      ? "Ctrl/Cmd+Shift+Enter"
-      : "Ctrl/Cmd+D";
 }
 
 export function resolveApprovalDecisions(
@@ -571,7 +564,7 @@ function ExecApprovalCardContent(
             disabled={!props.connected || props.deciding() || props.busy || !props.canGrant}
             title={
               shortcuts() && props.connected && props.canGrant
-                ? `${label()} (${decisionShortcut(decision)})`
+                ? `${label()} (${formatApprovalDecisionShortcut(decision)})`
                 : label()
             }
             onClick={() => void props.decide(active().id, decision)}

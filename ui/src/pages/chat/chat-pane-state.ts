@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -13,21 +14,34 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<
     ChatPageHost,
-    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "handleSendChat"
+    | "sessionKey"
+    | "connected"
+    | "chatRunId"
+    | "chatSending"
+    | "handleSendChat"
+    | "chatMessages"
+    | "chatMessage"
+    | "chatAttachments"
+    | "chatMentions"
+    | "chatReplyTarget"
+    | "chatGoalDraftMode"
+    | "chatRunError"
+    | "chatDismissedRunErrorId"
   >,
   options: {
     canSend: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
+    onRewindMessage?: ChatProps["onRewindMessage"];
   },
-): Pick<ChatProps, "onRetryRun"> {
+): Pick<ChatProps, "onRetryRun" | "failedMessageEditSource" | "onDismissRunError"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -36,7 +50,19 @@ export function createChatPaneRunRecoveryActions(
     !state.chatRunId &&
     !state.chatSending &&
     options.latestFailedRunId() === runId;
+  const failedRunId = options.latestFailedRunId();
+  const rewind = options.onRewindMessage;
   return {
+    failedMessageEditSource:
+      rewind && failedRunId
+        ? {
+            state,
+            runId: failedRunId,
+            isCurrent: () => ownsFailure(failedRunId),
+            readIdentity: readSessionMessageIdentity,
+            rewind,
+          }
+        : undefined,
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {
@@ -46,6 +72,8 @@ export function createChatPaneRunRecoveryActions(
           }
         }
       : undefined,
+    // Reply failures can be dismissed; placement failures keep their recovery action.
+    onDismissRunError: state.chatRunError ? () => dismissChatRunError(state) : undefined,
   };
 }
 

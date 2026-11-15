@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
 
@@ -27,7 +28,29 @@ export class SqliteStagingRetiredError extends Error {
 export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean } = {},
+  options: { allowMissing?: boolean; exclusiveCreate?: boolean } = {},
+): SqliteStagingToken {
+  // Cancelled work still reclaims, releases or retires private locks instead of
+  // leaving copies behind, but it never mints a new staging owner.
+  const settle = withSqliteDatabaseAdmissionSettlement;
+  const acquire = () => acquireStagingToken(directory, mode, options);
+  const token = mode === "create" ? acquire() : settle(acquire);
+  const settled: SqliteStagingToken = Object.assign(
+    (retiring?: boolean) => settle(() => token(retiring)),
+    {
+      beginRetirement: () => {
+        settle(() => token.beginRetirement());
+        return settled;
+      },
+    },
+  );
+  return settled;
+}
+
+function acquireStagingToken(
+  directory: string,
+  mode: "create" | "read" | "reclaim",
+  options: { allowMissing?: boolean; exclusiveCreate?: boolean },
 ): SqliteStagingToken {
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
   const readIdentity = (pathname: string, kind: "directory" | "file") => {
@@ -72,7 +95,7 @@ export function acquireSqliteStagingToken(
   // This lock primitive needs fixed SQLite commands, not the query-builder graph.
   const read = (sql: string) =>
     executeWithCachedStatement(db, sql, [], (statement) => statement.get());
-  let exclusive = mode === "reclaim";
+  let exclusive = mode === "reclaim" || (mode === "create" && options.exclusiveCreate === true);
   let retired = false;
   const assertIdentity = () => {
     const currentDirectory = readIdentity(directory, "directory");
@@ -124,10 +147,10 @@ export function acquireSqliteStagingToken(
   const token = Object.assign(release, { beginRetirement });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
-    if (mode === "create") {
-      db.exec("BEGIN IMMEDIATE");
-    } else if (mode === "reclaim") {
+    if (exclusive) {
       db.exec("BEGIN EXCLUSIVE");
+    } else if (mode === "create") {
+      db.exec("BEGIN IMMEDIATE");
     } else {
       db.exec("BEGIN");
     }

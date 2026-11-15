@@ -232,6 +232,60 @@ it("rolls rejected initial and controlled visibility back", async () => {
   expect(received).toEqual([false, false, true, true, false]);
 });
 
+it("updates leaf presentation without replacing the row or its presentation slots", async () => {
+  const icon = document.createElement("span"),
+    details = document.createElement("span"),
+    nextIcon = document.createElement("span"),
+    nextDetails = document.createElement("span");
+  const [items, setItems] = createSignal<MenuItem[]>([
+    { id: "edit", label: "Edit", content: "Custom", icon, details, labelClass: "initial-label" },
+  ]);
+  mountMenu(() => ({ items: items() }));
+  await openMenu();
+  const row = item("Edit");
+  const label = row.querySelector(".oc-menu-item__label")!;
+  const iconSlot = row.querySelector(".oc-menu-item__icon")!;
+  const detailsSlot = row.querySelector(".oc-menu-item__details")!;
+  expect(label.classList.contains("oc-menu-item__label--text")).toBe(false);
+  update(() =>
+    setItems([
+      {
+        id: "edit",
+        label: "Renamed",
+        content: "Updated custom",
+        icon: nextIcon,
+        details,
+        labelClass: "updated-label",
+      },
+    ]),
+  );
+  expect(item("Renamed")).toBe(row);
+  expect(row.querySelector(".oc-menu-item__label")).toBe(label);
+  expect(label.textContent).toBe("Updated custom");
+  expect(label.classList.contains("updated-label")).toBe(true);
+  expect(label.classList.contains("initial-label")).toBe(false);
+  expect(row.querySelector(".oc-menu-item__icon")).toBe(iconSlot);
+  expect(iconSlot.contains(nextIcon)).toBe(true);
+  expect(icon.isConnected).toBe(false);
+  expect(row.querySelector(".oc-menu-item__details")).toBe(detailsSlot);
+  expect(detailsSlot.contains(details)).toBe(true);
+  update(() =>
+    setItems([{ id: "edit", label: "Null content", content: null, icon: nextIcon, details }]),
+  );
+  expect(item("Null content")).toBe(row);
+  expect(row.querySelector(".oc-menu-item__label")).toBe(label);
+  expect(label.textContent).toBe("Null content");
+  expect(label.classList.contains("oc-menu-item__label--text")).toBe(false);
+  update(() => setItems([{ id: "edit", label: "Plain", icon: nextIcon, details: nextDetails }]));
+  expect(item("Plain")).toBe(row);
+  expect(row.querySelector(".oc-menu-item__label")).toBe(label);
+  expect(label.textContent).toBe("Plain");
+  expect(label.classList.contains("oc-menu-item__label--text")).toBe(true);
+  expect(row.querySelector(".oc-menu-item__details")).toBe(detailsSlot);
+  expect(detailsSlot.contains(nextDetails)).toBe(true);
+  expect(details.isConnected).toBe(false);
+});
+
 it("retains submenu content and identity across label updates", async () => {
   const icon = document.createElement("span"),
     details = document.createElement("span");
@@ -243,6 +297,7 @@ it("retains submenu content and identity across label updates", async () => {
       {
         id: "assign",
         label: "Assign to",
+        content: "Submenu body",
         icon,
         details,
         children: () => [{ id: "ada", label: "Ada Rivera" }],
@@ -255,8 +310,10 @@ it("retains submenu content and identity across label updates", async () => {
   await openMenu();
   expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
   const assignment = trigger("people-assign");
+  expect(assignment.querySelector(".oc-menu-item__label")?.textContent).toBe("Assign to");
   await openMenu("people-assign");
   const child = surface("people-assign");
+  expect(child.textContent).toContain("Submenu body");
   const ada = item("Ada Rivera", "people-assign");
   update(() =>
     setProps((draft) => {

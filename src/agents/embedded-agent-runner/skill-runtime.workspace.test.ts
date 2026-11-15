@@ -3,19 +3,24 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentSkillsRoot } from "../../skills/loading/skill-paths.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { readSkillResourceFiles } from "../../skills/runtime/resources.js";
 import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/skill-file-host.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
-import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { createInstalledSkillTools } from "../tools/installed-skill-tools.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
+
+// The skill-workshop plugin's manifest `agentSkillsDir`.
+const resolveWorkshopSkillsDir = (config: OpenClawConfig, agentId: string) =>
+  resolveAgentSkillsRoot({ config, agentId, dirName: "workshop-skills" });
 
 const libraryFixture = vi.hoisted(() => ({ entries: [] as SkillEntry[] }));
 vi.mock("../../skills/library/selection.js", async (importOriginal) => {

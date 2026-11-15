@@ -2,15 +2,6 @@
 export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
-// Package-root modules loaded outside the compiled graph retain their bootstrap dependencies.
-export const vitestWorkerRuntimeAssets = [
-  "cli-invocation.mjs",
-  "cli-parent-lifetime.mjs",
-  "gateway-shutdown-budget.mjs",
-  "node-host-launcher.mjs",
-  "node-runtime-env.mjs",
-];
-
 export const rootRuntimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
     "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
@@ -25,6 +16,8 @@ export const rootRuntimeProcessDeclarationEntries = {
 
 export const runtimeProcessDeclarationEntries = {
   ...rootRuntimeProcessDeclarationEntries,
+  // Cold policy readers require this native sibling in every worker preset.
+  "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",

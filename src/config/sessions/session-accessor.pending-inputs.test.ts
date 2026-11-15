@@ -49,6 +49,7 @@ import {
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
+import { dismissRetiredSessionPendingInputs } from "./session-pending-input-withdrawal.js";
 import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
@@ -342,6 +343,91 @@ it("rolls transcript promotion and custody consumption back together", async () 
   expect(await promote(receipt)).toMatchObject(appendResult(receipt.inputId));
   expect(await readPending(receipt.inputId)).toBeUndefined();
 });
+
+it("lets a channel redelivery reopen its own cancelled attempt under a fresh run", async () => {
+  const sourceTurn = (content = "fix it please"): PersistedUserTurnMessage => ({
+    role: "user",
+    content,
+    timestamp: 100,
+    idempotencyKey: "channel-user:v1:redelivered-source-turn",
+  });
+  const redeliver = (runId: string, options: Partial<Parameters<typeof stage>[1]> = {}) =>
+    stage(runId, { message: sourceTurn(), reclaimCancelledSourceTurn: true, ...options });
+  const readStored = (inputId: string) =>
+    database().db.prepare("SELECT * FROM session_pending_inputs WHERE input_id = ?").get(inputId);
+
+  const first = await redeliver("ingress-attempt-1");
+  const before = await readTranscript();
+  // The first attempt fails before consumption (a transcript write error) and is released.
+  first.finish("cancelled");
+  await first.settled?.();
+  expect(readStored(first.inputId)).toMatchObject({
+    run_id: "ingress-attempt-1",
+    state: "cancelled",
+    consumed_event_id: null,
+  });
+
+  // Ordinary callers keep the run-bound conflict; only the opted-in source turn reclaims.
+  await expect(stage("ingress-attempt-2", { message: sourceTurn() })).rejects.toThrow(
+    "idempotency key conflicts",
+  );
+  await expect(
+    redeliver("ingress-attempt-2", { message: sourceTurn("edited text") }),
+  ).rejects.toThrow("idempotency key conflicts");
+
+  const retried = await redeliver("ingress-attempt-2");
+  expect(retried.inputId).toBe(first.inputId);
+  expect(retried.message).toEqual(first.message);
+  expect(readStored(first.inputId)).toMatchObject({
+    run_id: "ingress-attempt-2",
+    state: "queued",
+  });
+  // A live reclaimed attempt still excludes a concurrent redelivery.
+  await expect(redeliver("ingress-attempt-3")).rejects.toThrow("idempotency key conflicts");
+  expect(await promote(retried)).toMatchObject(appendResult(retried.inputId));
+  expect(await readPending(retried.inputId)).toBeUndefined();
+  const sourceRows = (await readTranscript()).filter((event) =>
+    JSON.stringify(event).includes("fix it please"),
+  );
+  expect(before.some((event) => JSON.stringify(event).includes("fix it please"))).toBe(false);
+  expect(sourceRows).toHaveLength(1);
+  expect(await submitted("channel-user:v1:redelivered-source-turn")).toEqual(retried.message);
+});
+
+it.each(["stopped", "dismissed"] as const)(
+  "never reopens a source turn the user %s",
+  async (retirement) => {
+    const sourceTurn: PersistedUserTurnMessage = {
+      role: "user",
+      content: `${retirement} source turn`,
+      timestamp: 100,
+      idempotencyKey: `channel-user:v1:${retirement}-source-turn`,
+    };
+    const first = await stage(`${retirement}-attempt-1`, {
+      message: sourceTurn,
+      reclaimCancelledSourceTurn: true,
+    });
+    if (retirement === "stopped") {
+      first.finish("cancelled", true);
+      await first.settled?.();
+    } else {
+      first.finish("cancelled");
+      await first.settled?.();
+      await dismissRetiredSessionPendingInputs(scope(), [first.inputId], () => {});
+    }
+    const transcript = await readTranscript();
+
+    await expect(
+      stage(`${retirement}-attempt-2`, { message: sourceTurn, reclaimCancelledSourceTurn: true }),
+    ).rejects.toThrow("idempotency key conflicts");
+    expect(await readTranscript()).toEqual(transcript);
+    expect(
+      database()
+        .db.prepare("SELECT run_id, state FROM session_pending_inputs WHERE input_id = ?")
+        .get(first.inputId),
+    ).toEqual({ run_id: `${retirement}-attempt-1`, state: "cancelled" });
+  },
+);
 
 it("moves transcript custody only after an authorized relocation commits", async () => {
   const receipt = await stage("relocation");

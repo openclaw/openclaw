@@ -2,6 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { planAdaptiveSelection } from "./lib/ci-adaptive-selection.mjs";
+import { decodeTestObservations } from "./lib/ci-test-observations.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 function main(args = process.argv.slice(2)) {
@@ -21,7 +22,7 @@ function main(args = process.argv.slice(2)) {
   }
   const read = (file) => JSON.parse(readFileSync(file, "utf8"));
   const report = planAdaptiveSelection(
-    read(values.observations),
+    decodeTestObservations(read(values.observations)),
     read(values.request),
     values.recommendations ? read(values.recommendations) : null,
   );

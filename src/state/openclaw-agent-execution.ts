@@ -15,11 +15,11 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-contract.js";
-import {
-  createAgentDatabaseExecution,
-  type AgentDatabaseExecutionState,
-} from "./openclaw-agent-execution-owner.js";
+import type {
+  OpenClawAgentDatabaseExecution,
+  AgentDatabaseExecutionState,
+} from "./openclaw-agent-execution-contract.js";
+import { createAgentDatabaseExecution } from "./openclaw-agent-execution-owner.js";
 import {
   assertAgentDatabaseExecutionCreationIdentity,
   assertAgentDatabaseExecutionSharedState,

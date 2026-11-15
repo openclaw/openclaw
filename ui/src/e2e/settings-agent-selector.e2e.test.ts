@@ -150,16 +150,20 @@ suite.define(() => {
       await gateway.waitForRequest("models.list", {
         match: { agentId: "research", view: "configured" },
       });
+      await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Set Default", exact: true }).isEnabled())
+        .poll(() => page.getByRole("menuitem", { name: "Set default", exact: true }).isEnabled())
         .toBe(true);
+      await page.keyboard.press("Escape");
       await expectSidebarPickerOnly(page);
 
       await chooseAgent(page, /^Clawd(?:,|$)/);
       await expectAgentRoute(page, "main");
+      await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Default", exact: true }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Default", exact: true }).isDisabled())
         .toBe(true);
+      await page.keyboard.press("Escape");
       await chooseAgent(page, "Research");
       await expectAgentRoute(page, "research");
       await page.goBack();

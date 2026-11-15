@@ -7,6 +7,7 @@ set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/lib/docker-e2e-logs.sh
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
@@ -277,7 +278,7 @@ reset_lane() {
 
 run_negative_control() {
   local lane=negative
-  setup_lane "$lane" 18791
+  openclaw_prepublish_plugin_registry_run_published setup_lane "$lane" 18791
   local update_status=0
   run_update "$lane-update" "$NEGATIVE_PACKAGE" || update_status="$?"
   local assert_started=$SECONDS
@@ -306,7 +307,7 @@ run_negative_control() {
 
 run_positive_hops() {
   local lane=positive
-  setup_lane "$lane" 18792
+  openclaw_prepublish_plugin_registry_run_published setup_lane "$lane" 18792
   local previous_pid current_pid hop target assert_started
   local service_pids
   service_pids=("$(cat "$ARTIFACT_DIR/$lane-before.pid")")

@@ -20,7 +20,10 @@ import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  runtimeOptions: { captureContent?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -306,6 +309,23 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
+    }
+    // Session identity rides the captureContent gate: a collector trusted with raw
+    // prompt and tool content is trusted with the session identifier, so trace
+    // backends can group spans per conversation. The value is the session id —
+    // the durable identifier assigned at session creation, not the session key.
+    // A /new reset clears history but preserves the durable session id, so reset
+    // continuations stay grouped in the same backend conversation; a fresh id
+    // arises when a session is first created. The raw session key (which can
+    // embed channel peer ids) is never exported.
+    // Metric attributes stay low-cardinality and never carry session
+    // identifiers.
+    if (runtimeOptions.captureContent) {
+      const sessionId = evt.sessionId;
+      if (sessionId) {
+        spanAttrs["gen_ai.conversation.id"] = sessionId;
+        spanAttrs["openclaw.session.id"] = sessionId;
+      }
     }
   };
 

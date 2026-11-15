@@ -150,6 +150,15 @@ export async function retireHeartbeatWithDoctor(
             schedulingInputsRequested: true,
             scheduleChanged: false,
           });
+          if (job.state.runningAtMs !== undefined) {
+            // A resumed cutover can disable an already converted job whose
+            // interrupted run still belongs to Gateway startup recovery.
+            Object.assign(nextJob.state, {
+              runningAtMs: job.state.runningAtMs,
+              runningReceiptId: job.state.runningReceiptId,
+              runningScheduleChangeId: job.state.runningScheduleChangeId,
+            });
+          }
           upsertCronJobRow(
             db,
             storeKey,

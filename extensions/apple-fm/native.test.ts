@@ -54,6 +54,18 @@ afterEach(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 
+it("retries source discovery after a missing asset is repaired", async () => {
+  const pluginRoot = path.join(directory, "plugin");
+  const source = path.join(pluginRoot, "assets", "AppleFoundationModels.swift");
+  const recovering = createAppleFmNative(pluginRoot);
+  await expect(recovering.probe()).rejects.toMatchObject({ code: "ENOENT" });
+  expect(command).not.toHaveBeenCalled();
+
+  await fs.mkdir(path.dirname(source), { recursive: true });
+  await fs.writeFile(source, "synthetic Swift source");
+  await expect(recovering.prepare()).resolves.toEqual(facts);
+});
+
 it.each(["probe", "prepare"] as const)("cleans up canceled %s", async (operation) => {
   abortAfterCompile = new AbortController();
   await expect(native[operation]({ signal: abortAfterCompile.signal })).rejects.toThrow();

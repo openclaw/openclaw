@@ -20,6 +20,7 @@ import {
 } from "./plugin-npm-prepared-release.mjs";
 import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
+import { validateCorePluginDeferrals } from "./release-approval-receipt.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
 const WORKFLOW = ".github/workflows/plugin-npm-release.yml";
@@ -282,6 +283,56 @@ export async function createPluginNpmPublicationReadback(options) {
     });
     return { value: JSON.parse(files.get(file).toString("utf8")), metadata };
   };
+  const readDeferredAuthCheckpoint = async (job, entry, releaseDistTag) => {
+    const artifactName = `plugin-npm-deferred-auth-${entry.extensionId}-${runId}-${job.run_attempt}`;
+    const matches = artifacts.filter(
+      (artifact) => artifact.name === artifactName && artifact.expired === false,
+    );
+    requireValue(
+      matches.length <= 1,
+      `Ambiguous deferred npm authentication checkpoint: ${artifactName}.`,
+    );
+    if (matches.length === 0) {
+      return undefined;
+    }
+    const { value: checkpoint, metadata } = await readJobReceipt(
+      job,
+      artifactName,
+      `${entry.extensionId}-npm-oidc-deferred.json`,
+    );
+    const workflowRefMatches =
+      checkpoint?.workflow?.ref === `refs/heads/${workflowRef}` ||
+      checkpoint?.workflow?.ref === `refs/tags/${workflowRef}`;
+    requireValue(
+      isRecord(checkpoint) &&
+        checkpoint.schemaVersion === 1 &&
+        checkpoint.kind === "openclaw-plugin-npm-deferred-auth" &&
+        checkpoint.reason === "npm-oidc-eneedauth" &&
+        checkpoint.repository === repository &&
+        isRecord(checkpoint.workflow) &&
+        workflowRefMatches &&
+        checkpoint.workflow.sha === workflowSha &&
+        checkpoint.workflow.runId === runId &&
+        checkpoint.workflow.runAttempt === job.run_attempt &&
+        isRecord(checkpoint.parent) &&
+        checkpoint.parent.runId === options.parentRunId &&
+        checkpoint.parent.runAttempt === options.parentRunAttempt &&
+        checkpoint.sourceSha === sourceSha &&
+        isRecord(checkpoint.package) &&
+        checkpoint.package.extensionId === entry.extensionId &&
+        checkpoint.package.name === entry.packageName &&
+        checkpoint.package.version === entry.version &&
+        checkpoint.package.publishTag === releaseDistTag &&
+        releaseDistTag !== "extended-stable" &&
+        isRecord(checkpoint.recovery) &&
+        checkpoint.recovery.environment === "npm-publish" &&
+        checkpoint.recovery.publishScope === "selected" &&
+        checkpoint.recovery.requiresParentPublication === false &&
+        checkpoint.recovery.requiresTrustedPublisherPreflight === true,
+      "Deferred npm authentication checkpoint differs from the approved parent, source, or package.",
+    );
+    return { checkpoint, metadata };
+  };
   // Failed-job reruns retain the successful planner from its original attempt.
   // Its resolved matrix, not absent publisher jobs, owns the skip disposition.
   const { value: plan, metadata: planMetadata } = await readJobReceipt(
@@ -289,6 +340,21 @@ export async function createPluginNpmPublicationReadback(options) {
     `plugin-npm-plan-${runId}-${planner.run_attempt}`,
     "npm-publication-plan.json",
   );
+  // The exact trusted planner verifies the complete qualified roster and reads
+  // these declarations from its live, human-approved parent receipt. They are
+  // distinct from both published skips and automatic ENEEDAUTH checkpoints.
+  const coreDeferrals = plan.coreDeferrals?.length
+    ? validateCorePluginDeferrals(plan.coreDeferrals, {
+        targetSha: sourceSha,
+        releaseTag: `v${packages[0]?.version}`,
+        npmDistTag: options.npmDistTag ?? "beta",
+      })
+    : [];
+  const deferredPackages = coreDeferrals.map((deferred) => {
+    const entry = packages.find((candidate) => candidate.packageName === deferred.packageName);
+    requireValue(entry, "Deferred npm package is outside the frozen roster.");
+    return entry;
+  });
   const identities = (entries) => {
     requireValue(Array.isArray(entries) && entries.length <= 256, "Invalid npm planning roster.");
     const values = entries.map((entry) =>
@@ -300,8 +366,9 @@ export async function createPluginNpmPublicationReadback(options) {
   requireValue(
     plan.sourceSha === sourceSha &&
       JSON.stringify(identities(plan.all)) === JSON.stringify(identities(packages)) &&
-      JSON.stringify(identities([...plan.candidates, ...plan.skippedPublished])) ===
-        JSON.stringify(identities(packages)),
+      JSON.stringify(
+        identities([...plan.candidates, ...plan.skippedPublished, ...deferredPackages]),
+      ) === JSON.stringify(identities(packages)),
     "Resolved npm publication plan differs from the frozen package roster.",
   );
   requireValue(
@@ -322,6 +389,9 @@ export async function createPluginNpmPublicationReadback(options) {
   const evidence = [];
   return {
     evidence,
+    /**
+     * @returns {Promise<{ disposition: "published" | "deferred-auth"; note?: string }>}
+     */
     async verify(packageName, releaseVersion, releaseDistTag) {
       const entry = byJob.get(`${JOB_PREFIX}${packageName})`);
       requireValue(
@@ -329,6 +399,31 @@ export async function createPluginNpmPublicationReadback(options) {
         "Qualified plugin version differs from the parent release version.",
       );
       const job = publishers.get(`${JOB_PREFIX}${packageName})`);
+      const coreDeferral = coreDeferrals.find((deferred) => deferred.packageName === packageName);
+      if (coreDeferral) {
+        requireValue(!job, "Explicitly deferred package unexpectedly has a publisher job.");
+        const { alreadyPublished, supersededBy } = await verifyPublishedNpmRegistry({
+          packageName,
+          version: releaseVersion,
+          publishTags: [releaseDistTag],
+          allowMissing: true,
+          fetchImpl: options.fetchImpl,
+        });
+        evidence.push({
+          ...coreDeferral,
+          verification: alreadyPublished ? "published-registry" : "operator-deferred-auth",
+          supersededBy,
+          childRunId: runId,
+          planAttempt: planner.run_attempt,
+          planArtifactId: planMetadata.id,
+        });
+        return {
+          disposition: alreadyPublished ? "published" : "deferred-auth",
+          note: alreadyPublished
+            ? `${packageName}@${releaseVersion} is public after its explicit deferral; original failure ${coreDeferral.evidence}.`
+            : `${packageName}@${releaseVersion} explicitly deferred: ${coreDeferral.reason}; original failure ${coreDeferral.evidence}. Publication is not asserted.`,
+        };
+      }
       if (!job) {
         requireValue(
           skipped.has(packageName),
@@ -350,10 +445,16 @@ export async function createPluginNpmPublicationReadback(options) {
           planAttempt: planner.run_attempt,
           planArtifactId: planMetadata.id,
         });
-        return supersededBy === null
-          ? undefined
-          : `${packageName}@${releaseVersion} superseded by ${supersededBy}; dist-tag ${releaseDistTag} stays.`;
+        return {
+          disposition: "published",
+          ...(supersededBy === null
+            ? {}
+            : {
+                note: `${packageName}@${releaseVersion} superseded by ${supersededBy}; dist-tag ${releaseDistTag} stays.`,
+              }),
+        };
       }
+      const deferredAuth = await readDeferredAuthCheckpoint(job, entry, releaseDistTag);
       const { value: receipt, metadata } = await readJobReceipt(
         job,
         `plugin-npm-qualification-${entry.extensionId}-${runId}-${job.run_attempt}`,
@@ -370,7 +471,8 @@ export async function createPluginNpmPublicationReadback(options) {
           Number.isSafeInteger(receipt.artifactId) &&
           receipt.artifactId > 0 &&
           receipt.workflowEvent === "workflow_dispatch" &&
-          receipt.workflowSha === workflowSha &&
+          (receipt.workflowSha === workflowSha ||
+            (receipt.runId !== runId && receipt.workflowSha === sourceSha)) &&
           receipt.targetSha === sourceSha &&
           receipt.packageName === packageName &&
           receipt.packageDir === entry.packageDir &&
@@ -392,7 +494,7 @@ export async function createPluginNpmPublicationReadback(options) {
         repository,
         workflowPath: WORKFLOW,
         workflowEvent: "workflow_dispatch",
-        workflowSha,
+        workflowSha: receipt.workflowSha,
         workflowHeadBranch: receipt.workflowHeadBranch,
         runId: receipt.runId,
         runAttempt: receipt.runAttempt,
@@ -442,7 +544,16 @@ export async function createPluginNpmPublicationReadback(options) {
           policyId: "plugin-npm-release-workflow",
           sha256: createHash("sha256")
             .update(
-              readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)),
+              // The authenticated P receipt records the original producer, not
+              // a new publication authority. Q's archive retains Q's policy.
+              receipt.workflowSha === workflowSha
+                ? readFileSync(
+                    new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url),
+                  )
+                : readBoundedRegularFile(join(sourceRoot, WORKFLOW), {
+                    label: "frozen source npm publisher policy",
+                    maxBytes: 1024 * 1024,
+                  }),
             )
             .digest("hex"),
         },
@@ -460,18 +571,20 @@ export async function createPluginNpmPublicationReadback(options) {
         artifactZipPath: qualified.archivePath,
         outputDir: join(directory, "package"),
       });
-      await verifyPreparedNpmRegistry({
-        packageName,
-        version: entry.version,
-        route: receipt.route,
-        publishTags: [...new Set([receipt.publishTag, releaseDistTag])],
-        tarballPath: consumed.tarballPath,
-        allowMissing: false,
-        fetchImpl: options.fetchImpl,
-      });
+      if (!deferredAuth) {
+        await verifyPreparedNpmRegistry({
+          packageName,
+          version: entry.version,
+          route: receipt.route,
+          publishTags: [...new Set([receipt.publishTag, releaseDistTag])],
+          tarballPath: consumed.tarballPath,
+          allowMissing: false,
+          fetchImpl: options.fetchImpl,
+        });
+      }
       evidence.push({
         packageName,
-        verification: "qualified-artifact",
+        verification: deferredAuth ? "deferred-auth" : "qualified-artifact",
         sourceSha,
         workflowSha,
         childRunId: runId,
@@ -486,8 +599,20 @@ export async function createPluginNpmPublicationReadback(options) {
         artifactId: receipt.artifactId,
         artifactDigest: receipt.artifactDigest,
         tarballSha256: consumed.tarballSha256,
+        ...(deferredAuth
+          ? {
+              deferredAuthArtifactId: deferredAuth.metadata.id,
+              deferredAuthArtifactDigest: deferredAuth.metadata.digest,
+              recovery: deferredAuth.checkpoint.recovery,
+            }
+          : {}),
       });
-      return undefined;
+      return deferredAuth
+        ? {
+            disposition: "deferred-auth",
+            note: `${packageName}@${releaseVersion} deferred after npm ENEEDAUTH; selected-package recovery is required.`,
+          }
+        : { disposition: "published" };
     },
   };
 }

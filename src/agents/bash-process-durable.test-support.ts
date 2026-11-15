@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { after, it } from "node:test";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -21,6 +23,7 @@ import {
   publishSecretEgressProxy,
 } from "../secrets/egress-proxy/registry.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -29,15 +32,24 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDurableProcessStore } from "./bash-durable-process-store.js";
-import { disposeDurableProcesses, initializeDurableProcesses } from "./bash-process-durable.js";
+import {
+  disposeDurableProcesses,
+  initializeDurableProcesses,
+  startDurableExecProcess,
+} from "./bash-process-durable.js";
 import {
   getSession,
   getFinishedSession,
   getActiveBackgroundExecSessionCount,
+  createProcessSession,
+  markBackgrounded,
+  type ProcessSession,
+  setExitWakeRecorder,
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { durableProcessUnitName } from "./bash-process-systemd.js";
+import { systemdDurableSupervisor } from "./bash-process-systemd.js";
+import { hasExitWake } from "./bash-tools.exec-output.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
@@ -95,7 +107,11 @@ type ManagerRecord = {
   exitCode?: number;
 };
 
-async function scenario(run: (state: OpenClawTestState, managerFile: string) => Promise<void>) {
+async function scenario(
+  run: (state: OpenClawTestState, managerFile: string) => Promise<void>,
+  // Ordinary exec runs on the real host, without the proxy's admitted-run requirement.
+  { ordinaryExec = false } = {},
+) {
   await withOpenClawTestState({ label: "durable-registry" }, async (state) => {
     const bin = state.path("systemd-bin");
     const managerFile = state.path("systemd-manager-fixture.json");
@@ -115,7 +131,9 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
       },
       async () => {
         const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-        Object.defineProperty(process, "platform", { value: "linux" });
+        if (!ordinaryExec) {
+          Object.defineProperty(process, "platform", { value: "linux" });
+        }
         const proxy: SecretEgressProxyHandle = {
           caCertPath: "unused",
           proxyOrigin: "http://127.0.0.1:19090",
@@ -123,7 +141,9 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
           registerProcess: () => assert.fail("Durable exec must not create a proxy grant"),
           stop: async () => {},
         };
-        publishSecretEgressProxy(proxy);
+        if (!ordinaryExec) {
+          publishSecretEgressProxy(proxy);
+        }
         try {
           setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
           openOpenClawStateDatabase({ env: state.env });
@@ -133,6 +153,9 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
           try {
             await broker.ready();
             await runWithSpawnBroker(broker, () => run(state, managerFile));
+            if (ordinaryExec) {
+              return;
+            }
             const parents = (await fs.readFile(managerFile + ".parents", "utf8"))
               .trim()
               .split("\n")
@@ -146,7 +169,9 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
             await broker.close();
           }
         } finally {
-          clearSecretEgressProxy(proxy);
+          if (!ordinaryExec) {
+            clearSecretEgressProxy(proxy);
+          }
           await disposeDurableProcesses();
           resetProcessRegistryForTests();
           resetGatewayWorkAdmission();
@@ -190,6 +215,36 @@ async function launch(state: OpenClawTestState, notifyOnExit: boolean) {
   return { id: result.details.sessionId, content: result.content };
 }
 
+void it("observes durable completion outside the initiating request context", async (t) => {
+  await scenario(async (state, managerFile) => {
+    const request = new AsyncLocalStorage<string>();
+    let launching = true;
+    const observation = createDeferredCore<string | undefined>();
+    let now = Math.floor(performance.now());
+    t.mock.method(performance, "now", () => now);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await initializeDurableProcesses({
+      assertCurrent: () => {
+        if (!launching) {
+          observation.resolve(request.getStore());
+        }
+      },
+    });
+    const { id } = await request.run("expired-request", () => launch(state, false));
+    const session = getSession(id)!;
+    const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));
+    await fs.writeFile(managerFile, JSON.stringify({ ...manager, state: "exited" }));
+    launching = false;
+    now += 1000;
+    t.mock.timers.tick(1000);
+    const context = await observation.promise;
+    await waitForExecSession(session);
+    assert.equal(context, undefined);
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
+});
+
 void it("re-adopts persisted work with scoped list/log/poll/kill and restart admission", async () => {
   await scenario(async (state, managerFile) => {
     await writeSecretStoreEntry({
@@ -201,12 +256,12 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
       updatedBy: "test",
     });
     await initializeDurableProcesses();
-    const { id, content } = await launch(state, false);
+    const { id, content } = await launch(state, true);
     assert.match(JSON.stringify(content), /without 1 secret-store credential/);
     const store = createDurableProcessStore();
     const [record] = await store.list();
     assert.equal(record?.id, id);
-    assert.equal(record?.unitName, durableProcessUnitName(id));
+    assert.equal(record?.unitName, systemdDurableSupervisor.unitName(id));
     assert.doesNotMatch(JSON.stringify(record), /synthetic-/);
     assert.equal(getActiveBackgroundExecSessionCount(), 0);
     const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));
@@ -232,6 +287,12 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     const write = await tool.execute("write", { action: "write", sessionId: id, data: "input" });
     assert.match(JSON.stringify(write), /no interactive input/);
     const adopted = getSession(id)!;
+    // Adoption prepares the exit wake, so poll and the Processes rows report it.
+    assert.equal(hasExitWake(adopted), true);
+    const running = await runWithSpawnBroker(undefined, () =>
+      tool.execute("running", { action: "poll", sessionId: id }),
+    );
+    assert.doesNotMatch(JSON.stringify(running.content), /completion wake is unavailable/);
     await tool.execute("kill", { action: "kill", sessionId: id });
     await waitForExecSession(adopted);
     const poll = await runWithSpawnBroker(undefined, () =>
@@ -302,4 +363,174 @@ void it("records a downtime exit and queues one unattributed session completion"
       suspended!.release("fixture complete");
     }
   });
+});
+
+void it("recovers a memory-limit completion before its notification settles", async () => {
+  await scenario(async (state) => {
+    await initializeDurableProcesses();
+    const session = createProcessSession({
+      id: "memory-limit-recovery",
+      command: "printf worker",
+      agentId: "main",
+      sessionKey,
+      scopeKey: sessionKey,
+      cwd: state.workspaceDir,
+      startedAt: Date.now(),
+      cleanupMs: 60_000,
+      maxOutputChars: 8_000,
+      totalOutputChars: 0,
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      pendingOutputDropped: false,
+      exited: false,
+      truncated: false,
+      backgrounded: true,
+      cursorKeyMode: "normal",
+      notifyOnExit: true,
+    });
+    const run = await startDurableExecProcess(session, sessionId, {
+      mode: "child",
+      argv: ["/bin/sh", "-c", session.command],
+      cwd: state.workspaceDir,
+      env: process.env,
+    });
+    run.cancel("memory-limit");
+    assert.equal((await run.wait()).reason, "memory-limit");
+    // Reconstruct after the native result is durable but before caller settlement.
+    await disposeDurableProcesses();
+    resetProcessRegistryForTests();
+    const suspended = tryBeginGatewaySuspendAdmission(() => {});
+    assert.ok(suspended?.commit());
+    try {
+      await initializeDurableProcesses();
+      const adopted = getSession(session.id)!;
+      await adopted.durable!.observe();
+      await waitForExecSession(adopted);
+      assert.equal(getFinishedSession(session.id)?.exitReason, "memory-limit");
+      const events = peekSystemEventEntries(sessionKey);
+      assert.equal(events.length, 1);
+      const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");
+      consumeSelectedSystemEventEntries(sessionKey, events);
+    } finally {
+      suspended!.release("fixture complete");
+    }
+  });
+});
+
+void it("reports each wake-armed ordinary command a restart lost, once, with what happened to it", async () => {
+  await scenario(
+    async (state) => {
+      const ordinary = async (command: string) => {
+        const tool = createExecTool({
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          bypassHostApprovalFloors: true,
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          scopeKey: sessionKey,
+          cwd: state.workspaceDir,
+          notifyOnExit: true,
+        });
+        const result = await tool.execute("ordinary-launch", { command, background: true });
+        assert.ok(result.details?.status === "running", JSON.stringify(result));
+        return getSession(result.details.sessionId!)!;
+      };
+      const store = createDurableProcessStore();
+      const kill = async (session: ProcessSession) => {
+        await createProcessTool({ agentId: "main", sessionKey, scopeKey: sessionKey }).execute(
+          "kill",
+          { action: "kill", sessionId: session.id },
+        );
+        await waitForExecSession(session);
+      };
+      await initializeDurableProcesses();
+      // A command that exits on its own leaves no row behind.
+      await waitForExecSession(await ordinary("printf finished"));
+      const crashed = await ordinary("sleep 30");
+      await delay(5);
+      const stopped = await ordinary("sleep 30");
+      // The Gateway cannot see inside a sandbox container; incognito state never reaches storage.
+      const unobserved = (id: string, key: string, sandboxContainerName?: string) => {
+        const session = createProcessSession({
+          id,
+          command: "sleep 30",
+          agentId: "main",
+          sessionKey: key,
+          sandboxContainerName,
+          startedAt: Date.now(),
+          cleanupMs: 60_000,
+          maxOutputChars: 8_000,
+          totalOutputChars: 0,
+          pendingStdoutChars: 0,
+          pendingStderrChars: 0,
+          pendingOutputDropped: false,
+          exited: false,
+          truncated: false,
+          backgrounded: false,
+          cursorKeyMode: "normal",
+          notifyOnExit: true,
+          notifyOnExitEmptySuccess: true,
+        });
+        session.notifySessionTarget = stopped.notifySessionTarget;
+        markBackgrounded(session);
+        return session;
+      };
+      const sandboxed = unobserved("sandboxed-waiter", sessionKey, "sandbox-container");
+      unobserved("incognito-waiter", "agent:main:dashboard:incognito-waiter");
+      // The Gateway ends without observing either exit, so both rows stay as armed.
+      setExitWakeRecorder(undefined);
+      await kill(crashed);
+      await kill(stopped);
+      await disposeDurableProcesses();
+      assert.partialDeepStrictEqual(
+        (await store.list()).toSorted((a, b) => a.startedAt - b.startedAt),
+        [
+          { id: crashed.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
+          { id: stopped.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
+          { id: sandboxed.id, kind: "ordinary", sandboxed: true, sessionKey, sessionId },
+        ],
+      );
+      assert.equal((await store.list()).length, 3);
+      resetProcessRegistryForTests();
+      const suspended = tryBeginGatewaySuspendAdmission(() => {});
+      assert.ok(suspended?.commit());
+      try {
+        // Only the first command started inside the unclean Gateway lifetime the boot owner recorded.
+        await initializeDurableProcesses({
+          crashWindows: { main: [{ startedAt: crashed.startedAt, endedAt: stopped.startedAt }] },
+        });
+        const notice = async (session: ProcessSession) => {
+          const matching = () =>
+            peekSystemEventEntries(sessionKey).filter((event) =>
+              event.text.includes(session.id.slice(0, 8)),
+            );
+          // Reporting runs after startup without holding durable adoption.
+          for (let turn = 0; turn < 500 && matching().length === 0; turn++) {
+            await delay(10);
+          }
+          const events = matching();
+          assert.equal(events.length, 1);
+          return events[0]!.text;
+        };
+        // Linux stops ordinary commands with a killed Gateway; macOS can leave one running.
+        assert.match(
+          await notice(crashed),
+          process.platform === "linux"
+            ? /was stopped when the Gateway restarted unexpectedly/
+            : /It may still be running, but its result will not wake this conversation/,
+        );
+        assert.match(await notice(stopped), /was stopped when the Gateway shut down/);
+        assert.match(await notice(sandboxed), /It may still be running/);
+        await disposeDurableProcesses();
+        assert.deepEqual(await store.list(), []);
+        const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");
+        consumeSelectedSystemEventEntries(sessionKey, peekSystemEventEntries(sessionKey));
+      } finally {
+        suspended!.release("fixture complete");
+      }
+    },
+    { ordinaryExec: true },
+  );
 });

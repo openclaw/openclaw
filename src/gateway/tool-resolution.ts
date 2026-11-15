@@ -5,8 +5,9 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.async.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
-import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
+import { projectAgentToolsExecPolicy } from "../agents/agent-tools.execution-policy.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
@@ -19,13 +20,13 @@ import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import {
-  applySwarmCollectorToolContract,
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
+import { applySwarmCollectorToolContract } from "../agents/subagents/swarm/swarm-collector-capability.js";
 import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
@@ -54,7 +55,6 @@ import {
   hasSessionControlAuthority,
   prepareSandboxSessionTools,
 } from "../agents/tools/sessions-operator-authority.js";
-import type { SkillWorkshopRunOptions } from "../agents/tools/skill-workshop-tool-factory.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -65,6 +65,7 @@ import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   captureGatewayToolResolutionAuthority,
@@ -125,10 +126,11 @@ export async function resolveGatewayScopedTools(
     /** Current node inventory predicate; evaluated with the resolved exec binding. */
     nodeExecAvailable?: (node?: string) => boolean;
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
-    skillWorkshop?: SkillWorkshopRunOptions;
+    skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
     /**
-     * Run-owned configured MCP tools for an exclusive CLI grant. They enter the
-     * same policy pipeline as Gateway tools; core names always win collisions.
+     * Configured MCP tools owned by the caller: a run for an exclusive CLI grant,
+     * or one standalone invocation. They enter the same policy pipeline as
+     * Gateway tools; core names always win collisions.
      */
     bundledTools?: readonly AnyAgentTool[];
   },
@@ -360,6 +362,7 @@ export async function resolveGatewayScopedTools(
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    webSearchModelSelection: params.webSearchModelSelection,
     modelHasVision: params.modelHasVision,
     requesterModel: params.requesterModel,
     pairedNodeComputerUse: params.pairedNodeComputerUse,
@@ -370,6 +373,12 @@ export async function resolveGatewayScopedTools(
     // Transport dispatchers own hooks for both tool factories.
     wrapBeforeToolCallHook: false,
     agentAccountId: params.accountId,
+  });
+  const delegatedExecPolicy = projectAgentToolsExecPolicy({
+    options: { config: params.cfg, exec: params.execOverrides, sessionPermissionPolicy },
+    execConfig: resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId }),
+    agentId: policyAgentId,
+    model: { provider: params.modelProvider, id: params.modelId },
   });
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
@@ -406,7 +415,9 @@ export async function resolveGatewayScopedTools(
         }
       : {}),
     execSession: params.execSession,
-    execOverrides: params.execOverrides,
+    execOverrides: { ...params.execOverrides, ...delegatedExecPolicy },
+    // Exported MCP tools do not certify the client's effective execution policy.
+    // Explicit OpenClaw Full Access and standing delegation grants remain independent.
     approvalReviewerDeviceIds: params.approvalReviewerDeviceId
       ? [params.approvalReviewerDeviceId]
       : undefined,
@@ -432,7 +443,7 @@ export async function resolveGatewayScopedTools(
     conversationReadOrigin: params.conversationReadOrigin,
     inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    skillWorkshop: params.skillWorkshop,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     agentDir: params.agentDir,
@@ -602,12 +613,9 @@ export async function resolveGatewayScopedTools(
     : toolsWithMediatedCoding;
 
   const coreToolNames = new Set(allTools.map((tool) => normalizeToolPolicyName(tool.name)));
-  const bundledTools =
-    surface === "loopback"
-      ? (params.bundledTools ?? []).filter(
-          (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
-        )
-      : [];
+  const bundledTools = (params.bundledTools ?? []).filter(
+    (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
+  );
   const toolsForMessageProvider = filterToolsByMessageProvider(
     bundledTools.length > 0 ? [...allTools, ...bundledTools] : allTools,
     params.messageProvider,

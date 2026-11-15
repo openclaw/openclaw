@@ -155,6 +155,11 @@ plugins can set `path` to a plugin HTTP route (see
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
 
+For access management and other settings pages, set `placement: "settings"`. The
+page appears in the Settings navigation and search instead of Pages, and direct
+links open it with the Settings shell. Its URL, plugin renderer, and required
+scopes stay unchanged.
+
 Bundled plugins whose page already has a matching native Control UI route can set
 `placement: "route:<pluginId>"`. The host rejects native-route claims from external
 plugins or from bundled plugins whose ID does not own that route. The sidebar opens
@@ -329,7 +334,7 @@ The contracts intentionally split authority:
   are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
-- `allowPromptInjection=false` disables prompt-mutating hooks including
+- `allowPromptModification=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
   and `enqueueNextTurnInjection`.
 

@@ -232,6 +232,14 @@ function readLegacyGatewayRestartLockSync(env: NodeJS.ProcessEnv) {
 
 /** Called only for stopped native service state while physical cleanup exclusion is held. */
 function assertLegacyGatewayStoppedSync(env: NodeJS.ProcessEnv) {
+  // Doctor and embedded agents project this lock too. Killed, they leave it behind, and only a
+  // Gateway can serve; refusing here strands the stopped service an interrupted update must restart.
+  const { role, pid: ownerPid } =
+    readLockPayloadSync(resolveGatewayLockPaths(env).stateLockPath, true) ?? {};
+  const pid = asPositiveSafeInteger(ownerPid);
+  if (role !== undefined && role !== "gateway" && pid !== undefined && isPidDefinitelyDead(pid)) {
+    return;
+  }
   const legacy = readLegacyGatewayRestartLockSync(env);
   if (!legacy) {
     return;

@@ -70,6 +70,15 @@ export const UserProfileSchema = closedObject({
   emails: Type.Array(NonEmptyString),
   // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
+  // users.self only: verified GitHub credit for the configured host, independent of supplied pairs/consent.
+  gitCoauthorAvailable: Type.Optional(Type.Boolean()),
+  // users.self only: public-GitHub credit details; never an Enterprise commit address.
+  gitCoauthorIdentity: Type.Optional(
+    closedObject({
+      name: Type.String({ minLength: 1, maxLength: 256 }),
+      email: Type.String({ minLength: 1, maxLength: 254 }),
+    }),
+  ),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
   effectiveRole: Type.Optional(UserProfileRoleSchema),

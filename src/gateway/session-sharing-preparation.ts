@@ -92,6 +92,7 @@ export async function prepareSessionMutationFacts(
   let beforeDiscovery = params.storageReady !== undefined;
   let waitingForStorage = false;
   let invalidated = false;
+  let pendingTopologyChanges: SessionRowChange[] | undefined;
   let facts: PreparedSessionSourceFacts | undefined;
   let assertRegistryPublication: (() => void) | undefined;
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
@@ -161,7 +162,20 @@ export async function prepareSessionMutationFacts(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
-        if (beforeDiscovery) {
+        // Another agent's admission cannot revoke this retained logical/physical store pair.
+        if (
+          beforeDiscovery ||
+          (facts?.target &&
+            typeof change.scope === "object" &&
+            change.scope.agentId &&
+            change.scope.agentId !== agentId &&
+            change.scope.agentId !== facts.sourceAgentId)
+        ) {
+          return;
+        }
+        // Bind the physical owner before deciding which startup publications affect this read.
+        if (!facts) {
+          (pendingTopologyChanges ??= []).push(change);
           return;
         }
         if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
@@ -188,6 +202,18 @@ export async function prepareSessionMutationFacts(
         change.scope.agentId &&
         change.scope.agentId !== agentId
       ) {
+        return;
+      }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        change.runtimeSession === undefined &&
+        active &&
+        !invalidated &&
+        facts?.target != null
+      ) {
+        // Committed writers install entry and membership before this catalog notification.
+        // The next assertion still checks the retained physical source and current facts.
         return;
       }
       invalidate();
@@ -382,6 +408,8 @@ export async function prepareSessionMutationFacts(
         preparedSources,
         registryDiscovery: inventory.registryDiscovery,
       }),
+      undefined,
+      true,
     );
     followRegistration = inventoryRead.followRegistration;
     assertRegistryPublication = inventoryRead.assertRegistryCurrent;
@@ -515,7 +543,6 @@ export async function prepareSessionMutationFacts(
       assertDiscoveryCurrent();
       return target;
     });
-    assertActive();
     const storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"] =
       Object.freeze({
         agentId: selected.agentId,
@@ -621,15 +648,20 @@ export async function prepareSessionMutationFacts(
         if (!current?.entry) {
           throw new SessionMutationFactsUnavailableError();
         }
-        return {
-          sourcePath: sharing.source.path,
-          sourceAgentId: sharing.source.agentId,
-          readSource,
-          target: { ...target, entry: current.entry },
-          membership: current.membership,
-        };
+        // The retained owner checks its live revision before lending these published facts.
+        if (facts!.target?.entry !== current.entry || facts!.membership !== current.membership) {
+          facts = {
+            ...facts!,
+            target: { ...target, entry: current.entry },
+            membership: current.membership,
+          };
+        }
+        return facts!;
       };
     }
+    pendingTopologyChanges?.forEach(changed);
+    pendingTopologyChanges = undefined;
+    assertActive();
     assertSource = inventoryRead.assertRegistryCurrent;
     const readCurrent = (cfg: OpenClawConfig) => {
       try {

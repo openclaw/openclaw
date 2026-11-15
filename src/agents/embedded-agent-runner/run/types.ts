@@ -7,6 +7,7 @@ import type {
 } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -14,7 +15,6 @@ import type { AgentHarnessCompletionScope } from "../../agent-harness-completion
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
@@ -35,6 +35,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import type { ToolOutcomeObserver } from "../../tool-outcome-observation.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -397,6 +398,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "harness"; readonly data: unknown }
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
+  /** Presentation accepted for this attempt's ordinary final, never evidence of completion. */
+  finalPresentation?: MessagePresentation;
   assistantTexts: string[];
   /** A registered tool was requested as structured text without a native call. */
   textToolCallAttempt?: boolean;

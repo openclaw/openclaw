@@ -14,6 +14,7 @@ public enum DashboardRouteMap {
     public static let dreamingPagePath = "/settings/memory/dreams"
     public static let usagePagePath = "/usage"
     public static let sessionsPagePath = "/sessions"
+    public static let systemsPagePath = "/systems"
     public static let devicesSettingsPath = "/settings/devices"
     public static let custodianPagePath = "/custodian"
     /// Control UI query that renders /custodian with onboarding chrome.

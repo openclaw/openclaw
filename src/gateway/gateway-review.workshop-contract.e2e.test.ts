@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
-import { assert, describe, expect, it } from "vitest";
+import { assert, beforeAll, describe, expect, it } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -26,6 +26,7 @@ import { captureActivePluginRegistrySnapshot } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { Deferred } from "../shared/deferred.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import {
   activateTestChannelRegistry,
   createChannelTestPluginBase,
@@ -180,7 +181,8 @@ async function withReview(
       OPENCLAW_SKIP_CANVAS_HOST: "1",
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      // The skill-workshop plugin is bundled; plugins.allow keeps every other one off.
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     },
   });
   const sessionKey = `agent:main:${options.channel ?? "dashboard"}:direct:review-contract-${randomUUID()}`;
@@ -287,6 +289,8 @@ async function withReview(
           gateway: { auth: { mode: "token", token } },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           plugins: {
+            enabled: true,
+            allow: ["skill-workshop"],
             slots: { memory: "none" },
             entries: {
               "skill-workshop": {
@@ -508,6 +512,9 @@ const editActions: Action[] = [
     reason: "check signature",
   },
 ];
+
+// The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
+beforeAll(shareCoreWithWorkshopPluginForTest);
 
 describe("Workshop review through the real Gateway", () => {
   it(

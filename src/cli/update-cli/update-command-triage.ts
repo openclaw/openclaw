@@ -30,6 +30,7 @@ export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResul
 
 type UpdateFailureTriageOptions = Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & {
   invocationCwd?: string;
+  operatorEnv?: NodeJS.ProcessEnv;
 };
 
 export async function withUpdateFailureTriage(
@@ -69,6 +70,7 @@ export async function prepareUpdateCommandFailureTriage(
       log: opts.json ? defaultRuntime.error : defaultRuntime.log,
     },
     invocationCwd: opts.invocationCwd,
+    operatorEnv: opts.operatorEnv,
   });
   return async (error) => {
     if (error instanceof ExitError) {

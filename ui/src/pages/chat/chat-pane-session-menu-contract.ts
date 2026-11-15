@@ -8,7 +8,8 @@ import type { SessionManagementAction } from "../../components/session-menu-acti
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type HeaderMenuAction =
-  | SessionManagementAction
+  | Exclude<SessionManagementAction, { kind: "fork" }>
+  | { kind: "fork"; title?: string }
   | { kind: "continue-in-terminal" }
   | { kind: "stop-cloud-worker" }
   | { kind: "plugin"; id: string };

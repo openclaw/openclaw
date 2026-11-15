@@ -42,10 +42,22 @@ export type BeamUpload = {
   truncated?: boolean;
   hookEvent?: string;
   sourceModel?: BeamSourceModel;
+  /** Explicit source release; this generation can never accept another source snapshot. */
+  handoffId?: string;
   items: BeamTranscriptItem[];
 };
 
 export type BeamStoredSession = BeamUpload & {
+  /** Receiver incarnation; a release retry must never recreate an expired publication. */
+  publicationId?: string;
+  /** Receiver-owned handoff survives uploads, independently of provider runtime IDs. */
+  continuation?: {
+    id: string;
+    sessionKey: string;
+    agentId: string;
+    creating?: string;
+    ready?: true;
+  };
   /** Immutable verified initial publisher. Older ownerless live rows remain ownerless. */
   publisherProfileId?: string;
   /** Verified uploader of this accepted snapshot; never accepted from the upload body. */
@@ -53,6 +65,9 @@ export type BeamStoredSession = BeamUpload & {
   createdAt: number;
   receivedAt: number;
 };
+
+/** Durable ownership metadata, independent of the seven-day transcript retention. */
+export type BeamHandoff = Omit<BeamStoredSession, "items">;
 
 const TOP_LEVEL_KEYS = new Set([
   "version",
@@ -64,6 +79,7 @@ const TOP_LEVEL_KEYS = new Set([
   "truncated",
   "hookEvent",
   "sourceModel",
+  "handoffId",
   "items",
 ]);
 const ITEM_KEYS = new Set(["type", "text"]);
@@ -121,6 +137,13 @@ export function parseBeamUpload(
   }
   if (typeof value.completed !== "boolean") {
     return { ok: false, error: "completed must be a boolean" };
+  }
+  const handoffId = value.handoffId;
+  if (
+    handoffId !== undefined &&
+    (typeof handoffId !== "string" || !/^[a-f0-9]{32}$/.test(handoffId))
+  ) {
+    return { ok: false, error: "handoffId must be a 32-character lowercase hex generation" };
   }
   if (value.truncated !== undefined && typeof value.truncated !== "boolean") {
     return { ok: false, error: "truncated must be a boolean" };
@@ -183,6 +206,7 @@ export function parseBeamUpload(
       ...(value.truncated === true ? { truncated: true } : {}),
       ...(hookEvent ? { hookEvent } : {}),
       ...(sourceModel ? { sourceModel } : {}),
+      ...(handoffId ? { handoffId } : {}),
       items,
     },
   };

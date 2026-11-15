@@ -422,6 +422,39 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "timeout_recovery");
     return retry();
   }
+  const emitTransientRetryStatus = async ({
+    attempt: retryAttempt,
+    maxRetries,
+    delayMs,
+    reason,
+  }: {
+    attempt: number;
+    maxRetries: number;
+    delayMs: number;
+    reason: FailoverReason | "output_limit";
+  }) => {
+    const event = {
+      stream: "run_status",
+      data: {
+        phase: "retrying",
+        message:
+          reason === "rate_limit"
+            ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
+            : reason === "output_limit"
+              ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+              : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+        retryAttempt,
+        maxRetries,
+        delayMs,
+        retryAt: Date.now() + delayMs,
+        attempt: retryAttempt + 1,
+        maxAttempts: maxRetries + 1,
+        reason,
+      },
+    };
+    emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
+    await params.onAgentEvent?.(event);
+  };
   const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
   const retryCode = promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code;
   const retryMessage = promptError ? formatErrorMessage(promptError) : assistantSignal?.message;
@@ -453,32 +486,10 @@ export async function recoverEmbeddedRunAttempt(input: {
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
       maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
-      // Fallback and rotation both require a replay-safe attempt; without one the
-      // only recovery left is to wait out the floor and continue the transcript.
+      // Fallback and rotation both require a replay-safe attempt; unsafe attempts
+      // may only continue the transcript when the retry controller admits the wait.
       failoverEligible: currentAttemptReplaySafe,
-      onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
-        const event = {
-          stream: "run_status",
-          data: {
-            phase: "retrying",
-            message:
-              reason === "rate_limit"
-                ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
-                : reason === "output_limit"
-                  ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
-                  : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
-            retryAttempt,
-            maxRetries,
-            delayMs,
-            retryAt: Date.now() + delayMs,
-            attempt: retryAttempt + 1,
-            maxAttempts: maxRetries + 1,
-            reason,
-          },
-        };
-        emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
-        await params.onAgentEvent?.(event);
-      },
+      onRetry: emitTransientRetryStatus,
     }))
   ) {
     runInput.laneController.throwIfAborted();
@@ -556,6 +567,15 @@ export async function recoverEmbeddedRunAttempt(input: {
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
+    // A provider outage during recovery compaction gets the same bounded backoff as a
+    // failed model request; the retried attempt rechecks the budget and compacts again.
+    retryTransientCompactionFailure: (failure) =>
+      failoverRetryController.maybeRetryTransient({
+        ...failure,
+        maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
+        failoverEligible: currentAttemptReplaySafe,
+        onRetry: emitTransientRetryStatus,
+      }),
   });
   if (overflowRecovery.action === "retry") {
     recordRecoveryDecision("accepted", "overflow_recovery");

@@ -286,9 +286,7 @@ export async function stageStandalonePluginLoader({ runtimeRoot, outputRoot, bui
   const entrypoint = path.join(outputRoot, "plugin-loader-entry.cjs");
   fs.writeFileSync(
     entrypoint,
-    `const { createRequire } = require("node:module");
-exports.loadModule = (parent, specifier) => createRequire(parent)(specifier);
-exports.createJiti = (...args) => require(${JSON.stringify(jiti)}).createJiti(...args);
+    `exports.createJiti = (...args) => require(${JSON.stringify(jiti)}).createJiti(...args);
 `,
   );
   const directory = path.join(runtimeRoot, STANDALONE_PLUGIN_LOADER_DIRECTORY);

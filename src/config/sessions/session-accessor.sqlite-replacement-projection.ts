@@ -59,10 +59,10 @@ import {
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
 import { composeSessionSourceAssertion } from "./session-source-authority.js";
-import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
@@ -104,6 +104,7 @@ type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions
 };
 
 type CreationProjection = {
+  certifyNotCommitted?: true;
   scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
   sessionKey: string;
   creationSnapshot: SessionCreationSnapshot & { databaseIdentity: string };
@@ -316,7 +317,15 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     async (preparedScope) => {
       creation?.onWriterAdmitted?.();
       if (creation) {
-        params.assertCommitAllowed?.();
+        // This owner has not dispatched a writer yet. A failed final guard is
+        // affirmative nonexecution evidence, even after diagnostic admission.
+        try {
+          params.assertCommitAllowed?.();
+        } catch (error) {
+          throw creation.certifyNotCommitted
+            ? new SessionEntryCreationNotCommittedError(error)
+            : error;
+        }
       }
       const resolved = { ...preparedScope, env };
       const databaseOptions = {
@@ -380,13 +389,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 }
                 return result.replacement;
               },
-              // Label owners can expand a keyed selection beyond the foreground read budget.
-              params.sessionKeys &&
-                params.sessionKeys.length + (params.includeSessionWindowOwner ? 1 : 0) <=
-                  MAX_SESSION_ROW_FACTS_KEYS &&
-                params.includeLabelOwners === undefined
-                ? projectionLane
-                : maintenanceLane,
+              sessionStoreLane,
             )
           : await readNative();
       const { entries, expectedRows, labelOwnerKeys } = snapshot;

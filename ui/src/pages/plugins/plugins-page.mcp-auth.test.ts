@@ -153,7 +153,7 @@ it("reports a confirmation that cannot open and keeps the account connected", as
   signOutButton(page)!.click();
   await waitForSolid(() =>
     expect(page.querySelector('[role="alert"]')?.textContent).toContain(
-      "Sign-out could not open. Your account is still connected; try again.",
+      "Couldn’t open sign-out. Your account is still signed in. Try again.",
     ),
   );
   expect(calls("mcp.authLogout")).toHaveLength(0);

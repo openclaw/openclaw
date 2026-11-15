@@ -21,38 +21,38 @@ function fixture(recommendedPrompts?: unknown) {
 }
 
 describe("manifest recommended prompts", () => {
-  it("carries up to three author-written prompts through third-party cold discovery unchanged", () => {
-    const prompts = [
-      "  Plan  my week\nwith priorities.  ",
-      "Compare my options.",
-      "x".repeat(4096),
-    ];
-    const candidate = fixture(prompts);
+  it("loads authored Knowledge starters through native manifest normalization", () => {
+    const result = loadPluginManifest(path.resolve("extensions/knowledge"), false);
+    expect(result.ok && result.manifest.recommendedPrompts?.length).toBe(3);
+  });
+  it("normalizes three short prompts through third-party cold discovery", () => {
+    const spacedPrompt = `${" ".repeat(128)}Plan  my week\nwith priorities.  `;
+    const candidate = fixture([spacedPrompt, "Compare my options.", "😀".repeat(128)]);
     const registry = loadPluginManifestRegistryCore({
       installRecords: {},
       candidates: [candidate],
     });
     expect(registry.plugins[0]?.recommendedPrompts).toEqual([
-      "Plan  my week\nwith priorities.",
+      "Plan my week with priorities.",
       "Compare my options.",
-      "x".repeat(4096),
+      "😀".repeat(128),
     ]);
     expect(registry.diagnostics).toEqual([]);
   });
-
   it.each([{ prompts: undefined }, { prompts: [] }])(
     "accepts absent or empty optional metadata: $prompts",
     ({ prompts }) => {
       const result = loadPluginManifest(fixture(prompts).rootDir, false);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.manifest.recommendedPrompts).toEqual(prompts);
+      if (!result.ok) {
+        throw new Error(result.error);
       }
+      expect(result.manifest.recommendedPrompts).toEqual(prompts);
     },
   );
-
   it.each([
     { prompts: null },
+    { prompts: ["Valid", "x".repeat(129)] },
+    { prompts: ["Valid", "😀".repeat(129)] },
     { prompts: "Plan my week." },
     { prompts: [""] },
     { prompts: [" \n "] },
@@ -64,15 +64,12 @@ describe("manifest recommended prompts", () => {
       installRecords: {},
       candidates: [candidate],
     });
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({ id: candidate.idHint, recommendedPrompts: undefined }),
+    expect(registry.plugins.map(({ id, recommendedPrompts }) => [id, recommendedPrompts])).toEqual([
+      [candidate.idHint, undefined],
     ]);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        message: expect.stringContaining("ignoring invalid plugin manifest recommendedPrompts"),
-      }),
-    );
-    expect(registry.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
+    const warning = expect.stringContaining("ignoring invalid plugin manifest recommendedPrompts");
+    expect(registry.diagnostics.map(({ level, message }) => [level, message])).toEqual([
+      ["warn", warning],
+    ]);
   });
 });

@@ -22,6 +22,7 @@ import {
 import { updateRegistry } from "../agents/sandbox/registry.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
+import * as workspaceMounts from "../agents/sandbox/workspace-mounts.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
@@ -48,6 +49,38 @@ import * as workspaceStore from "./worker-environments/local-workspace-store.js"
 import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 export const mocks = githubPublicationTestMocks();
+
+export function observeManagedLayoutCaptures() {
+  let layoutChanged = false;
+  const ensureMounts = workspaceMounts.ensureReadOnlyWorkspaceSkillMountSources;
+  const mounts = vi
+    .spyOn(workspaceMounts, "ensureReadOnlyWorkspaceSkillMountSources")
+    .mockImplementation(async (...args) => (layoutChanged = await ensureMounts(...args)));
+  const observations: string[] = [];
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const storeObserver = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, run) =>
+      withStore(params, (store) =>
+        run({
+          ...store,
+          manifest: async (row, action) => {
+            if (layoutChanged && (action.kind === "probe" || action.kind === "scan")) {
+              observations.push(`${action.kind}:${action.target}`);
+            }
+            return await store.manifest(row, action);
+          },
+        }),
+      ),
+    );
+  return {
+    observations,
+    [Symbol.dispose]() {
+      storeObserver.mockRestore();
+      mounts.mockRestore();
+    },
+  };
+}
 
 const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
   ...process.env,

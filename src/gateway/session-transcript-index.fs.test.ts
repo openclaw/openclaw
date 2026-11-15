@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { constants, zstdCompressSync } from "node:zlib";
 import * as fileReads from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { realisticTranscriptText } from "../../test/helpers/session-archive.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
@@ -156,27 +158,38 @@ function sourcePage(reader: ArchivedTranscriptReader, cursor?: SessionTranscript
   return reader.readSourcePage({ mode: "page", cursor }, archiveSnapshot);
 }
 
-test("prepares cold source pages incrementally before selecting the final archive branch and reset", async () => {
+test("falls back from late archive corruption within each source page's preparation budget", async () => {
+  const content = (index: number) => `prompt ${index} ${realisticTranscriptText(4096, index + 1)}`;
   const rows = Array.from({ length: 260 }, (_, index) =>
-    message(`message-${index}`, `prompt ${index}`, index === 0 ? null : `message-${index - 1}`),
+    message(`message-${index}`, content(index), index === 0 ? null : `message-${index - 1}`),
   );
-  const file = await fixture([
+  const plainFile = await fixture([
+    { type: "session", id: "test" },
     ...rows,
     { type: "leaf", id: "leaf", parentId: "message-259", targetId: "message-100" },
     { type: "reset", id: "reset", parentId: "message-100", firstKeptEntryId: "message-99" },
     message("after-reset", "new reply", "reset", "assistant"),
   ]);
-  const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
+  const file = `${plainFile}.reset.2026-07-12T18-00-00.000Z.zst`;
+  const newer = `${plainFile}.reset.2026-07-12T19-00-00.000Z.zst`;
+  const stored = zstdCompressSync(fs.readFileSync(plainFile));
+  const damaged = zstdCompressSync(Buffer.from("corrupt suffix"), {
+    params: { [constants.ZSTD_c_checksumFlag]: 1 },
+  });
+  damaged[damaged.length - 1] = damaged.readUInt8(damaged.length - 1) ^ 1;
+  fs.writeFileSync(file, stored);
+  fs.writeFileSync(newer, Buffer.concat([stored, damaged]));
+  const reader = new ArchivedTranscriptReader({ sessionId: "test", sessionFile: plainFile });
   const parse = vi.spyOn(recordParser, "parseTranscriptRecord");
   let page = await sourcePage(reader);
   expect(page).toMatchObject({
     messages: [],
-    nextCursor: { kind: "archive", position: 0, path: file },
+    nextCursor: { kind: "archive", position: 0, path: newer },
   });
   expect(parse.mock.calls.length).toBeLessThanOrEqual(128);
   const messages: unknown[] = [];
   let pulls = 0;
-  while (page.nextCursor && pulls++ < 10) {
+  while (page.nextCursor && pulls++ < 12) {
     parse.mockClear();
     page = await sourcePage(reader, page.nextCursor);
     expect(parse.mock.calls.length).toBeLessThanOrEqual(128);
@@ -184,11 +197,16 @@ test("prepares cold source pages incrementally before selecting the final archiv
   }
   expect(page.nextCursor).toBeUndefined();
   expect(messages).toMatchObject([
-    { content: "prompt 99" },
-    { content: "prompt 100" },
+    { content: content(99) },
+    { content: content(100) },
     { __openclaw: { kind: "reset", id: "reset" } },
     { content: "new reply" },
   ]);
+  await expect(
+    new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: newer }).readById(
+      "message-0",
+    ),
+  ).rejects.toMatchObject({ code: "ZSTD_error_checksum_wrong" });
 });
 
 test("rejects an oversized source line before decoding while retaining ordinary image recovery", async () => {

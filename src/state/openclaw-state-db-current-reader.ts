@@ -8,6 +8,7 @@ import {
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -55,6 +56,11 @@ export function createOpenClawStateCurrentWarmReader<T>(
     return withCurrentOpenClawStateReadScope(options, (pathname) => {
       const scope = getOpenClawDatabaseMaintenanceScope();
       if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
+        return { available: false };
+      }
+      // Captured SQLite migrations retain native exclusion across commits. An idle
+      // independent WAL reader would block that exclusion; use fresh private reads.
+      if (!isStatePostgres() && hasUpdateDoctorMigrationCapture()) {
         return { available: false };
       }
       if (isStatePostgres()) {

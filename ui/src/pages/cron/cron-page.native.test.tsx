@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -11,11 +12,17 @@ import { callsFor, expectCalls, testId, attribute } from "./cron-assertions.test
 import {
   createContext,
   createGateway,
+  createPage,
   createRequest,
   cronListResponse,
 } from "./cron-page.test-support.tsx";
-import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
-import { createCronViewJob, getButtonByText } from "./view.test-support.ts";
+import { cronRpc, emitEvent, mountCronPage } from "./cron-rpc.test-support.ts";
+import {
+  createCronViewJob,
+  createCronViewRun,
+  cronRunsResponse,
+  getButtonByText,
+} from "./view.test-support.ts";
 
 type Page = ReturnType<typeof mountCronPage>["page"];
 const row = (page: Page, id: string) => page.querySelector<HTMLElement>(testId(`cron-row-${id}`));
@@ -64,10 +71,99 @@ it("reveals admitted jobs without waiting for scheduler status or duplicating re
       expect(page.querySelector('[data-test-id="cron-scheduler-banner"]')).not.toBeNull();
     });
     expectCalls(request, ["cron.list", "cron.status"], 1);
+    expectCalls(request, ["cron.runs"], 0);
   } finally {
     status.resolve({ enabled: true, jobs: 1, triggersEnabled: true });
     list.resolve(cronListResponse([job]));
     page.remove();
+  }
+});
+
+it("loads history and delivery accounts only for their visible automation surfaces", async () => {
+  const job = createCronViewJob("visible-reads", {
+    state: {},
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message: "Review the garden" },
+    delivery: { mode: "announce", channel: "telegram", accountId: "garden" },
+  });
+  const result = cronRunsResponse([
+    createCronViewRun({ jobId: job.id, summary: "Garden review complete" }),
+  ]);
+  const held = createDeferred<typeof result>();
+  let holding = false;
+  const request = cronRpc({
+    "cron.list": () => cronListResponse([job]),
+    "cron.runs": () => (holding ? held.promise : result),
+    "conversations.list": () => ({ conversations: [] }),
+    "channels.status": () => ({
+      ts: 0,
+      channelOrder: ["telegram"],
+      channels: {},
+      channelAccounts: { telegram: [{ accountId: "garden" }] },
+    }),
+  });
+  const gateway = createGateway(createTestGatewayClient(request), true);
+  const channels = createChannelCapability(gateway);
+  const page = createPage(
+    { ...createContext(gateway), acquireChannels: () => channels },
+    { render: true },
+  );
+  const clickTab = (id: string) => page.querySelector<HTMLButtonElement>(testId(id))!.click();
+  try {
+    await waitForSolid(() => expect(row(page, job.id)).not.toBeNull());
+    expectCalls(request, ["cron.runs", "channels.status"], 0);
+    clickTab("cron-list-tab-activity");
+    await waitForSolid(() =>
+      expect(page.querySelector(".cron-run-entry")?.textContent).toContain(
+        "Garden review complete",
+      ),
+    );
+    expectCalls(request, ["cron.runs"], 1);
+
+    holding = true;
+    emitEvent(gateway, "cron", {}, 2);
+    await page.settle();
+    expectCalls(request, ["cron.runs"], 2);
+    emitEvent(gateway);
+    await page.settle();
+    clickTab("cron-tab-all");
+    await page.settle();
+    held.resolve(result);
+    await held.promise;
+    await page.settle();
+    expectCalls(request, ["cron.runs"], 2);
+    holding = false;
+    request.mockClear();
+    emitEvent(gateway);
+    await page.settle();
+    expectCalls(request, ["cron.runs", "channels.status"], 0);
+
+    row(page, job.id)!.click();
+    await waitForSolid(() =>
+      expect(
+        page.querySelector('#cron-delivery-account-suggestions option[value="garden"]'),
+      ).not.toBeNull(),
+    );
+    expectCalls(request, ["channels.status"], 1);
+    expectCalls(request, ["cron.runs"], 0);
+    clickTab("cron-detail-tab-history");
+    await waitForSolid(() =>
+      expect(page.querySelector(".cron-run-entry")?.textContent).toContain(
+        "Garden review complete",
+      ),
+    );
+    expectCalls(request, ["cron.runs"], 1);
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ scope: "job", id: job.id }),
+    );
+    clickTab("cron-detail-tab-settings");
+    await waitForSolid(() => expectCalls(request, ["channels.status"], 2));
+    expectCalls(request, ["cron.runs"], 1);
+  } finally {
+    held.resolve(result);
+    page.remove();
+    channels.dispose();
   }
 });
 

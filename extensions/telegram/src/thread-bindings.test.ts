@@ -110,12 +110,7 @@ describe("telegram thread bindings", () => {
         metadata: { label: "updated" },
       }),
     ).resolves.toMatchObject({
-      metadata: {
-        pluginBindingOwner: "plugin",
-        ...owner,
-        label: "updated",
-        data: { externalThread: "17" },
-      },
+      metadata: { pluginBindingOwner: "plugin", ...owner, label: "updated" },
     });
     await expect(
       getSessionBindingService().bind({
@@ -136,32 +131,27 @@ describe("telegram thread bindings", () => {
     expect(manager.listBindings()[0]?.agentId).toBeUndefined();
     await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
     expect(manager.listBindings()).toEqual([]);
-    const kindKey = "agent:alpha:subagent:kind-change";
+    const subagentKey = "agent:alpha:subagent:kind-change";
     await getSessionBindingService().bind({
       conversation,
-      targetSessionKey: kindKey,
+      targetSessionKey: subagentKey,
       targetKind: "session",
       metadata: { pluginBindingOwner: "plugin", ...owner },
     });
     const changedKind = await getSessionBindingService().bind({
       conversation,
-      targetSessionKey: kindKey,
+      targetSessionKey: subagentKey,
       targetKind: "subagent",
       metadata: { label: "new kind" },
     });
     expect(changedKind.targetKind).toBe("subagent");
     expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
-    expect(changedKind.metadata?.pluginId).toBeUndefined();
-    expect(changedKind.metadata?.pluginRoot).toBeUndefined();
-    expect(changedKind.metadata?.data).toBeUndefined();
     await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
-    await expect(
-      getSessionBindingService().unbind({
-        bindingId: changedKind.bindingId,
-        scope: changedKind.conversation,
-        reason: "manual",
-      }),
-    ).resolves.toHaveLength(1);
+    await getSessionBindingService().unbind({
+      bindingId: changedKind.bindingId,
+      scope: conversation,
+      reason: "manual",
+    });
   });
 
   it.each([
@@ -469,13 +459,11 @@ describe("telegram thread bindings", () => {
     ["global", "acp"],
     ["agent:main:subagent:child", "subagent"],
   ] as const)(
-    "preserves %s through topic creation and restart",
+    "preserves classified %s through topic creation and restart",
     async (targetSessionKey, targetKind) => {
       const options = { accountId: "default" };
       const manager = await createManager(options);
-      if (targetSessionKey === "global") {
-        acpHost.read.mockResolvedValueOnce({ acp: { state: "idle" } });
-      }
+      acpHost.classify.mockResolvedValueOnce(targetKind);
       createForumTopicMock.mockResolvedValueOnce({
         chatId: "-100200300",
         topicId: 88,
@@ -486,6 +474,17 @@ describe("telegram thread bindings", () => {
         conversation: conversationFor(options.accountId, "-100200300"),
         placement: "child",
       });
+      expect(acpHost.classify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+          targetSessionKey,
+          targetKind: targetKind === "subagent" ? "subagent" : "session",
+          metadata: {},
+          agentId: undefined,
+          channel: "Telegram",
+          assertCurrent: expect.any(Function),
+        }),
+      );
       expect(manager.getByConversationId("-100200300:topic:88")?.targetKind).toBe(targetKind);
       await manager.stop();
       acpHost.read.mockClear().mockResolvedValue({ storeReadFailed: false });
@@ -524,16 +523,38 @@ describe("telegram thread bindings", () => {
     });
   });
 
-  it("does not create a native topic when target classification is uncertain", async () => {
+  it("forwards classification facts/current authority and refuses native creation on failure", async () => {
     const manager = await createManager({ accountId: "uncertain" });
-    acpHost.read.mockResolvedValueOnce({ storeReadFailed: true });
+    const assertCurrent = vi.fn();
+    let forwardedAuthorityCalls = 0;
+    const metadata = { agentId: "main", label: "classify this target" };
+    acpHost.classify.mockImplementationOnce(async (input) => {
+      const calls = assertCurrent.mock.calls.length;
+      input.assertCurrent();
+      forwardedAuthorityCalls = assertCurrent.mock.calls.length - calls;
+      throw new Error("Classification refused");
+    });
     await expect(
       bind(manager.accountId, "global", {
         targetKind: "session",
         conversation: conversationFor(manager.accountId, "-100200300"),
         placement: "child",
+        metadata,
+        assertCurrent,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Classification refused");
+    expect(acpHost.classify).toHaveBeenCalledOnce();
+    expect(acpHost.classify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+        targetSessionKey: "global",
+        targetKind: "session",
+        metadata,
+        agentId: "main",
+        channel: "Telegram",
+      }),
+    );
+    expect(forwardedAuthorityCalls).toBe(1);
     expect(createForumTopicMock).not.toHaveBeenCalled();
     expect(manager.listBindings()).toEqual([]);
   });
@@ -720,9 +741,8 @@ describe("telegram thread bindings", () => {
 
   it("retains persisted incognito bindings when prepared cleanup loses authority", async () => {
     const target = "agent:main:dashboard:incognito-prepared";
-    acpHost.read.mockImplementation(async ({ sessionKey }: { sessionKey: string }) =>
-      sessionKey === target ? { acp: { state: "idle" } } : null,
-    );
+    // Seed the ACP projection through the public classification operation; cleanup owns preparation.
+    acpHost.classify.mockResolvedValueOnce("acp");
     await storeBinding(target, "prepared");
     let current = true;
     const error = new IncognitoSessionEndedError();

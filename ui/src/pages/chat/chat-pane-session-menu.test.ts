@@ -3,6 +3,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createComponent, flush, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -615,6 +616,55 @@ describe("chat pane session menu boundary", () => {
     },
   );
 
+  it.each(["session", "agent", "reconnect", "retained return", "mutation scope"])(
+    "keeps newer %s intent when a typed fork settles",
+    async (change) => {
+      const pending = createDeferred<string>();
+      const admitted = createDeferred();
+      const create = vi.fn(() => {
+        admitted.resolve();
+        return pending.promise;
+      });
+      const row: GatewaySessionRow = {
+        key: "global",
+        kind: "direct",
+        sharingRole: "owner",
+        sessionId: "source-instance",
+      };
+      const { pane, state } = createTestChatPane({
+        sessions: createSessionCapabilityFixture({ create }),
+      });
+      pane.presented = true;
+      state.sessionKey = row.key;
+      state.assistantAgentId = "main";
+      state.currentSessionId = row.sessionId!;
+      state.sessionsResult = sessionsResult([row]);
+      state.sessionsLoading = false;
+      const navigate = vi.fn();
+      pane.onPaneSessionChange = navigate;
+      const fork = pane.forkConversation("Plan B");
+      await admitted.promise;
+      expect(create).toHaveBeenCalledOnce();
+      if (change === "session") {
+        state.sessionKey = "agent:main:new-selection";
+      } else if (change === "agent") {
+        state.assistantAgentId = "work";
+      } else if (change === "reconnect") {
+        state.connectionEpoch = ++pane.connectionGeneration;
+      } else if (change === "mutation scope") {
+        pane.retireHeaderSessionMutations();
+      } else {
+        pane.presented = false;
+        pane.presented = true;
+      }
+      state.chatMessage = "Keep this newer draft";
+      pending.resolve("agent:main:late-fork");
+      await expect(fork).resolves.toBe("cancelled");
+      expect(navigate).not.toHaveBeenCalled();
+      expect(state.chatMessage).toBe("Keep this newer draft");
+    },
+  );
+
   it.each([false, true])(
     "forks owned conversations through the organizer (active=%s)",
     async (active) => {
@@ -731,7 +781,10 @@ describe("chat pane session menu boundary", () => {
         expect(pane.context.navigation.snapshot.sidebarEntries).toEqual([]);
       } else if (current === "removed") {
         expect(patch).not.toHaveBeenCalled();
-        expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
+        expect(showToast).toHaveBeenCalledWith({
+          severity: undefined,
+          message: t("common.refresh"),
+        });
       } else {
         expect(patch).toHaveBeenCalledWith(original.key, expectedPatch, {
           agentId: "main",

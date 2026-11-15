@@ -232,7 +232,7 @@ suite.define(() => {
           await page.getByRole("menuitem", { name: "Rename", exact: true }).waitFor();
           await page.keyboard.press("Escape");
           await header.locator(".mobile-header__navigation").click();
-          await page.getByRole("link", { name: "New conversation", exact: true }).waitFor();
+          await page.getByRole("link", { name: "New session", exact: true }).waitFor();
         },
       );
     });

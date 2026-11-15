@@ -521,6 +521,18 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let stopReason: String?
     public let errorMessage: String?
     public internal(set) var details: AnyCodable?
+    #if os(macOS)
+    private var runFailureNotice: AnyCodable?
+
+    var desktopFailureSummary: String? {
+        guard self.role == "custom",
+              let notice = self.runFailureNotice?.dictionaryValue,
+              ChatPayloadDecoding.trimmedNonEmptyString(notice["runId"]?.stringValue) != nil,
+              ChatPayloadDecoding.trimmedNonEmptyString(notice["summary"]?.stringValue) != nil
+        else { return nil }
+        return ChatPayloadDecoding.trimmedNonEmptyString(notice["desktopSummary"]?.stringValue)
+    }
+    #endif
     public internal(set) var isError: Bool?
     public internal(set) var provenance: OpenClawChatInputProvenance?
     public internal(set) var historyMarker: OpenClawChatHistoryMarker?
@@ -579,6 +591,9 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case stopReason
         case errorMessage
         case details
+        #if os(macOS)
+        case runFailureNotice = "openclawRunError"
+        #endif
         case isError
         case is_error
         case mediaPath = "MediaPath"
@@ -654,6 +669,9 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
         self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
         self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
+        #if os(macOS)
+        self.runFailureNotice = try? container.decode(AnyCodable.self, forKey: .runFailureNotice)
+        #endif
         self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
             container.decodeIfPresent(Bool.self, forKey: .is_error)
         self.provenance = try? container.decode(
@@ -806,6 +824,9 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
         try container.encodeIfPresent(self.errorMessage, forKey: .errorMessage)
         try container.encodeIfPresent(self.details, forKey: .details)
+        #if os(macOS)
+        try container.encodeIfPresent(self.runFailureNotice, forKey: .runFailureNotice)
+        #endif
         try container.encodeIfPresent(self.isError, forKey: .isError)
         try container.encode(self.content, forKey: .content)
     }

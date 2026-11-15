@@ -19,7 +19,7 @@ import {
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import { useLoadingFixture, writeSkillFixture as writeSkill } from "./loading.test-support.js";
 import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -287,6 +287,35 @@ describe("syncWorkspaceSkills", () => {
     expect((await fs.stat(ignorePath)).mode & 0o200).toBe(0o200);
   });
 
+  it.each([true, false])(
+    "handles usage eviction with readOnlyTarget=%s and resource revisions",
+    async (readOnlyTarget) => {
+      const { source, target } = await setupSkills(["alpha"]);
+      await writeFiles(skillPath(source, "alpha"), { "resource.txt": "before" });
+      const skillsSnapshot = await buildSnapshot(source);
+      await sync(source, target, { skillsSnapshot });
+      for (let index = 0; index < 100; index++) {
+        await sync(source, path.join(target, String(index)), { skillsSnapshot });
+      }
+      const phases: string[] = [];
+      await withDiagnosticsTimelineObserver(
+        (phase) => {
+          phases.push(phase);
+          return () => {};
+        },
+        () => sync(source, target, { skillsSnapshot, readOnlyTarget }),
+      );
+      expect(phases.includes("attempt.setup.sandbox.layout.skills_sync.copy_tree")).toBe(
+        !readOnlyTarget,
+      );
+      expect(await readText(skillPath(target, "alpha", "resource.txt"))).toBe("before");
+      await fs.writeFile(skillPath(source, "alpha", "resource.txt"), "after!");
+      markSkillsSupportingFilesChanged({ workspaceDir: source });
+      await sync(source, target, { skillsSnapshot, readOnlyTarget });
+      expect(await readText(skillPath(target, "alpha", "resource.txt"))).toBe("after!");
+    },
+  );
+
   it("keeps generated skills out of Git discovery across sync, cached reuse and refresh", async () => {
     const workspace = await newDir("git-workspace");
     const target = path.join(workspace, ".openclaw", "sandbox-skills");
@@ -443,13 +472,13 @@ describe("syncWorkspaceSkills", () => {
     const manifestPath = path.join(targetSkills, ".openclaw-sync.json");
     const manifest = JSON.parse(await readText(manifestPath)) as {
       skillsVersion: number;
-      entryKeys: string[];
+      destinations: Record<string, unknown>;
     };
     await fs.writeFile(
       manifestPath,
       JSON.stringify({
         ...manifest,
-        entryKeys: ["../escape", "..\\escape"],
+        destinations: { "../escape": "escape", "..\\escape": "escape" },
       }),
     );
 
@@ -488,8 +517,9 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(skillPath(target, "gamma", "SKILL.md"))).toBe(true);
   });
 
-  it("refreshes changed support files without replacing unchanged copies", async () => {
-    const { source, target } = await setupSkills(["alpha"]);
+  it.each([false, true])("reconciles support files with cold sync state=%s", async (cold) => {
+    const { source, target: initialTarget } = await setupSkills(["alpha"]);
+    const target = cold ? await newDir("restarted-target") : initialTarget;
     const sourceSkill = skillPath(source, "alpha");
     const targetSkill = skillPath(target, "alpha");
     await writeFiles(sourceSkill, {
@@ -499,10 +529,15 @@ describe("syncWorkspaceSkills", () => {
       "scripts/edited.txt": "original",
     });
     const skillsSnapshot = await buildSnapshot(source);
-    await sync(source, target, { skillsSnapshot });
+    await sync(source, initialTarget, { skillsSnapshot });
+    if (cold) {
+      // Retain the on-disk result without a process-local entry for this destination.
+      await fs.rename(skillPath(initialTarget), skillPath(target));
+    }
     const unchanged = path.join(targetSkill, "scripts/unchanged.txt");
+    await fs.utimes(unchanged, 1, 1);
     const before = await fs.stat(unchanged);
-    await fs.writeFile(path.join(sourceSkill, "references/changed.txt"), "after");
+    await fs.writeFile(path.join(sourceSkill, "references/changed.txt"), "after!");
     await fs.rm(path.join(sourceSkill, "references/removed.txt"));
     await fs.writeFile(path.join(targetSkill, "unexpected.txt"), "stale");
     await fs.writeFile(path.join(targetSkill, "scripts/edited.txt"), "modified");
@@ -510,7 +545,7 @@ describe("syncWorkspaceSkills", () => {
 
     await sync(source, target, { skillsSnapshot });
 
-    expect(await readText(targetSkill, "references/changed.txt")).toBe("after");
+    expect(await readText(targetSkill, "references/changed.txt")).toBe("after!");
     expect(await exists(path.join(targetSkill, "references/removed.txt"))).toBe(false);
     expect(await exists(path.join(targetSkill, "unexpected.txt"))).toBe(false);
     expect(await readText(unchanged)).toBe("keep");
@@ -556,8 +591,9 @@ describe("syncWorkspaceSkills", () => {
     },
   );
 
-  it("does not publish a manifest when a refreshed copy fails", async () => {
-    const { source, target } = await setupSkills();
+  it.each([false, true])("discards failed copies with cold sync state=%s", async (cold) => {
+    const { source, target: initialTarget } = await setupSkills();
+    const target = cold ? await newDir("restarted-target") : initialTarget;
     const sourceSkill = skillPath(source, "alpha");
     await writeSkill(sourceSkill, "alpha", "Alpha skill");
     await fs.writeFile(path.join(sourceSkill, "asset.txt"), "before");
@@ -566,7 +602,10 @@ describe("syncWorkspaceSkills", () => {
       ...syncOptions(source, target),
       skillsSnapshot: firstSnapshot,
     };
-    await syncWorkspaceSkills(syncParams);
+    await syncWorkspaceSkills({ ...syncParams, ...syncOptions(source, initialTarget) });
+    if (cold) {
+      await fs.rename(skillPath(initialTarget), skillPath(target));
+    }
 
     await fs.writeFile(path.join(sourceSkill, "asset.txt"), "after");
     await refreshSkillsDiscovery({ workspaceDir: source });
@@ -587,6 +626,7 @@ describe("syncWorkspaceSkills", () => {
 
     const manifestPath = skillPath(target, ".openclaw-sync.json");
     expect(await exists(manifestPath)).toBe(false);
+    expect(await exists(skillPath(target, "alpha"))).toBe(false);
     await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
     expect(await exists(manifestPath)).toBe(true);
     expect(await readText(skillPath(target, "alpha", "asset.txt"))).toBe("after");

@@ -955,8 +955,8 @@ describe("Claude session catalog", () => {
 
   it("imports a Claude Desktop custom group for its matching catalog row", async () => {
     const home = await createHome();
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const sessionId = "desktop-custom-group";
     await writeIndexedDesktopSession(home, sessionId);
     await writeDesktopGroupStore(home, "Release");
@@ -1195,8 +1195,8 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     const watches = createClaudeCatalogWatchDriver(home);
     const sessionId = "large-colored-session";
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     await writeProject({
       home,
       entries: [{ sessionId, summary: "Stale index title" }],
@@ -1249,6 +1249,12 @@ describe("Claude session catalog", () => {
 
   it("serves an unchanged assembled scan without reparsing transcript files", async () => {
     const home = await createHome();
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    await writeDesktopMetadata(home, "missing", {
+      cliSessionId: "missing-desktop-transcript",
+      title: "Missing",
+    });
     const sessionIds = ["cached-session-a", "cached-session-b"];
     await writeUnindexedCliSessions(
       home,
@@ -1267,6 +1273,8 @@ describe("Claude session catalog", () => {
 
     // Polls re-read until the watch vouches for coverage; from then on an unchanged tree is free.
     await expectClaudeCatalogQuiescent(home, spies, homeCalls, first);
+    now += 15_001;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_000);
     const records = await listClaudeSessions(home);
     for (const spy of spies) {
       spy.mockClear();
@@ -1275,24 +1283,10 @@ describe("Claude session catalog", () => {
     for (const spy of spies) {
       expect(homeCalls(spy)).toEqual([]);
     }
-  });
-
-  it("does not shorten cache validity for Desktop rows with no captured transcript", async () => {
-    const home = await createHome();
-    await writeUnindexedCliSessions(home, { existing: "Existing" });
-    await writeDesktopMetadata(home, "missing", {
-      cliSessionId: "missing-desktop-transcript",
-      title: "Missing",
-    });
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const openSpy = vi.spyOn(fs, "open");
-    const first = await listPage({}, home);
-    openSpy.mockClear();
-
-    now += 15_001;
-    await expect(listPage({}, home)).resolves.toEqual(first);
-    expect(openSpy).not.toHaveBeenCalled();
+    now += 300_001;
+    vi.mocked(Date.now).mockReturnValue(Date.now() - 7_200_000);
+    await listPage({}, home);
+    expect(spies.some((spy) => homeCalls(spy).length > 0)).toBe(true);
   });
 
   it("retries a transient project snapshot read on the short I/O recovery bound", async () => {
@@ -1317,8 +1311,8 @@ describe("Claude session catalog", () => {
       }
       return readdir(...args);
     });
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     expect((await listPage({}, home)).sessions).toEqual([]);
     now += 10_000;
     failOther = true;
@@ -1394,7 +1388,7 @@ describe("Claude session catalog", () => {
         });
       }
       let now = 1_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       expect((await listPage({}, home)).sessions).toEqual([]);
       now += 15_001;
       expect((await listPage({}, home)).sessions).toMatchObject([

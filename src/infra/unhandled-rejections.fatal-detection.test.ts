@@ -33,8 +33,8 @@ describe("process error handlers", () => {
     rejectionListener = installed;
   });
   beforeEach(() => {
-    originalExitCode = process.exitCode;
-    process.exitCode = undefined;
+    originalExitCode = process.exitCode ?? 0;
+    process.exitCode = 0;
     exitCalls = [];
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
@@ -89,7 +89,7 @@ describe("process error handlers", () => {
     try {
       emitUnhandled(Object.assign(new Error("expected failure"), { code }));
       expect(owner).toHaveBeenCalledExactlyOnceWith(1, reason);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     } finally {
       release();
     }

@@ -92,18 +92,21 @@ it.each(
     terminateRunningSubagentsForShutdown: marker ? undefined : settle,
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const markerOverrun = marker && outcome === "timed out";
   const closing = runWithProcessCleanupBudget(
-    { deadline: performance.now() + 3_000, warn() {} },
+    { deadline: performance.now() + (markerOverrun ? 85_000 : 3_000), warn() {} },
     () => closeGateway(params).catch((error: unknown) => error),
   );
   try {
     await vi.advanceTimersByTimeAsync(500);
-    await vi.advanceTimersByTimeAsync(outcome === "timed out" ? 2_500 : 1_500);
+    await vi.advanceTimersByTimeAsync(
+      markerOverrun ? 9_500 : outcome === "timed out" ? 2_500 : 1_500,
+    );
     committed.resolve();
     const expected =
       outcome === "rejected"
         ? "store refused"
-        : `Shutdown ${step} did not settle within ${marker ? 3_000 : 2_500}ms`;
+        : `Shutdown ${step} did not settle within ${marker ? 10_000 : 2_500}ms`;
     expect(await closing).toMatchObject(
       outcome === "slow" ? { warnings: [] } : new Error(expected),
     );

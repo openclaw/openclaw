@@ -21,6 +21,7 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError, getSlackWebApiErrorData } from "./errors.js";
+import { buildSlackLiteralText } from "./literal-text.js";
 import {
   buildSlackMessageIdentityPayload,
   hasSlackMessageIdentity,
@@ -245,6 +246,7 @@ export async function postSlackMessageBestEffort(params: {
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
   mrkdwn?: boolean;
+  literalText?: boolean;
   unfurl?: SlackUnfurlOptions;
 }) {
   const threadPayload =
@@ -267,6 +269,7 @@ export async function postSlackMessageBestEffort(params: {
     ...(params.unfurl?.unfurlMedia !== undefined
       ? { unfurl_media: params.unfurl.unfurlMedia }
       : {}),
+    ...(params.literalText ? buildSlackLiteralText(params.text) : {}),
   };
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({

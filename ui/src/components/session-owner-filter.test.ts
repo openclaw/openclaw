@@ -32,7 +32,6 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
     ...snapshot,
   });
   gateway.connection.gatewayUrl = gatewayUrl;
-  let facet: SessionListSnapshot | undefined;
   let invalidate = () => {};
   const filter = new SessionOwnerFilter(
     () => gateway,
@@ -56,14 +55,10 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
     mounted = mountSolid(() => {
       const [revision, setRevision] = createSignal(0);
       invalidate = () => setRevision((value) => value + 1);
-      createSessionOwnerFilterQuery(
-        filter,
-        () => {
-          revision();
-          return host;
-        },
-        () => facet,
-      );
+      createSessionOwnerFilterQuery(filter, () => {
+        revision();
+        return host;
+      });
       return null;
     });
     host.isConnected = true;
@@ -82,7 +77,7 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
   };
   connect();
   const setFacet = (value: SessionListSnapshot) => {
-    facet = value;
+    filter.observeOwnerFacet("main", value.result?.owners);
     update();
   };
   return { host, filter, connect, disconnect, gateway, update, facet: setFacet };
@@ -104,6 +99,7 @@ function expectReads(host: ReturnType<typeof fixture>["host"], scheduled: number
 
 describe("sidebar owner filter", () => {
   it("retains a known profile's filter while reconnect identity is unresolved", () => {
+    storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("profile-ada"));
     const { gateway, host, update } = fixture();
     update();
     for (const phase of ["reconnecting", "connected"] as const) {
@@ -124,6 +120,8 @@ describe("sidebar owner filter", () => {
   it.each(["no query change", "replacement profile", "disconnected host"])(
     "does not carry explicit intent into later automatic work after %s",
     (retirement) => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("profile-ada"));
+      storeSidebarSessionOwnerFilter(gatewayUrl, "replacement-profile", choice(null, true));
       const { connect, disconnect, filter, host, update } = fixture();
       update();
       filter.set(filter.read().ownerId, filter.read().involvingMe);
@@ -135,7 +133,7 @@ describe("sidebar owner filter", () => {
       }
       update({ selfUser: { id: "replacement-profile" } });
       expectReads(host, 2);
-      expectOwner(host, "replacement-profile");
+      expectOwner(host, null, true);
     },
   );
 
@@ -182,8 +180,117 @@ describe("sidebar owner filter", () => {
       ["write role", auth(["operator.sessions.write"], "write")],
       ["admin operator", auth(["operator.admin"])],
       ["legacy hello", {}],
-    ])("keeps the own-sessions default: %s", (_label, snapshot) => {
-      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(choice("profile-ada"));
+    ])("starts on All owners: %s", (_label, snapshot) => {
+      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(choice(null));
+    });
+  });
+
+  describe("authenticated person-timeline admission", () => {
+    const hello = (viewerId?: string | null, sessionCap = "view") =>
+      ({
+        auth: {
+          role: "operator",
+          scopes: ["operator.sessions.write"],
+          roleAllowsAdmin: false,
+          sessionCap,
+          ...(viewerId !== undefined ? { profileActivityViewerId: viewerId } : {}),
+        },
+      }) as NonNullable<ApplicationGatewaySnapshot["hello"]>;
+
+    it.each(["write", "suggest", "view", "invited", "none"])(
+      "admits a restored owner before a %s role's first query",
+      (sessionCap) => {
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
+        const { host, update } = fixture({ hello: hello("profile-ada", sessionCap) });
+        expectOwner(host, "owner-bob");
+        update();
+        expectReads(host, 1);
+        expect(saved()).toEqual(choice("owner-bob"));
+      },
+    );
+
+    it("keeps a saved choice when a delivered hello has no auth projection", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
+      const { filter, host, update } = fixture({
+        // Shipped hellos without auth remain review-only; absence grants no viewer authority.
+        hello: { type: "hello-ok", protocol: 4 } as NonNullable<
+          ApplicationGatewaySnapshot["hello"]
+        >,
+      });
+      update();
+      expectOwner(host, "owner-bob");
+      expect(filter.selfUserId).toBe("profile-ada");
+      expect(saved()).toEqual(choice("owner-bob"));
+    });
+
+    it.each([false, true])(
+      "retires prior intent and facets when an equal choice changes profile (new hello=%s)",
+      (replaceHello) => {
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice(null));
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-bob", choice(null));
+        const { filter, gateway } = fixture({ hello: hello() });
+        const previous = filter.read();
+        filter.observeOwnerFacet("main", [{ type: "human", id: "owner-foreign" }]);
+        filter.set(null);
+        expect(filter.hasMultipleOwners("main")).toBe(true);
+        gateway.snapshot.selfUser = { id: "profile-bob" };
+        if (replaceHello) {
+          gateway.snapshot.hello = hello();
+        }
+        expect(filter.read()).toMatchObject(choice(null));
+        expect(filter.read().scope).not.toBe(previous.scope);
+        expect(filter.takeUserIntent()).toBe(false);
+        expect(filter.hasMultipleOwners("main")).toBe(false);
+        expect(saved("profile-ada")).toEqual(choice(null));
+        expect(saved("profile-bob")).toEqual(choice(null));
+      },
+    );
+
+    it("keeps a broad role's foreign choice despite a reduced socket grant", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
+      const { host, update } = fixture({ hello: hello() });
+      update();
+      expectOwner(host, "owner-bob");
+      expect(saved()).toEqual(choice("owner-bob"));
+    });
+
+    it("keeps the selected owner across a reduced-authority hello and read errors", () => {
+      const { filter, host, update, facet } = fixture({ hello: hello() });
+      update();
+      filter.set("owner-bob");
+      update();
+      update({ hello: hello("profile-ada") });
+      expectOwner(host, "owner-bob");
+      expect(saved()).toEqual(choice("owner-bob"));
+      filter.set("owner-bob");
+      update();
+      facet({ ...ownerFacet("profile-ada"), error: "Other people's activity is private." });
+      expectOwner(host, "owner-bob");
+      expect(saved()).toEqual(choice("owner-bob"));
+    });
+
+    it("binds replacement admission to the hello identity while old display identity is retained", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-before"));
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-bob", choice("owner-foreign"));
+      const { filter, host, update } = fixture({ hello: hello() });
+      update();
+      update({ phase: "reconnecting", selfUser: undefined });
+      expectOwner(host, "owner-before");
+      update({ phase: "connected", selfUser: undefined, hello: hello("profile-bob") });
+      expectOwner(host, "owner-foreign");
+      expect(filter.selfUserId).toBe("profile-bob");
+      expect(saved("profile-ada")).toEqual(choice("owner-before"));
+      expect(saved("profile-bob")).toEqual(choice("owner-foreign"));
+    });
+
+    it("does not overwrite a retained profile preference for an unidentified restricted hello", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-before"));
+      const { filter, host, update } = fixture({ hello: hello() });
+      update();
+      update({ phase: "connected", selfUser: undefined, hello: hello(null) });
+      expectOwner(host, null);
+      expect(filter.selfUserId).toBeUndefined();
+      expect(saved()).toEqual(choice("owner-before"));
     });
   });
 
@@ -198,7 +305,7 @@ describe("sidebar owner filter", () => {
     update({ selfUser: { id: "profile-bob" } });
     expectOwner(host, null, true);
     update({}, "wss://two.example/ws");
-    expectOwner(host, "profile-bob");
+    expectOwner(host, null);
     filter.set("owner-two");
     update();
     update({ selfUser: { id: "profile-ada" } }, gatewayUrl);
@@ -225,7 +332,7 @@ describe("sidebar owner filter", () => {
     expectReads(host, 2);
   });
 
-  it("clears absent owners only from a settled complete owner facet", async () => {
+  it("keeps an absent owner selected when the readable session facet becomes empty", async () => {
     const { filter, host, update, facet } = fixture();
     filter.set("owner-bob");
     update();
@@ -243,9 +350,9 @@ describe("sidebar owner filter", () => {
     facet(ownerFacet("owner-bob"));
     expect(filter.read().ownerId).toBe("owner-bob");
     facet(ownerFacet("profile-ada"));
-    expect(filter.read().ownerId).toBeNull();
-    expect(saved()).toEqual(choice(null));
+    expect(filter.read().ownerId).toBe("owner-bob");
+    expect(saved()).toEqual(choice("owner-bob"));
     update();
-    expectReads(host, 1, 1);
+    expectReads(host, 0, 1);
   });
 });

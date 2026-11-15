@@ -19,7 +19,6 @@ import {
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { resolveHostExecMemoryLimit } from "../process/child-memory.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
@@ -53,6 +52,7 @@ import {
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
+import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
@@ -64,8 +64,9 @@ import {
   type ExecProcessOutcome,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { DurableExecOptions, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { DurableExecOptions } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
@@ -228,6 +229,8 @@ export async function runExecProcess({
   notifyOnExit: boolean;
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
+  /** A one-shot run can await this command's exit only through sessions_yield. */
+  sessionsYieldAvailable?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
@@ -239,6 +242,8 @@ export async function runExecProcess({
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
+  /** Explicit `background: true` service, handed off rather than stopped at one-shot exit. */
+  independentService?: boolean;
   /** Cancels startup only; background process lifetime belongs to the supervisor. */
   startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -278,6 +283,7 @@ export async function runExecProcess({
         command: opts.command,
         scopeKey: opts.scopeKey,
         sessionKey: opts.sessionKey,
+        sandboxContainerName: opts.sandbox?.containerName,
         cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
         agentId: opts.agentId,
         eventRouting: opts.eventRouting,
@@ -296,6 +302,7 @@ export async function runExecProcess({
         exited: false,
         truncated: false,
         backgrounded: false,
+        ...(opts.independentService ? { independentService: true as const } : {}),
         cursorKeyMode: opts.usePty ? "unknown" : "normal",
       },
       opts.requestOwners,
@@ -306,7 +313,11 @@ export async function runExecProcess({
     retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));
   }
 
-  const notificationTarget = prepareExecExitNotification(session, opts.subagentSession === true);
+  const notificationTarget = prepareExecExitNotification(
+    session,
+    opts.subagentSession === true,
+    opts.sessionsYieldAvailable === true,
+  );
   if (notificationTarget) {
     await notificationTarget;
   }
@@ -421,13 +432,7 @@ export async function runExecProcess({
     session.finalizing = true;
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
-        // Root completion does not release descendants that retained the group's lineage fd.
-        managedRun.cancel();
-        const extinction = await managedRun.waitForExtinction();
-        session.cleanupUncertain = extinction?.status === "uncertain";
-        if (session.requestCancelled && session.cleanupUncertain) {
-          throw new Error("Command descendant cleanup could not be confirmed");
-        }
+        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome);
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -621,7 +626,6 @@ export async function runExecProcess({
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
-      memoryLimitBytes: opts.sandbox ? undefined : resolveHostExecMemoryLimit(),
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
@@ -656,6 +660,8 @@ export async function runExecProcess({
         mode: "child",
         argv: spawnSpec.argv,
         stdinMode: spawnSpec.stdinMode,
+        // Host commands own only their foreground; sandbox lifetimes stay with the backend.
+        ...(opts.sandbox ? {} : { releaseOnRootExit: true as const }),
       });
     }
     if (opts.durable && requestSignal?.aborted) {

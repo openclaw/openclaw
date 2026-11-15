@@ -993,13 +993,13 @@ describe("node worker tunnel manager", () => {
       );
       expect(gatewayReports[1]!.some((report) => report.metrics.memoHitCount > 0)).toBe(true);
       const retained = memoInputs[1]!.length;
-      const uncached = fileCount - retained;
       expect(retained).toBeGreaterThan(0);
       expect(remoteReports).toHaveLength(2);
       expect(remoteReports[0]!.metrics.contentHashCount).toBe(fileCount);
+      // The node's persisted manifest memo fills entries omitted by the transport cap.
       expect(remoteReports[1]!.metrics).toMatchObject({
-        contentHashCount: uncached,
-        memoHitCount: retained,
+        contentHashCount: 0,
+        memoHitCount: fileCount,
       });
       expect(memoInputs).toHaveLength(2);
       expect(memoInputs[0]).toEqual([]);

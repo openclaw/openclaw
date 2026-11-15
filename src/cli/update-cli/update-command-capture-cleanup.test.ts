@@ -105,6 +105,8 @@ async function withCaptureHistory(
       ["alreadyCurrent", "skipped", true, []],
       ["failedBaseline", "failed", true, activated],
       ["latest", "succeeded", false, activated],
+      // A success without recorded Gateway verification keeps its copy.
+      ["unverified", "succeeded", false, activated],
       // Later than every successful update: only the missing activation releases it.
       ["neverActivated", "failed", true, ["staging", "validating"]],
       ["repairedBeforeActivation", "failed", true, ["staging", "validating"], true],
@@ -131,7 +133,7 @@ async function withCaptureHistory(
           { env },
         );
       }
-      if (status === "succeeded") {
+      if (status === "succeeded" && label !== "unverified") {
         recordUpdateRunVerification(
           runId,
           {
@@ -210,7 +212,8 @@ const expectedPreview = (captures: Record<string, string>) => ({
     reason: "unresolved-failed-update",
     bytes: 1038,
   },
-  [captures.latest!]: {
+  [captures.latest!]: { outcome: "candidate", reason: "verified-update-capture", bytes: 1035 },
+  [captures.unverified!]: {
     outcome: "protected",
     reason: "awaiting-later-verified-update",
     bytes: 1035,
@@ -284,10 +287,10 @@ it.each(["current", "pre-migration"] as const)(
       const progress = stderr.mock.calls
         .map(([text]) => String(text))
         .filter((text) => text.startsWith("Removing capture "));
-      expect(progress).toHaveLength(4);
+      expect(progress).toHaveLength(5);
       for (const [index, text] of progress.entries()) {
         expect(text).toMatch(
-          new RegExp(`^Removing capture ${index + 1}/4: .+ \\(103[58] bytes\\)\\n$`),
+          new RegExp(`^Removing capture ${index + 1}/5: .+ \\(103[58] bytes\\)\\n$`),
         );
       }
       const preview = expectedPreview(captures);

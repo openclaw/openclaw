@@ -305,7 +305,8 @@ function createSharedStateWorkerBackend(
       }
       if (
         commandType === "githubPublication.sourceFacts" ||
-        commandType.startsWith("githubPublications.")
+        (commandType.startsWith("githubPublications.") &&
+          commandType !== "githubPublications.personalRestart")
       ) {
         const sourcePreparation = publicationSource
           ? undefined

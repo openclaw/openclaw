@@ -2,8 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import {
   assertSqliteSchemaContains,
@@ -54,6 +54,7 @@ export async function needsOpenClawStateDatabaseSchemaRepair(
     prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
       signal,
+      reuse: true,
     });
   } catch (error) {
     if (error instanceof SqliteSnapshotCleanupError) {

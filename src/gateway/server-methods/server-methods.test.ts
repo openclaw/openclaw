@@ -666,7 +666,7 @@ describe("projectChatDisplayMessages", () => {
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
   const networkFailureText =
-    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -2174,8 +2174,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(async () => {
     const runtimeSpy = vi
-      .spyOn(childRuntime, "readChildRuntimeViability")
-      .mockReturnValue(healthyChildRuntime);
+      .spyOn(childRuntime, "prepareChildRuntimeViability")
+      .mockResolvedValue({ publish: () => healthyChildRuntime });
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     await registerLegacyContextEngine();

@@ -5,6 +5,9 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
+import { refreshPreparedModelRuntimeSnapshots } from "../../agents/prepared-model-runtime.js";
+import { resetPreparedModelCatalogStateForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   callInProcessGatewayTool,
@@ -759,9 +762,10 @@ it("recovers an unknown channel owner through the canonical profile directory", 
 
 it.each([
   { channel: "slack", role: "admin" },
+  { channel: "discord", role: "admin" },
   { channel: "discord", role: "member" },
 ] as const)(
-  "assigns visible and newly created sessions to the linked $channel $role",
+  "preserves visible and independent creation authority for the linked $channel $role",
   ({ channel, role }) =>
     withAdminIngress(
       async (fixture) => {
@@ -770,6 +774,18 @@ it.each([
         const metadata = JSON.parse(
           buildInboundUserContextPrefix(turn).match(/```json\n([\s\S]*?)\n```/)![1]!,
         );
+        // Visible creation validates its inherited model against the prepared catalog.
+        fixture.cfg.agents = { defaults: { model: "anthropic/claude-opus-4-6" } };
+        fixture.cfg.models = {
+          providers: {
+            anthropic: {
+              baseUrl: "https://anthropic.example.test/v1",
+              models: [modelDefinition("claude-opus-4-6")],
+            },
+          },
+        };
+        await resetPreparedModelCatalogStateForTest();
+        await refreshPreparedModelRuntimeSnapshots(fixture.cfg, { gatewayLifecycle: true });
         using assignment = await prepareAssignment(fixture, turn, channel === "discord");
         const { operatorAuthority, execute, sessions, assign, run, scope } = assignment;
         const requester = human(metadata.requester_profile.id);
@@ -815,24 +831,15 @@ it.each([
         if (role === "member") {
           // A profile write grant does not make a shared-channel viewer a participant.
           await expect(spawn()).rejects.toThrow("session is shared for this connection");
-          const created = await execute("sessions_create", "member-create", {
-            label: "Member work",
+          const beforeCreation = listSessionEntriesReadOnly({
+            agentId: "main",
+            env: fixture.state.env,
           });
-          const details = created.details;
-          if (
-            !details ||
-            typeof details !== "object" ||
-            !("sessionKey" in details) ||
-            typeof details.sessionKey !== "string"
-          ) {
-            throw new Error("sessions_create did not return a session key");
-          }
-          expect(loadSessionEntry(scope(details.sessionKey))).toMatchObject({
-            createdVia: "operator",
-            createdActor: { type: "human", source: "profile", id: requester.id },
-          });
-          await expect(assign(details.sessionKey, requester.id)).rejects.toThrow(
-            "session is shared for this connection",
+          await expect(
+            execute("sessions_create", "member-create", { label: "Member work" }),
+          ).rejects.toThrow("session is shared for this connection");
+          expect(listSessionEntriesReadOnly({ agentId: "main", env: fixture.state.env })).toEqual(
+            beforeCreation,
           );
           const identity = fixture.admins[0]!.identity;
           const retained = await prepareChannelOperatorAuthority(fixture.cfg, identity);
@@ -853,6 +860,21 @@ it.each([
           ).resolves.toBeUndefined();
           return;
         }
+        const created = await execute("sessions_create", "admin-create", { label: "Admin work" });
+        const details = created.details;
+        if (
+          !details ||
+          typeof details !== "object" ||
+          !("sessionKey" in details) ||
+          typeof details.sessionKey !== "string"
+        ) {
+          throw new Error("sessions_create did not return a session key");
+        }
+        expect(loadSessionEntry(scope(details.sessionKey))).toMatchObject({
+          createdVia: "spawn",
+          createdActor: agent,
+          owner: { actor: requester },
+        });
         await spawn();
         expect(loadSessionEntry(scope(spawnedSessionKey))).toMatchObject({
           createdVia: "spawn",

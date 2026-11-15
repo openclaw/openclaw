@@ -193,6 +193,8 @@ export type ManagedWorktreeGcResult = {
   /** Complete recovery locations, even when individual issue details are omitted. */
   retiredCheckoutPaths: string[];
   snapshotsPruned: number;
+  scratch?: import("../../infra/scratch-cleanup.js").ScratchCleanupResult;
+  scratchDeferred?: "io-pressure";
   /** Current or last repository stage; independent of checkout removal counts. */
   gitMaintenance?: {
     repoRoot: string;

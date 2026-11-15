@@ -23,6 +23,7 @@ import {
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   resolveOperatorRolePolicyForAssignment,
   resolveOperatorRoleSelection,
@@ -55,7 +56,7 @@ function resolveChannelOperatorIdentityFacts(
   identity: UserChannelIdentity,
   stateOptions: OpenClawStateDatabaseOptions,
 ) {
-  if (!cfg.gateway?.roles && !cfg.gateway?.auth?.identityScopes) {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) && !cfg.gateway?.auth?.identityScopes) {
     return undefined;
   }
   const capturedIdentity = { ...identity };
@@ -68,6 +69,7 @@ function resolveChannelOperatorIdentityFacts(
     isCurrent: (currentCfg = cfg) => {
       const current = resolveUserChannelIdentity(capturedIdentity, stateOptions);
       const usesGithubAssignment =
+        isNamedOperatorRoleEnforcementEnabled(currentCfg) &&
         Object.keys(currentCfg.gateway?.roles?.assignments?.byGithubLogin ?? {}).length > 0 &&
         resolveOperatorRoleSelection(
           linked.profileId,
@@ -213,7 +215,7 @@ async function prepareChannelOperatorIdentity(
   stateOptions: OpenClawStateDatabaseOptions,
   requireAdmin: boolean,
 ) {
-  if (!cfg.gateway?.roles && !cfg.gateway?.auth?.identityScopes) {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) && !cfg.gateway?.auth?.identityScopes) {
     return undefined;
   }
   const identity = "identity" in input ? input.identity : input;

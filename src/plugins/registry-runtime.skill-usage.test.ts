@@ -1,12 +1,14 @@
-import path from "node:path";
-import { Type } from "typebox";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, onTestFinished } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { canonicalizePath } from "../agents/utils/paths.js";
+import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { registerSkillUsageTracking } from "../skills/runtime/skill-usage.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
@@ -19,10 +21,8 @@ it("records skill use for the executing plugin tool call and reads it back by pa
   onTestFinished(async () => void (await disposePluginRegistryInstances(builder.registry)));
   const { skills } = builder.createApi(createOwnershipRecord("skill-usage-reader"), {
     config: {},
-    pluginConfig: {},
   }).runtime;
-  await state.writeText("workspace/skills/deploy/SKILL.md", "# Deploy\n");
-  const skillFile = path.join(state.workspaceDir, "skills", "deploy", "SKILL.md");
+  const skillFile = await state.writeText("workspace/skills/deploy/SKILL.md", "# Deploy\n");
   const use: Parameters<typeof skills.recordUsed>[0] = {
     skillFile,
     skillName: "deploy",
@@ -37,32 +37,29 @@ it("records skill use for the executing plugin tool call and reads it back by pa
   });
   expect(skills.recordUsed(use)).toBe(false);
 
-  let late: Promise<boolean> | undefined;
+  let late: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
   const tool: AnyAgentTool = {
-    name: "skill_viewer",
-    label: "Skill viewer",
-    description: "Shows a skill",
-    parameters: Type.Object({}),
+    ...createStubTool("skill_viewer"),
     execute: async () => {
       expect(() => skills.recordUsed({ ...use, skillFile: "skills/deploy/SKILL.md" })).toThrow(
         "absolute SKILL.md path",
       );
       expect(skills.recordUsed(use)).toBe(true);
-      // A continuation that outlives the call keeps the async context but not the authority.
-      late = new Promise((resolve) => {
-        setTimeout(() => resolve(skills.recordUsed(use)), 0);
-      });
+      // A continuation keeps the async scope, but must release settled call facts.
+      late = AsyncLocalStorage.snapshot();
       return { content: [{ type: "text", text: "Deploy" }], details: {} };
     },
   };
   const runId = "plugin-skill-usage";
-  await wrapToolWithBeforeToolCallHook(tool, {
-    runId,
-    agentId: "main",
-    loopDetection: { enabled: false },
-  }).execute("view-deploy", {});
-  expect(await late).toBe(false);
+  const reference = await (async () => {
+    const ctx = { runId, agentId: "main", loopDetection: { enabled: false } };
+    await wrapToolWithBeforeToolCallHook(tool, ctx).execute("view-deploy", {});
+    return new WeakRef(ctx);
+  })();
+  await waitForDiagnosticEventsDrained();
   await stopTracking();
+  await expectCollected(reference);
+  expect(late?.(() => skills.recordUsed(use))).toBe(false);
 
   const canonicalFile = canonicalizePath(skillFile);
   expect(consumeRunSkillUsage(runId)).toEqual([

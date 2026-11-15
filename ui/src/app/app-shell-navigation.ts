@@ -1,4 +1,4 @@
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
 import {
   isSessionRouteId,
   pluginSlugCandidate,
@@ -22,6 +22,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -301,8 +302,19 @@ export class ShellNavigationOwner {
       this.host.ensureAgentsList(context.gateway.snapshot);
     }
     this.synchronizeSessionUrl();
-    if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
-      this.host.settingsSearchQuery = "";
+    if (
+      routeState.routeId &&
+      !isSettingsTakeover(
+        routeState.routeId,
+        context?.gateway.snapshot.hello?.controlUiTabs,
+        routeState.location,
+        context?.basePath,
+      )
+    ) {
+      // The embedded list is this search's home, so its results survive Back.
+      if (routeState.routeId !== "settings") {
+        this.host.settingsSearchQuery = "";
+      }
       this.host.lastWorkspaceLocation = {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
@@ -323,6 +335,20 @@ export class ShellNavigationOwner {
 
   openNewSession(agentId: string, target?: NewSessionTarget): void {
     this.navigate("new-session", { search: newSessionSearch(agentId, target) });
+  }
+
+  /** Escape: one level up from a subpage, out of Settings from a top-level section. */
+  leaveSettingsLevel(): void {
+    const { routeId, location } = this.host.routeState;
+    const basePath = this.host.context?.basePath ?? "";
+    const parent =
+      routeId && isRouteId(routeId) ? settingsParentTarget(routeId, location, basePath) : null;
+    if (parent) {
+      const { routeId: parentRoute, ...parentLocation } = parent;
+      this.navigate(parentRoute, parentLocation);
+      return;
+    }
+    this.exitSettings();
   }
 
   exitSettings(): void {

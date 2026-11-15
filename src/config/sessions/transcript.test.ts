@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { recordDeliveredCommandExchange } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -150,7 +155,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ...params,
     });
   }
-  async function startEntryChange(patch: Partial<InternalSessionEntry>) {
+  function startEntryChange(patch: Partial<InternalSessionEntry>) {
     const gate = createDeferred();
     const started = createDeferred();
     const change = updateSessionEntry(transcriptScope(), async () => {
@@ -158,10 +163,17 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       await gate.promise;
       return patch;
     });
-    await started.promise;
-    return async () => {
-      gate.resolve();
-      await change;
+    // Return retirement ownership before waiting: a missing entry never calls the updater.
+    return {
+      started: awaitGateBeforeSettlement(
+        started.promise,
+        change,
+        "session entry change settled before its updater started",
+      ),
+      finish: () => {
+        gate.resolve();
+        return change;
+      },
     };
   }
   type BeforeMessageWriteParams = Parameters<
@@ -884,50 +896,104 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result).toMatchObject({ ok: false, code: "blocked" });
   });
 
-  it.each(["session", "lifecycle", "writer"] as const)(
-    "rejects concurrent %s replacement",
-    async (kind) => {
-      const replacementSessionFile = resolveSessionTranscriptPathInDir(
-        "replacement-session",
-        fixture.sessionsDir(),
-      );
-      const lifecycleRevision = kind === "writer" ? "owned-revision" : "original-revision";
-      await writeTranscriptStore(
-        kind === "session"
-          ? {}
-          : {
-              lifecycleRevision,
-              ...(kind === "writer" ? { activeWriterRunId: "run-a" } : {}),
-            },
-      );
-      const patch =
-        kind === "session"
-          ? { sessionId: "replacement-session", sessionFile: replacementSessionFile }
-          : kind === "lifecycle"
-            ? { lifecycleRevision: "replacement-revision" }
-            : { activeWriterRunId: "run-b" };
-      const finishChange = await startEntryChange(patch);
-      const admission = {
-        expectedSessionId: sessionId,
-        ...(kind !== "session" ? { expectedLifecycleRevision: lifecycleRevision } : {}),
-        ...(kind === "writer" ? { expectedWriterRunId: "run-a" } : {}),
-      };
-      const append = appendText("late output", admission);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await finishChange();
-      await expect(append).resolves.toMatchObject({ ok: false, code: "session-rebound" });
-      if (kind === "session") {
-        expect(fs.existsSync(replacementSessionFile)).toBe(false);
-      }
-      if (kind === "writer") {
-        await expect(
-          appendText("current output", { ...admission, expectedWriterRunId: "run-b" }),
-        ).resolves.toMatchObject({ ok: true });
-      }
-    },
-  );
+  describe("entry-change lifecycle", () => {
+    let retire: (() => Promise<void>) | undefined;
+    // Vitest may start teardown before a cancelled body unwinds; join it before fixture drain.
+    afterEach(async () => {
+      const finish = retire;
+      retire = undefined;
+      await finish?.();
+    });
+    it.for(["session", "lifecycle", "writer"] as const)(
+      "rejects concurrent %s replacement",
+      (kind, { signal }) => {
+        let change: ReturnType<typeof startEntryChange> | undefined;
+        let retirement: Promise<void> | undefined;
+        const appends: Promise<PromiseSettledResult<unknown>[]>[] = [];
+        retire = () => {
+          retirement ??= (async () => {
+            void change?.finish();
+            const [primary] = await Promise.allSettled([scenario]);
+            // Setup can finish after cancellation; retire any change it acquired before joining.
+            const outcomes = [
+              ...(await Promise.allSettled([change?.finish()])),
+              ...(await Promise.all(appends)).flat(),
+            ];
+            const failures = outcomes.flatMap((outcome) =>
+              outcome.status === "rejected" &&
+              !(primary?.status === "rejected" && outcome.reason === primary.reason)
+                ? [outcome.reason]
+                : [],
+            );
+            if (failures.length) {
+              throw new AggregateError(
+                [
+                  ...new Set([
+                    ...(primary?.status === "rejected" ? [primary.reason] : []),
+                    ...failures,
+                  ]),
+                ],
+                "transcript entry-change cleanup failed",
+              );
+            }
+          })();
+          return retirement;
+        };
+        const scenario = (async () => {
+          try {
+            const replacementSessionFile = resolveSessionTranscriptPathInDir(
+              "replacement-session",
+              fixture.sessionsDir(),
+            );
+            const lifecycleRevision = kind === "writer" ? "owned-revision" : "original-revision";
+            await writeTranscriptStore(
+              kind === "session"
+                ? {}
+                : {
+                    lifecycleRevision,
+                    ...(kind === "writer" ? { activeWriterRunId: "run-a" } : {}),
+                  },
+            );
+            const patch =
+              kind === "session"
+                ? { sessionId: "replacement-session", sessionFile: replacementSessionFile }
+                : kind === "lifecycle"
+                  ? { lifecycleRevision: "replacement-revision" }
+                  : { activeWriterRunId: "run-b" };
+            change = startEntryChange(patch);
+            await withinTest(change.started, signal);
+            const admission = {
+              expectedSessionId: sessionId,
+              ...(kind !== "session" ? { expectedLifecycleRevision: lifecycleRevision } : {}),
+              ...(kind === "writer" ? { expectedWriterRunId: "run-a" } : {}),
+            };
+            const append = appendText("late output", admission);
+            appends.push(Promise.allSettled([append]));
+            await withinTest(nextEventLoopTurn(), signal);
+            await withinTest(change.finish(), signal);
+            expect(await withinTest(append, signal)).toMatchObject({
+              ok: false,
+              code: "session-rebound",
+            });
+            if (kind === "session") {
+              expect(fs.existsSync(replacementSessionFile)).toBe(false);
+            }
+            if (kind === "writer") {
+              const currentAppend = appendText("current output", {
+                ...admission,
+                expectedWriterRunId: "run-b",
+              });
+              appends.push(Promise.allSettled([currentAppend]));
+              expect(await withinTest(currentAppend, signal)).toMatchObject({ ok: true });
+            }
+          } finally {
+            void change?.finish();
+          }
+        })();
+        return scenario;
+      },
+    );
+  });
 
   it("rejects revision materialization between the initial check and SQLite append", async () => {
     await writeTranscriptStore({ lifecycleRevision: undefined });

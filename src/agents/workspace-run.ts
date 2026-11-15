@@ -5,6 +5,7 @@
  */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { findGitRoot, readGitMetadataDirectories } from "../infra/git-root.js";
 import { logWarn } from "../logger.js";
 import { classifySessionKeyShape } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -32,15 +33,32 @@ export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
 }
 
-/** Recorded session roots own bootstrap files; cwd alone never selects instructions. */
+/**
+ * A recorded or confined execution root owns bootstrap files only when it checks out the agent
+ * workspace itself. Other roots, such as worktrees of a separate project repository, keep the
+ * agent's identity and instructions; callers layer that root's AGENTS.md as project context.
+ * cwd alone never selects instructions.
+ */
 export function resolveRunBootstrapWorkspaceDir(
   params: Parameters<typeof resolveRootedRunRuntimeWorkspace>[0],
   fallback = params.bootstrapWorkspaceDir ?? params.workspaceDir,
 ): string {
+  const agentWorkspace = resolveUserPath(fallback);
   const confined =
     params.requireWorkspaceOnly ||
     resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: params.agentId });
-  return resolveUserPath(params.sessionRoot ?? (confined ? params.workspaceDir : fallback));
+  const executionRoot = params.sessionRoot ?? (confined ? params.workspaceDir : undefined);
+  const root = executionRoot && resolveUserPath(executionRoot);
+  return root && checksOutWorkspace(root, agentWorkspace) ? root : agentWorkspace;
+}
+
+function checksOutWorkspace(root: string, workspace: string): boolean {
+  if (root === workspace) {
+    return true;
+  }
+  const repository = findGitRoot(workspace);
+  const commonDir = repository && readGitMetadataDirectories(repository)?.commonDir;
+  return Boolean(commonDir && readGitMetadataDirectories(root)?.commonDir === commonDir);
 }
 
 export function resolveRunWorkspaceDir(params: {

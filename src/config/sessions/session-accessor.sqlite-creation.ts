@@ -39,6 +39,7 @@ import type {
 } from "./session-accessor.types.js";
 import { createSessionActorEntryWithTranscriptInScope } from "./session-actor-entry-adapter.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { resolveSessionEntryCandidates } from "./store-entry.js";
@@ -278,8 +279,14 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             skipMaintenance: true,
             withCommit,
             beforeCommitInTransaction: () => {
-              assertCurrent();
-              assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
+              try {
+                assertCurrent();
+                assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
+              } catch (error) {
+                throw options.certifyNotCommitted
+                  ? new SessionEntryCreationNotCommittedError(error)
+                  : error;
+              }
             },
             creation: {
               receipt: options.creationOperation
@@ -300,6 +307,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         try {
           assertCurrent();
           await applySessionEntryCreationReplacement({
+            certifyNotCommitted: options.certifyNotCommitted,
             scope,
             agentId: scope.agentId,
             storePath: scope.path,

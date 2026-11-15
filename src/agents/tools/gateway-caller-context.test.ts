@@ -455,6 +455,34 @@ describe("gateway caller context wrapper", () => {
     );
   });
 
+  it("preserves every same-run automatic delegation assertion", async () => {
+    let outerActive = true;
+    let innerActive = true;
+    const outer = () => {
+      if (!outerActive) {
+        throw new Error("outer revoked");
+      }
+    };
+    const inner = () => {
+      if (!innerActive) {
+        throw new Error("inner revoked");
+      }
+    };
+    await withCallers(
+      [{ assertAutoApproveChangesCurrent: outer }, { assertAutoApproveChangesCurrent: inner }],
+      () => {
+        const assertCurrent = getCaller()?.assertAutoApproveChangesCurrent;
+        expect(assertCurrent).toBeDefined();
+        expect(assertCurrent).not.toThrow();
+        outerActive = false;
+        expect(assertCurrent).toThrow("outer revoked");
+        outerActive = true;
+        innerActive = false;
+        expect(assertCurrent).toThrow("inner revoked");
+      },
+    );
+  });
+
   it.each(["same", "distinct"] as const)("retains %s run receipts and signals", async (kind) => {
     const sameRun = kind === "same";
     const run = runInstance("outer");

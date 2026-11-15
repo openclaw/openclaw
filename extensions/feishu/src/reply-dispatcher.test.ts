@@ -1074,28 +1074,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   );
 
   it.each([
-    { name: "delta blocks", partials: ["hello"], block: "lo world", expected: "hellolo world" },
-    {
-      name: "authoritative corrected snapshots",
-      partials: ["Old draft answer.", "Corrected answer.", "Old draft"],
-      block: undefined,
-      expected: "Old draft",
-    },
-    {
-      name: "private reasoning tags",
-      partials: ["<thinking>private chain of thought</thinking>\nvisible answer"],
-      block: undefined,
-      expected: "visible answer",
-    },
-  ])("streams $name without losing visible content", async ({ partials, block, expected }) => {
-    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
+    ["delta blocks", ["hello"], ["lo world"], "hellolo world"],
+    ["covered tail", ["First.\n\nLast."], ["First.", "\n\nLast."], "First.\n\nLast."],
+    ["sentence gap", ["First. Last."], ["First.", "Last."], "First. Last."],
+    ["repeated blocks", ["ha ha"], ["ha", " ha", "ha"], "ha haha"],
+    ["block-only repeats", [], ["ha", "ha"], "haha"],
+    [
+      "corrected snapshots",
+      ["Old draft answer.", "Corrected answer.", "Old draft"],
+      [],
+      "Old draft",
+    ],
+    ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], [], "visible answer"],
+  ] as const)("streams %s", async (_name, partials, blocks, expected) => {
+    useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
     for (const text of partials) {
       result.replyOptions.onPartialReply?.({ text });
     }
-    if (block) {
-      await options.block({ text: block });
+    for (const text of blocks) {
+      await options.block({ text });
     }
     await options.onIdle?.();
     expect(streamingInstances).toHaveLength(1);
@@ -1838,7 +1837,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("backs off streaming retries after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const origPush = streamingInstances.push.bind(streamingInstances);
     streamingInstances.push = (...args: StreamingSessionStub[]) => {
       const firstInstance = args[0];

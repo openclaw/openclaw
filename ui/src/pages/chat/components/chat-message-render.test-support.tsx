@@ -33,11 +33,11 @@ export function createChatMessageHarness() {
 
   const mediaSubscribers = new Set<object>();
 
-  const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
+  const renderMarkdownHtml = markdown.toSanitizedMarkdownContent;
 
   const renderStreamingMarkdown = markdownLive.toStreamingMarkdownDomParts;
 
-  const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownHtml>((value) => value);
+  const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownContent>((value) => value);
 
   const streamingMarkdownRenderMock = vi.fn<typeof markdownLive.toStreamingMarkdownDomParts>(
     (value) => ["", `<div class="streaming-markdown">${value}</div>`],
@@ -51,7 +51,7 @@ export function createChatMessageHarness() {
   beforeEach(async () => {
     await loadStreamingMarkdown();
     view = document.createElement("div");
-    vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
+    vi.spyOn(markdown, "toSanitizedMarkdownContent").mockImplementation(markdownRenderMock);
     vi.spyOn(markdownLive, "toStreamingMarkdownDomParts").mockImplementation(
       streamingMarkdownRenderMock,
     );

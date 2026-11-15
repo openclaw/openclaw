@@ -148,7 +148,7 @@ suite.define(() => {
           const composer = pane.locator(".agent-chat__composer-combobox textarea");
           const stop = pane.getByRole("button", { name: "Stop", exact: true });
           const steer = pane.getByRole("button", {
-            name: "Steer into the active run",
+            name: "Steer this reply",
             exact: true,
           });
           const history = pane.getByText(historyText, { exact: true });

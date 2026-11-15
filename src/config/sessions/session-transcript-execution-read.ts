@@ -17,6 +17,7 @@ export type PreparedSessionTranscriptReads = Pick<
   SessionHistoryWorkerDatabase,
   | "readRawDelta"
   | "readVisibleDelta"
+  | "readReplayGroups"
   | "readSessionMemoryCapture"
   | "readColdMetadata"
   | "readAnchors"
@@ -161,6 +162,12 @@ export function createPreparedSessionTranscriptReads(params: {
     readVisibleDelta: reader(params.reader.readVisibleDelta, (worker, input, signal) =>
       worker.execute(
         { type: "session.transcript.visibleDelta.read", input: { ...input, expectedIdentity } },
+        { signal },
+      ),
+    ),
+    readReplayGroups: reader(params.reader.readReplayGroups, (worker, input, signal) =>
+      worker.execute(
+        { type: "session.transcript.replayGroups.read", input: { ...input, expectedIdentity } },
         { signal },
       ),
     ),
