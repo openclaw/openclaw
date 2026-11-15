@@ -1,15 +1,18 @@
 /**
  * Actual SessionManager appends across --sessions retained readers (default 2), followed by
- * a separate main-thread native-receipt delivery benchmark. Synthetic state only.
+ * a separate main-thread receipt delivery benchmark. Synthetic state only.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-append-receipt-measure.ts \
- *   --output .local/append-receipt/base --mode timing --iterations 2000
- * Repeat counterbalanced with --mode allocation. --owner-file substitutes a saved
- * session-actor-replica.ts on main only; native workers always use this checkout.
- * Each arm warms up one round; --text-repeats 1500 exercises an individually oversized
- * context. Use --sessions 100 --rows 4 for entry-only pool pressure. --check-compact asserts receipts stay below 64 KiB for the default small appends.
- * Acceptance: identical model-context bytes, proportional receipts, lower allocation
- * or CPU, no material latency/GC regression. Census includes capture overhead; replay
- * excludes fixture preparation and sender-thread CPU. This is not Gateway load proof.
+ *   --output .local/append-receipt/base --mode census --sessions 100 --rows 4 --rounds 1 --text-repeats 20
+ * Use --mode heap for post-GC main heap without retained wire captures; --mode append-timing
+ * and append-allocation measure actual main-thread appends including replica updates, without
+ * wire captures. Each measured round is one sample; use --rounds 5 and counterbalance arms.
+ * The default prompt has one shared ~110 KB skills snapshot, a ~20 KB report with per-session
+ * provenance, and four identical report sections. Census captures full native admission requests
+ * plus receipts; compare identical fixture paths to avoid path-length changes in wire byte counts.
+ * Acceptance: unchanged wire shapes/model-context hashes, better residency and truthful pool
+ * accounting, no material per-append CPU/allocation regression. Existing timing/allocation modes
+ * replay receipts only; --owner-file substitutes the main replica owner, not native workers.
+ * --check-compact asserts receipts stay below 64 KiB for small appends. This is not Gateway load proof.
  */
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -34,12 +37,20 @@ const { values } = parseArgs({
     rounds: { type: "string", default: "6" },
     sessions: { type: "string", default: "2" },
     rows: { type: "string", default: "512" },
+    "prompt-repeats": { type: "string", default: "4500" },
     "text-repeats": { type: "string", default: "500" },
     "owner-file": { type: "string" },
     "check-compact": { type: "boolean", default: false },
   },
 });
-assert(values.output && ["census", "timing", "allocation"].includes(values.mode));
+assert(
+  values.output &&
+    ["census", "heap", "timing", "allocation", "append-timing", "append-allocation"].includes(
+      values.mode,
+    ),
+);
+const measureAppends = values.mode.startsWith("append-");
+const appendPasses: Record<string, unknown>[] = [];
 const iterations = Number(values.iterations),
   rounds = Number(values.rounds),
   sessions = Number(values.sessions),
@@ -58,6 +69,16 @@ const source = values["owner-file"] ? pathToFileURL(path.resolve(values["owner-f
 const sourceDigest = createHash("sha256").update(readFileSync(source)).digest("hex");
 const receiptOwner = pathToFileURL(path.resolve("src/config/sessions/session-actor-receipt.ts"));
 const captured: unknown[] = [];
+const admissions: unknown[] = [];
+const admissionRequests: unknown[] = [];
+const admissionKey = Symbol.for("openclaw.benchmark.entryAdmission");
+Reflect.set(globalThis, admissionKey, (snapshot: unknown, request: unknown) => {
+  if (capture) {
+    admissions.push(structuredClone(snapshot));
+    admissionRequests.push(structuredClone(request));
+  }
+});
+const sqliteOwner = pathToFileURL(path.resolve("src/config/sessions/session-actor-sqlite.ts"));
 const census: Array<Record<string, unknown>> = [];
 let capture = false;
 const captureKey = Symbol.for("openclaw.benchmark.appendReceiptCapture");
@@ -72,6 +93,19 @@ const evictionKey = Symbol.for("openclaw.benchmark.receiptEvictions");
 Reflect.set(globalThis, evictionKey, evictions);
 registerHooks({
   load(url, context, next) {
+    if (url === sqliteOwner.href) {
+      const result = next(url, context);
+      assert(typeof result.source === "string");
+      const anchor = /actorAdmissionSeen\s*=\s*(?:true|!0);/;
+      assert(anchor.test(result.source));
+      return {
+        ...result,
+        source: result.source.replace(
+          anchor,
+          `$& globalThis[Symbol.for("openclaw.benchmark.entryAdmission")](facts.snapshot, request);`,
+        ),
+      };
+    }
     if (url === receiptOwner.href) {
       const result = next(url, context);
       assert(typeof result.source === "string");
@@ -134,6 +168,7 @@ const metric = (kind: "authority" | "sqlite_request") => {
     (bytes?.["session.actor.appendToolResult"] ?? 0)
   );
 };
+let liveMemory: ReturnType<typeof process.memoryUsage> | undefined;
 let requestBytes = 0,
   receiptBytes = 0;
 try {
@@ -196,7 +231,7 @@ try {
       sessionId: target.sessionId,
       updatedAt: 1,
       skillsSnapshot: {
-        prompt: "Synthetic instructions. ".repeat(10000),
+        prompt: "Synthetic instructions. ".repeat(Number(values["prompt-repeats"])),
         skills: Array.from({ length: 120 }, (_, index) => ({ name: `skill-${index}` })),
       },
       systemPromptReport: {
@@ -251,6 +286,24 @@ try {
           await readers[index]!(() => SessionManager.openAsync(target, state.workspaceDir, limits)),
         );
       }
+      const inspector = new Session(),
+        gc = new GCProfiler();
+      if (measureAppends && round >= 0) {
+        globalThis.gc?.();
+        await setImmediate();
+        if (values.mode === "append-allocation") {
+          inspector.connect();
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 32768,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+        }
+        gc.start();
+      }
+      const appendCpu = process.threadCpuUsage(),
+        appendStart = performance.now(),
+        hostLoad = loadavg();
       for (const [slot, manager] of managers.entries()) {
         const message =
           slot % 3 === 2
@@ -281,12 +334,13 @@ try {
         const requestsBefore = metric("sqlite_request"),
           receiptsBefore = metric("authority");
         const start = performance.now(),
-          before = captured.length;
-        capture = round >= 0;
+          before = captured.length,
+          admissionsBefore = admissions.length;
+        capture = round >= 0 && !measureAppends;
         await readers[slot]!(() => manager.appendMessageAsync(message));
         capture = false;
         const appendMs = performance.now() - start;
-        if (round < 0) {
+        if (round < 0 || measureAppends) {
           continue;
         }
         requestBytes += metric("sqlite_request") - requestsBefore;
@@ -316,6 +370,15 @@ try {
           })(),
           instrumentedAppendMs: appendMs,
           receiptBytes: size(native),
+          admissionBytes: admissions
+            .slice(admissionsBefore)
+            .reduce<number>((total, item) => total + size(item), 0),
+          admissionRequestBytes: admissionRequests
+            .slice(admissionsBefore)
+            .reduce<number>((total, item) => total + size(item), 0),
+          admissionFields: admissions
+            .slice(admissionsBefore)
+            .map((item) => fields(isRecord(item) ? item.entry : undefined)),
           receiptFields: fields(native.receipt),
           postimageFields: fields(native.receipt.postimage),
           entryFields: fields(
@@ -330,15 +393,49 @@ try {
           contextBytes: Buffer.byteLength(context),
           contextHash: createHash("sha256").update(context).digest("hex"),
         });
+        if (values.mode === "heap") {
+          captured.length = 0;
+          admissions.length = 0;
+          admissionRequests.length = 0;
+        }
+      }
+      if (measureAppends && round >= 0) {
+        const cpu = process.threadCpuUsage(appendCpu),
+          elapsedMs = performance.now() - appendStart;
+        const pauses = gc.stop();
+        const profile =
+          values.mode === "append-allocation"
+            ? (await inspector.post("HeapProfiler.stopSampling")).profile
+            : undefined;
+        inspector.disconnect();
+        const pool = readGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"));
+        assert(isRecord(pool));
+        appendPasses.push({
+          round,
+          appends: sessions,
+          elapsedMs,
+          mainThreadCpuUsPerAppend: (cpu.user + cpu.system) / sessions,
+          sampledBytesPerAppend: profile ? allocated(profile.head) / sessions : undefined,
+          pool: { bytes: pool.bytes, snapshots: pool.snapshots },
+          gc: pauses,
+          hostLoad,
+        });
       }
     }
   }
   await withReaders(0);
+  if (values.mode === "heap") {
+    globalThis.gc?.();
+    await setImmediate();
+    globalThis.gc?.();
+    liveMemory = process.memoryUsage();
+  }
 } finally {
   capture = false;
   await state.cleanup();
   await drainGlobalSingletonLifecycleState();
   Reflect.deleteProperty(globalThis, captureKey);
+  Reflect.deleteProperty(globalThis, admissionKey);
   Reflect.deleteProperty(globalThis, evictionKey);
   rmSync(stateRoot, { recursive: true, force: true });
 }
@@ -433,7 +530,17 @@ const result = {
   evictions,
   census,
   replay,
+  appendPasses,
+  liveMemory,
   node: process.version,
 };
 writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
-console.log(JSON.stringify({ output, sessions, evictions, requestBytes, receiptBytes, replay }));
+console.log(
+  JSON.stringify({
+    output,
+    sessions,
+    evictions,
+    appends: census.length,
+    appendPasses: appendPasses.length,
+  }),
+);
