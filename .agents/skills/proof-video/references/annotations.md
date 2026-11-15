@@ -4,12 +4,57 @@ Capture the real surface required by the task. A synthetic page can demonstrate
 the annotation tools, but cannot prove a product fix. Keep the raw screenshot or
 recording and the measured rectangles alongside the annotated output.
 
+For PRs, follow the shared [visual-proof workflow and comparison layout](../../openclaw-pr-maintainer/references/media.md#pr-visual-proof).
+The annotation renderer introduced in [#174805](https://github.com/openclaw/openclaw/pull/174805)
+works on captured images; it does not choose a scenario or establish product proof.
+
+## Choose marks that explain the fix
+
+The implementing agent selects targets from the PR's visible change, measures
+them, and writes factual labels. Use the fewest marks that make the difference
+clear, not a box around every changed component:
+
+| Visible change      | Mark                                                    | Example label pair                                  |
+| ------------------- | ------------------------------------------------------- | --------------------------------------------------- |
+| Duplicate content   | Outlines around the repeated/single content             | Account shown twice → Account shown once            |
+| Clipping or overlap | Outline or arrow at the affected edge                   | Action clipped → Action fully visible               |
+| Alignment           | Guide through corresponding edges or centers            | Renderer-calculated offsets from the same reference |
+| Spacing             | Bracket between measured edges                          | Renderer-calculated gap before and after            |
+| Moved control       | Arrow to its old/new location, retaining surrounding UI | Action in overflow → Action beside item             |
+
+Label observations, not verdicts such as “Bad” and “Fixed.” Do not invent numbers
+or imply that a still proves timing or backend behavior. Place labels in clear
+space and outline strokes outside the text they explain. Keep exact measured
+bounds for alignment/spacing even if an outline needs visual padding.
+
 ## Geometry
 
-All positions use viewport CSS pixels, top-left origin. `scale` is raw pixels per
-CSS pixel, not zoom. The first rectangle is the alignment reference. Measure
-each target in the settled state with Playwright `locator.boundingBox()`; reject
-missing or offscreen targets. Use `labelAt` to place a label in clear space.
+All positions use one capture coordinate system with a top-left origin. For web
+captures use viewport CSS pixels; `scale` is image pixels per CSS pixel, not zoom.
+Use the settled bounds returned by `takeControlUiScreenshotFrame`, or measure
+with Playwright `locator.boundingBox()` when capturing outside that helper.
+Reject missing or offscreen targets. The first rectangle is the alignment
+reference. Use `labelAt` to place a label in clear space.
+
+For native outlines/arrows, use the verified logical capture dimensions as
+`viewport` and image pixels per logical unit as `scale`. This keeps labels
+readable on high-density screenshots without resizing the source image. Map
+accessibility/test bounds into that coordinate system, accounting for window
+origin and orientation; native points or Android density-independent units are
+not image pixels. If no bounds are reported, locate the target in the inspected
+screenshot, but do not present estimates as precise measurements.
+
+The renderer's numeric alignment/spacing labels say `px`. For native physical-
+pixel measurements, use image-pixel bounds, PNG dimensions as `viewport`, and
+`scale: 1`; use a matched close crop if labels would otherwise be unreadable.
+Do not present native point/density-independent measurements as physical pixels.
+Use PNG captures, or convert a captured JPEG to PNG without resizing it; retain
+the original alongside the PR artifacts.
+
+For a crop, translate targets and labels by the crop origin in the same units.
+Web frame crops expose `pixelBounds`: subtract their pixel origin from
+pixel-converted target coordinates and annotate that cropped PNG with `scale: 1`.
+Do not take another screenshot to annotate or modify the app to draw the marks.
 
 | Kind        | Fields                        | Meaning                                                                                                                                                                                                        |
 | ----------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

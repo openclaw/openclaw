@@ -114,7 +114,7 @@ must declare their own development dependencies rather than rely on hoisting.
 - Check that CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
-- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+- **Make visual changes easy to review** — follow the [PR visual-proof standard](.agents/skills/openclaw-pr-maintainer/references/media.md#pr-visual-proof) for visible clean and annotated before/after comparisons of the affected web or native UI.
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 
 ## Security-sensitive changes

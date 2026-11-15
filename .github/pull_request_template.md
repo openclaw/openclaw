@@ -51,9 +51,10 @@ behavior or a material tradeoff. Do not hide risks or required actions in <detai
 <!--
 Show the most useful proof that this change works. Screenshots, screencasts,
 terminal output, focused tests, CI results, live observations, redacted logs,
-and artifact links are all useful. For user-visible UI changes, follow the root
-AGENTS.md "Product and validation" screenshot completion/landing gate; these other
-forms of evidence do not replace the required screenshots in chat AND the PR.
+and artifact links are all useful. For visual web/macOS/iOS/Android changes, follow
+the PR visual-proof standard and its screenshot delivery gate:
+https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/media.md#pr-visual-proof
+Keep the clean before/after pair visible first, then the annotated pair.
 
 Reviewers will inspect the code, tests, and CI. Use this section to make the
 validation easy to understand, not to restate the diff.
