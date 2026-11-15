@@ -195,7 +195,7 @@ describe("registerDirectoryCli", () => {
   it("rejects blank group IDs before setup writes", async () => {
     await expect(
       runDirectory(["groups", "members", "--channel", "slack", "--group-id", "", "--json"]),
-    ).rejects.toThrow("Missing --group-id");
+    ).rejects.toMatchObject({ name: "ExpectedCliError", message: "Missing --group-id" });
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
@@ -460,16 +460,45 @@ describe("registerDirectoryCli", () => {
     ).toBe(true);
   });
 
-  it("bubbles JSON errors for unsupported directory self", async () => {
+  it.each([
+    { args: ["self"], operation: "directory self" },
+    { args: ["peers", "list"], operation: "directory peers" },
+    { args: ["groups", "list"], operation: "directory groups" },
+    {
+      args: ["groups", "members", "--group-id", "group-1"],
+      operation: "group members listing",
+    },
+  ])("preserves the JSON-mode remedy for unsupported $operation", async ({ args, operation }) => {
     installDirectory({});
 
-    await expect(runDirectory(["self", "--channel", "demo-directory", "--json"])).rejects.toThrow(
-      "Channel demo-directory does not support directory self",
-    );
+    await expect(
+      runDirectory([...args, "--channel", "demo-directory", "--json"]),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: `Channel demo-directory does not support ${operation}`,
+    });
 
     expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
     expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("preserves the JSON-mode remedy when the selected channel has no plugin", async () => {
+    mocks.resolveMessageChannelSelection.mockResolvedValue({ channel: "unavailable" });
+
+    await expect(runDirectory(["self", "--json"])).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Unsupported channel: unavailable",
+    });
+  });
+
+  it("leaves unexpected plugin failures with their original classification", async () => {
+    const failure = new Error("unexpected lookup failure");
+    installDirectory({ self: vi.fn().mockRejectedValue(failure) });
+
+    await expect(runDirectory(["self", "--channel", "demo-directory", "--json"])).rejects.toBe(
+      failure,
+    );
   });
 
   it("rejects invalid directory limit", async () => {
