@@ -18,7 +18,7 @@ import {
   resolveVideoMaxBase64Bytes,
 } from "../../packages/media-understanding-common/src/video.js";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
-import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -27,7 +27,10 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
-import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import {
+  captureGuardedFetchRequestAuthority,
+  withGuardedFetchRequestAuthority,
+} from "../infra/net/fetch-request-authority.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
@@ -38,10 +41,16 @@ import {
   listOfficialExternalProviderCatalogEntries,
 } from "../plugins/official-external-plugin-catalog.js";
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runExec } from "../process/exec.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
 import { MediaAttachmentCache } from "./attachments.cache.js";
+import {
+  audioTranscriptionFingerprint,
+  shareAudioTranscription,
+} from "./audio-transcription-cache.js";
+import { cliTemplateContext } from "./cli-input.js";
 import { resolveCliOutput } from "./cli-output.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import {
@@ -458,14 +467,15 @@ export async function runProviderEntry(params: {
   });
 }
 
-export async function runCliEntry(
+async function runUnsharedCliEntry(
   params: Pick<
     Parameters<typeof runProviderEntry>[0],
     "capability" | "entry" | "cfg" | "cache" | "config" | "request" | "assertCurrent" | "execution"
-  > & { ctx: MsgContext; attachment: MediaAttachment },
+  > & { ctx: MsgContext; attachment: MediaAttachment; automaticAudio?: boolean },
+  pinnedAudio?: { bytes: Buffer; env: NodeJS.ProcessEnv; cwd: string },
 ): Promise<MediaUnderstandingOutput | null> {
   assertMediaExecutionCurrent(params.execution);
-  const { entry, capability, ctx } = params;
+  const { entry, capability } = params;
   const attachmentIndex = params.attachment.index;
   const cli = resolveCliModelEntry(entry);
   if (!cli.ok) {
@@ -490,12 +500,16 @@ export async function runCliEntry(
   );
   try {
     let mediaPath = attachmentPath;
+    if (pinnedAudio) {
+      mediaPath = path.join(outputDir, "audio" + path.extname(attachmentPath));
+      await fs.writeFile(mediaPath, pinnedAudio.bytes, { flag: "wx", mode: 0o600 });
+    }
     if (
       capability === "audio" &&
       path.parse(command).name === "whisper-cli" &&
       normalizeLowercaseStringOrEmpty(path.extname(attachmentPath)) !== ".wav"
     ) {
-      const wavPath = path.join(outputDir, `${path.parse(attachmentPath).name}.wav`);
+      const wavPath = path.join(outputDir, `${path.parse(mediaPath).name}.wav`);
       await writeExternalFileWithinRoot({
         rootDir: outputDir,
         path: path.basename(wavPath),
@@ -505,7 +519,7 @@ export async function runCliEntry(
           await runFfmpeg([
             "-y",
             "-i",
-            attachmentPath,
+            mediaPath,
             "-ac",
             "1",
             "-ar",
@@ -522,33 +536,14 @@ export async function runCliEntry(
     }
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
-    const templCtx: TemplateContext & Record<string, unknown> = {
-      ...ctx,
-      AttachmentPath: mediaPath,
-      AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
-      AttachmentContentType: params.attachment.mime,
-      AttachmentDir: path.dirname(mediaPath),
-      AttachmentIndex: params.attachment.index,
-      MediaPath: mediaPath,
-      MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
-      MediaType: params.attachment.mime,
-      MediaDir: path.dirname(mediaPath),
-      OutputDir: outputDir,
-      OutputBase: outputBase,
-      Prompt: params.request?.prompt ?? prompt,
-      ...(capability === "audio" && language ? { Language: language } : {}),
-      MaxChars: maxChars,
-    };
-    for (const key of [
-      "MediaPaths",
-      "MediaUrls",
-      "MediaTypes",
-      "MediaWorkspaceDir",
-      "MediaTranscribedIndexes",
-      "MediaStaged",
-    ]) {
-      delete templCtx[key];
-    }
+    const templCtx = cliTemplateContext(params, {
+      mediaPath,
+      outputDir,
+      outputBase,
+      prompt: params.request?.prompt ?? prompt,
+      language: capability === "audio" ? language : undefined,
+      maxChars,
+    });
     const argv = args.map((part) => applyTemplate(part, templCtx));
     params.assertCurrent?.();
     assertMediaExecutionCurrent(params.execution);
@@ -556,9 +551,12 @@ export async function runCliEntry(
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
       signal: params.execution?.signal,
-      cwd: ["agy", "antigravity"].includes(path.parse(command).name)
-        ? path.dirname(mediaPath)
-        : undefined,
+      cwd:
+        pinnedAudio?.cwd ??
+        (["agy", "antigravity"].includes(path.parse(command).name)
+          ? path.dirname(mediaPath)
+          : undefined),
+      ...(pinnedAudio ? { baseEnv: pinnedAudio.env } : {}),
     });
     const requestedBackend =
       capability === "audio"
@@ -601,4 +599,98 @@ export async function runCliEntry(
       );
     });
   }
+}
+
+type CliEntryParams = Parameters<typeof runUnsharedCliEntry>[0];
+
+export async function runCliEntry(
+  params: CliEntryParams,
+): Promise<MediaUnderstandingOutput | null> {
+  const { ctx } = params;
+  // A request-bound operation keeps its own authority and cancellation. Only
+  // account preflight's unbound, auto-detected local computation can share.
+  // Provider requests are deliberately not cached before credential resolution.
+  if (
+    params.capability !== "audio" ||
+    !params.automaticAudio ||
+    params.assertCurrent ||
+    params.execution ||
+    captureGuardedFetchRequestAuthority() ||
+    resolveCommandProcessSignal() ||
+    ctx.OriginatingChannel !== "telegram" ||
+    ctx.ChatType !== "group" ||
+    !ctx.OriginatingTo ||
+    !ctx.MessageSid ||
+    !ctx.AccountId
+  ) {
+    return runUnsharedCliEntry(params);
+  }
+  const cli = resolveCliModelEntry(params.entry);
+  if (!cli.ok) {
+    throw cli.error;
+  }
+  const { command, args } = cli.value;
+  // Only the built-in discovery owner supplies these fixed local STT contracts.
+  // Authored custom CLI commands can observe paths or arbitrary side effects.
+  if (
+    args.some((arg) => /{{\s*(?:AttachmentDir|MediaDir|AttachmentUrl|MediaUrl)\s*}}/.test(arg)) ||
+    !["whisper-cli", "whisper", "parakeet-mlx", "sherpa-onnx-offline"].includes(
+      path.parse(command).name,
+    )
+  ) {
+    return runUnsharedCliEntry(params);
+  }
+  const env = { ...process.env };
+  const cwd = process.cwd();
+  // Discovery already selected the executable. Preserve its filesystem walk:
+  // path.resolve/join would collapse symlink/.. and could choose a different file.
+  const executable = path.isAbsolute(command) ? command : `${cwd}${path.sep}${command}`;
+  const executableStat = await fs.stat(executable);
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions(params);
+  // Every account performs its own bounded, policy-checked read. The owner
+  // stages exactly these hashed bytes; it never borrows another account's path.
+  const media = await params.cache.getBuffer({
+    attachmentIndex: params.attachment.index,
+    maxBytes,
+    timeoutMs,
+  });
+  assertMinAudioSize({ size: media.buffer.length, attachmentIndex: params.attachment.index });
+  const templCtx = cliTemplateContext(params, {
+    mediaPath: "<shared-audio>",
+    outputDir: "<shared-output>",
+    outputBase: "<shared-output-base>",
+    prompt: params.request?.prompt ?? prompt,
+    language: params.request?.language ?? params.entry.language ?? params.config?.language,
+    maxChars,
+  });
+  const key = audioTranscriptionFingerprint(
+    {
+      origin: [ctx.OriginatingChannel, ctx.OriginatingTo, ctx.MessageThreadId, ctx.MessageSid],
+      config: params.cfg,
+      command: [
+        executable,
+        executableStat.dev,
+        executableStat.ino,
+        executableStat.size,
+        executableStat.mtimeMs,
+      ],
+      argv: args.map((arg) => applyTemplate(arg, templCtx)),
+      templates: args,
+      cwd,
+      env: Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b)),
+      mime: media.mime,
+      extension: path.extname(media.fileName),
+      maxBytes,
+      maxChars,
+      timeoutMs,
+    },
+    media.buffer,
+  );
+  const transcript = await shareAudioTranscription(params.cfg, key, () =>
+    runUnsharedCliEntry(
+      { ...params, entry: { ...params.entry, command: executable } },
+      { bytes: media.buffer, env, cwd },
+    ),
+  );
+  return transcript ? { ...transcript, attachmentIndex: params.attachment.index } : null;
 }
