@@ -153,8 +153,13 @@ export function copyTree(
     // A symlink is copied as what it points to, so nothing written to the private
     // copy can reach the live file. A dangling link stays a link.
     const linked = entry.isSymbolicLink() ? fs.statSync(source, { throwIfNoEntry: false }) : null;
-    if (entry.isDirectory() || linked?.isDirectory()) {
-      const real = fs.realpathSync(source);
+    const real = entry.isDirectory() || linked?.isDirectory() ? fs.realpathSync(source) : null;
+    if (real && linked && source.split(path.sep).includes("node_modules")) {
+      // Package links are code, not state: plugin installs link node_modules/openclaw
+      // to the whole OpenClaw package, so following them would copy that package.
+      fs.symlinkSync(fs.readlinkSync(source), target);
+      baseline.set(target, fileStamp(target));
+    } else if (real) {
       if (!visited.has(real)) {
         copyTree(source, target, skip, baseline, new Set([...visited, real]));
       }

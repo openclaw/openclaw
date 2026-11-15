@@ -333,11 +333,20 @@ describe("copyTree and diffTree", () => {
     for (const name of ["edited.json", "deleted.json", "untouched.json"]) {
       fs.writeFileSync(path.join(live, name), name);
     }
+    // Plugin installs link node_modules/openclaw to the whole OpenClaw package.
+    const pkg = path.join(root, "openclaw-package");
+    fs.mkdirSync(pkg);
+    fs.writeFileSync(path.join(pkg, "index.js"), "");
+    fs.mkdirSync(path.join(live, "plugin", "node_modules"), { recursive: true });
+    fs.symlinkSync(pkg, path.join(live, "plugin", "node_modules", "openclaw"));
     const shadow = path.join(root, "shadow");
     const baseline = new Map<string, string | undefined>();
     copyTree(live, shadow, () => false, baseline);
     // A closed database is cloned byte for byte; VACUUM INTO would rewrite it.
     expect(hash(path.join(shadow, "backups", "old.sqlite"))).toBe(hash(closed));
+    expect(
+      fs.lstatSync(path.join(shadow, "plugin", "node_modules", "openclaw")).isSymbolicLink(),
+    ).toBe(true);
 
     fs.writeFileSync(path.join(shadow, "edited.json"), "upgraded");
     fs.rmSync(path.join(shadow, "deleted.json"));
