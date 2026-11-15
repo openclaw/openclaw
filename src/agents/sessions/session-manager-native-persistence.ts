@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -264,6 +265,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     }
     const appendOptions = {
       cwd: this.cwd,
+      mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
       eventId: entry.id,
       ...(options?.beforeFreshMessageCommit
         ? { beforeFreshMessageCommit: options.beforeFreshMessageCommit }

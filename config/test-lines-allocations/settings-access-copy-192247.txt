@@ -1,2 +1,0 @@
-# Preserve settings save, access, and sidebar assertions while wrapping revised copy.
-26

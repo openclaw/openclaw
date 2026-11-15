@@ -212,7 +212,10 @@ selections are not reused. Per-runtime pruning cannot remove another identity's
 samples, and failed or incomplete measurements never become timing samples.
 Until matching policy measurements exist, scheduling retains historical Node or
 release-envelope estimates. Measured runtime-placement observations never fall
-back across policies.
+back across policies. Readers select both the policy and runtime for each planning
+pass, so Node and Bun prices cannot leak into each other. Exact projected
+measurements replace historical estimates; the complete `dual-all` Node pass
+continues to share ordinary Node history.
 
 Five paired main trials established the switch: runs
 [38870726251](https://github.com/openclaw/openclaw/actions/runs/38870726251),
@@ -516,7 +519,10 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Package tests start after preflight and do not consume the Linux runtime artifact.
+Package tests and full-validation release compilation start after preflight and do not
+consume the Linux runtime artifact. The release phase shares the independent package
+matrix and its two-worker cap. It no longer waits for Linux build verification;
+all native suites and total job counts are unchanged.
 App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
 runner queueing cannot consume the native test job's 30-minute budget. They download
 the producer's artifact by its output ID and verify the selected checkout SHA before

@@ -37,6 +37,137 @@ const RESPONSES_LIFECYCLE_APIS = new Set<Model["api"]>([
 // a fork whose authority ended could still send.
 const UNFENCED_FORK_APIS = new Set<Model["api"]>(["bedrock-converse-stream"]);
 
+const TOOL_CALL_ID_KEYS = new Set(["id", "call_id", "tool_use_id", "tool_call_id"]);
+
+/**
+ * Cache checkpoints place a request rather than content; only the parent's survive replay,
+ * as nothing reads one the fork writes past the parent's input. `id` maps tool-call IDs.
+ */
+const serializeItem = (item: unknown, id: (value: string) => unknown, textBlocks = false) =>
+  JSON.stringify(item, (key, value: unknown) => {
+    if (key === "cache_control") {
+      return undefined;
+    }
+    if (typeof value === "string" && TOOL_CALL_ID_KEYS.has(key)) {
+      return id(value);
+    }
+    return textBlocks && key === "content" && typeof value === "string"
+      ? [{ type: "text", text: value }]
+      : value;
+  });
+
+/**
+ * The parent's stream may rewrite tool-call IDs and collapse one text block to a string
+ * after the history the fork rebuilds, so items compare with IDs by order of first use.
+ */
+function compareItems(items: unknown[]) {
+  const ids: string[] = [];
+  const keys = items.map((item) =>
+    serializeItem(
+      item,
+      (value) => (ids.includes(value) ? ids.indexOf(value) : ids.push(value) - 1),
+      true,
+    ),
+  );
+  return { ids, keys };
+}
+
+const isPlainContainer = (value: unknown): value is Record<string, unknown> | unknown[] =>
+  Array.isArray(value) ||
+  (typeof value === "object" &&
+    value !== null &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value)));
+
+/** Signals, fetch overrides and class instances; JSON null and primitives are data. */
+const isTransportHandle = (value: unknown) =>
+  typeof value === "function" ||
+  (typeof value === "object" && value !== null && !isPlainContainer(value));
+
+/**
+ * Copies the parent's request data. Transport handles that ride in request configs (the
+ * Google SDK's abort signal, fetch overrides) belong to each request, so the fork's own
+ * value at the same path replaces them.
+ */
+function replayData(sent: unknown, own: unknown): unknown {
+  if (isTransportHandle(sent)) {
+    return own;
+  }
+  if (!isPlainContainer(sent)) {
+    return sent;
+  }
+  const ownRecord: Record<string, unknown> = isPlainContainer(own) ? Object(own) : {};
+  if (Array.isArray(sent)) {
+    return sent.map((item, index) => replayData(item, ownRecord[index]));
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(sent)) {
+    const replayed = replayData(value, ownRecord[name]);
+    if (replayed !== undefined) {
+      copy[name] = replayed;
+    }
+  }
+  for (const [name, value] of Object.entries(ownRecord)) {
+    if (!(name in copy) && isTransportHandle(value)) {
+      copy[name] = value;
+    }
+  }
+  return copy;
+}
+
+/**
+ * Replays the parent's last prepared request, then the fork's own items. Its own request is
+ * rebuilt from history, whose bytes and order may differ from what the parent sent. Keeps
+ * the rebuilt request when the parent sent items the fork lacks or only a continuation delta.
+ */
+function replayPreparedRequest(
+  payload: Record<string, unknown>,
+  prepared: Record<string, unknown>,
+): void {
+  const key = ["input", "messages", "contents"].find((name) => Array.isArray(payload[name]));
+  if (!key) {
+    return;
+  }
+  const ownItems = payload[key];
+  const sentItems = prepared[key];
+  if (
+    !Array.isArray(ownItems) ||
+    !Array.isArray(sentItems) ||
+    prepared.previous_response_id != null
+  ) {
+    return;
+  }
+  const parent = compareItems(sentItems);
+  const own = compareItems(ownItems);
+  const unmatched = new Map<string, number>();
+  for (const item of parent.keys) {
+    unmatched.set(item, (unmatched.get(item) ?? 0) + 1);
+  }
+  const suffix = ownItems.filter((_, index) => {
+    const count = unmatched.get(own.keys[index]!);
+    if (count) {
+      unmatched.set(own.keys[index]!, count - 1);
+    }
+    return !count;
+  });
+  if ([...unmatched.values()].some(Boolean)) {
+    return;
+  }
+  // Matched items share ID order, so the suffix spells the parent's IDs as the parent did.
+  const spelling = new Map(parent.ids.map((id, index) => [own.ids[index], id]));
+  const replay = replayData({ ...prepared, [key]: [] }, payload);
+  for (const name of Object.keys(payload)) {
+    delete payload[name];
+  }
+  Object.assign(payload, replay, {
+    [key]: [
+      ...sentItems.map((item) => replayData(item, undefined)),
+      ...suffix.map((item) =>
+        JSON.parse(serializeItem(item, (value) => spelling.get(value) ?? value)),
+      ),
+    ],
+  });
+}
+
 /** Function declarations the fork can deny; anything else may run at the provider. */
 function isClientTool(tool: unknown): boolean {
   if (!isRecord(tool)) {
@@ -56,6 +187,8 @@ export async function runEmbeddedSessionFork(params: {
   context: Context;
   streamFn: StreamFn;
   options?: StreamOptions;
+  /** The parent's last provider request; absent, the rebuilt request is sent unchanged. */
+  preparedRequest?: Record<string, unknown>;
   question: string;
   model: Model;
   apiKey?: string;
@@ -127,6 +260,9 @@ export async function runEmbeddedSessionFork(params: {
         assertCurrent();
         if (!isRecord(payload)) {
           throw new Error("Session fork requires an object provider request.");
+        }
+        if (params.preparedRequest) {
+          replayPreparedRequest(payload, params.preparedRequest);
         }
         // Mutate the prepared body: provider wrappers reapply their defaults to
         // replacement objects, but preserve an in-place caller override.

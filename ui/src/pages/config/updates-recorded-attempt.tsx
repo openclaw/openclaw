@@ -83,7 +83,7 @@ export function RecordedAttempt(
                 <button
                   class="btn btn--sm"
                   type="button"
-                  title={props.canCheckStatus ? "" : t("updates.adminRequired")}
+                  title={props.canCheckStatus ? "" : t("updates.adminRequiredTooltip")}
                   disabled={
                     !props.canCheckStatus ||
                     props.updateBusy ||
@@ -98,7 +98,7 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm"
                     type="button"
-                    title={props.canDiagnose ? "" : t("updates.adminRequired")}
+                    title={props.canDiagnose ? "" : t("updates.adminRequiredTooltip")}
                     disabled={
                       reporting() ||
                       !props.canDiagnose ||
@@ -117,7 +117,7 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm primary"
                     type="button"
-                    title={canRetry() ? "" : t("updates.adminRequired")}
+                    title={canRetry() ? "" : t("updates.adminRequiredTooltip")}
                     disabled={!canRetry()}
                     onClick={() => void props.onUpdateNow()}
                   >

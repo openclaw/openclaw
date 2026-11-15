@@ -54,6 +54,7 @@ import {
 const mocks = vi.hoisted(() => ({
   matchesIdentity: vi.fn(),
   prepareIdentity: vi.fn(),
+  prepareRepositoryIntegration: vi.fn(),
   runCommand: vi.fn(),
   findWorktree: vi.fn(),
   readWorktree: vi.fn(),
@@ -241,7 +242,11 @@ export function createTestGitHubPublicationRuntime({
   getCommittedRuntimeConfig = currentGitHubPublicationConfig,
   ...params
 }: PublicationFixtureOptions<Parameters<typeof createRuntime>[0]>) {
-  const runtime = createRuntime({ ...params, getCommittedRuntimeConfig });
+  const runtime = createRuntime({
+    prepareRepositoryIntegration: mocks.prepareRepositoryIntegration,
+    ...params,
+    getCommittedRuntimeConfig,
+  });
   onTestFinished(() => runtime.close());
   return { ...runtime, coordinator: withSystemRequesterFixture(runtime.coordinator) };
 }
@@ -254,7 +259,13 @@ export function createTestGitHubPublicationCoordinator(
     placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
   },
 ) {
-  return withSystemRequesterFixture(createCoordinator({ ...params, getCommittedRuntimeConfig }));
+  return withSystemRequesterFixture(
+    createCoordinator({
+      prepareRepositoryIntegration: mocks.prepareRepositoryIntegration,
+      ...params,
+      getCommittedRuntimeConfig,
+    }),
+  );
 }
 
 export const SESSION_KEY = "agent:main:dashboard:publication";
@@ -595,7 +606,7 @@ export function installGitHubPublicationTestHarness(
       account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
       env: {
         GH_CONFIG_DIR: "/private/github-profile",
-        GH_TOKEN: undefined,
+        GH_TOKEN: "synthetic-shared-publication-token",
         GITHUB_TOKEN: undefined,
       },
     });

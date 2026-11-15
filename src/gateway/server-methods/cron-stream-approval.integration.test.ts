@@ -1,4 +1,4 @@
-import { access, writeFile } from "node:fs/promises";
+import fsp, { access, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -554,6 +554,100 @@ describe("agent stream approval through the automation tool", () => {
         error: expect.objectContaining({ message: expect.stringMatching(/SYSTEM_RUN_DENIED/) }),
       });
       expect(await read()).toEqual([]);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rechecks a retargeted executable after the approved mutation waits for admission",
+    async () => {
+      const executable = path.join(stateDir, "stream-command");
+      const approved = path.join(stateDir, "stream-approved.sh");
+      const replacement = path.join(stateDir, "stream-replacement.sh");
+      await writeFile(approved, "#!/bin/sh\necho approved\n", { mode: 0o755 });
+      await writeFile(replacement, "#!/bin/sh\necho replacement\n", { mode: 0o755 });
+      await symlink(approved, executable);
+      await withStreamApprovalFixture(async ({ add, read, takeApproval, decide, manager }) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        const originalAdd = cron.add.bind(cron);
+        using _ = vi.spyOn(cron, "add").mockImplementation(async (input, options) => {
+          if (options?.streamExecApproval) {
+            entered.resolve();
+            await release.promise;
+          }
+          return await originalAdd(input, options);
+        });
+        const job = approvedStreamJob();
+        const create = add({ ...job, schedule: { ...job.schedule, command: [executable] } });
+        const settled = create.then(
+          () => ({ ok: true }),
+          (error: unknown) => ({ ok: false, error }),
+        );
+        try {
+          const request = await takeApproval(create);
+          await decide(request.id, "allow-once");
+          await Promise.race([
+            entered.promise,
+            create.then(() => {
+              throw new Error("Stream saved before delayed admission");
+            }),
+          ]);
+          await unlink(executable);
+          await symlink(replacement, executable);
+          release.resolve();
+          expect(await settled).toMatchObject({
+            ok: false,
+            error: expect.objectContaining({ message: expect.stringMatching(/SYSTEM_RUN_DENIED/) }),
+          });
+          expect(await read()).toEqual([]);
+          expect(manager.getLocalSnapshot(request.id)?.consumedDecision).toBeUndefined();
+        } finally {
+          release.resolve();
+        }
+      });
+    },
+  );
+
+  it("rechecks creator authority after asynchronous physical checks at commit", async () => {
+    const scriptPath = path.join(stateDir, "stream-commit-source.js");
+    await writeFile(scriptPath, 'console.log("approved source");\n');
+    await withStreamApprovalFixture(async ({ add, read, takeApproval, decide, revokeRun }) => {
+      const job = approvedStreamJob();
+      const create = add({
+        ...job,
+        schedule: { ...job.schedule, command: [process.execPath, scriptPath] },
+      });
+      const settled = create.then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ ok: false, error }),
+      );
+      const request = await takeApproval(create);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const readFile = fsp.readFile;
+      let reads = 0;
+      using _ = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+        if (args[0] === scriptPath && ++reads === 2) {
+          entered.resolve();
+          await release.promise;
+        }
+        return await readFile(...args);
+      });
+      try {
+        await decide(request.id, "allow-once");
+        await Promise.race([
+          entered.promise,
+          create.then(() => {
+            throw new Error("Stream saved before commit physical checks");
+          }),
+        ]);
+        revokeRun();
+        release.resolve();
+        expect((await settled).ok).toBe(false);
+        expect(await read()).toEqual([]);
+      } finally {
+        release.resolve();
+      }
     });
   });
 

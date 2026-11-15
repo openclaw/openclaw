@@ -6,7 +6,6 @@ import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
-import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   compactWithoutNewSummary,
@@ -38,13 +37,13 @@ import {
   createCompactionRequestBudget,
   createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
-  estimateCompactionHistoryTokens,
   replayTokenBudget,
   resolveCompactionRetentionBudget,
   type CompactionRequestBudget,
   type CompactionRequestConstraints,
 } from "./compaction/request-budget.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
+import { SAFETY_MARGIN, estimateCompactionHistoryTokens } from "./context-token-pressure.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";

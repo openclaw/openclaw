@@ -1,4 +1,0 @@
-184
-# Interrupted validation/replacement preserves the last-good generation for resumed callers.
-# Cover atomic publication rollback, staged source/index custody and interrupted-clone cleanup.
-# Frozen v2026.11.2 rows load, select and refresh through the template owner without a migration.

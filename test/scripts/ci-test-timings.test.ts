@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import * as nodeTestInventory from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   type CompactNodeTestShard,
   type NodeTestShardGroup,
@@ -36,6 +37,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
+import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 function runtimeTiming(
@@ -433,6 +435,262 @@ describe("native singleton invocation timings", () => {
       .replaceAll(`[test] starting ${config}`, `[test] starting ${ordinaryConfig}`);
     expect(refit(text)).toEqual({ [extensionTimingKey(ordinaryConfig, files)!]: 34 });
   });
+});
+
+describe("split runtime timing feedback", () => {
+  function selectInventory(
+    rows: { name: string; config: string; files?: string[]; runtime?: boolean }[],
+  ) {
+    const original = fullSuiteVitestShards.slice();
+    fullSuiteVitestShards.splice(
+      0,
+      fullSuiteVitestShards.length,
+      ...rows.map(({ name, config }) => ({ name, config, projects: [config] })),
+    );
+    const inventory = vi
+      .spyOn(nodeTestInventory, "listNodeTestConfigFiles")
+      .mockImplementation((config) => rows.find((row) => row.config === config)?.files);
+    const build = vi
+      .spyOn(buildPrerequisites, "resolveVitestPretestBuildMode")
+      .mockImplementation((selections) => {
+        if (!rows.some((row) => row.runtime)) return undefined;
+        const spare = rows.find((row) => !row.runtime)!;
+        return selections.some(
+          (selection) =>
+            selection.configs?.includes(spare.config) ||
+            selection.includePatterns?.some((file) => spare.files?.includes(file)),
+        )
+          ? undefined
+          : "runtime";
+      });
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "");
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME", "");
+    onTestFinished(() => {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+      inventory.mockRestore();
+      build.mockRestore();
+      vi.unstubAllEnvs();
+    });
+  }
+
+  function observedLog(
+    group: NodeTestShardGroup,
+    policy: "bun-all" | "dual-all",
+    runtime: "node" | "bun",
+    seconds: number,
+  ) {
+    const prefix = runtime === "bun" ? "bun:" : policy === "bun-all" ? "node-subset:" : "";
+    const key = prefix + (group.timing_key ?? group.shard_name);
+    const [begin, end] = compactLog(seconds, key).split("\n");
+    const header = [
+      `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}`,
+      `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: ${runtime}`,
+    ];
+    return {
+      compact: timingLog(
+        [
+          ...header,
+          "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: " +
+            encodeNodeTestGroups([group]),
+          begin,
+          ...(group.pretestBuildMode
+            ? [
+                `2026-08-27T23:00:01Z [shard:${key}] [test] preparing runtime runtime before Vitest workers`,
+              ]
+            : []),
+          end,
+        ].join("\n"),
+        "blacksmith-4vcpu-ubuntu-2404",
+      ),
+      tooling: timingLog(
+        [...header, samplerToolingLog(seconds).replaceAll("[shard:", "[shard:" + prefix)].join(
+          "\n",
+        ),
+        "blacksmith-4vcpu-ubuntu-2404",
+        "tooling",
+      ),
+    };
+  }
+
+  it("uses split runtime placement observations in the public planner", () => {
+    const configs = ["test/vitest/vitest.hooks.config.ts", "test/vitest/vitest.secrets.config.ts"];
+    const files = [
+      "src/infra/sqlite-schema-facts.native.test.ts",
+      "src/infra/sqlite-schema-facts.physical-cache.test.ts",
+    ];
+    // Distinct pinned families permit donation without merging sibling stripes.
+    const names = ["core-runtime-media-ui-90", "agentic-gateway-core-90"];
+    selectInventory([
+      ...configs.map((config, index) => ({
+        name: names[index]!,
+        config,
+        runtime: true,
+        files: [
+          "src/cli/cli-process-diagnostics.test.ts",
+          files[index]!,
+          "src/runtime-fixture.test.ts",
+        ],
+      })),
+      {
+        name: "placement-spare",
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        files: ["src/spare.test.ts"],
+      },
+    ]);
+    const previous = compactBaseline(
+      Object.fromEntries([...names, "placement-spare"].map((name) => [name, 30])),
+    );
+    const coldFile = mockTimingFile(JSON.stringify(previous));
+    const options = {
+      compactMode: "pull-request" as const,
+      runnerBackend: "hybrid",
+      runtimePolicy: "bun-all" as const,
+    };
+    const owner = (jobs: CompactNodeTestShard[], runtime: "node" | "bun", config: string) =>
+      jobs.find(
+        (job) =>
+          job.testRuntime === runtime && job.groups.some((group) => group.configs.includes(config)),
+      )!;
+    const cold = nodeBundles(options);
+    for (const runtime of ["node", "bun"] as const) {
+      expect(owner(cold, runtime, configs[0]!)).toBe(owner(cold, runtime, configs[1]!));
+      expect(
+        owner(cold, runtime, configs[0]!).groups.some(
+          (group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2",
+        ),
+      ).toBe(true);
+    }
+    const logs = cold.flatMap((job) =>
+      job.groups
+        .filter((group) => group.pretestBuildMode === "runtime")
+        .map(
+          (group, index) =>
+            observedLog(
+              { ...group, shard_name: "recorded-" + index, timing_key: undefined },
+              "bun-all",
+              job.testRuntime!,
+              job.testRuntime === "node" ? 90 : 200,
+            ).compact,
+        ),
+    );
+    const fitted = refitTestTimings(
+      [1, 2].map((id) => timingRun(id, logs)),
+      previous,
+    );
+    expect(fitted.timings.runtimePlacementTimings.blacksmith).toHaveLength(4);
+    coldFile.read.mockRestore();
+    syncBuiltinESMExports();
+    mockTimingFile(JSON.stringify(fitted.timings));
+    const measured = nodeBundles(options);
+    expect(owner(measured, "node", configs[0]!)).toBe(owner(measured, "node", configs[1]!));
+    // 2 * round(200 * 0.87) exceeds the 300-second serial runtime budget.
+    expect(owner(measured, "bun", configs[0]!)).not.toBe(owner(measured, "bun", configs[1]!));
+    for (const [runtime, seconds] of [
+      ["node", 90],
+      ["bun", 200],
+    ] as const) {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME", runtime);
+      const observations = testTimings.readRuntimePlacementTimings("blacksmith");
+      const group = owner(cold, runtime, configs[0]!).groups.find((group) =>
+        group.configs.includes(configs[0]!),
+      )!;
+      expect(testTimings.resolveRuntimePlacementSeconds(group, observations)).toBe(seconds);
+      expect(
+        testTimings.resolveRuntimePlacementSeconds(
+          { ...group, env: { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "17" } },
+          observations,
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  it.each(["bun-all", "dual-all"] as const)(
+    "feeds collected %s prices through the real reader into projected runtime plans",
+    (runtimePolicy) => {
+      const config = "test/vitest/vitest.hooks.config.ts";
+      const nodeOnly = "src/cli/cli-process-diagnostics.test.ts";
+      const bothHosts = "src/infra/sqlite-schema-facts.native.test.ts";
+      const bunEligible = "src/runtime-fixture.test.ts";
+      const files = [nodeOnly, bothHosts, bunEligible];
+      selectInventory([
+        { name: "mixed", config, files },
+        { name: "core-support-boundary", config: "test/vitest/vitest.boundary.config.ts" },
+      ]);
+      const previous = compactBaseline({
+        mixed: 60,
+        retained: 41,
+        [runtimePolicy + ":mixed"]: 999,
+      });
+      previous.toolingFileSeconds = {
+        ...previous.toolingFileSeconds,
+        blacksmith: { retained: 42 },
+      };
+      const coldFile = mockTimingFile(JSON.stringify(previous));
+      const options = {
+        compactMode: "pull-request" as const,
+        runnerBackend: "hybrid",
+        runtimePolicy,
+      };
+      const cold = nodeBundles(options);
+      const owner = (jobs: CompactNodeTestShard[], runtime: "node" | "bun") =>
+        jobs.find((job) => !job.requiresDist && job.testRuntime === runtime)!;
+      const logs = (["node", "bun"] as const).flatMap((runtime) => {
+        const log = observedLog(
+          owner(cold, runtime).groups[0]!,
+          runtimePolicy,
+          runtime,
+          runtime === "node" ? 90 : 120,
+        );
+        return [log.compact, log.tooling];
+      });
+      const fitted = refitTestTimings(
+        [1, 2].map((id) => timingRun(id, logs)),
+        previous,
+      );
+      expect(fitted.contributingRunIds.blacksmith).toEqual([1, 2]);
+      expect(
+        fitted.timings.compactGroupSeconds.blacksmith[
+          runtimePolicy + ":bun:" + owner(cold, "bun").groups[0]!.timing_key
+        ],
+      ).toBe(120);
+      coldFile.read.mockRestore();
+      syncBuiltinESMExports();
+      mockTimingFile(JSON.stringify(fitted.timings));
+      // No ambient owner: the public planner must choose each leg itself.
+      const measured = nodeBundles(options);
+      for (const [runtime, seconds] of [
+        ["node", 90],
+        ["bun", 120],
+      ] as const) {
+        const jobs = measured.filter((job) => !job.requiresDist && job.testRuntime === runtime);
+        expect(jobs.reduce((sum, job) => sum + job.predictedTestSeconds!, 0)).toBe(seconds);
+        expect(
+          jobs
+            .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? files))
+            .toSorted(),
+        ).toEqual(
+          (runtime === "bun"
+            ? [bothHosts, bunEligible]
+            : runtimePolicy === "dual-all"
+              ? files
+              : [nodeOnly, bothHosts]
+          ).toSorted(),
+        );
+        vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
+        vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME", runtime);
+        const group = owner(cold, runtime).groups[0]!;
+        const key = group.timing_key ?? group.shard_name;
+        expect(testTimings.readCompactGroupTimings("blacksmith")[key]).toBe(seconds);
+        expect(testTimings.readCompactGroupTimings("blacksmith").retained).toBe(41);
+        expect(testTimings.readToolingFileTimings("blacksmith")[toolingFile]).toBe(seconds);
+        expect(testTimings.readToolingFileTimings("blacksmith").retained).toBe(42);
+      }
+      expect(measured.filter((job) => job.requiresDist).map((job) => job.testRuntime)).toEqual([
+        "node",
+      ]);
+    },
+  );
 });
 
 describe("runtime placement observations", () => {

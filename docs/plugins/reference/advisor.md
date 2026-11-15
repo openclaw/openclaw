@@ -72,10 +72,9 @@ Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
-- Only the main agent's user-triggered runs are reviewed. Heartbeat, cron and
-  other automatic runs are not, and neither are subagent sessions: the main
-  agent sees what its subagents report, so Advisor corrects the main agent,
-  which can redirect the subagent.
+- User-triggered runs are reviewed, including subagent runs, each in its own
+  session. Heartbeat and cron runs are not, but subagents they spawn are, like
+  any other subagent.
 - After a correction steers a run, later reviews in that run are told what was
   already said and stay quiet unless they find a different problem.
 - A due review waits until every running tool call has its result, so the fork
@@ -89,7 +88,9 @@ Behavior and limits:
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
 - Gateway info logs record review token usage (uncached input, cache reads,
-  cache writes and output) and whether a correction steered the run. When a review
+  cache writes and output), whether a correction steered the run, and each
+  cancelled review with its reason (`run_end`, `run_aborted`, `new_user_turn`,
+  `session_reset` or `plugin_stop`) and running time. When a review
   misses the provider cache and the provider reports cache-write tokens, its
   context appears under cache writes rather than input. Reviews do not share the conversation's prompt-cache key, so on
   OpenAI routes some reviews miss the cache.

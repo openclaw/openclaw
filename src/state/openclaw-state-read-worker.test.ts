@@ -353,9 +353,14 @@ it("reads newly created state without blocking warm reads or allocating absent-s
 it("refuses an absent result when its owner closes during the filesystem probe", async () => {
   const { options, pathname } = source();
   const probing = createDeferredCore<undefined>();
-  using probe = vi.spyOn(pathExistence, "statIfExists").mockReturnValueOnce(probing.promise);
+  const entered = createDeferredCore();
+  using probe = vi.spyOn(pathExistence, "statIfExists").mockImplementationOnce(() => {
+    entered.resolve();
+    return probing.promise;
+  });
   const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   void reading.catch(() => {});
+  await entered.promise;
   const closing = closeOpenClawStateDatabaseByPathAsync(pathname);
   try {
     expect(probe).toHaveBeenCalledExactlyOnceWith(pathname);

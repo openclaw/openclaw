@@ -336,6 +336,12 @@ worker-owned state:
 | `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
 | `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
 
+When another awaited policy check separates a conversation-binding read from
+execution, use `prepareConversationBindingInspections(refs)` from
+`openclaw/plugin-sdk/conversation-binding-inspection-runtime`. Await preparation,
+then call `inspect()` synchronously immediately before the effect. The prepared
+owner rejects changed bindings; release it with `dispose()` in `finally`.
+
 Await inspection and command authorization before consuming their results. The
 approval factories still return adapters synchronously; their async eligibility
 callbacks are awaited by the host. The original APIs preserve their synchronous

@@ -5,6 +5,10 @@
       "identities": []
     },
     {
+      "name": "agent_tool_usage",
+      "identities": []
+    },
+    {
       "name": "auth_profile_state",
       "identities": []
     },
@@ -474,41 +478,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        33249,
-        33432
+        33439,
+        33622
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        30353,
-        30600
+        30543,
+        30790
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        30136,
-        30351
+        30326,
+        30541
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        30602,
-        30978
+        30792,
+        31168
       ]
     }
   ],
   "preData": [
     0,
-    31102
+    31300
   ],
   "postData": [
-    31102,
-    47459
+    31300,
+    47657
   ]
 }

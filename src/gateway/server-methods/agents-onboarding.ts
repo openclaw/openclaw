@@ -46,6 +46,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type PreparedAgentOnboarding = {
   expectedConfigHash: string | null;
+  assertAuthorityCurrent: () => void;
   assertCurrent: () => void;
 };
 
@@ -104,6 +105,7 @@ export async function prepareAgentOnboarding(
   }
   return {
     expectedConfigHash: snapshot.hash ?? null,
+    assertAuthorityCurrent: authority.assertCurrent,
     assertCurrent,
   };
 }

@@ -13,6 +13,7 @@ export type SkillLibraryWorkerAuthority = {
   profileId?: string;
   namespace?: "personal";
   scopes: readonly string[];
+  ownerDevice?: boolean;
   config: OpenClawConfig;
 };
 export type SkillLibraryReadQueries = {

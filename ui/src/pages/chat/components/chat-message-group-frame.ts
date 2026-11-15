@@ -2,13 +2,8 @@ import type { JSX } from "@solidjs/web";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
-import {
-  normalizeRoleForGrouping,
-  resolveMessageRole,
-} from "../../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
-import { hasVisiblePreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
+import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
@@ -74,29 +69,6 @@ export function prepareGroupMessage(
     }
   }
   return { item, source, actions: details, ownsActions };
-}
-
-export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
-  if (normalizeRoleForGrouping(group.role) !== "tool") {
-    return false;
-  }
-  if (
-    bubbleMode &&
-    group.messages.some(
-      (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
-    )
-  ) {
-    return false;
-  }
-  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
-  return (
-    bubbleMode ||
-    group.messages.length > 1 ||
-    cards.length > 1 ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
-  );
 }
 
 export function resolveFileLinkOwnerOptions(
@@ -193,10 +165,15 @@ export function prepareMessageGroupFrame(
       : undefined;
 
   const ownsRunFrame = opts.frameContent !== undefined;
-  // Tool activity and live narration are blocks of the turn whose answer follows:
-  // no identity, footer or actions of their own, only the run-block gap.
+  // Tool activity, reasoning-only steps and live narration are blocks of the turn
+  // whose answer follows: no identity, footer or actions of their own, only the
+  // run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
+    (normalizedRole === "assistant" &&
+      group.visibleContent === "none" &&
+      group.messages.length > 0 &&
+      group.messages.every(({ message }) => Boolean(extractThinkingCached(message)))) ||
     (group.messages.length > 0 &&
       group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&
@@ -276,6 +253,12 @@ export function prepareMessageGroupFrame(
     lastMessageIndex,
     footerActionDetails,
     footerActionMessageKey,
+    rowReactions:
+      normalizedRole === "assistant" &&
+      !forwardedSource &&
+      !opts.bubbleMode &&
+      !isTurnBlock &&
+      opts.frameFooter !== false,
     hasUserFooterActions,
     // An undelivered steer's footer slot holds only its steer row; identity, time and
     // actions follow delivery.

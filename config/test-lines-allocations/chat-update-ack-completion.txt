@@ -1,2 +1,0 @@
-# Regression: chat /update with a Gateway-owned acknowledgement must not send the missing-reply notice.
-17

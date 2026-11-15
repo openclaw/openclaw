@@ -13,7 +13,7 @@
       "hasSubcommands": true
     }
   ],
-  "enabledByDefault": true,
+  "enabledByDefault": false,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {
     "onStartup": true,

@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -271,32 +272,41 @@ describe("Agent-specific exec tool defaults", () => {
     });
   });
 
-  it("should run exec synchronously when process is denied", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        deny: ["process"],
-        exec: {
-          host: "gateway",
-          mode: "full",
+  it.each(["configuration", "turn"])(
+    "runs exec synchronously when process is denied by %s",
+    async (restriction) => {
+      const cfg: OpenClawConfig = {
+        tools: {
+          deny: restriction === "configuration" ? ["process"] : [],
+          exec: {
+            host: "gateway",
+            mode: "full",
+          },
         },
-      },
-    };
+      };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      ...createTempAgentDirs("test-main"),
-    });
-    const execTool = requireExecTool(tools);
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        ...createTempAgentDirs("test-main"),
+      });
+      const offered = requireExecTool(tools).parameters;
+      if (restriction === "turn") {
+        finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["exec"] });
+      }
+      const execTool = requireExecTool(tools);
+      expect(execTool.parameters).toEqual(offered);
+      expect(schemaPropertyNames(execTool).includes("background")).toBe(restriction === "turn");
 
-    const result = await execTool.execute("call1", {
-      command: "echo done",
-      yieldMs: 10,
-    });
+      const result = await execTool.execute("call1", {
+        command: "echo done",
+        background: true,
+      });
 
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
-  });
+      const resultDetails = result?.details as { status?: string } | undefined;
+      expect(resultDetails?.status).toBe("completed");
+    },
+  );
 
   it("makes exec completion-only when the final runtime allowlist removes process", async () => {
     const tools = createOpenClawCodingTools({

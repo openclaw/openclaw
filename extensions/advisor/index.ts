@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
@@ -77,6 +76,7 @@ export default definePluginEntry({
       if (!scheduler) {
         return;
       }
+      const startedAt = Date.now();
       const signal = AbortSignal.any([
         cancel,
         scheduler.signal,
@@ -101,7 +101,11 @@ export default definePluginEntry({
           `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} cacheWrite=${result.usage?.cacheWriteTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
         );
       } catch (error) {
-        if (!cancel.aborted) {
+        if (cancel.aborted) {
+          api.logger.info(
+            `advisor: review cancelled for session ${sessionKey}: reason=${String(cancel.reason)} runningMs=${Date.now() - startedAt}`,
+          );
+        } else {
           const reason =
             error instanceof Error && error.name === "TimeoutError" ? "timeout" : "fork_failed";
           api.logger.warn(`advisor: review failed for session ${sessionKey}: ${reason}`);
@@ -178,10 +182,10 @@ export default definePluginEntry({
       });
     }
 
-    function forget(sessionKey?: string) {
+    function forget(reason: string, sessionKey?: string) {
       for (const [key, session] of sessions) {
         if (sessionKey === undefined || key === sessionKey) {
-          session.review?.abort();
+          session.review?.abort(reason);
           sessions.delete(key);
         }
       }
@@ -195,7 +199,7 @@ export default definePluginEntry({
       },
       stop: () => {
         scheduler = undefined;
-        forget();
+        forget("plugin_stop");
       },
     });
 
@@ -203,13 +207,8 @@ export default definePluginEntry({
       "before_agent_reply",
       (_event, ctx) => {
         // Hooks and the Gateway service use distinct registrations; run context carries admission.
-        // Only the main agent is reviewed: it sees its subagents' results and can redirect them.
-        if (
-          ctx.sessionKey &&
-          ctx.runId &&
-          ctx.trigger === "user" &&
-          !isSubagentSessionKey(ctx.sessionKey)
-        ) {
+        // Subagent runs dispatch with the "user" trigger too, so they are reviewed the same way.
+        if (ctx.sessionKey && ctx.runId && ctx.trigger === "user") {
           api.runContext.setRunContext({
             runId: ctx.runId,
             namespace: RUN_CONTEXT_NAMESPACE,
@@ -222,7 +221,7 @@ export default definePluginEntry({
 
     api.agent.events.registerAgentEventSubscription({
       id: "advisor-runs",
-      description: "Counts tool calls in main-agent user runs and reviews when a trigger is due.",
+      description: "Counts tool calls in user and subagent runs and reviews when a trigger is due.",
       streams: ["tool", "lifecycle", "codex_app_server.item"],
       phases: ["start", "result", "end", "error", "started", "completed"],
       payload: "metadata",
@@ -235,7 +234,7 @@ export default definePluginEntry({
         if (event.stream === "lifecycle" && phase === "start") {
           const session = sessions.get(run.sessionKey);
           // A new user turn makes advice about the previous one stale.
-          session?.review?.abort();
+          session?.review?.abort("new_user_turn");
           sessions.set(run.sessionKey, {
             toolCalls: session?.toolCalls ?? 0,
             since: Date.now(),
@@ -272,10 +271,10 @@ export default definePluginEntry({
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {
           if (event.data.aborted === true) {
-            forget(run.sessionKey);
+            forget("run_aborted", run.sessionKey);
           } else {
             // Advice can only steer an active run, so a review still in flight is moot.
-            sessions.get(run.sessionKey)?.review?.abort();
+            sessions.get(run.sessionKey)?.review?.abort("run_end");
           }
         }
       },
@@ -284,8 +283,8 @@ export default definePluginEntry({
     api.registerRuntimeLifecycle({
       id: "advisor",
       description: "Cancels in-flight advisor reviews when sessions or the plugin go away.",
-      cleanup: ({ sessionKey }) => forget(sessionKey),
-      dispose: () => forget(),
+      cleanup: ({ sessionKey }) => forget(sessionKey ? "session_reset" : "plugin_stop", sessionKey),
+      dispose: () => forget("plugin_stop"),
     });
   },
 });

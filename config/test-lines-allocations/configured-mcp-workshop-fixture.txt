@@ -1,2 +1,0 @@
-# Per-case real Workshop activation and cleanup preserves configured MCP authority coverage.
-7

@@ -121,6 +121,37 @@ export function isPlainEventPayload(payload: unknown): payload is Record<string,
   return (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
 }
 
+export function resolveBroadcastSessionScope(
+  payload: unknown,
+  explicit: readonly string[] | undefined,
+  explicitAgentId: string | undefined,
+): { sessionKeys: readonly string[]; agentId?: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      sessionKeys: explicit ?? [],
+      ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
+    };
+  }
+  // SAFETY: Internal event envelopes supply these optional fields; consumed values are checked below.
+  const record = payload as {
+    sessionKey?: unknown;
+    agentId?: unknown;
+    suggestion?: { sessionKey?: unknown; agentId?: unknown };
+    request?: { sessionKey?: unknown; agentId?: unknown };
+  };
+  const source = [record, record.suggestion, record.request].find(
+    (candidate) => typeof candidate?.sessionKey === "string" && candidate.sessionKey.trim(),
+  );
+  const sessionKey = typeof source?.sessionKey === "string" ? source.sessionKey.trim() : "";
+  const agentId =
+    explicitAgentId ??
+    (typeof source?.agentId === "string" ? source.agentId.trim() || undefined : undefined);
+  return {
+    sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
 /** Realtime Talk stays operator-only; session readers receive only targeted dictation. */
 export function isTargetedTranscriptionEvent(payload: unknown, targeted: boolean): boolean {
   return (

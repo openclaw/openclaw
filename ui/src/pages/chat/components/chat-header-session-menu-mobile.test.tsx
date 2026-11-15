@@ -60,6 +60,8 @@ it.each([
   ["Mu\u0308nchen", "M\u00fcnchen"],
 ])("opens the controlled group picker and selects %s without autofocus", async (query, group) => {
   const { menu, open, close, onAction } = await menuFixture(true, group);
+  menu.groups = [...menu.groups, ...Array.from({ length: 7 }, (_, index) => `Zzz ${index}`)];
+  await menu.updateComplete;
   menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
   flush();
   expect(open).toHaveBeenCalledOnce();

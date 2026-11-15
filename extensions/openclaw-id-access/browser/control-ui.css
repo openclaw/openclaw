@@ -99,8 +99,21 @@
   gap: var(--space-2);
 }
 
+.ocid-access__form,
 .ocid-access__actions {
   flex-wrap: wrap;
+}
+
+.ocid-access__profile-select {
+  display: grid;
+  gap: var(--space-2);
+  flex: 1 0 100%;
+  min-width: 0;
+  margin-bottom: var(--space-2);
+}
+
+.ocid-access__form .ocid-access__profile-select .settings-input {
+  width: 100%;
 }
 
 .ocid-access__invite-card,
@@ -297,6 +310,7 @@
 
 .ocid-access__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -352,6 +366,7 @@
 }
 
 .ocid-access__node-info {
+  flex: 1 1 240px;
   min-width: 0;
 }
 
@@ -363,6 +378,13 @@
 
 .ocid-access__node-info + .ocid-access__actions {
   flex-shrink: 0;
+  max-width: 100%;
+}
+
+.ocid-access__node-info + .ocid-access__actions .btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ocid-access__title {
@@ -506,6 +528,36 @@
 .ocid-access__row--member:hover .ocid-access__person,
 .ocid-access__row--member:focus-within .ocid-access__person {
   padding-inline-end: 76px;
+}
+
+.ocid-access__devices {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ocid-access__device {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.ocid-access__device-info {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ocid-access__device > .ocid-access__confirmation {
+  grid-column: 1 / -1;
+  padding-top: 0;
 }
 
 .ocid-access__confirmation,
@@ -658,6 +710,7 @@
     margin-inline-end: auto;
   }
 
+  .ocid-access__devices,
   .ocid-access__confirmation,
   .ocid-access__row-error {
     grid-column: 1 / -1;

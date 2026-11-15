@@ -1,3 +1,0 @@
-177
-# CLI turn hook memory audience: host/owner-private audience regressions and scheduled cron admission-before-audience proof.
-# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.

@@ -72,44 +72,48 @@ async function dispatchPrepare(revokeBeforeDispatch: boolean) {
     ...(await importOriginal<typeof import("../../scripts/release-ci-summary.mjs")>()),
     createReleaseEvidenceClient: () => client,
   }));
-  vi.doMock("node:child_process", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("node:child_process")>()),
-    execFileSync(command: string, args: string[]) {
-      if (command === "git" && args.join(" ") === "show " + qualification.q + ":package.json") {
-        return JSON.stringify({ version });
-      }
-      if (command !== "gh" || args[0] !== "api") {
-        throw new Error("Unexpected external command: " + command + " " + args.join(" "));
-      }
-      const endpoint = args[1] ?? "";
-      const prefix = "repos/" + qualification.repository + "/";
-      if (endpoint === prefix + "git/ref/tags/" + tooling.ref) {
-        tagReads += 1;
-        if (tagReads === 2 && revokeBeforeDispatch) {
-          if (!existsSync(requestPath)) {
-            throw new Error("Revocation preceded request persistence");
-          }
-          qualification.admission.authority.permission = "read";
-          revokedAtEffect = true;
+  vi.doMock("node:child_process", async (importOriginal) => {
+    const original = await importOriginal<typeof import("node:child_process")>();
+    const mocked = {
+      ...original,
+      execFileSync(this: void, command: string, args: string[]) {
+        if (command === "git" && args.join(" ") === "show " + qualification.q + ":package.json") {
+          return JSON.stringify({ version });
         }
-        return JSON.stringify({
-          ref: tooling.fullRef,
-          object: { type: "commit", sha: tooling.sha },
-        });
-      }
-      if (endpoint === prefix + "commits/" + encodeURIComponent(inputs.tag)) {
-        return JSON.stringify({ sha: qualification.q });
-      }
-      if (endpoint === prefix + "actions/runs/" + qualification.runId + "/attempts/1") {
-        return JSON.stringify(qualification.parent);
-      }
-      if (args.includes("POST")) {
-        posts.push({ endpoint, args: [...args] });
-        return JSON.stringify({ workflow_run_id: 9400 });
-      }
-      throw new Error("Unexpected GitHub transport: " + args.join(" "));
-    },
-  }));
+        if (command !== "gh" || args[0] !== "api") {
+          throw new Error("Unexpected external command: " + command + " " + args.join(" "));
+        }
+        const endpoint = args[1] ?? "";
+        const prefix = "repos/" + qualification.repository + "/";
+        if (endpoint === prefix + "git/ref/tags/" + tooling.ref) {
+          tagReads += 1;
+          if (tagReads === 2 && revokeBeforeDispatch) {
+            if (!existsSync(requestPath)) {
+              throw new Error("Revocation preceded request persistence");
+            }
+            qualification.admission.authority.permission = "read";
+            revokedAtEffect = true;
+          }
+          return JSON.stringify({
+            ref: tooling.fullRef,
+            object: { type: "commit", sha: tooling.sha },
+          });
+        }
+        if (endpoint === prefix + "commits/" + encodeURIComponent(inputs.tag)) {
+          return JSON.stringify({ sha: qualification.q });
+        }
+        if (endpoint === prefix + "actions/runs/" + qualification.runId + "/attempts/1") {
+          return JSON.stringify(qualification.parent);
+        }
+        if (args.includes("POST")) {
+          posts.push({ endpoint, args: [...args] });
+          return JSON.stringify({ workflow_run_id: 9400 });
+        }
+        throw new Error("Unexpected GitHub transport: " + args.join(" "));
+      },
+    };
+    return { ...mocked, default: { ...original, execFileSync: mocked.execFileSync } };
+  });
   const errors: string[] = [];
   const errorOutput = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     errors.push(args.map(String).join(" "));

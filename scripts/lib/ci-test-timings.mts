@@ -1,5 +1,6 @@
 // Committed CI measurements are advisory weights, never a test inventory.
 import fs from "node:fs";
+import type { CiTestRuntimePolicy } from "./ci-test-runtime.mts";
 import {
   ciTestTimingsSchema,
   isRuntimePlacementIncludePatterns,
@@ -47,9 +48,31 @@ export function readUiE2eFileTimings(): {
   return readTestTimings()?.uiE2e ?? emptyUiTimings;
 }
 
+type TimingRuntime = { policy: CiTestRuntimePolicy; runtime: "node" | "bun" };
+let timingRuntime: TimingRuntime | undefined;
+
+/** Nested readers share the synchronous planner leg without changing process.env. */
+export function withCiTestTimingRuntime<T>(selection: TimingRuntime, plan: () => T): T {
+  const previous = timingRuntime;
+  timingRuntime = selection;
+  try {
+    return plan();
+  } finally {
+    timingRuntime = previous;
+  }
+}
+
 function selectedTimingPrefix(): string {
-  const policy = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
-  return policy === "bun-all" || policy === "dual-all" ? `${policy}:` : "";
+  const policy = timingRuntime?.policy ?? process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
+  const runtime = timingRuntime?.runtime ?? process.env.OPENCLAW_CI_TEST_RUNTIME;
+  if (policy !== "bun-all" && policy !== "dual-all") {
+    return "";
+  }
+  // The complete dual-all Node pass deliberately shares ordinary Node history.
+  if (policy === "dual-all" && runtime === "node") {
+    return "";
+  }
+  return runtime === "node" || runtime === "bun" ? `${policy}:${runtime}:` : `${policy}:`;
 }
 
 function runtimeSeconds(
@@ -67,7 +90,10 @@ function runtimeSeconds(
   const selected = Object.fromEntries([
     ...entries.filter(([key]) => !/^(?:bun-all|bun-native|node-subset|dual-all|bun):/u.test(key)),
     ...entries
-      .filter(([key]) => prefix && key.startsWith(prefix))
+      .filter(
+        ([key]) =>
+          prefix && key.startsWith(prefix) && !/^(?:node|bun):/u.test(key.slice(prefix.length)),
+      )
       .map(([key, seconds]) => [key.slice(prefix.length), seconds]),
   ]);
   cached.set(prefix, selected);
@@ -92,18 +118,25 @@ export function readRepoE2eFileTimings(): Readonly<Record<string, number>> {
 export function readRuntimePlacementTimings(
   profile: CiTimingProfile,
 ): readonly RuntimePlacementTiming[] {
-  const runtime = selectedTimingPrefix().slice(0, -1);
+  const prefix = selectedTimingPrefix();
+  const [policy = "", runtime = ""] = prefix.split(":");
   const observations = readTestTimings()?.runtimePlacementTimings[profile] ?? emptyRuntimeTimings;
   const cached =
     runtimePlacementCache.get(observations) ?? new Map<string, readonly RuntimePlacementTiming[]>();
-  if (cached.has(runtime)) {
-    return cached.get(runtime)!;
+  if (cached.has(prefix)) {
+    return cached.get(prefix)!;
   }
   const selected = observations.flatMap((observation) => {
-    const { OPENCLAW_CI_TEST_RUNTIME_POLICY: measuredRuntime = "", ...env } = observation.env;
-    return measuredRuntime === runtime ? [{ ...observation, env }] : [];
+    const {
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: measuredPolicy = "",
+      OPENCLAW_CI_TEST_RUNTIME: measuredRuntime = "",
+      ...env
+    } = observation.env;
+    return measuredPolicy === policy && measuredRuntime === runtime
+      ? [{ ...observation, env }]
+      : [];
   });
-  cached.set(runtime, selected);
+  cached.set(prefix, selected);
   runtimePlacementCache.set(observations, cached);
   return selected;
 }

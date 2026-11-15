@@ -50,6 +50,10 @@ const diagnosticTaskKinds = new Set([
   "model-context",
   "context-messages",
   "transcript-search",
+  "session-target-prepare",
+  "session-store-target",
+  "session-target-inventory",
+  "combined-store-topology",
 ]);
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
@@ -133,11 +137,6 @@ export function createWorkerTaskHost(
           retiring: false,
         };
         admissions.set(worker, admission);
-        const retained = admission;
-        worker.once("exit", () => {
-          retained.owner.finish();
-          admissions.delete(worker);
-        });
       }
       // The retained relay supplies current facts on demand; global snapshots grow with sessions.
       const selection = getDatabaseEngineSelection();
@@ -171,7 +170,13 @@ export function createWorkerTaskHost(
           operation === undefined ? "task" : classifyWorkerRequest(operation),
         );
     },
-    describeTask(url, input) {
+    describeTask(url, input, diagnosticOperation) {
+      if (diagnosticOperation !== undefined) {
+        const operation = diagnosticTaskKinds.has(diagnosticOperation)
+          ? diagnosticOperation
+          : classifyWorkerRequest(diagnosticOperation);
+        return `${workerRequestKind(url)}.${operation}`;
+      }
       // Inspect a data property only: diagnostics must not execute an input getter.
       const kind: unknown =
         input !== null && typeof input === "object"
@@ -196,6 +201,20 @@ export function createWorkerTaskHost(
         admission.retiring = true;
       }
       markWorkerRetirement(worker, reason);
+    },
+    workerStopped(worker) {
+      const admission = admissions.get(worker);
+      if (admission) {
+        admission.retiring = true;
+        const finishing = admission.owner.finish();
+        if (finishing) {
+          return finishing.then(() => {
+            admissions.delete(worker);
+          });
+        }
+        admissions.delete(worker);
+      }
+      return undefined;
     },
     flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),

@@ -24,8 +24,10 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-`templates add` accepts a ClawHub package name, a canonical local package directory,
-or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-only.
+`templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
+local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
+publisher's ClawHub handle, as skill references do, including for a Template whose
+package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
 path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
@@ -186,7 +188,7 @@ automations:
   - id: daily-summary
     name: Daily incident summary
     schedule: { cron: "0 9 * * *", timezone: UTC }
-    session: isolated
+    session: main
     message: Summarize active incidents.
 ```
 
@@ -198,16 +200,27 @@ folders are not installed or counted as dependencies. Bundled contents show thei
 name and package-relative path; they have no invented registry version or
 standalone ClawHub verification claim.
 
+`validate` and `build` also stop at 4,096 folders and unselected files in the
+project, outside `.git` and `node_modules`; selected files do not count toward it.
+
 Bundled skill and plugin folders use the same bounded selection: regular files
 only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
 per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
 excluded regardless of case. Links, nonregular files, unsafe portable paths,
 overlapping bundled directories, and conflicting skill identities or workspace
-destinations are rejected. Build and Add reject changed source bytes or folder
-membership after review. File modes follow ordinary Template packaging.
+destinations are rejected. Build and Add preserve executable files and reject changes to source bytes,
+executable flags, or folder membership after review. Other permission bits are
+normalized when packaging and installing bundled folders.
 
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.
+
+Add preserves each automation's required `session`: `main` runs in the new
+agent's main conversation, while `isolated` runs in a separate session.
+Declared automations start with no channel delivery; Add accepts but does not
+apply `delivery`. To post a summary to a channel, configure delivery in the
+automation's settings after Add. Previously added jobs keep their saved session
+target; change those in the automation's settings if needed.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
@@ -215,10 +228,10 @@ reports the conflict without replacing them. Plugin and skill trust warnings
 require explicit consent. Automations are assigned to the new agent.
 If a declared plugin still needs setup, a referenced environment variable is
 missing, or an OAuth MCP server is not authorized, Add creates the declared
-automations paused. Their schedules, prompts, and imported scratch stay intact.
+automations disabled. Their schedules, prompts, and imported scratch stay intact.
 Connect the requirement through its ordinary plugin or MCP controls, then enable
 the jobs through the agent's automation controls; Add does not create substitute
-routines or automatically enable paused jobs later.
+routines or automatically enable disabled jobs later.
 
 A package may declare `agent.heartbeat` in `CLAW.md` or include
 `HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
@@ -226,11 +239,11 @@ and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
 The Add review shows each converted job with its interval and owner delivery;
-existing cron schedules and `none` or last-channel delivery keep their meaning.
+existing cron schedules keep their meaning.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
 `everyMs` is a positive integer, and
 owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules
-and `none` or `last-channel` delivery variants.
+and the `none` delivery of declared automations.
 
 Add creates a job disabled until its imported scratch is saved and verified.
 If scratch import conflicts with another edit, or its write cannot be confirmed,
@@ -255,7 +268,7 @@ agent:
   memory: { search: { enabled: false } }
 ```
 
-Set `enabled: false` on an automation to install it paused; omitting the field
+Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
 in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
 and update its timezone, tools, or timeout through ordinary automation controls.
@@ -296,7 +309,7 @@ version review and installation. The Gateway chooses the new workspace;
 precedence over registry names and require the Gateway to be stopped.
 
 Offline Add uses the same installer and local scheduler after acquiring exclusive
-state ownership. Explicitly paused automations remain paused.
+state ownership. Explicitly disabled automations remain disabled.
 
 A registry name resolves the latest published release to an exact version and
 immutable artifact digest before planning. OpenClaw uses its existing registry
@@ -322,8 +335,8 @@ greeting or a message sent on your behalf. Later setup failure retains the expos
 agent and conversation; completion does not replace an existing draft.
 
 The installer shows a card for each newly installed plugin and an automation-created
-notice as each routine is added. Paused routines stay paused until their setup
-prerequisites are ready. Actual installation failures appear in the plugin card or
+notice as each routine is added. Disabled routines remain disabled while their setup
+prerequisites are missing. Actual installation failures appear in the plugin card or
 a concise automation-failed notice; continue setup in the same agent. Successful
 skill and MCP setup, absent optional files, and empty categories stay silent. There
 is no final setup receipt or second model recap. Declared package bootstrap still
@@ -340,7 +353,7 @@ to use the default unused ID.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
-values are `none`, `last-channel`, or `owner`.
+is `owner` for converted heartbeat jobs and `none` for declared automations.
 
 CLI Add from a local source requires exclusive offline state ownership; it refuses
 to run while a Gateway owns that state. For published ClawHub Templates, both the

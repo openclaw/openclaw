@@ -312,6 +312,9 @@ describe("full-release-validation-at-sha", () => {
     const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
     expect(reopened.status, reopened.stderr).toBe(0);
     expect(reopened.stdout).toContain("release_profile=stable rerun_group=all soak=true");
+    expect(reopened.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(readFileSync(fixture.requestPath())).toEqual(before);
     expect(
       fixture
@@ -1173,6 +1176,9 @@ describe("full-release-validation-at-sha", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("release_profile=stable rerun_group=all soak=true");
     expect(result.stdout).toContain("(dry run; not written)");
+    expect(result.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
     expect(result.stdout).not.toContain("validation/target-");
     const fetch = fixture
@@ -1644,6 +1650,9 @@ describe("full-release-validation-at-sha", () => {
     ]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`Trusted workflow ref: ${fixture.trustedWorkflowTag}`);
+    expect(result.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(fixture.gitCalls()).toContainEqual([
       "ls-remote",
       "--tags",

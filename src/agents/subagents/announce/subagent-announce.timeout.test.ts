@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
-import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 let sessionStore: Record<string, Record<string, unknown>> = {};
 const configOverride = { session: { mainKey: "main", scope: "per-sender" } } as const;
@@ -52,17 +51,18 @@ vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
   getSubagentDepthFromSessionStoreInWorker: async () => 0,
 }));
-// mock-isolation: timeout tests replace the complete transport runtime with deterministic adapters.
-vi.mock("./subagent-announce-delivery.runtime.js", () =>
-  createSubagentAnnounceDeliveryRuntimeMock({
-    callGateway: (request) => callGateway(request),
-    getRuntimeConfig: () => configOverride,
-    loadSessionStore: () => sessionStore,
-    resolveMainSessionKey: () => "agent:main:main",
-    resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
-    isSessionRunActive: (sessionId: string) => isActive(sessionId),
-  }),
-);
+// mock-isolation: Timeout cases do not resolve external transport targets or invoke hooks.
+vi.mock("../../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({ hasHooks: () => false }),
+}));
+vi.mock("../../../infra/outbound/bound-delivery-router.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/bound-delivery-router.js")>()),
+  resolveBoundDeliveryDestination: async () => null,
+}));
+vi.mock("../../../infra/outbound/conversation-id.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/conversation-id.js")>()),
+  resolveConversationIdFromTargets: () => "",
+}));
 // mock-isolation: The fixture controls delivery deadlines and requester records without starting transport or session-store work.
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (...args: Parameters<typeof deliverSubagentAnnouncement>) =>

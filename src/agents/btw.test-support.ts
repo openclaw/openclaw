@@ -326,10 +326,11 @@ export function expectSeedOnlyUserContext(context: unknown) {
   expect(contextMessages(context)).toEqual([
     expect.objectContaining({
       role: "user",
-      content: [
-        { type: "text", text: "seed" },
-        { type: "text", text: expect.stringContaining(MATH_QUESTION) },
-      ],
+      content: [{ type: "text", text: "seed" }],
+    }),
+    expect.objectContaining({
+      role: "user",
+      content: [{ type: "text", text: expect.stringContaining(MATH_QUESTION) }],
     }),
   ]);
 }

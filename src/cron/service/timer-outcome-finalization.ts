@@ -41,7 +41,7 @@ export async function finalizeCompletedCronRunOutcomes(
     captureOpenClawStateWorkerContext();
   const storeKey = state.deps.storeKey;
   const canPublish = (outcome: TimedCronRunOutcome) =>
-    !(state.stopped && opts?.discardWhenStopped) &&
+    !(state.stopped && !state.handedOver && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
   const finalized: TimedCronRunOutcome[] = [];
   let committedSuccessfully = false;
@@ -57,7 +57,6 @@ export async function finalizeCompletedCronRunOutcomes(
           nowMs: state.deps.nowMs(),
           defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
           cronConfig: state.deps.cronConfig,
-          failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
           outcomes: outcomes.map(
             ({
               activeJobMarker,

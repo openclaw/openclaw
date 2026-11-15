@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/outbound-media";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackAccountAsync } from "./accounts.js";
 import { createClickClackClient, type ClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
@@ -128,13 +128,16 @@ async function attachUploadRetrySafe(params: {
   }
 }
 
-function createOutboundContext(params: {
+async function createOutboundContext(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   correlationId?: string;
   assertDirectAdapterHandoff?: () => void;
 }) {
-  const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = await resolveClickClackAccountAsync({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const client = createClickClackClient({
     baseUrl: account.apiEndpoint,
     token: account.token,
@@ -169,7 +172,7 @@ export async function sendClickClackText(params: {
   if (!text) {
     return { outcome: "not_sent" };
   }
-  const { account, client } = createOutboundContext(params);
+  const { account, client } = await createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const message = await createTargetMessage({
     client,
@@ -198,7 +201,7 @@ export async function sendClickClackMedia(
     },
 ): Promise<string> {
   const nonces = mediaDeliveryNonces(params);
-  const { account, client } = createOutboundContext(params);
+  const { account, client } = await createOutboundContext(params);
   const maxBytes = Math.min(
     resolveChannelMediaMaxBytes({
       cfg: params.cfg,
@@ -297,7 +300,7 @@ export async function reconcileClickClackUnknownSend(
       ? plannedMediaUrls
       : [payload?.mediaUrl, ...(payload?.mediaUrls ?? [])],
   );
-  const { account, client } = createOutboundContext({
+  const { account, client } = await createOutboundContext({
     cfg: ctx.cfg as CoreConfig,
     accountId: ctx.accountId,
   });

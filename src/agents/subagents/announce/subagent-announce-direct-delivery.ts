@@ -1,7 +1,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
+import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
@@ -17,7 +20,10 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
+import {
+  isEmbeddedAgentRunHandleActive,
+  resolveEmbeddedRunAbandonment,
+} from "../../embedded-agent-runner/runs.js";
 import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
@@ -46,11 +52,8 @@ import {
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  getSubagentAnnounceRuntimeConfig,
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
-  resolveExternalBestEffortDeliveryTarget,
-  resolveQueueSettings,
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
@@ -341,16 +344,20 @@ async function sendSubagentAnnounceDirectlyBound(
         return sourceOwnerChangedResult();
       }
     }
+    // A cron run keeps its session turn through finalization, so a requester turn queued
+    // after its agent attempt ended would wait out the run; the run reads this row itself.
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(
-        params.targetRequesterSessionKey,
-        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
-      ).isActive &&
       !agentMediatedCompletion
     ) {
-      return completionHandoffPendingResult();
+      const { sessionId } = resolveRequesterSessionActivity(
+        params.targetRequesterSessionKey,
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+      );
+      if (!sessionId || !isEmbeddedAgentRunHandleActive(sessionId)) {
+        return completionHandoffPendingResult();
+      }
     }
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };
@@ -387,6 +394,7 @@ async function sendSubagentAnnounceDirectlyBound(
       bestEffortDeliver: params.bestEffortDeliver,
       internalEvents: params.internalEvents,
       channel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
+      ...(params.inputAttachments?.length ? { attachments: params.inputAttachments } : {}),
       accountId: directAgentOrigin?.accountId,
       to: directAgentOrigin?.to,
       threadId: stringifyRouteThreadId(directAgentOrigin?.threadId),

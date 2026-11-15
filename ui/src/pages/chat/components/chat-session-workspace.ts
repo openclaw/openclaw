@@ -482,6 +482,10 @@ export function createSessionWorkspaceProps(
       ),
     onSetFilter: (filter: SessionWorkspaceFilter) => {
       workspace.filter = filter;
+      // Activity reveals default results; refresh and All preserve manual disclosure.
+      if (options?.presentation === undefined && filter !== "all") {
+        workspace.tree!.sessionExpanded = true;
+      }
       if (mobile && filter !== "all") {
         mobile.expandedGroups[filter] = true;
       }

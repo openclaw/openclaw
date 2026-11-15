@@ -1,2 +1,0 @@
-# Extend the queue-drain regression to cover model projection and a lone second-source context.
-6

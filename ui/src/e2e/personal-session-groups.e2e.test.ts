@@ -28,6 +28,83 @@ const key = "agent:main:reliability";
 const releaseKey = "agent:main:release";
 
 suite.define(() => {
+  it("moves only the dragged personal reference and retains it across reload", async () => {
+    await suite.withPage({ reducedMotion: "reduce" }, async ({ page }) => {
+      const session = createControlUiSessionRow(key, "Move reference", Date.now());
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+        presenceUsers: [{ self: true, id: "move-owner", name: "Move Owner" }],
+        sessions: [session],
+        methodResponses: { "sessions.list": sessionsListResponse([session]) },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await evaluateControlUiContext(page, ({ navigation }) =>
+        navigation.update({
+          personalSessionGroups: [
+            { id: "source", label: "Source", sessionKeys: ["agent:main:reliability"] },
+            { id: "destination", label: "Destination", sessionKeys: [] },
+            { id: "separate", label: "Separate", sessionKeys: ["agent:main:reliability"] },
+          ],
+        }),
+      );
+      const group = (id: string) => page.locator(`[data-personal-session-group="${id}"]`);
+      const row = (id: string) => group(id).locator(`[data-session-key="${key}"]`);
+      await row("source").dragTo(group("destination").locator(".personal-session-groups__header"));
+      await expect.poll(() => row("source").count()).toBe(0);
+      await expect.poll(() => row("destination").count()).toBe(1);
+      expect(await row("separate").count()).toBe(1);
+      // Moving onto an existing reference still removes only the dragged origin.
+      await row("separate").dragTo(
+        group("destination").locator(".personal-session-groups__header"),
+      );
+      await expect.poll(() => row("separate").count()).toBe(0);
+      expect(await row("destination").count()).toBe(1);
+      await row("destination").dragTo(
+        group("destination").locator(".personal-session-groups__header"),
+      );
+      expect(await row("destination").count()).toBe(1);
+      await page.reload();
+      await row("destination").waitFor();
+      expect(await row("source").count()).toBe(0);
+      expect(await row("separate").count()).toBe(0);
+      // A drag started before reconnect must not edit the replacement scope.
+      const transfer = await page.evaluateHandle(() => new DataTransfer());
+      await row("destination").dispatchEvent("dragstart", { dataTransfer: transfer });
+      const sockets = await gateway.getSocketCount();
+      await gateway.closeLatest(1001, "scope changed during drag");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(sockets);
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot()?.gatewayPhase === "connected",
+      );
+      await group("source").dispatchEvent("drop", { dataTransfer: transfer });
+      expect(await row("source").count()).toBe(0);
+      expect(await row("destination").count()).toBe(1);
+      await transfer.dispose();
+      // An unresolvable session payload cannot create a personal reference.
+      const unknown = await page.evaluateHandle(() => {
+        const data = new DataTransfer();
+        data.setData("application/x-openclaw-session-key", "agent:main:inaccessible");
+        return data;
+      });
+      await group("source").dispatchEvent("drop", { dataTransfer: unknown });
+      expect(await group("source").locator("[data-session-key]").count()).toBe(0);
+      await unknown.dispose();
+      expect(
+        await evaluateControlUiContext(
+          page,
+          ({ navigation }) => navigation.snapshot.personalSessionGroups,
+        ),
+      ).toEqual([
+        { id: "source", label: "Source", sessionKeys: [] },
+        { id: "destination", label: "Destination", sessionKeys: [key] },
+        { id: "separate", label: "Separate", sessionKeys: [] },
+      ]);
+      for (const method of ["users.prefs.set", "sessions.patch", "sessions.groups.put"]) {
+        expect(await gateway.getRequests(method)).toEqual([]);
+      }
+    });
+  });
   it("places sections below Pinned and scopes the two-step editor", async () => {
     // OPENCLAW_SECTIONS_STAGE=after records proof screenshots for every touched surface.
     const stage = process.env.OPENCLAW_SECTIONS_STAGE;

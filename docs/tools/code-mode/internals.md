@@ -215,7 +215,9 @@ it forms a direct branch extension, bounded to 256 events and 1 MiB. An unchange
 suffix returns no writes. Divergent branches, rewrites, and larger or non-linear
 suffixes use the canonical branch selector. Both paths validate historical
 shapes, keys, and provenance in the reader, then return only each key's final
-write or delete. The main thread applies that compact result in the attributed
+write or delete. Cold replay folds each selected store payload before reading the
+next, so superseded snapshots do not accumulate in the reader. The main thread
+applies that compact result in the attributed
 `sessions.transcript-maintenance:apply` task; superseded values never cross the
 worker boundary.
 

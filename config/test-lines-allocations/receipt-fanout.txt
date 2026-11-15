@@ -1,2 +1,0 @@
-# Receipt fanout: retained tool state/current actions, display-owner scope, narration identity, unloaded reply settlement, and inline plugin presentation regressions.
-347

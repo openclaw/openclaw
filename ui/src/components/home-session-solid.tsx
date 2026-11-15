@@ -127,7 +127,7 @@ export function HomeSession(input: Partial<Props>) {
           class="oc-icon-button oc-icon-button--28 rail-header__action"
           aria-label={t("assistantPanel.attachSelection")}
           disabled={!selectionAvailable()}
-          title={t("assistantPanel.attachSelection")}
+          title={t("assistantPanel.attachSelectionTooltip")}
           onMouseDown={attachSelection}
           onClick={(event) => {
             if (event.detail === 0) {

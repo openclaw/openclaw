@@ -14,6 +14,8 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+In the Control UI, the **Context compacted** divider shows the tokens saved and the percentage reduction from the pre-compaction token count when both before and after counts are available.
+
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
 Compaction and branch summaries omit an edit or write from modified-file metadata when its matching tool result explicitly reports `changed: false`. An earlier change to the same path remains recorded. Missing results and errors without that explicit outcome remain conservative: an error alone does not prove that no file changed.
@@ -91,6 +93,13 @@ new tool results, against the full window even when proactive compaction is
 disabled. It stops an over-window submission and uses the existing safe recovery
 path. Native Codex and Claude CLI keep their own compaction policies.
 
+If tool-result trimming cannot change the saved context, recovery falls through
+to compaction instead of retrying the same oversized request. Same-turn retries
+reuse the recorded keyed input and its runtime context, preserving completed tool
+results without appending another continuation prompt. Recovery estimates count
+only tool-result text the transcript owner can trim; context-engine projections
+that are absent from the saved transcript require compaction.
+
 Scheduled turns in an existing session use the same built-in request checks.
 Their context totals update during requests and after completion even when the
 automation preserves the conversation's displayed model and billing snapshot.
@@ -117,6 +126,14 @@ For OpenAI-compatible Chat Completions, an automatically context-capped response
 Before automatically reducing the output budget for an OpenAI-compatible tool request, OpenClaw uses a minimum output budget equal to one eighth of the model’s declared maximum output, bounded between 16 and 2,048 tokens. If that minimum cannot fit, compaction runs before the request is sent. Requests without active tools keep the 16-token floor, and explicit output limits that fit remain valid.
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
+
+Before using the Responses compact endpoint, OpenClaw checks that its input fits
+the model and request window. Oversized input goes directly to the bounded client
+summarizer. If the endpoint still reports context overflow during automatic
+compaction, OpenClaw logs the reason and commits a deterministic reduction without
+another model request. Recent turns and the pending request stay in context;
+older messages remain in saved history. Manual `/compact` keeps trying the bounded
+client summarizer after an endpoint failure.
 
 If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. If the recovery compaction itself fails, for example because the summary model errors or times out, the reply says so and suggests trying again or running `/compact`. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 

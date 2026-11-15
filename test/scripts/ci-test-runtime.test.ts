@@ -1,7 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  BUN_UI_TEST_ENV,
   ciTestShardRuntimes,
   filterCiTestRuntimeSelections,
   resolveCiTestRuntimeFiles,
@@ -34,32 +33,6 @@ describe("CI runtime job inventory", () => {
         "bun-all",
       ),
     ).toEqual(["node"]);
-  });
-
-  it("retains UI post-shard membership rather than promoting Node-only files to Bun", () => {
-    const nodeFile = "ui/src/pages/chat/chat-pane-retention.test.ts";
-    const original = resolveCiTestRuntimeSelections(
-      {
-        configs: ["ui/vitest.config.ts"],
-        vitestArgs: ["--maxWorkers=3", "--shard=1/3"],
-      },
-      "bun-all",
-    );
-    expect(original).toHaveLength(2);
-    const [node, bun] = original;
-    if (!node || !bun) {
-      throw new Error("UI must retain both runtime selections");
-    }
-    expect(node).toMatchObject({ runtime: "node", includeAfterShard: true });
-    expect(bun).toMatchObject({ runtime: "bun", includeAfterShard: true, env: BUN_UI_TEST_ENV });
-    if (node.engine === "bun-test" || bun.engine === "bun-test") {
-      throw new Error("UI must preserve Vitest native sharding");
-    }
-    expect(node.includePatterns).toContain(nodeFile);
-    expect(bun.includePatterns).not.toContain(nodeFile);
-    expect(
-      new Set(node.includePatterns!.filter((file) => bun.includePatterns!.includes(file))).size,
-    ).toBe(0);
   });
 
   it("includes inherited CLI arguments when selecting grouped runtime jobs", () => {

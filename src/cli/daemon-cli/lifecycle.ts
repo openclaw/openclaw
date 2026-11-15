@@ -27,7 +27,6 @@ import {
 } from "../../infra/gateway-processes.js";
 import { captureStalledGatewayStartup } from "../../infra/gateway-startup-owner.js";
 import {
-  assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
   isGatewayExternallySupervised,
   resolveGatewayServiceMutationError,
@@ -511,7 +510,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
-    beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
+    beforeServiceMutation: () =>
+      assertGatewayServiceActionAllowed("restart", "restart the gateway"),
     restartOwnedProcess: preserveDefinition
       ? undefined
       : async () => {
@@ -676,9 +676,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           env: restartContext.env,
           config: restartContext.config,
           probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
-          ...(restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
-            ? { requirePluginHealth: false }
-            : {}),
+          requireOwnedListener: restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1",
           supervisorKeepsAlive: process.platform === "darwin",
           signal: getAsyncWorkSignal(),
         });

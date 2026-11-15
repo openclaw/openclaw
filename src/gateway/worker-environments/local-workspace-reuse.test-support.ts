@@ -10,7 +10,9 @@ import {
 import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
@@ -23,7 +25,67 @@ const expectText = async (directory: string, relative: string, expected: string)
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
 
+async function provePreparationAttribution(owner: LocalWorkspaceOwner) {
+  const stores = await import("./local-workspace-store.js");
+  const withStore = stores.withLocalWorkspaceStore;
+  let clock = 0;
+  using clockSpy = vi.spyOn(performance, "now");
+  clockSpy.mockImplementation(() => clock);
+  using storeSpy = vi.spyOn(stores, "withLocalWorkspaceStore");
+  storeSpy.mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        update: async (...args) => {
+          const result = await store.update(...args);
+          if (args[3] && "rawManifest" in args[3]) {
+            clock += 2_000;
+          }
+          return result;
+        },
+        manifest: async (...args) => {
+          const result = await store.manifest(...args);
+          if (args[1].kind === "scan") {
+            clock += 4_000;
+          }
+          return result;
+        },
+      }),
+    ),
+  );
+  const log = { info: vi.fn<(message: string) => void>() };
+  const timing = startChatSendDiagnostics(log);
+  timing.acknowledge();
+  using prepared = await withDiagnosticsTimelineObserver(timing.observeSpan, () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
+  timing.finish();
+  await expectText(prepared.workspaceDir, "source.txt", "original\n");
+  expect(log.info).toHaveBeenCalledTimes(1);
+  const message = log.info.mock.calls[0]![0];
+  const prefix = "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+  expect(message).toContain(`${prefix}=6000ms`);
+  expect(message).toContain(`${prefix}.baseline=2000ms`);
+  expect(message).toContain(`${prefix}.checkpoint.projection=4000ms`);
+
+  await writeText(prepared.workspaceDir, "source.txt", "later guest edit\n");
+  const reuseTiming = startChatSendDiagnostics(log);
+  reuseTiming.acknowledge();
+  using reused = await withDiagnosticsTimelineObserver(reuseTiming.observeSpan, () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
+  reuseTiming.finish();
+  await expectText(reused.workspaceDir, "source.txt", "later guest edit\n");
+  expect(log.info).toHaveBeenCalledTimes(2);
+  const reuseMessage = log.info.mock.calls[1]![0];
+  expect(reuseMessage).toContain(
+    "detail.attempt.setup.sandbox.workspace_selection.reuse.reconcile.checkpoint.canonical=",
+  );
+  expect(reuseMessage).not.toContain(`${prefix}.checkpoint`);
+}
+
 export async function proveWorkspaceWaitAttribution(owner: LocalWorkspaceOwner) {
+  await provePreparationAttribution(owner);
   using _ = await prepareSandboxCheckpointFixture(owner);
   const stores = await import("./local-workspace-store.js");
   const projections = await import("./local-workspace-projection.js");
@@ -308,11 +370,11 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   const canonical = owner.worktree.path;
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   using first = await prepareSandboxCheckpointFixture(owner);
+  expect(
+    (await readLocalWorkspaceProjection(owner.worktree.id))?.projection_fingerprints,
+  ).not.toBeNull();
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
-  using unchanged = await prepareSandboxCheckpointFixture(owner);
-  expect(unchanged.workspaceDir).toBe(first.workspaceDir);
-  expect(quiesce).not.toHaveBeenCalled();
-
+  // The first reuse must detect a same-size edit despite the retained initialization identities.
   const source = path.join(first.workspaceDir, "source.txt");
   const before = await fs.stat(source);
   await writeText(first.workspaceDir, "source.txt", "modified\n");
@@ -320,6 +382,11 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
   await expectText(canonical, "source.txt", "modified\n");
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
+
+  quiesce.mockClear();
+  using unchanged = await prepareSandboxCheckpointFixture(owner);
+  expect(unchanged.workspaceDir).toBe(first.workspaceDir);
+  expect(quiesce).not.toHaveBeenCalled();
 
   await writeText(canonical, "source.txt", "host edit\n");
   const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
@@ -359,6 +426,12 @@ export async function proveWarmWorkspaceReuseFailure(
   revoke: () => void,
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
+  if (failure === "observation") {
+    // An unchanged inode needs no acceptance; replace it without changing the content.
+    const source = path.join(first.workspaceDir, "source.txt");
+    await fs.copyFile(source, `${source}.replacement`);
+    await fs.rename(`${source}.replacement`, source);
+  }
   const stores = await import("./local-workspace-store.js");
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");

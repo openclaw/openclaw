@@ -111,6 +111,25 @@ describe("worktree Git size estimates", () => {
     expect(scans()).toHaveLength(1);
   });
 
+  it("hydrates missing contents with 20,000 unrelated repository config entries", async () => {
+    const { clone, commit, missing } = await partialClone();
+    const common = path.join(path.dirname(clone), process.platform === "win32" ? "meta" : "meta ");
+    await git(clone, "init", "--template=", `--separate-git-dir=${common}`);
+    await fs.appendFile(
+      path.join(common, "config"),
+      Array.from(
+        { length: 10_000 },
+        (_, index) =>
+          `[branch "session-${index}"]\nremote = origin\n[remote "unused-${index}"]\nurl = https://example.invalid/repository.git\n`,
+      ).join(""),
+    );
+    await hydrateCommitObjects(clone, commit, missing);
+    for (const object of missing) {
+      await expect(runGit(clone, ["cat-file", "-e", object])).resolves.toMatchObject({ code: 0 });
+    }
+    expect(await estimateWorktreeGitBytes(clone, commit)).toBe(16_384);
+  });
+
   it("preserves admitted caller ownership config through text and buffered sizing without changing defaults", async () => {
     const root = tempDirs.make("openclaw-capacity-caller-git-");
     const repo = await initializeGitFixture(root, "repo", "README.md", "capacity\n");
