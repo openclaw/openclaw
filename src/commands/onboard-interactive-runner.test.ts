@@ -4,10 +4,13 @@ import { restoreTerminalState } from "../../packages/terminal-core/src/restore.j
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { runGuidedOnboardingHandoff } from "./onboard-interactive-runner.js";
 
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  existsSync: vi.fn(() => false),
-}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(() => false) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 // mock-isolation: Prove the bootstrap lookup without preparing a real agent workspace.
 vi.mock("../agents/workspace.js", () => ({ DEFAULT_BOOTSTRAP_FILENAME: "BOOTSTRAP.md" }));
 // mock-isolation: Observe the handoff without opening an interactive terminal client.

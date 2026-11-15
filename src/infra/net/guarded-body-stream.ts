@@ -141,12 +141,17 @@ export function wrapGuardedBodyStream(params: BodyStreamOptions): ReadableStream
 }
 
 /** Preserves post-header request cancellation around runtime fetch body streams. */
-export function responseWithAbortSignal(response: Response, signal?: AbortSignal): Response {
+export function responseWithAbortSignal(
+  response: Response,
+  signal?: AbortSignal,
+  cleanup: () => void = () => {},
+): Response {
   if (!response.body || !signal) {
+    cleanup();
     return response;
   }
   const wrapped = new Response(
-    wrapBodyStream({ body: response.body, cleanup: () => {}, signal }, "cancellation"),
+    wrapBodyStream({ body: response.body, cleanup, signal }, "cancellation"),
     {
       status: response.status,
       statusText: response.statusText,

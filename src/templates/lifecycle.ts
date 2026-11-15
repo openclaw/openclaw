@@ -167,9 +167,12 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
+  const admittedWorkspace =
+    context.admittedWorkspace === undefined
+      ? undefined
+      : canonicalWorkspacePath(context.admittedWorkspace);
   const workspaceBlocked =
-    configuredWorkspaceConflict ||
-    (workspaceExistsOnDisk && context.admittedWorkspace !== workspace);
+    configuredWorkspaceConflict || (workspaceExistsOnDisk && admittedWorkspace !== workspace);
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;

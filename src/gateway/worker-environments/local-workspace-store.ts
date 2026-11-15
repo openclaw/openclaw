@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
-import { deserialize, serialize } from "node:v8";
-import { deflateRaw, deflateRawSync, inflateRawSync } from "node:zlib";
+import { serialize } from "node:v8";
+import { deflateRaw, deflateRawSync } from "node:zlib";
 import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
@@ -22,12 +22,13 @@ import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
+import {
+  localWorkspaceFingerprintPatch,
+  readLocalWorkspaceCommit,
+} from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
-} from "./local-workspace-manifest-scan.js";
-import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
-import type {
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
@@ -203,29 +204,37 @@ export function withLocalWorkspaceStore<T>(
                 const mutate = async (
                   mutation: LocalWorkspaceMutation,
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
+                  preparedMutation?: Uint8Array,
                 ) => {
                   assertCurrent();
                   if (mutation.kind === "update" && mutation.manifest) {
                     // Checkpoints also carry recovery documents; the writer only publishes roots.
-                    const { previousRoot, resultingRoot, treeRoot, fingerprints } =
-                      mutation.manifest;
+                    const {
+                      previousRoot,
+                      resultingRoot,
+                      treeRoot,
+                      fingerprints,
+                      fingerprintsFromCheckpoint,
+                    } = mutation.manifest;
                     mutation.manifest = {
                       previousRoot,
                       resultingRoot,
                       treeRoot,
                       fingerprints,
+                      fingerprintsFromCheckpoint,
                       records: [],
                       removed: [],
                     };
                   }
-                  let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined = mutation;
+                  let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined =
+                    preparedMutation ?? mutation;
                   const source =
                     mutation.kind === "create"
                       ? mutation.row
                       : mutation.kind === "update"
                         ? mutation.patch
                         : undefined;
-                  if (typeof source?.source_paths_json === "string") {
+                  if (!preparedMutation && typeof source?.source_paths_json === "string") {
                     const paths = prepareLocalWorkspaceSourcePathSet(source.source_paths_json);
                     await prepare([deflateRawSync(serialize({ paths }))]);
                     source.source_paths_digest = localWorkspaceDigestBytes(paths.digest);
@@ -242,22 +251,47 @@ export function withLocalWorkspaceStore<T>(
                       };
                     }
                   }
+                  if (
+                    !(wireMutation instanceof Uint8Array) &&
+                    wireMutation.kind === "update" &&
+                    wireMutation.manifest?.fingerprintsFromCheckpoint
+                  ) {
+                    wireMutation = {
+                      ...wireMutation,
+                      manifest: { ...wireMutation.manifest, fingerprints: undefined },
+                    };
+                  }
+                  // Commit receipts and acknowledgement reuse the same decoded fingerprint bytes.
                   let pending:
                     | {
                         mutation: LocalWorkspaceMutation;
                         previous: LocalWorkspaceProjection | undefined;
                       }
-                    | undefined = { mutation, previous: row };
+                    | undefined = {
+                    mutation:
+                      mutation.kind === "update" && mutation.manifest?.fingerprints
+                        ? {
+                            ...mutation,
+                            patch: {
+                              ...mutation.patch,
+                              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
+                            },
+                          }
+                        : mutation,
+                    previous: row,
+                  };
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
                   // Compress large inventories to fit the broker's existing queue budget.
-                  const serialized = serialize(wireMutation);
-                  const compressed =
-                    serialized.byteLength > 32 * 1024 * 1024
-                      ? await compressMutation(serialized)
-                      : undefined;
-                  if (compressed && compressed.byteLength < serialized.byteLength) {
-                    wireMutation = compressed;
+                  if (!preparedMutation) {
+                    const serialized = serialize(wireMutation);
+                    const compressed =
+                      serialized.byteLength > 32 * 1024 * 1024
+                        ? await compressMutation(serialized)
+                        : undefined;
+                    if (compressed && compressed.byteLength < serialized.byteLength) {
+                      wireMutation = compressed;
+                    }
                   }
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
@@ -284,6 +318,8 @@ export function withLocalWorkspaceStore<T>(
                                 mutation: wireMutation!,
                                 preparationEpoch,
                                 predicates,
+                                workspaceEvidence: guard.workspaceEvidence,
+                                stateOwnerPath: guard.stateOwnerPath,
                                 leases: write.identities,
                               },
                             }),
@@ -402,10 +438,16 @@ export function withLocalWorkspaceStore<T>(
                 };
                 const accept: LocalWorkspaceStore["accept"] = async (prepared, guard) => {
                   await prepare(prepared.preparations ?? []);
-                  const mutationBytes = inflateRawSync(prepared.mutation);
-                  // SAFETY: prepareUpdate serializes this owner-created mutation after immutable preparation.
-                  const mutation = deserialize(mutationBytes) as LocalWorkspaceMutation;
-                  await mutate(mutation, guard);
+                  await mutate(
+                    {
+                      kind: "update",
+                      revision: prepared.revision,
+                      patch: prepared.patch,
+                      rejectedResult: prepared.rejectedResult,
+                    },
+                    guard,
+                    prepared.mutation,
+                  );
                   return row!;
                 };
                 return await run({

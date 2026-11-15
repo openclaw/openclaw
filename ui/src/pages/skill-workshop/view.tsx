@@ -437,15 +437,12 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
             </Show>
           </div>
         </section>
-        <section
-          class="sw-detail settings-group oc-settings-group"
-          ref={(element) => {
-            detail = element;
-          }}
-        >
-          <Show
-            when={props.view().viewer}
-            fallback={<SettingsEmpty message={t("skillWorkshop.viewer.pick")} carapace />}
+        <Show when={props.view().viewer}>
+          <section
+            class="sw-detail settings-group oc-settings-group"
+            ref={(element) => {
+              detail = element;
+            }}
           >
             <Show
               when={props.view().viewer?.target.draftId}
@@ -453,8 +450,8 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
             >
               <DraftDetail view={props.view} reads={props.reads} />
             </Show>
-          </Show>
-        </section>
+          </section>
+        </Show>
       </div>
     </Show>
   );

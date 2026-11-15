@@ -183,7 +183,7 @@ async function loadArtifacts(
       readWindow: cursor?.readWindow,
     }).catch((error: unknown) => {
       if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
-        throw invalidImageCursor("Transcript changed; restart artifacts.list");
+        throw invalidImageCursor("Chat history changed; restart artifacts.list");
       }
       throw error;
     });

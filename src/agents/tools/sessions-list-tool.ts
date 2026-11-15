@@ -93,7 +93,7 @@ const SessionsListOutputSchema = Type.Object(
     enrichmentOmitted: Type.Optional(
       Type.Boolean({
         description:
-          "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
+          "Inline messages and chat previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
     sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),

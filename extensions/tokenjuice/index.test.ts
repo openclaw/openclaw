@@ -85,7 +85,11 @@ describe("tokenjuice plugin", () => {
       toolEvent("exec", undefined, "x".repeat(120_000)),
     );
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
-    expect(result.details).toEqual({ ...completed, tokenjuice: { compacted: true } });
+    expect(result.details).toEqual({
+      ...completed,
+      aggregated: "compacted",
+      tokenjuice: { compacted: true },
+    });
   });
 
   it("passes through status metadata without duplicate aggregated output", async () => {

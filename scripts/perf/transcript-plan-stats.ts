@@ -37,7 +37,7 @@ const iterations = parseStrictIntegerOption({
 assert(["plans", "timing", "allocation"].includes(values.mode));
 const sourceHash = createHash("sha256");
 const baseline = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
-for (const owner of ["projection-read", "history-interval", "suffix-read"]) {
+for (const owner of ["projection-read", "history-interval", "suffix-read", "active-context"]) {
   const file = `src/config/sessions/session-accessor.sqlite-${owner}.ts`;
   const saved = baseline && path.join(baseline, file);
   sourceHash.update(file).update(readFileSync(saved && existsSync(saved) ? saved : file));

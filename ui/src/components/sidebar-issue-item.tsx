@@ -34,7 +34,7 @@ registerEnglishCatalog(registerSidebarAttentionEnglish);
 type SidebarIssueItemHandlers = {
   basePath: string;
   onDismiss?: () => void;
-  onNavigate: (routeId: NavigationRouteId) => void;
+  onNavigate: (routeId: NavigationRouteId, options?: { search: string }) => void;
   onOpen: (item: SidebarAttentionItem) => void;
 };
 
@@ -412,10 +412,13 @@ export function SidebarIssueItem(props: {
             <a
               ref={sidebarAttentionFocusRef("row")}
               class="sidebar-issues-panel__navigation-link"
-              href={pathForRoute(action().routeId, props.handlers.basePath)}
+              href={`${pathForRoute(action().routeId, props.handlers.basePath)}${action().search ?? ""}`}
               data-issue-row-focus
               onClick={(event) =>
-                handleNavigationClick(event, () => props.handlers.onNavigate(action().routeId))
+                handleNavigationClick(event, () => {
+                  const search = action().search;
+                  props.handlers.onNavigate(action().routeId, search ? { search } : undefined);
+                })
               }
             >
               <SidebarIssueContent item={props.item} />

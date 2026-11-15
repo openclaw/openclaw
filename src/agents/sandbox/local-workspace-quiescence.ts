@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -22,6 +23,7 @@ import {
   assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
+import type { LocalWorkspacePausePhase } from "./types.js";
 
 const log = createSubsystemLogger("sandbox/quiescence");
 const pauseCounts = {
@@ -33,24 +35,6 @@ const pauseCounts = {
   restore: 0,
 };
 export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
-export type LocalWorkspacePausePhase =
-  | "pause"
-  | "operation"
-  | "recovery"
-  | "capture"
-  | "scan"
-  | "staging"
-  | "materialization"
-  | "preflight"
-  | "patch"
-  | "apply"
-  | "acceptance"
-  | "verification"
-  | "cleanup"
-  | "resume"
-  | "resumeInspect"
-  | "resumeAuthority"
-  | "unpause";
 
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(
@@ -225,6 +209,7 @@ export async function quiesceLocalWorkspace(params: {
   using phases = observeDiagnosticsTimelinePhases(
     "attempt.setup.sandbox.workspace_selection.quiesce.registry",
   );
+  const scope = createHash("sha256").update(params.workspaceDir).digest("hex").slice(0, 16);
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir, { env: params.env })).map(
     (runtime) => ({
       runtime,
@@ -367,10 +352,13 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
       phaseStartedAt = startedAt = performance.now();
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
-      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
-        engine: engine.id,
-        runtime: runtime.kind,
-      });
+      log.info(
+        `Local workspace pause: reason=${reason} scope=${scope} count=${++pauseCounts[reason]}`,
+        {
+          engine: engine.id,
+          runtime: runtime.kind,
+        },
+      );
     }
     phaseObservers.add(observePhase);
     releases.push(async () => {
@@ -434,7 +422,7 @@ export async function quiesceLocalWorkspace(params: {
         }
         // Recovered receipts have no timestamp; never present this owner's observation as the full pause.
         log.info(
-          `Local workspace unpause: reason=${reason} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
+          `Local workspace unpause: reason=${reason} scope=${scope} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
           { engine: engine.id, runtime: runtime.kind },
         );
       }
