@@ -10,11 +10,7 @@ import {
   resolveGitReleaseEntrypointForLauncher,
   resolveGitReleaseLauncherForEntrypoint,
 } from "./git-release-paths.js";
-import {
-  createGitReleaseWorktreeDir,
-  publishGitRelease,
-  settleGitReleaseTrial,
-} from "./git-release.js";
+import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -53,9 +49,14 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     const db = path.join(stateDir, "state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(db), { recursive: true });
     await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
-    // The new release's boot upgraded state by copy and swap before crashing.
+    // The new release's boot upgraded state by copy and swap before crashing:
+    // the WAL had a predecessor, the trial created SHM and seal files from scratch.
     await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+    await fs.writeFile(`${db}-wal.pre-2.0.0`, "old wal");
     await fs.writeFile(db, "new schema");
+    await fs.writeFile(`${db}-wal`, "new wal");
+    await fs.writeFile(`${db}-shm`, "new shm");
+    await fs.writeFile(`${db}.seal`, "new seal");
 
     expect(startGateway(prefix).status).not.toBe(0);
     expect(startGateway(prefix).status).not.toBe(0);
@@ -65,6 +66,9 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(third.stdout).toContain(`old ${path.join(gitReleaseSlot(prefix), "dist", "index.js")}`);
     expect(third.stderr).toContain("failed to start twice");
     expect(await fs.readFile(db, "utf8")).toBe("old schema");
+    expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
+    await expect(fs.access(`${db}-shm`)).rejects.toThrow();
+    await expect(fs.access(`${db}.seal`)).rejects.toThrow();
     await expect(fs.access(path.join(prefix, "releases", GIT_RELEASE_TRIAL))).rejects.toThrow();
   });
 

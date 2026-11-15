@@ -27,22 +27,40 @@ const slot = path.join(prefix, "lib", "node_modules", "openclaw");
 const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
 const counts = process.argv.slice(2).includes("gateway");
 
-function restoreState(dir, suffix, since, depth) {
+// Upgraded state keeps each replaced file as "<file>.pre-<version>". Restore them
+// together: a trial's WAL, journal, SHM or seal must never pair with a restored
+// database, so a companion with no preserved predecessor is removed.
+function collectPreserved(dir, suffix, since, depth, found) {
   let entries = [];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return;
+    return found;
   }
   for (const entry of entries) {
     const file = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (depth > 0 && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
-        restoreState(file, suffix, since, depth - 1);
+        collectPreserved(file, suffix, since, depth - 1, found);
       }
     } else if (entry.name.endsWith(suffix) && fs.statSync(file).ctimeMs >= since) {
-      fs.renameSync(file, file.slice(0, -suffix.length));
+      found.push(file.slice(0, -suffix.length));
     }
+  }
+  return found;
+}
+
+function restoreState(files, suffix) {
+  const restored = new Set(files);
+  for (const file of files) {
+    for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {
+      if (!restored.has(file + companion)) {
+        fs.rmSync(file + companion, { force: true });
+      }
+    }
+  }
+  for (const file of files) {
+    fs.renameSync(file + suffix, file);
   }
 }
 
@@ -58,11 +76,12 @@ if (trial && counts) {
     fs.symlinkSync(trial.previous, temporary);
     fs.renameSync(temporary, slot);
     const suffix = ".pre-" + trial.version;
-    restoreState(path.dirname(prefix), suffix, trial.createdAt, 4);
+    const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
     const config = process.env.OPENCLAW_CONFIG_PATH;
-    if (config && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
-      fs.renameSync(config + suffix, config);
+    if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
+      files.push(config);
     }
+    restoreState(files, suffix);
     fs.rmSync(trialFile, { force: true });
     console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
   } else {

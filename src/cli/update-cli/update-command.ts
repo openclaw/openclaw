@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { usesGitReleases } from "../../infra/git-release-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -429,6 +430,7 @@ async function updateCommandInternal(
     let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
     let mutableUpdatePrepared = false;
     let retainedRuntimeStep: UpdateStepResult | undefined;
+    const gitRelease = updateInstallKind === "git" && usesGitReleases(switchToGit);
     const prepareMutableUpdate: Parameters<
       typeof executeMutableUpdate
     >[0]["prepareMutableUpdate"] = async (
@@ -459,7 +461,7 @@ async function updateCommandInternal(
       assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
       preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
       // A Git release update never rewrites the tree this updater runs from.
-      if (updateInstallKind === "git" && !switchToGit && process.platform !== "win32") {
+      if (gitRelease) {
         mutableUpdatePrepared = true;
         return;
       }
@@ -500,6 +502,7 @@ async function updateCommandInternal(
         : { updateInstallKind: "git" as const }),
       callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
       installKind,
+      gitRelease,
       timeoutMs,
       updateStepTimeoutMs,
       startedAt,

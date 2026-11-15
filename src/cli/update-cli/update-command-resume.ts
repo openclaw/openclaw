@@ -1,4 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { UPDATE_GIT_RELEASE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -346,13 +347,17 @@ async function resumePostCoreUpdateInternal(
         });
         const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
         assertCurrent?.();
-        maintenance = await beginDoctorMaintenance({
-          // Parent-owned completion retains native service custody, not state admission.
-          root: parentOwnsCompletion ? null : params.root,
-          options: { repair: true, nonInteractive: true, json: params.opts.json },
-          runtime: { ...defaultRuntime, log: defaultRuntime.error },
-          ...(params.opts.run ? { assertCurrent } : {}),
-        });
+        // A switched Git release leaves state to the serving Gateway and its successor.
+        maintenance =
+          process.env[UPDATE_GIT_RELEASE_ENV] === "1"
+            ? undefined
+            : await beginDoctorMaintenance({
+                // Parent-owned completion retains native service custody, not state admission.
+                root: parentOwnsCompletion ? null : params.root,
+                options: { repair: true, nonInteractive: true, json: params.opts.json },
+                runtime: { ...defaultRuntime, log: defaultRuntime.error },
+                ...(params.opts.run ? { assertCurrent } : {}),
+              });
         // Each fresh Doctor holds its own database fences after admission. Release
         // this scope before unscoped requester policy reads reopen shared state.
         await maintenance?.releaseState();

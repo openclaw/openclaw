@@ -6,6 +6,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import { usesGitReleases } from "../../infra/git-release-paths.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -506,8 +507,7 @@ export async function updateGitInstall(params: {
       timeoutMs: params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
       startedAt: params.startedAt,
       opts: {
-        // POSIX checkouts run from releases (#198835's link); Windows keeps the in-place path.
-        gitReleases: !params.switchToGit && process.platform !== "win32",
+        gitReleases: usesGitReleases(params.switchToGit),
         releaseNode: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         sourceRuntimePrepared: params.sourceRuntimePrepared,

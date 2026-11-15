@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
+  UPDATE_GIT_RELEASE_ENV,
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
   UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
 } from "../../commands/doctor/shared/update-phase.js";
@@ -84,11 +85,8 @@ export async function convergeUpdatePlugins(params: {
   const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
-  // A Git release's own Gateway upgrades state and plugins when it starts; the
-  // previous Gateway still serves and owns state here, so nothing converges now.
-  if (params.result.mode === "git" && readPackageReleaseSlotSync(postUpdateRoot)) {
-    return { resultWithPostUpdate: params.result };
-  }
+  const gitRelease =
+    params.result.mode === "git" && readPackageReleaseSlotSync(postUpdateRoot) !== null;
   // Uncommitted target finalization cannot authorize a detached helper restart.
   const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
     ...result,
@@ -172,6 +170,7 @@ export async function convergeUpdatePlugins(params: {
       params.deferPostActivationInspections === true
         ? UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE
         : "0",
+    ...(gitRelease ? { [UPDATE_GIT_RELEASE_ENV]: "1" } : {}),
   };
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
     withUpdateEnv(convergenceEnv, () =>
@@ -272,6 +271,7 @@ export async function convergeUpdatePlugins(params: {
 
         if (
           postCorePluginUpdate &&
+          !gitRelease &&
           (!params.coreAlreadyCurrent ||
             postCorePluginUpdate.changed ||
             hasDeferredUpdateModelRetirement(params.opts.run?.env, params.opts.run?.runId))

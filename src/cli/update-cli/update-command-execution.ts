@@ -109,9 +109,6 @@ export async function executeMutableUpdate(
   };
   const mode: UpdateRunResult["mode"] =
     params.updateInstallKind === "git" ? "git" : params.packageInstallTarget.manager;
-  // A POSIX Git release update switches a link; the serving Gateway keeps its own
-  // release until the service restarts, so nothing is verified, stopped or parked first.
-  const gitRelease = mode === "git" && !params.switchToGit && process.platform !== "win32";
   if (opts.recovery) {
     throw new UpdatePreMutationError(
       "update-recovery-pending",
@@ -418,7 +415,7 @@ export async function executeMutableUpdate(
     }
   };
   // A Git release never stops or verifies the serving Gateway before activation.
-  let servicePrepared = gitRelease;
+  let servicePrepared = params.gitRelease === true;
   // Activation-window timing the install runners cannot observe.
   const activationSteps: UpdateStepResult[] = [];
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
@@ -480,21 +477,20 @@ export async function executeMutableUpdate(
     assertExecutionCurrent();
     await recordPhase("activating");
     assertExecutionCurrent();
-    if (gitRelease) {
-      // Every consumer keeps the release it started from; only the link moves.
-      mutationStarted = true;
-      return params.onActivation?.();
-    }
     const publication = {
-      roots,
+      // Every consumer keeps the release it started from; a release replaces no root.
+      roots: params.gitRelease ? [] : roots,
       env,
       timeoutMs: updateStepTimeoutMs,
       assertCurrent: assertExecutionCurrent,
       updateInstallKind: params.updateInstallKind,
       shouldRestart: params.shouldRestart,
-      selected: preManagedServiceStop,
     };
-    await assertManagedGatewayArtifactPublication({ ...publication, phase: "before-stop" });
+    await assertManagedGatewayArtifactPublication({
+      ...publication,
+      selected: preManagedServiceStop,
+      phase: "before-stop",
+    });
     if (!servicePrepared) {
       await waitForCurrent();
       await stopManagedServiceBeforeMutableUpdate(roots);
@@ -503,7 +499,10 @@ export async function executeMutableUpdate(
     }
     const postStopStartedAt = Date.now();
     await waitForCurrent();
-    const publicationWarning = await assertManagedGatewayArtifactPublication(publication);
+    const publicationWarning = await assertManagedGatewayArtifactPublication({
+      ...publication,
+      selected: preManagedServiceStop,
+    });
     if (originalRun) {
       // The run's database capture follows activation; refuse while nothing has changed.
       await assertUpdatePostgresCaptureOwnership({ config, env });
@@ -591,9 +590,7 @@ export async function executeMutableUpdate(
       );
     } else {
       const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-      // Releases build in their own worktrees; the checkout's artifacts are never written.
-      const sourceRuntimePrepared =
-        !gitRelease && (await admitSourceUpdateArtifacts(sourceRoot, opts.run));
+      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
       assertExecutionCurrent();
       const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
         ...installOptions,

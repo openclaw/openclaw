@@ -11,6 +11,14 @@ export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
 export const GIT_RELEASE_TRIAL = ".trial";
 
 /**
+ * Whether a Git update runs from releases. POSIX only: #198835's link is POSIX-only, so
+ * Windows checkouts and package-to-Git switches keep the in-place runner.
+ */
+export function usesGitReleases(switchToGit: boolean): boolean {
+  return !switchToGit && process.platform !== "win32";
+}
+
+/**
  * A Git checkout install runs from releases on #198835's linked-root layout:
  * `<stateDir>/git-install/lib/node_modules/openclaw -> releases/<id>/lib/node_modules/openclaw`,
  * where each release is a detached worktree of the checkout. The checkout itself
