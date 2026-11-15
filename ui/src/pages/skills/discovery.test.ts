@@ -58,6 +58,36 @@ describe("unified skill discovery", () => {
     },
   );
 
+  it.each(["", "calendar"])(
+    "does not infer empty discovery from a failed first report (query=%s)",
+    (clawhubQuery) => {
+      const error = "Installed skill inventory unavailable";
+      const container = renderDiscovery({ report: null, error, clawhubQuery, clawhubResults: [] });
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(error);
+      expect(container.querySelector(".settings-empty")).toBeNull();
+      expect(container.querySelector<HTMLInputElement>('input[type="search"]')?.disabled).toBe(
+        false,
+      );
+
+      renderDiscovery(
+        { report: null, error, clawhubQuery, clawhubResults: [remoteSkill()] },
+        container,
+      );
+      expect(container.querySelector('[data-skill-id="remote:@alice/repo"]')).not.toBeNull();
+      expect(container.querySelector(".settings-empty")).toBeNull();
+
+      // An accepted empty report remains known even if its later refresh fails.
+      renderDiscovery(
+        { report: createReport([]), error, clawhubQuery, clawhubResults: [] },
+        container,
+      );
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(error);
+      expect(container.querySelector(".settings-empty")?.textContent).toBe(
+        clawhubQuery ? "No skills match your search." : "No skills yet. Search ClawHub to add one.",
+      );
+    },
+  );
+
   it("shows first content before installed status and adopts the route result once", async () => {
     const entry = libraryEntry();
     const report = createReport([

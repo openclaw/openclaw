@@ -80,6 +80,12 @@ Key/value environment overrides merged on top of the inherited environment.
 Return a running process handle after this delay (ms), at most 120000; larger values are capped and the running result says so. On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
+<ParamField path="awaitResults" type="boolean" default="false">
+Keep the tool call open until the command exits and its terminal result is collected. Use this for bounded tests and builds whose result is needed before continuing, including headless coding runs, instead of a short `yieldMs` followed by polling. It takes precedence over `yieldMs`; Stop and process deadlines still apply. Cannot be combined with `background: true` or `durable: true`.
+
+In [Code Mode](/tools/code-mode/tool-surface#required-results), set `awaitResults: true` on the outer cell to collect ordinary nested shell commands without model polling. Explicit `background: true` commands remain detached.
+</ParamField>
+
 <ParamField path="background" type="boolean" default="false">
 Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
@@ -363,10 +369,16 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Ordinary work that yields a handle, then poll:
+Bounded tests or builds needed before continuing:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
+{ "tool": "exec", "command": "npm run build", "awaitResults": true, "timeoutSeconds": 120 }
+```
+
+If ordinary work returns a running handle, collect that handle instead of restarting the command:
+
+```json
+{"tool":"exec","command":"npm run build"}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 
