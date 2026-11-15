@@ -786,7 +786,7 @@ describe("direct compactor through the context-engine delegate", () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const getBranch = sessions.SessionManager.prototype.getBranch;
     const branchSpy = vi.spyOn(sessions.SessionManager.prototype, "getBranch");
-    branchSpy.mockImplementation(function () {
+    branchSpy.mockImplementation(function (this: typeof sessions.SessionManager.prototype) {
       const branch = getBranch.call(this);
       retainedBytes = JSON.stringify(branch).length;
       return branch;
