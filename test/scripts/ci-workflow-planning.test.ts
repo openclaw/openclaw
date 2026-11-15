@@ -13227,13 +13227,15 @@ describe("ci workflow guards", () => {
 
   it.each([
     { eventName: "schedule", runId: "", selected: ["first-cli"] },
-    { eventName: "schedule", runId: "1", selected: ["second-cli"] },
-    { eventName: "schedule", runId: "2", selected: ["first-cli"] },
-    { eventName: "schedule", runId: "9007199254740993", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "1", selected: ["gateway-database"] },
+    { eventName: "schedule", runId: "2", selected: ["gateway-methods"] },
+    { eventName: "schedule", runId: "9007199254740993", selected: ["gateway-database"] },
+    { eventName: "schedule", runId: "3", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "4", selected: ["first-cli"] },
     { eventName: "schedule", runId: "invalid", selected: ["first-cli"] },
     { eventName: "pull_request", runId: "1", selected: [] },
   ] as const)(
-    "assigns one separate CLI audit row by run identity ($eventName, $runId)",
+    "assigns one shared CLI/Gateway audit row by run identity ($eventName, $runId)",
     ({ eventName, runId, selected }) => {
       const cli = "test/vitest/vitest.cli-process.config.ts";
       const unit = "test/vitest/vitest.unit-fast.config.ts";
@@ -13241,6 +13243,10 @@ describe("ci workflow guards", () => {
         { name: "first-cli", configs: [cli] },
         { name: "unit", configs: [unit] },
         { name: "mixed", configs: [unit, cli] },
+        { name: "gateway-database", configs: ["test/vitest/vitest.gateway-server-isolated.config.ts", "test/vitest/vitest.gateway-database-workers.config.ts"] },
+        { name: "gateway-methods", configs: ["test/vitest/vitest.gateway-methods.config.ts", "test/vitest/vitest.gateway-methods-isolated.config.ts"] },
+        { name: "unknown-gateway", configs: ["test/vitest/vitest.gateway-server.config.ts"] },
+        { name: "unqualified-mixed", configs: ["test/vitest/vitest.gateway-methods.config.ts", "test/vitest/vitest.infra.config.ts"] },
         { name: "second-cli", configs: [cli] },
       ];
       const manifest = runCiManifestFixture({
