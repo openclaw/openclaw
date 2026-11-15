@@ -26,6 +26,17 @@ export function pluginTabKey(ref: PluginTabRef): string {
   return `${ref.pluginId}/${ref.id}`;
 }
 
+/** The advertised tab owns navigation placement, including direct sign-in links. */
+export function pluginTabForLocation(
+  context: Pick<ApplicationContext, "basePath" | "gateway">,
+  location: { search: string; pathname: string } | undefined,
+) {
+  const key = pluginTabKey(
+    pluginTabRefFromSearch(location?.search ?? "", location?.pathname, context.basePath),
+  );
+  return context.gateway.snapshot.hello?.controlUiTabs?.find((tab) => pluginTabKey(tab) === key);
+}
+
 /** The page's own label: its native page registration, else the Gateway-advertised tab. */
 export function pluginPageLabel(
   context: Pick<ApplicationContext, "basePath" | "gateway" | "plugins">,
@@ -36,7 +47,7 @@ export function pluginPageLabel(
   );
   return (
     context.plugins.registrations("pages").find((entry) => entry.key === key)?.value.label ||
-    context.gateway.snapshot.hello?.controlUiTabs?.find((tab) => pluginTabKey(tab) === key)?.label
+    pluginTabForLocation(context, location)?.label
   );
 }
 

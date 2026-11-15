@@ -1,8 +1,4 @@
-import {
-  isSettingsNavigationRoute,
-  isSettingsTakeover,
-  pageTitleForRoute,
-} from "../app-navigation.ts";
+import { isSettingsTakeover, pageTitleForRoute } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
@@ -13,7 +9,12 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { pluginPageLabel, pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
+import {
+  pluginPageLabel,
+  pluginTabForLocation,
+  pluginTabKey,
+  pluginTabRefFromSearch,
+} from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
@@ -144,13 +145,14 @@ export function readShellView(host: ShellViewHost) {
   const nativeEmbed = isNativeEmbedHost();
   const initialGatewayConnection = host.initialConnectionPending;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
+  const settingsRoute = isSettingsTakeover(activeRoute, context, host.routeState.location);
   const embedSettings =
     nativeEmbed &&
     (activeRoute === "settings" ||
-      isSettingsNavigationRoute(activeRoute) ||
+      settingsRoute ||
       activeRoute === "skills" ||
       activeRoute === "cron");
-  const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
+  const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
   // Drawer motion invalidates only the bindings that read its presentation.
@@ -329,6 +331,11 @@ export function readShellView(host: ShellViewHost) {
   const settingsSidebarProps: SettingsSidebarFallbackProps = {
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
     activeRouteId: activeRoute,
+    pluginTabs: gatewaySnapshot.hello?.controlUiTabs?.filter((tab) => tab.placement === "settings"),
+    activePluginTab:
+      activeRoute === "plugin"
+        ? pluginTabForLocation(context, host.routeState.location)
+        : undefined,
     connectionStatus,
     onExit: () => {
       if (!nativeEmbed) {

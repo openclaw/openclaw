@@ -139,7 +139,11 @@ export class ShellPanelOwner {
     const host = this.host;
     const snapshot = host.context?.gateway.snapshot;
     const detail = event instanceof CustomEvent ? event.detail : null;
-    if (!snapshot || isSettingsTakeover(host.routeState.routeId) || isNativeEmbedHost()) {
+    if (
+      !snapshot ||
+      isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) ||
+      isNativeEmbedHost()
+    ) {
       return;
     }
     const readers = availableLinkReaders(snapshot);

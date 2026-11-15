@@ -1,12 +1,14 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import type { RouteId } from "./app-route-paths.ts";
+import type { ApplicationContext } from "./app/context.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
+import { pluginTabForLocation } from "./pages/plugin/route.tsx";
 
 export type NavigationRouteId = RouteId;
 
@@ -368,8 +370,17 @@ export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
-export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
+export function isSettingsTakeover(
+  routeId: RouteId | undefined,
+  context?: Pick<ApplicationContext, "basePath" | "gateway">,
+  location?: { pathname: string; search: string },
+): boolean {
+  return (
+    (routeId !== undefined && isSettingsNavigationRoute(routeId)) ||
+    (routeId === "plugin" &&
+      context !== undefined &&
+      pluginTabForLocation(context, location)?.placement === "settings")
+  );
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {

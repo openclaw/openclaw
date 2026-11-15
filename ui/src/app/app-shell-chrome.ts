@@ -193,7 +193,8 @@ export class ShellChromeOwner {
       !context ||
       host.onboardingMode ||
       (host.initialConnectionPending && isMobileNavLayout()) ||
-      (isSettingsTakeover(host.routeState.routeId) && !isMobileNavLayout())
+      (isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) &&
+        !isMobileNavLayout())
     ) {
       return;
     }
@@ -392,7 +393,7 @@ export class ShellChromeOwner {
       event.preventDefault();
       host.closeNavDrawer({ restoreFocus: true });
     } else if (
-      isSettingsTakeover(host.routeState.routeId) &&
+      isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) &&
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
@@ -440,7 +441,7 @@ export class ShellChromeOwner {
       !isSessionRouteId(host.routeState.routeId) &&
       !event.defaultPrevented &&
       !host.onboardingMode &&
-      !isSettingsTakeover(host.routeState.routeId) &&
+      !isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) &&
       host.context &&
       isTerminalAvailable(
         host.context.gateway.snapshot,
@@ -750,7 +751,11 @@ export class ShellChromeOwner {
   readonly nativeNavCollapsed = (): boolean =>
     this.host.onboardingMode ||
     isMobileNavLayout() ||
-    isSettingsTakeover(this.host.routeState.routeId) ||
+    isSettingsTakeover(
+      this.host.routeState.routeId,
+      this.host.context,
+      this.host.routeState.location,
+    ) ||
     (!this.host.navDrawerOpen &&
       !this.host.desktopNavigationExpanded &&
       (this.host.context?.navigation.snapshot.navCollapsed ?? false));
