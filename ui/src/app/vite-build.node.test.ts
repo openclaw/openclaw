@@ -329,9 +329,9 @@ it("preloads only the selected locale's Chat catalogs after the entry graph is a
       const beforeBody = Reflect.get(page.window, "beforeBody");
       expect(beforeBody.body).toBeNull();
       expect(beforeBody.hints.filter((href: string) => !href.includes("/index-"))).toEqual([]);
-      await new Promise<void>((resolve) =>
-        page.window.document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }),
-      );
+      await new Promise<void>((resolve) => {
+        page.window.document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+      });
       const afterParse = Reflect.get(page.window, "afterParse");
       expect(afterParse.state).toBe("interactive");
       const hints = afterParse.hints.filter((href: string) => href.startsWith(`${base}/assets/`));

@@ -151,11 +151,12 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
       order: "post",
       handler(_html, context) {
         // Direction cannot wait for the translated catalog: the critical frame paints first.
+        // Private inline keys keep the document within its compressed-size budget.
         const policy = JSON.stringify({
-          supported: SUPPORTED_LOCALES,
-          rules: LOCALE_MATCH_RULES,
-          rtl: RTL_LOCALES,
-          fallback: DEFAULT_LOCALE,
+          s: SUPPORTED_LOCALES,
+          m: LOCALE_MATCH_RULES,
+          r: RTL_LOCALES,
+          f: DEFAULT_LOCALE,
         }).replaceAll("<", "\\u003c");
         // Namespace data shares a content generation, so parallel hints need only
         // the base chunk hash and one namespace hash per locale.
@@ -196,7 +197,7 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
         const helper = files.find((file) => /^assets\/lazy-catalog-[\w-]+\.js$/.test(file));
         const hints =
           helper && Object.keys(hashes).length
-            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==p.fallback&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){const names=${JSON.stringify(namespaces)};const files=["assets/"+locale+"-"+hashes.slice(0,8)+".js",${JSON.stringify(helper)},...names.map(name=>"assets/"+(name==="runtimeErrors"?"locale-errors-"+locale:"locale-namespace-"+locale+"-"+name)+"-"+hashes.slice(8)+".js")];for(const file of files){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
+            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==p.f&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){const names=${JSON.stringify(namespaces)};const files=["assets/"+locale+"-"+hashes.slice(0,8)+".js",${JSON.stringify(helper)},...names.map(name=>"assets/"+(name==="runtimeErrors"?"locale-errors-"+locale:"locale-namespace-"+locale+"-"+name)+"-"+hashes.slice(8)+".js")];for(const file of files){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
             : "";
         return [
           {
@@ -204,7 +205,7 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
             attrs: { "data-cfasync": "false" },
             injectTo: "head-prepend",
             // Finish parsing the critical graph's hints before admitting locale data.
-            children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr";${hints ? `document.addEventListener("readystatechange",()=>{${hints}},{once:true});` : ""}})();`,
+            children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.s.includes(saved)?saved:(p.m.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.f);document.documentElement.dir=p.r.includes(locale)?"rtl":"ltr";${hints ? `document.addEventListener("readystatechange",()=>{${hints}},{once:true});` : ""}})();`,
           },
         ];
       },
