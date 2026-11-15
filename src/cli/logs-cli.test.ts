@@ -101,6 +101,15 @@ it("writes output directly to stdout/stderr", async () => {
   expectText(stderr, ["Log tail truncated (increase --limit or --max-bytes).", "Log cursor reset"]);
 });
 
+it("clamps oversized --limit/--max-bytes to the Gateway caps before the RPC", async () => {
+  callGatewayFromCli.mockResolvedValueOnce(logPage(["capped line"]));
+  await run(["--limit", "6000", "--max-bytes", "2000000", "--plain"]);
+  expect(callGatewayFromCli.mock.calls[0]?.[2]).toMatchObject({
+    limit: 5_000,
+    maxBytes: 1_000_000,
+  });
+});
+
 it("reports a byte-budget re-anchor without claiming rotation in JSON output", async () => {
   callGatewayFromCli.mockResolvedValueOnce(
     logPage(["line after skipped burst"], undefined, {

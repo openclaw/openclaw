@@ -281,8 +281,8 @@ export function registerLogsCli(program: Command) {
   const logs = program
     .command("logs")
     .description("Tail gateway file logs via RPC")
-    .option("--limit <n>", "Max lines to return", "200")
-    .option("--max-bytes <n>", "Max bytes to read", "250000")
+    .option("--limit <n>", "Max lines to return (capped at 5000)", "200")
+    .option("--max-bytes <n>", "Max bytes to read (capped at 1000000)", "250000")
     .option("--follow", "Follow log output", false)
     .option("--interval <ms>", "Polling interval in ms", "1000")
     .option("--json", "Emit JSON log lines", false)
@@ -347,8 +347,17 @@ export function registerLogsCli(program: Command) {
       parseLogsPositiveInt(opts.interval, 1000, "--interval"),
       1000,
     );
-    const limit = parseLogsPositiveInt(opts.limit, 200, "--limit");
-    const maxBytes = parseLogsPositiveInt(opts.maxBytes, 250_000, "--max-bytes");
+    // Clamp both delivery paths to the same caps the Gateway RPC validates and
+    // the journal/local fallbacks already apply, so one input cannot succeed
+    // silently on one path and fail with INVALID_REQUEST on the other.
+    const limit = Math.min(
+      parseLogsPositiveInt(opts.limit, 200, "--limit"),
+      JOURNAL_MAX_LIMIT,
+    );
+    const maxBytes = Math.min(
+      parseLogsPositiveInt(opts.maxBytes, 250_000, "--max-bytes"),
+      JOURNAL_MAX_BYTES,
+    );
     let gatewayCursor: number | undefined;
     let gatewayFile: string | undefined;
     let journalCursor: string | undefined;
