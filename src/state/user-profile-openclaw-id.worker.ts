@@ -18,6 +18,7 @@ import {
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  selectResolvedUserProfileMetadataById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -124,7 +125,7 @@ export type OpenClawIdLinkResult =
 /**
  * Links an OpenClaw ID account to an existing personal profile, as a provider identity.
  * An account belongs to at most one profile (a profile may hold several, as after a merge);
- * the shared owner profile never holds one. The caller proves both sides on one connection; linking grants nothing.
+ * the shared owner profile never holds one. The caller owns authorization; linking grants nothing.
  */
 export function linkOpenClawIdUserProfile(
   input: { profileId: string; accountId: string; email: string | null },
@@ -134,7 +135,10 @@ export function linkOpenClawIdUserProfile(
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
-      const target = requireResolvedUserProfileMetadataById(db, input.profileId);
+      const target = selectResolvedUserProfileMetadataById(db, input.profileId);
+      if (!target) {
+        return { ok: false, code: "profile_changed" };
+      }
       if (target.id === GATEWAY_OWNER_PROFILE_ID) {
         return { ok: false, code: "owner_profile" };
       }

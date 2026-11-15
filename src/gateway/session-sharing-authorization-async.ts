@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
+  bindSynchronousSessionSource,
   composeSessionSourceAssertion,
   releaseSessionSourceAuthorities,
 } from "../config/sessions/session-source-authority.js";
@@ -213,18 +214,22 @@ async function prepareSessionPrincipalRunAccess(params: {
         openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
       },
     };
-    const assertPrincipalCurrent = () => {
-      params.assertCurrent?.();
-      access?.signal.throwIfAborted();
-      access?.assertCurrent();
-      if (params.preserveRecordedSource) {
-        recorded?.authority.assertCurrent();
-      }
-      // readScopes validates the retained identity before consuming its current role.
-      if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
-        throw new Error("Session principal has no current run authority.");
-      }
-    };
+    const assertPrincipalCurrent = composeSessionSourceAssertion(
+      [params.assertCurrent],
+      (assertParent) => {
+        assertParent();
+        access?.signal.throwIfAborted();
+        access?.assertCurrent();
+        if (params.preserveRecordedSource) {
+          recorded?.authority.assertCurrent();
+        }
+        // readScopes validates the retained identity before consuming its current role.
+        if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
+          throw new Error("Session principal has no current run authority.");
+        }
+      },
+      params.preserveRecordedSource ? undefined : { synchronousCheck: true },
+    );
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client,
       context: params.context,
@@ -253,12 +258,13 @@ async function prepareSessionPrincipalRunAccess(params: {
     if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
       throw new Error("Session is unavailable for this principal.");
     }
+    const sharingSource = sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent;
+    // This synthetic principal's sharing owner has no caller-supplied policy callbacks.
+    bindSynchronousSessionSource(sharingSource);
     const assertCurrent = composeSessionSourceAssertion(
-      [sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent],
-      (assertSource) => {
-        assertPrincipalCurrent();
-        assertSource();
-      },
+      [assertPrincipalCurrent, sharingSource],
+      undefined,
+      { synchronousCheck: true },
     );
     assertCurrent();
     const signals = [access?.signal, recorded?.authority.signal].filter(

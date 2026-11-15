@@ -431,6 +431,9 @@ extension OpenClawChatView {
 
     private func messageList(transcript: TranscriptPresentation) -> some View {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
+        let groups = self.runGroups(transcript)
+        let latestTurn = ChatAssistantRunGroup.latestTurnStart(in: groups)
+        let spacing = self.isDesktopLayout ? 16 : Layout.messageSpacing
         return ZStack {
             Group {
                 #if os(iOS)
@@ -460,16 +463,17 @@ extension OpenClawChatView {
                 .environment(\.defaultMinListRowHeight, 0)
                 #else
                 ScrollView {
-                    LazyVStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
-                        self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
-
-                        if self.usesInlineProgressCard {
-                            self.progressCard
+                    LazyVStack(spacing: spacing) {
+                        self.groupRows(groups[..<latestTurn], transcript: transcript)
+                        VStack(spacing: spacing) {
+                            self.messageListRows(
+                                transcript: transcript,
+                                groups: groups[latestTurn...],
+                                hasVisibleContent: hasVisibleContent)
+                            if self.usesInlineProgressCard { self.progressCard }
+                            if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
+                            self.subagentWaitRow
                         }
-                        if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
-                            self.turnRecapRow
-                        }
-                        self.subagentWaitRow
 
                         Color.clear
                             #if os(macOS)
@@ -708,7 +712,17 @@ extension OpenClawChatView {
             .padding(.bottom, cell.joinsBelow ? 0 : Layout.messageSpacing / 2)
         }
         #else
-        ForEach(shownGroups) { group in
+        self.groupRows(shownGroups, transcript: transcript)
+        #endif
+        OpenClawQuestionCards(viewModel: self.viewModel)
+    }
+
+    private func groupRows(
+        _ groups: ArraySlice<ChatAssistantRunGroup>,
+        transcript: TranscriptPresentation) -> some View
+    {
+        let contextWindowTokens = self.viewModel.contextUsage?.contextWindowTokens
+        return ForEach(groups) { group in
             let parts = ForEach(group.parts) { part in
                 self.runPart(
                     part,
@@ -733,8 +747,6 @@ extension OpenClawChatView {
                 if group.includesLive { self.liveAssistantContent }
             }
         }
-        #endif
-        OpenClawQuestionCards(viewModel: self.viewModel)
     }
 
     #if os(iOS)
@@ -930,6 +942,10 @@ extension OpenClawChatView {
                     self.expandedUserMessageIDs.insert(msg.id)
                 }
             },
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(self.viewModel),
+                sessionTarget: self.viewModel.currentSessionTarget,
+                sessionGeneration: self.viewModel.sessionGeneration),
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)

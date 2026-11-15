@@ -343,6 +343,34 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
+it.for(["main", "other"])(
+  "keeps an acquiring session's facts scoped to its physical owner when %s becomes ready",
+  async (agentId, { harness }) => {
+    const { cfg, sessionKey } = harness;
+    harness.write(restrictedEntry("acquiring-topology", "original"));
+    const read = entryReads.readSessionEntriesFromStoreInWorker;
+    let published = false;
+    vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+      async (...args) => {
+        const result = await read(...args);
+        if (!published && result.entries.some((row) => row.sessionKey === sessionKey)) {
+          published = true;
+          sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        }
+        return result;
+      },
+    );
+    const pending = harness.prepare();
+    if (agentId === "main") {
+      await expect(pending).rejects.toThrow(unavailableMessage);
+    } else {
+      using prepared = releasing(await pending);
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring-topology");
+    }
+    expect(published).toBe(true);
+  },
+);
+
 it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",
   async (change, { state }) => {

@@ -43,7 +43,7 @@ export function createChatModelSearchView(
   const scope = createMemo(() => ({ active: read().activeProvider, providers: read().providers }), {
     equals: (a, b) => a.active === b.active && a.providers.join("\0") === b.providers.join("\0"),
   });
-  // Selection resets provider defaults; catalog refreshes retain each surviving choice.
+  // Closing and selection reset provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
     selected?: string;
@@ -158,6 +158,12 @@ export function createChatModelSearchView(
         draft.selected = provider;
       });
     },
+    resetProvider() {
+      const current = scope();
+      updateDisclosure((draft) => {
+        draft.selected = current.active ?? current.providers[0];
+      });
+    },
     expandMore(provider: string, event: MouseEvent) {
       event.stopPropagation();
       const state = chatModelSearchState(event.currentTarget);
@@ -231,27 +237,4 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
     view.highlight(next.row.key);
     view.reveal(next.row.key);
   }
-}
-
-/** A disappearing refresh control can return focus; catalog presentation is already derived. */
-export function restoreChatModelRefreshFocus(details: Element | undefined): void {
-  if (!(details instanceof HTMLDetailsElement) || !details.open) {
-    return;
-  }
-  const state = chatModelSearchState(details);
-  const active = details.ownerDocument.activeElement;
-  if (!state || !active?.closest("[data-chat-model-refresh]") || !details.contains(active)) {
-    return;
-  }
-  queueMicrotask(() => {
-    if (
-      !active.isConnected &&
-      details.isConnected &&
-      details.open &&
-      details.ownerDocument.activeElement === details.ownerDocument.body
-    ) {
-      const target = state.input && !state.input.disabled ? state.input : state.summary;
-      target?.focus({ preventScroll: true });
-    }
-  });
 }
