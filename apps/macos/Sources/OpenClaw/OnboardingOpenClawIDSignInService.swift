@@ -30,7 +30,8 @@ struct OnboardingOpenClawIDSignInEnvironment {
     var store: MacOpenClawIDDeviceStore = .shared
     var savedSession: () -> OpenClawIDDiscoverySession? = { MacOpenClawIDDeviceStore.shared.session() }
     var saveSession: (OpenClawIDDiscoverySession) -> Void = { MacOpenClawIDDeviceStore.shared.saveSession($0) }
-    var forgetKeys: (UUID) async -> Void = { await MacOpenClawIDDeviceStore.forgetKeys(device: $0) }
+    /// Deletes an unfinished enrollment's D and W, and its W_node if it has one.
+    var forgetKeys: (UUID, UUID?) async -> Void = { await MacOpenClawIDDeviceStore.forgetKeys(device: $0, node: $1) }
     var now: () -> Date = { Date() }
     var sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     /// Saves the device, selects it for the operator route and starts its node (none for a member).
@@ -307,6 +308,9 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
                 return (admitted, session)
             } catch {
                 codes.continuation.finish(throwing: error)
+                // Declined, expired or abandoned (recovery kit, invite, Back, Close): nothing will use
+                // these keys, even if the approver admitted W before the handoff arrived.
+                await self.environment.forgetKeys(device.deviceEnrollmentID, device.nodeEnrollmentID)
                 throw error
             }
         }
@@ -361,6 +365,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             _ = try await self.client(device, configuration: configuration).approveWithRecoveryKit(
                 text, session: session, claw: claw, keys: keys, label: self.label(), node: description)
         } catch {
+            await self.environment.forgetKeys(device.deviceEnrollmentID, device.nodeEnrollmentID)
             return try self.problem(error, claw: claw)
         }
         try Task.checkCancellation()
@@ -537,7 +542,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     private func forget(_ join: MacOpenClawIDPendingJoin) async {
         self.pending = nil
         self.environment.store.savePendingJoin(nil)
-        await self.environment.forgetKeys(join.deviceEnrollmentID)
+        await self.environment.forgetKeys(join.deviceEnrollmentID, nil)
     }
 
     private static func spaced(_ code: String) -> String {

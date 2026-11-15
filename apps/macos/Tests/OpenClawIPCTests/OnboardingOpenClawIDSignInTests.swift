@@ -349,7 +349,7 @@ struct OnboardingOpenClawIDSignInTests {
                 databaseURL: self.database()),
             savedSession: { nil },
             saveSession: { _ in },
-            forgetKeys: { _ in },
+            forgetKeys: { _, _ in },
             install: { _, _ in Issue.record("nothing in these tests is admitted") })
     }
 

@@ -89,6 +89,23 @@ struct OnboardingOpenClawIDMemberJoinTests {
         // The request went to the member's own devices; nothing was redeemed or sent to the owners.
         #expect(await http.recipients.first == "self")
         #expect(await http.redemptions == 0)
+        #expect(effects.forgotten.isEmpty)
+    }
+
+    @Test func `switching to an invite mid-approval forgets that attempt's keys`() async throws {
+        let (defaults, suite) = try Self.defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let effects = Effects()
+        let service = Self.service(http: MemberDiscovery(member: true), effects: effects, defaults: defaults)
+        _ = try await service.perform(.signIn)
+        _ = try await service.perform(.selectClaw(Self.clawID))
+        _ = try await service.perform(.approveFromDevice)
+        #expect(try await service.perform(.joinWithInvite) == .inviteEntry)
+        for _ in 0..<200 where effects.forgotten.isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(effects.forgotten.count == 1)
+        #expect(effects.installed.isEmpty)
     }
 
     @Test func `a saved request resumes for its account and cancelling forgets its keys`() async throws {
@@ -225,7 +242,7 @@ struct OnboardingOpenClawIDMemberJoinTests {
                 store: MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: database),
                 savedSession: { effects.saved },
                 saveSession: { effects.saved = $0 },
-                forgetKeys: { effects.forgotten.append($0) },
+                forgetKeys: { device, _ in effects.forgotten.append(device) },
                 now: { effects.now },
                 sleep: { _ in
                     if approveWhileWaiting { await http.approve(role: "viewer") }
