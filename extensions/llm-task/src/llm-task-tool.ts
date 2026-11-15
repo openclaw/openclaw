@@ -167,7 +167,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         }
       }
 
-      return textResult(JSON.stringify(parsed, null, 2), {
+      return textResult(JSON.stringify(parsed), {
         json: parsed,
         provider: result.provider,
         model: result.model,

@@ -529,6 +529,7 @@ function planTerminalCompletion(
     };
   }
   entry.endedReason = completionReason;
+  entry.waitForMessage = undefined;
   if (entry.pauseReason !== undefined) {
     entry.pauseReason = undefined;
   }

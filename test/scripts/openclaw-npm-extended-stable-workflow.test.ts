@@ -100,7 +100,7 @@ it.each([
 ])("rejects retired alpha at npm publication and preflight boundaries: %j", (overrides) => {
   for (const [path, job, name] of [
     [workflowPath, "publish_openclaw_npm", "Validate tag input format"],
-    [preflightWorkflowPath, "check_openclaw_npm", "Validate release ref input format"],
+    [preflightWorkflowPath, "validate_npm_request", "Validate release ref input format"],
   ] as const) {
     const env = {
       ...process.env,

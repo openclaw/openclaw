@@ -25,6 +25,7 @@ import {
   serializeAnthropicRequestBody,
 } from "./transports/anthropic-request-body.js";
 import { createAnthropicMessagesTransportStreamFn } from "./transports/anthropic-transport-stream.js";
+import { modelRequestBodyState } from "./transports/model-request-body.js";
 import { createZeroUsage } from "./usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
 
@@ -274,74 +275,110 @@ describe("Anthropic immutable request bytes", () => {
         return response;
       },
     });
+    const options: AnthropicOptions = {
+      apiKey: "synthetic-request-key",
+      cacheRetention: "long",
+      onPayload: async (value, target) => {
+        const replacement = await hook?.(value, target);
+        payload = replacement === undefined ? value : replacement;
+        return replacement;
+      },
+    };
+    let reportedBytes = 0;
+    modelRequestBodyState(options).onBytes = (bytes) => {
+      reportedBytes = bytes;
+    };
     const stream = await createAnthropicMessagesTransportStreamFn()(
       model,
       { ...context, messages },
-      {
-        apiKey: "synthetic-request-key",
-        cacheRetention: "long",
-        onPayload: async (value, target) => {
-          const replacement = await hook?.(value, target);
-          payload = replacement === undefined ? value : replacement;
-          return replacement;
-        },
-      },
+      options,
     );
     expect((await stream.result()).stopReason).toBe("stop");
+    expect(reportedBytes).toBe(Buffer.byteLength(wire));
     return { wire, encodedBody, payload };
   }
 
-  it("reuses frozen history bytes with an observer hook and preserves moving cache checkpoints", async () => {
-    let messages: Context["messages"] = [
-      { role: "user", content: 'Frozen "history" 🦞', timestamp: 0 },
-    ];
-    for (let turn = 0; turn < 3; turn++) {
-      messages = turn === 0 ? messages : appendToolTurn(messages, turn);
-      const latestAssistant = messages.at(-2);
-      if (latestAssistant?.role === "assistant") {
-        const call = latestAssistant.content.find((block) => block.type === "toolCall");
-        if (call?.type === "toolCall") {
-          call.arguments.values = Object.assign(["x"], { slice: 0, constructor: 0 });
+  it.each([false, true])(
+    "reuses growing frozen history with envelope edits=%s",
+    async (editEnvelope) => {
+      let editableMessage: object | undefined;
+      const hook: AnthropicOptions["onPayload"] = (payload) => {
+        if (isRecord(payload) && Array.isArray(payload.messages)) {
+          editableMessage = payload.messages[0];
+          if (editEnvelope) {
+            payload.service_tier = "auto";
+          }
+        }
+      };
+      let messages: Context["messages"] = [
+        { role: "user", content: 'Frozen "history" 🦞', timestamp: 0 },
+      ];
+      for (let turn = 0; turn < 3; turn++) {
+        messages = turn === 0 ? messages : appendToolTurn(messages, turn);
+        const latestAssistant = messages.at(-2);
+        if (latestAssistant?.role === "assistant") {
+          const call = latestAssistant.content.find((block) => block.type === "toolCall");
+          if (call?.type === "toolCall") {
+            call.arguments.values = Object.assign(["x"], { slice: 0, constructor: 0 });
+          }
+        }
+        messages.forEach(freezeJsonSnapshot);
+        const first = await send(messages, hook);
+        expect(hash("sha256", first.wire)).toBe(hash("sha256", JSON.stringify(first.payload)));
+        if (first.encodedBody instanceof Uint8Array) {
+          first.encodedBody.fill(0);
+        }
+        const stringify = JSON.stringify;
+        const getDescriptor = Object.getOwnPropertyDescriptor;
+        let inspectedProperties = 0;
+        const descriptors = vi
+          .spyOn(Object, "getOwnPropertyDescriptor")
+          .mockImplementation((value, key) => {
+            if (value === editableMessage) {
+              inspectedProperties++;
+            }
+            return getDescriptor(value, key);
+          });
+        let wholePayloadEncodes = 0;
+        let assistantEncodes = 0;
+        const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
+          if (isRecord(value) && value.model === model.id && Array.isArray(value.messages)) {
+            wholePayloadEncodes++;
+          }
+          if (isRecord(value) && value.role === "assistant") {
+            assistantEncodes++;
+          }
+          return stringify(value, replacer, space);
+        });
+        let repeated: Awaited<ReturnType<typeof send>>;
+        try {
+          repeated = await send(messages, hook);
+        } finally {
+          spy.mockRestore();
+          descriptors.mockRestore();
+        }
+        expect(editableMessage).toBeDefined();
+        expect(inspectedProperties).toBe(2); // role + content, once each
+        expect(wholePayloadEncodes).toBe(0);
+        expect(first.encodedBody).toBeInstanceOf(Uint8Array);
+        expect(repeated.wire).toBe(first.wire);
+        expect(markerPaths(JSON.parse(repeated.wire))).toContain(
+          `messages[${turn * 2}].content[0]`,
+        );
+        if (turn > 0) {
+          expect(assistantEncodes).toBe(0);
+          expect(repeated.wire).toContain('"values":["x"]');
         }
       }
-      messages.forEach(freezeJsonSnapshot);
-      const first = await send(messages);
-      expect(hash("sha256", first.wire)).toBe(hash("sha256", JSON.stringify(first.payload)));
-      const stringify = JSON.stringify;
-      let wholePayloadEncodes = 0;
-      let assistantEncodes = 0;
-      const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
-        if (isRecord(value) && value.model === model.id && Array.isArray(value.messages)) {
-          wholePayloadEncodes++;
-        }
-        if (isRecord(value) && value.role === "assistant") {
-          assistantEncodes++;
-        }
-        return stringify(value, replacer, space);
-      });
-      let repeated: Awaited<ReturnType<typeof send>>;
-      try {
-        repeated = await send(messages);
-      } finally {
-        spy.mockRestore();
-      }
-      expect(wholePayloadEncodes).toBe(0);
-      expect(first.encodedBody).toBeInstanceOf(Blob);
-      expect(repeated.wire).toBe(first.wire);
-      expect(markerPaths(JSON.parse(repeated.wire))).toContain(`messages[${turn * 2}].content[0]`);
-      if (turn > 0) {
-        expect(assistantEncodes).toBe(0);
-        expect(repeated.wire).toContain('"values":["x"]');
-      }
-    }
-    const tail = { role: "user" as const, content: "First tail", timestamp: 10 };
-    const firstTail = await send([...messages, tail]);
-    tail.content = "Changed tail";
-    const changedTail = await send([...messages, tail]);
-    expect(changedTail.wire).toContain("Changed tail");
-    expect(changedTail.wire).not.toBe(firstTail.wire);
-    expect(changedTail.wire).toBe(JSON.stringify(changedTail.payload));
-  });
+      const tail = { role: "user" as const, content: "First tail", timestamp: 10 };
+      const firstTail = await send([...messages, tail]);
+      tail.content = "Changed tail";
+      const changedTail = await send([...messages, tail]);
+      expect(changedTail.wire).toContain("Changed tail");
+      expect(changedTail.wire).not.toBe(firstTail.wire);
+      expect(changedTail.wire).toBe(JSON.stringify(changedTail.payload));
+    },
+  );
 
   it("keeps checked history bytes when a hook later mutates its retained copy", async () => {
     configureAiTransportHost({
@@ -367,86 +404,105 @@ describe("Anthropic immutable request bytes", () => {
     );
   });
 
-  it.each(["nested edit", "replacement", "opaque JSON"] as const)(
-    "fully serializes a hook's %s without retaining edited bytes",
-    async (kind) => {
-      const messages = appendToolTurn([{ role: "user", content: "Original", timestamp: 0 }], 1);
-      messages.forEach(freezeJsonSnapshot);
-      const original = await send(messages);
-      const calls: string[] = [];
-      const edit: AnthropicOptions["onPayload"] = (value) => {
-        if (!isRecord(value) || !Array.isArray(value.messages)) {
-          throw new Error("Expected hook-editable messages");
-        }
-        if (kind === "replacement") {
-          return { ...value, max_tokens: 123, metadata: { user_id: "replacement" } };
-        }
-        if (kind === "opaque JSON") {
-          value.metadata = {
-            value: [
-              {
-                toJSON: (key: string) => {
-                  calls.push(key);
-                  return "opaque";
-                },
-              },
-            ],
-            get label() {
-              calls.push("get label");
-              return "accessor";
-            },
-          };
-          return undefined;
-        }
-        const first = value.messages[0];
-        if (!isRecord(first) || !Array.isArray(first.content) || !isRecord(first.content[0])) {
-          throw new Error("Expected the first cache-marked text block");
-        }
-        first.content[0].text = "Hook edit";
-        const assistant = value.messages[1];
-        if (!isRecord(assistant) || !Array.isArray(assistant.content)) {
-          throw new Error("Expected editable tool input");
-        }
-        const call = assistant.content.find(
-          (block) => isRecord(block) && block.type === "tool_use",
-        );
-        if (!isRecord(call) || !isRecord(call.input)) {
-          throw new Error("Expected tool input");
-        }
-        call.input.query = "Edited query";
-        return undefined;
-      };
-      const stringify = vi.spyOn(JSON, "stringify");
-      let wholePayloadEncodes = 0;
-      const edited = await send(messages, edit).finally(() => {
-        wholePayloadEncodes = stringify.mock.calls.filter(
-          ([value]) => isRecord(value) && value.model === model.id && Array.isArray(value.messages),
-        ).length;
-        stringify.mockRestore();
-      });
-      expect(wholePayloadEncodes).toBe(1);
-      expect(typeof edited.encodedBody).toBe("string");
-      const decoded: unknown = JSON.parse(edited.wire);
-      if (kind === "opaque JSON") {
-        expect(calls).toEqual(["0", "get label"]);
-        expect(decoded).toMatchObject({ metadata: { value: ["opaque"], label: "accessor" } });
-      } else {
-        expect(edited.wire).toBe(JSON.stringify(edited.payload));
-        expect(decoded).toMatchObject(
-          kind === "replacement"
-            ? { max_tokens: 123, metadata: { user_id: "replacement" } }
-            : {
-                messages: [
-                  { content: [{ text: "Hook edit" }] },
-                  { content: [{ input: { query: "Edited query" } }] },
-                  {},
-                ],
-              },
-        );
+  it.each([
+    "nested edit",
+    "replacement",
+    "opaque JSON",
+    "envelope accessor",
+    "messages accessor",
+  ] as const)("fully serializes a hook's %s without retaining edited bytes", async (kind) => {
+    const messages = appendToolTurn([{ role: "user", content: "Original", timestamp: 0 }], 1);
+    messages.forEach(freezeJsonSnapshot);
+    const original = await send(messages);
+    const calls: string[] = [];
+    const edit: AnthropicOptions["onPayload"] = (value) => {
+      if (!isRecord(value) || !Array.isArray(value.messages)) {
+        throw new Error("Expected hook-editable messages");
       }
-      expect((await send(messages)).wire).toBe(original.wire);
-    },
-  );
+      if (kind === "replacement") {
+        return { ...value, max_tokens: 123, metadata: { user_id: "replacement" } };
+      }
+      if (kind === "envelope accessor" || kind === "messages accessor") {
+        const key = kind === "envelope accessor" ? "metadata" : "messages";
+        const result = key === "messages" ? value.messages : { user_id: "accessor" };
+        Object.defineProperty(value, key, {
+          enumerable: true,
+          get() {
+            calls.push(key);
+            return result;
+          },
+        });
+        return undefined;
+      }
+      if (kind === "opaque JSON") {
+        value.metadata = {
+          value: [
+            {
+              toJSON: (key: string) => {
+                calls.push(key);
+                return "opaque";
+              },
+            },
+          ],
+          get label() {
+            calls.push("get label");
+            return "accessor";
+          },
+        };
+        return undefined;
+      }
+      const first = value.messages[0];
+      if (!isRecord(first) || !Array.isArray(first.content) || !isRecord(first.content[0])) {
+        throw new Error("Expected the first cache-marked text block");
+      }
+      first.content[0].text = "Hook edit";
+      const assistant = value.messages[1];
+      if (!isRecord(assistant) || !Array.isArray(assistant.content)) {
+        throw new Error("Expected editable tool input");
+      }
+      const call = assistant.content.find((block) => isRecord(block) && block.type === "tool_use");
+      if (!isRecord(call) || !isRecord(call.input)) {
+        throw new Error("Expected tool input");
+      }
+      call.input.query = "Edited query";
+      return undefined;
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    let wholePayloadEncodes = 0;
+    const edited = await send(messages, edit).finally(() => {
+      wholePayloadEncodes = stringify.mock.calls.filter(
+        ([value]) => isRecord(value) && value.model === model.id && Array.isArray(value.messages),
+      ).length;
+      stringify.mockRestore();
+    });
+    expect(wholePayloadEncodes).toBe(1);
+    expect(typeof edited.encodedBody).toBe("string");
+    const decoded: unknown = JSON.parse(edited.wire);
+    if (kind === "envelope accessor" || kind === "messages accessor") {
+      // Beta-header inspection reads messages twice; wire assembly reads it once.
+      expect(calls).toEqual(
+        kind === "envelope accessor" ? ["metadata"] : ["messages", "messages", "messages"],
+      );
+      expect(decoded).toMatchObject({ messages: JSON.parse(original.wire).messages });
+    } else if (kind === "opaque JSON") {
+      expect(calls).toEqual(["0", "get label"]);
+      expect(decoded).toMatchObject({ metadata: { value: ["opaque"], label: "accessor" } });
+    } else {
+      expect(edited.wire).toBe(JSON.stringify(edited.payload));
+      expect(decoded).toMatchObject(
+        kind === "replacement"
+          ? { max_tokens: 123, metadata: { user_id: "replacement" } }
+          : {
+              messages: [
+                { content: [{ text: "Hook edit" }] },
+                { content: [{ input: { query: "Edited query" } }] },
+                {},
+              ],
+            },
+      );
+    }
+    expect((await send(messages)).wire).toBe(original.wire);
+  });
 
   it("keeps hooks editable for embedding hosts without plain-data admission", async () => {
     const messages: Context["messages"] = [{ role: "user", content: "Original", timestamp: 0 }];

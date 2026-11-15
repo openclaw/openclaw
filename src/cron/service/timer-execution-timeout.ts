@@ -64,6 +64,15 @@ export type IsolatedAgentSetupTimeoutResult = {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
 };
 
+/** How a fired condition waits for a run slot: what cancels the wait, and who pauses its budget. */
+export type ConditionFiredWait = {
+  signal?: AbortSignal;
+  onWait?: (waiting: boolean) => void;
+};
+
+/** `stopped`: the wait ended without a slot, so the payload must not start. */
+export type ConditionFiredRunSlot = "taken" | "taken-after-wait" | "stopped";
+
 export type ExecuteJobCoreOptions = {
   /** Queue admission supplies this fact so receipt I/O cannot reorder payload starts. */
   migrationPending?: boolean;
@@ -74,6 +83,8 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  /** The condition fired; resolves once the run holds a run slot or must stop without one. */
+  onConditionFired?: (wait: ConditionFiredWait) => Promise<ConditionFiredRunSlot>;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;

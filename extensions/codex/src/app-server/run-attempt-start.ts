@@ -116,6 +116,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      onDeveloperInstructions: prompt.setThreadDeveloperInstructions,
       systemPromptReplaced: turnState.promptBuild.systemPromptReplaced,
       refreshableInstructions:
         joinPresentSections(

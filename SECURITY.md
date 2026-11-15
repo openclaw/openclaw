@@ -244,6 +244,17 @@ Hardening roadmap may add explicit visibility modes (for example `all`, `allowli
 - Hook/webhook-driven payloads should be treated as untrusted content; keep unsafe bypass flags disabled unless doing tightly scoped debugging (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`).
 - Weak model tiers are generally easier to prompt-inject. For tool-enabled or hook-driven agents, prefer strong modern model tiers and strict tool policy (for example `tools.profile: "messaging"` or stricter), plus sandboxing where possible.
 
+Delegated OpenClaw administration is a separate host-held capability. Explicit
+Full Access, or `tools.openclaw.autoApproveChanges: true`, grants standing
+authorization for permitted system-agent changes, including changes that can
+enable host code execution even when direct execution or editing tools are
+denied. Inferred Full Access requires effective unrestricted Gateway-host
+execution; settings for disabled tools do not grant authority. Set
+`autoApproveChanges: false` globally or per agent to require human approval for
+delegated persistent changes. Filesystem, sandbox, inherited-authority, and
+operation restrictions remain enforced, and a model cannot automatically approve
+broadening this grant. See [Delegated setup and repair](https://docs.openclaw.ai/gateway/permission-modes#delegated-setup-and-repair).
+
 ### Gateway and Node Trust Concept
 
 OpenClaw separates routing from execution, but both remain inside the same operator trust boundary:

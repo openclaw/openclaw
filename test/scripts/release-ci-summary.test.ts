@@ -40,6 +40,7 @@ import {
 } from "../../scripts/lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { FULL_RELEASE_CHILD_EVIDENCE_JOB } from "../../scripts/lib/full-release-evidence.mjs";
+import { evaluateReleaseChildPolicy } from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   artifactDownloadTimeoutMs,
   createReleaseEvidenceClient,
@@ -556,6 +557,15 @@ describe("original publication admission reader", () => {
     };
     const client = {
       ...fixture.client,
+      verifyRetainedPublicationArtifacts() {
+        throw new Error("Publication admission fixture does not recover publication artifacts");
+      },
+      downloadArtifactArchive() {
+        throw new Error("Publication admission fixture does not download artifact archives");
+      },
+      getRunArtifacts() {
+        throw new Error("Publication admission fixture does not list run artifacts");
+      },
       validateChildReuse: async () => {
         throw new Error("publication admission fixture does not reuse children");
       },
@@ -564,6 +574,7 @@ describe("original publication admission reader", () => {
           ? `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${releaseExecutionPlanSha256(fixture.plan)}\n`
           : fixture.client.getJobLog(id),
       getRun: async (id: string) => fixture.client.getRun(id),
+      getRunView: async (id: string) => fixture.client.getRunView(id),
       getParentJobs: async (id: string) => fixture.client.getParentJobs(id),
       getWorkflowSource: vi.fn(
         () =>
@@ -1480,36 +1491,43 @@ process.stdout.write(JSON.stringify(output));
 }
 
 describe("release CI summary child correlation", () => {
-  it("reports an early release blocker once while the diagnostic drain continues", () => {
-    const fixture = createReleaseCiWatchFixture([
-      {
-        attempt: 1,
-        conclusion: "",
-        jobs: [
-          { conclusion: "failure", name: "Release Decision", status: "completed" },
-          { conclusion: "", name: "Diagnostic Drain", status: "in_progress" },
-        ],
-        status: "in_progress",
-      },
-    ]);
-    try {
-      const result = fixture.run();
-      const calls = fixture.readCalls();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Full Release Validation state: blocked_diagnostics_running");
-      expect(result.stderr).toContain("Diagnostic Drain is still collecting terminal evidence");
-      expect(
-        calls.filter(
-          (args) =>
-            args[0] === "run" &&
-            args[args.indexOf("--json") + 1] === "status,conclusion,attempt,headSha,jobs",
-        ),
-      ).toHaveLength(1);
-      expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
+  it.each(["", " / Watch"])(
+    "reports an early release blocker once while the diagnostic drain continues%s",
+    (suffix) => {
+      const fixture = createReleaseCiWatchFixture([
+        {
+          attempt: 1,
+          conclusion: "",
+          jobs: [
+            { conclusion: "failure", name: "Release Decision" + suffix, status: "completed" },
+            { conclusion: "", name: "Diagnostic Drain" + suffix, status: "in_progress" },
+          ],
+          status: "in_progress",
+        },
+      ]);
+      try {
+        const result = fixture.run();
+        const calls = fixture.readCalls();
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          "Full Release Validation state: blocked_diagnostics_running",
+        );
+        expect(result.stderr).toContain("Diagnostic Drain is still collecting terminal evidence");
+        expect(
+          calls.filter(
+            (args) =>
+              args[0] === "run" &&
+              args[args.indexOf("--json") + 1] === "status,conclusion,attempt,headSha,jobs",
+          ),
+        ).toHaveLength(1);
+        expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(
+          1,
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("selects one immutable manifest artifact bound to the exact parent run", () => {
     const { artifact, runId } = trustedMainPackageFixture();
@@ -2368,6 +2386,55 @@ describe("release CI summary child correlation", () => {
     });
   });
 
+  it("authenticates exact-candidate failed CI and rejects forged or unexplained evidence", async () => {
+    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+    const targetVersion = "2026.11.4";
+    const fixture = trustedMainNpmFixture("stable", { targetSha, targetVersion });
+    const jobs = [
+      "checks-node-agentic-control-plane-runtime-state",
+      "checks-ui-e2e-real-gateway (1/2)",
+      "macos-swift (tests)",
+      "openclaw/ci-gate",
+    ].map((name, index) =>
+      Object.assign({}, fixture.parentJob, {
+        id: 1501 + index,
+        name,
+        conclusion: "failure",
+        steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+      }),
+    );
+    const { child, run } = setChildJobs(fixture, "normalCi", jobs);
+    run.conclusion = "failure";
+    const waivers = evaluateReleaseChildPolicy({
+      child: { key: "normalCi", jobs },
+      targetVersion,
+      targetSha,
+    }).waivers;
+    const recorded = waivers.map((waiver) => ({ ...waiver, runId: child.runId, runAttempt: 1 }));
+    Object.assign(fixture.manifest, { waivers: canonicalizeJsonValue(recorded) });
+    const originalLog = fixture.client.getJobLog.getMockImplementation()!;
+    let log = [
+      "checks-ui-e2e-real-gateway finished with failure (selected=true)",
+      "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+      "macos-swift finished with failure (selected=true)",
+      "Process completed with exit code 1.",
+    ]
+      .map((cause) => "2026-11-15T04:00:00.0000000Z ##[error]" + cause)
+      .join("\n");
+    fixture.client.getJobLog.mockImplementation((id) => (id === 1504 ? log : originalLog(id)));
+    const evidence = await verifyFixture(fixture);
+    expect(evidence.valid).toBe(true);
+    expect(
+      evidence.children.find((entry: { role: string }) => entry.role === "normalCi"),
+    ).toMatchObject({ conclusion: "failure", waivers });
+    expect(fixture.client.getJobLog).toHaveBeenCalledWith(1504);
+    Object.assign(fixture.manifest, { waivers: [] });
+    await expect(verifyFixture(fixture)).rejects.toThrow("waivers differ");
+    Object.assign(fixture.manifest, { waivers: canonicalizeJsonValue(recorded) });
+    log += "\n\u001b[31m##[error]unknown failure\u001b[0m";
+    await expect(verifyFixture(fixture)).rejects.toThrow("unwaived failure");
+  });
+
   it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {
     const fixture = trustedMainNpmFixture();
     const selected = expectDefined(
@@ -2477,57 +2544,52 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it.each(["", "ship"])(
-    "reads published empty retry metadata without granting a waiver (%s)",
-    async (laneWaiver) => {
-      const fixture = trustedMainNpmFixture();
-      const selected = expectDefined(
-        fixture.executionPlan.children.find((child) => child.key === "releaseChecksCandidate"),
-        "release checks child",
-      );
-      const jobs = [
-        {
-          name: "cross_os_release_checks / Windows / packaged upgrade",
-          status: "completed",
-          conclusion: "failure",
-        },
-        {
-          name: "cross_os_release_checks / macOS / packaged fresh",
-          status: "completed",
-          conclusion: "success",
-        },
-        { name: "Verify release checks", status: "completed", conclusion: "success" },
-      ].map((job) => Object.assign({}, fixture.parentJob, job));
-      setChildJobs(fixture, "releaseChecksCandidate", jobs).run.conclusion = "failure";
-      Object.assign(fixture.executionPlan, {
-        knownFlakyJobs: [],
-        ...(laneWaiver ? { laneWaiver } : {}),
-      });
-      fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
-      Object.assign(fixture.manifest.validationInputs, {
-        knownFlakyJobsJson: "[]",
-        ...(laneWaiver ? { laneWaiver } : {}),
-      });
-      const manifest = Object.assign(fixture.manifest, {
-        knownFlakyJobs: [],
-        automaticRetries: [],
-        executionPlanSha256: fixture.executionPlan.sha256,
-        advisoryJobs: jobs.slice(0, 2).map(({ name, status, conclusion }) => ({
-          child: selected.key,
-          job: name,
-          status,
-          conclusion,
-          policy: "advisory",
-        })),
-      });
-      const before = JSON.stringify(manifest);
-      expect(() => validateParentManifest(manifest, { runId: fixture.runId })).toThrow(
-        laneWaiver ? "no longer accepted" : "advisory jobs differ",
-      );
-      await expect(verifyFixture(fixture)).rejects.toThrow();
-      expect(JSON.stringify(manifest)).toBe(before);
-    },
-  );
+  it("reads published empty retry metadata without granting an advisory", async () => {
+    const fixture = trustedMainNpmFixture();
+    const selected = expectDefined(
+      fixture.executionPlan.children.find((child) => child.key === "releaseChecksCandidate"),
+      "release checks child",
+    );
+    const jobs = [
+      {
+        name: "cross_os_release_checks / Windows / packaged upgrade",
+        status: "completed",
+        conclusion: "failure",
+      },
+      {
+        name: "cross_os_release_checks / macOS / packaged fresh",
+        status: "completed",
+        conclusion: "success",
+      },
+      { name: "Verify release checks", status: "completed", conclusion: "success" },
+    ].map((job) => Object.assign({}, fixture.parentJob, job));
+    setChildJobs(fixture, "releaseChecksCandidate", jobs).run.conclusion = "failure";
+    Object.assign(fixture.executionPlan, {
+      knownFlakyJobs: [],
+    });
+    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+    Object.assign(fixture.manifest.validationInputs, {
+      knownFlakyJobsJson: "[]",
+    });
+    const manifest = Object.assign(fixture.manifest, {
+      knownFlakyJobs: [],
+      automaticRetries: [],
+      executionPlanSha256: fixture.executionPlan.sha256,
+      advisoryJobs: jobs.slice(0, 2).map(({ name, status, conclusion }) => ({
+        child: selected.key,
+        job: name,
+        status,
+        conclusion,
+        policy: "advisory",
+      })),
+    });
+    const before = JSON.stringify(manifest);
+    expect(() => validateParentManifest(manifest, { runId: fixture.runId })).toThrow(
+      "advisory jobs differ",
+    );
+    await expect(verifyFixture(fixture)).rejects.toThrow();
+    expect(JSON.stringify(manifest)).toBe(before);
+  });
 
   it("rejects a v3 producer dispatched from a tag named main", async () => {
     const fixture = trustedMainPackageFixture({

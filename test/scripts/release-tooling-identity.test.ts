@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -168,6 +168,44 @@ describe("release tooling identity", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Invalid admission descriptor fields");
+    expect(result.stderr).not.toContain("unsettled top-level await");
+  });
+
+  it.each(["lineage", "authority"])("loads npm publication %s without CLI deadlock", (mode) => {
+    const root = tempDirs.make("npm-publication-cli-");
+    const manifestDir = join(root, "full-release-validation");
+    mkdirSync(manifestDir);
+    const manifestPath = join(manifestDir, "full-release-validation-manifest.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ runId: RUN_ID, runAttempt: 1, targetSha: SHA, receiptRecovery: {} }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(process.cwd(), "scripts/npm-preflight-tooling-identity.mjs"),
+        `--verify-publication-${mode}`,
+        ...Object.entries({
+          "full-release-manifest": manifestPath,
+          "source-sha": SHA,
+          "workflow-sha": SHA,
+        }).flatMap(([key, value]) => [`--${key}`, value]),
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FULL_RELEASE_VALIDATION_RUN_ID: RUN_ID,
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
+          EXPECTED_RELEASE_SHA: SHA,
+          PREFLIGHT_WORKFLOW_SHA: SHA,
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Candidate-owned artifact source and qualification SHA differ");
     expect(result.stderr).not.toContain("unsettled top-level await");
   });
 

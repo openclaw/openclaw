@@ -225,10 +225,19 @@ catalogSuite.define(() => {
               }
             }
             // Exercise reads after real publication, not config changes during an in-flight read.
-            // Keep the Gateway's notifications intact and in their original order.
-            if (awaitCatalogPublication && catalogChange) {
+            // Once a notification is held, hold subsequent events too: forwarding a
+            // later sequence (for example skills.changed) would force a gap reconnect.
+            // Responses still flow so publication and in-flight reads can complete.
+            if (
+              awaitCatalogPublication &&
+              (catalogChange || (pendingNotifications.length > 0 && frame.type === "event"))
+            ) {
               traceCatalog(
-                frame.event === "config.changed" ? "config-changed-held" : "metadata-changed-held",
+                frame.event === "config.changed"
+                  ? "config-changed-held"
+                  : frame.event === "chat.metadata.changed"
+                    ? "metadata-changed-held"
+                    : "subsequent-event-held",
               );
               pendingNotifications.push(() => socket.send(message));
               if (
@@ -571,6 +580,44 @@ async function openAdvanced(page: Page, name: unknown) {
 }
 
 suite.define(() => {
+  it("long prompt preview: saves exact edits through the real Gateway and reloads them", async () => {
+    await withGatewayCommands(async (cliJson) => {
+      const prompt =
+        "# Fictional garden report\n\n" +
+        "Summarize the fictional herbs, flowers, and seedlings. Compare planned watering with the sample schedule and list observations for the next garden report.\n\n".repeat(
+          40,
+        );
+      const job = await seedPausedAgentJob("Long garden prompt", {
+        kind: "agentTurn",
+        message: prompt,
+      });
+      const jobId = cronJobId(job);
+      await withCronJobPage(cliJson, jobId, async (evidence) => {
+        const { page } = evidence;
+        await page.locator('[data-test-id="cron-back"]').click();
+        await page.locator('[data-test-id="cron-row-' + jobId + '"] .cron-table__name').click();
+        const input = page.locator("#cron-payload-text");
+        await input.waitFor();
+        expect(await input.inputValue()).toBe(prompt);
+        const preview = page.getByRole("region", { name: "Prompt preview", exact: true });
+        expect((await preview.boundingBox())?.height).toBe(240);
+        await preview.focus();
+        await page.keyboard.press("End");
+        await expect
+          .poll(() => preview.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(0);
+        const edited = prompt + "Updated through the real Gateway.";
+        await input.fill(edited);
+        const saved = await submitCronForm(evidence, "cron.update");
+        expect(saved.stored.payload).toMatchObject({ kind: "agentTurn", message: edited });
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await input.waitFor();
+        expect(await input.inputValue()).toBe(edited);
+      });
+    });
+  });
+
   it("timeout override: clearing restores the default after save and reload", async () => {
     await withGatewayCommands(async (cliJson) => {
       const job = await seedCliAutomation(cliJson, "Clear timeout override", {

@@ -1,5 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -49,6 +49,8 @@ export type InstallPluginResult =
       extensions: string[];
       setup?: PluginManifestSetup;
       artifactInspection?: PluginInstallArtifactInspection;
+      /** Only the native preparation operation returns this non-published outcome. */
+      outcome?: "prepared";
       npmResolution?: NpmSpecResolution;
     }
   | {
@@ -104,6 +106,7 @@ export type PackageInstallCommonParams = InstallSafetyOverrides &
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;
+  prepareOnly?: boolean;
 };
 
 /**

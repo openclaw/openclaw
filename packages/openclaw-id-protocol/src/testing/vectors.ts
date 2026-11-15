@@ -250,6 +250,47 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     },
     signers["device-1"],
   );
+  const memberDeviceChange = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: {
+        op: "add_member_device",
+        account_id: "acct_bob",
+        peer_key: iroh("peer-1"),
+        device_pub: pub("device-5"),
+        label: "Bob phone",
+      },
+    },
+    signers["device-1"],
+  );
+  const guestInvite = await signStatement(
+    "InviteCap",
+    { ...invite.body, role: "guest" },
+    signers["device-2"],
+  );
+  const guestAdd = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: {
+        op: "add",
+        account_id: "acct_bob",
+        role: "guest",
+        peer_keys: [iroh("invitee")],
+        invite_id: invite.body.invite_id,
+      },
+    },
+    signers["device-1"],
+  );
+  const guestRoleChange = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: { op: "set_role", account_id: "acct_bob", role: "support_team-2" },
+    },
+    signers["device-1"],
+  );
   const revocation = await signStatement(
     "Revocation",
     {
@@ -281,6 +322,14 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     },
     signers.gateway,
   );
+  const guestSnapshot = await signStatement(
+    "MembershipSnapshot",
+    {
+      ...snapshot.body,
+      members: [{ account_id: "acct_bob", role: "guest", peer_keys: [iroh("invitee")] }],
+    },
+    signers.gateway,
+  );
   const redemption = await signStatement(
     "InviteRedemption",
     {
@@ -290,6 +339,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       device_pub: pub("invitee"),
       peer_key: iroh("invitee"),
       proof: bytesToHex(await sha256(utf8("placeholder proof; see invites vectors"))),
+      label: "Bob browser",
       requested_at: VECTOR_ISSUED_AT,
     },
     signers.invitee,
@@ -347,6 +397,23 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       claw_id: VECTOR_CLAW_ID,
       seq: 4,
       target: { op: "remove_node", peer_key: iroh("node") },
+      issued_at: VECTOR_NOW,
+    },
+    signers["device-1"],
+  );
+
+  // An app approved as an owner device brings its node in the same decision.
+  const cert3 = await signStatement("OwnerDeviceCert", certBody("device-3"), signers["device-1"]);
+  const deviceNodeChange = await signStatement(
+    "MembershipChange",
+    {
+      claw_id: VECTOR_CLAW_ID,
+      seq: 5,
+      target: {
+        op: "add_owner_device",
+        cert: cert3,
+        node: { peer_key: iroh("node"), label: "Mac Studio", description },
+      },
       issued_at: VECTOR_NOW,
     },
     signers["device-1"],
@@ -462,6 +529,11 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("root signs server binding seq 2 (new server key)", "owner", binding2),
       vector("owner device-2 signs invite", "owner", invite),
       vector("owner device-1 adds member", "owner", change),
+      vector("owner adds member device", "owner", memberDeviceChange),
+      vector("owner invites opaque guest role", "owner", guestInvite),
+      vector("owner approves exact guest role", "owner", guestAdd),
+      vector("owner changes opaque role", "owner", guestRoleChange),
+      vector("gateway mirrors opaque guest role", "snapshot", guestSnapshot),
       vector("owner device-2 revokes device-3", "owner", revocation),
       vector("gateway signs membership snapshot", "snapshot", snapshot),
       vector("invitee signs redemption request", "redemption", redemption),
@@ -470,6 +542,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("node W signs redemption", "node_redemption", nodeRedemption),
       vector("owner approves node", "owner", nodeChange),
       vector("owner removes node", "owner", nodeRemoval),
+      vector("owner approves a device with its node", "owner", deviceNodeChange),
     ],
     invalid: [
       {

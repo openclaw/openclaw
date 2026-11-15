@@ -28,7 +28,7 @@ function sensitiveSurface(name: string) {
 }
 
 /** Shared dialog body; all self-reported node fields render as text. */
-export function NodeDialogContent(props: NodeDialogProps) {
+function NodeDialogContent(props: NodeDialogProps) {
   const [label, setLabel] = createSignal("");
   const [created, setCreated] = createSignal<CreatedNodeInvite>();
   const [outcome, setOutcome] = createSignal<"approved" | "denied">();

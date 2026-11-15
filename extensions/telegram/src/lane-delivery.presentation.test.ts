@@ -22,7 +22,7 @@ const canonicalPayload = (presentationTextMode?: "fallback") => ({
   presentation: {
     blocks: [
       statusTable,
-      { type: "buttons" as const, buttons: [{ label: "Unavailable", value: "x", disabled: true }] },
+      { type: "buttons" as const, buttons: [{ label: "Unavailable", value: "x".repeat(65) }] },
     ],
   },
 });
@@ -66,7 +66,7 @@ describe("createLaneTextDeliverer streamed presentation finals", () => {
   );
 });
 describe("streamed final canonical presentation text", () => {
-  it.each([undefined, "fallback"] as const)("renders capability-degraded controls (%s)", (mode) => {
+  it.each([undefined, "fallback"] as const)("renders unencodable controls as text (%s)", (mode) => {
     const rendered = renderFinal(canonicalPayload(mode));
     for (const text of ["<table>", "Unavailable", ...(mode ? [] : ["Summary"])]) {
       expect(rendered).toContain(text);

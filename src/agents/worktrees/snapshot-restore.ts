@@ -9,6 +9,7 @@ import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from 
 import { materializeManagedWorktree } from "./checkout-materialize.js";
 import { usesSourceOnlyWorktreeGit } from "./checkout-policy.js";
 import { addManagedWorktree } from "./checkout.js";
+import { WorktreeRecordNotFoundError } from "./errors.js";
 import {
   requireGit,
   worktreePathExists,
@@ -56,7 +57,7 @@ export function requireManagedWorktreeRestoreRecord(
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
   if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
-    throw new Error(`worktree ${id} is not restorable`);
+    throw new WorktreeRecordNotFoundError(`worktree ${id} is not restorable`);
   }
   return record;
 }

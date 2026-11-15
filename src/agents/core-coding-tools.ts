@@ -225,13 +225,14 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
-      ? resolveReadOnlyWorkspaceSkillMounts({
+      ? (sandbox.fsPreparation?.readOnlyWorkspaceSkillMounts ??
+        resolveReadOnlyWorkspaceSkillMounts({
           workspaceDir: sandbox.workspaceDir,
           agentWorkspaceDir: sandbox.agentWorkspaceDir,
           skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
           workdir: sandbox.containerWorkdir,
           workspaceAccess: sandbox.workspaceAccess,
-        })
+        }))
       : [];
 
   // Older external SDK bridges predate pathMappings. Only absence selects
@@ -268,6 +269,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 resolutionCwd: options.codingRoot,
+                containmentSource: options.applyPatchContainmentSource,
                 normalizeGuardedPathParams: true,
                 allowLinkedWorktrees: tool.name !== "ls",
               },
@@ -341,6 +343,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                containmentSource: options.applyPatchContainmentSource,
                 allowLinkedWorktrees: true,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,

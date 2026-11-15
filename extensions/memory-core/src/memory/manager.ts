@@ -259,7 +259,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     if (
       source?.embeddingBootstrapFailure &&
       cachedProbe?.result.ok === false &&
-      cachedProbe.expireAtMs > Date.now()
+      cachedProbe.expireAtMs > performance.now()
     ) {
       // Detached maintenance inherits the remaining cooldown, never a fresh deadline.
       this.embeddingBootstrapFailure = source.embeddingBootstrapFailure;

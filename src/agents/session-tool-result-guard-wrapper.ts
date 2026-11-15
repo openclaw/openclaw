@@ -93,7 +93,6 @@ type GuardOptions = {
   privateCompletion?: true;
   allowSyntheticToolResults?: boolean;
   missingToolResultText?: string;
-  allowedToolNames?: Iterable<string>;
   trigger?: EmbeddedRunTrigger;
   preparedUserTurnMessage?: PersistedUserTurnMessage;
   preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -408,7 +407,6 @@ export function guardSessionManager(
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: options?.allowSyntheticToolResults,
     missingToolResultText: options?.missingToolResultText,
-    allowedToolNames: options?.allowedToolNames,
     config: options?.config,
     maxToolResultChars,
     withCompactionPersistence: options?.withCompactionPersistence,

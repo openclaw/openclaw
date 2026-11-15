@@ -151,6 +151,7 @@ async function gatherDaemonStatusImpl(
     rpc: GatewayRpcOpts;
     probe: boolean;
     requireRpc?: boolean;
+    signal?: AbortSignal;
     deep?: boolean;
     allowExecSecretRefs?: boolean;
     pluginVersionTarget?: "running" | "restart";
@@ -391,6 +392,7 @@ async function gatherDaemonStatusImpl(
             ? localCertificate.value.fingerprintSha256
             : undefined,
           timeoutMs,
+          ...(opts.signal ? { signal: opts.signal } : {}),
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
           allowRpcConfigCredentials,
@@ -521,7 +523,7 @@ async function gatherDaemonStatusImpl(
 
   return {
     cli: projection.cli,
-    logFile: resolveConfiguredLogFilePath(cliCfg),
+    logFile: await resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
       label: formatServiceLabel(service.label, runtime),
@@ -537,7 +539,13 @@ async function gatherDaemonStatusImpl(
       ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       ...(installationDrift
-        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(
+              installationDrift,
+              process.env,
+              { command },
+            ),
+          }
         : {}),
       runtime: runtime?.inspectionFailure
         ? {

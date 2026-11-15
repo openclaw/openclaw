@@ -23,6 +23,7 @@ import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-cont
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
+import { readTemplatePluginInstallNotice } from "../../../../src/shared/template-install-notice.js";
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
@@ -520,6 +521,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (type === "plugin_view") {
         const inline = isAssistantMessage ? readPluginInlineViewBlock(item) : undefined;
         return inline ? [inline] : [];
+      }
+      if (type === "template_plugin_install") {
+        const receipt = isAssistantMessage ? readTemplatePluginInstallNotice(item) : undefined;
+        return receipt ? [receipt] : [];
       }
       if (type === "clawhub") {
         const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;

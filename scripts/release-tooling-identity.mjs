@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { accountGithubRequest } from "./lib/plain-gh.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
@@ -318,7 +319,8 @@ function parseJson(raw, label) {
 }
 
 export function runReleaseToolingGh(args) {
-  return execFileSync("gh", args, {
+  accountGithubRequest(args);
+  return childProcess.execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
     maxBuffer: 1024 * 1024,

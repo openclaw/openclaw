@@ -7,6 +7,7 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   actionOpacity,
+  controlUiSessionPath,
   createSessionManagementE2eSuite,
 } from "./session-management.test-support.ts";
 
@@ -149,7 +150,7 @@ suite.define(() => {
       });
     }));
 
-  it("keeps fork provenance in the title above always-visible touch actions", () =>
+  it("keeps fork provenance and navigation clear of touch actions", () =>
     suite.withPage(touchOptions, async ({ page }) => {
       await ui.installSessionRows(
         page,
@@ -187,6 +188,11 @@ suite.define(() => {
       expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
       expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+      expect(nameBounds.width).toBeGreaterThan(0);
+      await row.locator(".sidebar-recent-session__link").tap();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:touch-forked"));
     }));
 
   it("keeps unread glyph badges visible while PR icons yield to hover actions", () =>

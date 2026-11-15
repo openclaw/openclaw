@@ -2,7 +2,7 @@
 import { render } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { NodeDialog, NodeDialogContent } from "./node-dialog.js";
+import { NodeDialog } from "./node-dialog.js";
 import type { NodeInvite } from "./types.js";
 
 const pending: NodeInvite = {
@@ -24,11 +24,22 @@ const pending: NodeInvite = {
     },
   },
 };
+const disposeShell = vi.fn();
+// Only the modal platform shell is substituted; NodeDialog owns the real Solid subtree.
+const host = {
+  components: {
+    mountDialog: (container: HTMLElement, props: { content: HTMLElement }) => {
+      container.append(props.content);
+      return { update() {}, dispose: disposeShell };
+    },
+  },
+};
 let dispose: (() => void) | undefined;
 afterEach(() => {
   dispose?.();
   document.body.replaceChildren();
   vi.useRealTimers();
+  disposeShell.mockClear();
 });
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((node) => node.textContent === name)!;
@@ -44,7 +55,8 @@ it("creates, waits with a countdown, then expires without exposing a stale comma
   const decide = vi.fn();
   dispose = render(
     () => (
-      <NodeDialogContent
+      <NodeDialog
+        host={host}
         disabled={false}
         canCreate
         onCreate={create}
@@ -55,6 +67,7 @@ it("creates, waits with a countdown, then expires without exposing a stale comma
     document.body,
   );
   flush();
+  expect(document.body.textContent).toContain("Create node command");
   const input = document.querySelector("input")!;
   input.value = "Builder";
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -71,6 +84,9 @@ it("creates, waits with a countdown, then expires without exposing a stale comma
   expect(document.body.textContent).toContain("invitation expired");
   expect(document.body.textContent).not.toContain("npx synthetic");
   expect(decide).not.toHaveBeenCalled();
+  dispose();
+  dispose = undefined;
+  expect(disposeShell).toHaveBeenCalledOnce();
 });
 
 it.each([true, false])(
@@ -80,7 +96,8 @@ it.each([true, false])(
     const [invite, setInvite] = createSignal<NodeInvite | undefined>();
     dispose = render(
       () => (
-        <NodeDialogContent
+        <NodeDialog
+          host={host}
           invite={invite()}
           disabled={false}
           canCreate
@@ -112,7 +129,8 @@ it.each([true, false])(
 it("shows Discovery setup guidance without a copyable command", async () => {
   dispose = render(
     () => (
-      <NodeDialogContent
+      <NodeDialog
+        host={host}
         disabled={false}
         canCreate
         onCreate={() =>
@@ -139,37 +157,6 @@ it("shows Discovery setup guidance without a copyable command", async () => {
   expect(button("Copy command")).toBeUndefined();
 });
 
-it("mounts dialog content inside the host shell without a second reactive render root", () => {
-  const disposeShell = vi.fn();
-  // Only the modal platform shell is substituted; NodeDialog owns the real Solid subtree.
-  const host = {
-    components: {
-      mountDialog: (container: HTMLElement, props: { content: HTMLElement }) => {
-        container.append(props.content);
-        return { update() {}, dispose: disposeShell };
-      },
-    },
-  };
-  dispose = render(
-    () => (
-      <NodeDialog
-        host={host}
-        disabled={false}
-        canCreate
-        onCreate={() => Promise.resolve(undefined)}
-        onDecide={() => Promise.resolve(undefined)}
-        onClose={() => {}}
-      />
-    ),
-    document.body,
-  );
-  flush();
-  expect(document.body.textContent).toContain("Create node command");
-  dispose();
-  dispose = undefined;
-  expect(disposeShell).toHaveBeenCalledOnce();
-});
-
 it("discards a command completed after its originating dialog closes", async () => {
   let finish!: (value: { inviteId: string; expiresAt: number; commands: null }) => void;
   const pendingCreate = new Promise<{ inviteId: string; expiresAt: number; commands: null }>(
@@ -180,7 +167,8 @@ it("discards a command completed after its originating dialog closes", async () 
   const onCreated = vi.fn();
   dispose = render(
     () => (
-      <NodeDialogContent
+      <NodeDialog
+        host={host}
         disabled={false}
         canCreate
         onCreate={() => pendingCreate}

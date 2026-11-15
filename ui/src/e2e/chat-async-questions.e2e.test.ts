@@ -400,7 +400,7 @@ suite.define(() => {
       });
       await card.getByText(blockingTitle, { exact: true }).waitFor();
       expect(await card.textContent()).toContain("Waiting for your answer");
-      expect(await composer.count()).toBe(0);
+      await expectBrowser(composer).toBeVisible();
       await card.getByRole("button", { name: "Next", exact: true }).click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");

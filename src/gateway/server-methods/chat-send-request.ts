@@ -84,6 +84,8 @@ export type NormalizedChatSendRequest = {
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
   requestIdentity?: string;
   mentions?: HumanMention[];
+  /** Selected people are the recipients; the agent records the message without a turn. */
+  humanAddressed?: true;
   appContext?: ChatAppContextAttachment[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
@@ -277,7 +279,7 @@ export function normalizeChatSendRequest(params: {
       !ordinaryChat)
   ) {
     return reject(
-      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+      "Human mentions require a signed-in chat in the OpenClaw app. Remove the selected mentions to use this mode.",
     );
   }
   if (p.appContext && !ordinaryChat) {

@@ -14,7 +14,7 @@ import { isPendingExpired } from "./invite-expiry.js";
 import { withSweptInvites } from "./invite-sweep.js";
 
 /** Public node invitation fields exposed only to owners; description is self-reported. */
-export type NodeInviteView = {
+type NodeInviteView = {
   inviteId: string;
   label: string;
   createdAt: number;

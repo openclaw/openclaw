@@ -2,6 +2,7 @@ import { AsyncResource } from "node:async_hooks";
 import { type ChildProcess, fork } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { constants, getPriority } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { PassThrough } from "node:stream";
@@ -112,6 +113,33 @@ function createIntegrityChild(): ChildProcess {
 
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("runs background verification at low process priority", async () => {
+    const { source } = fixture("background", "CREATE TABLE records(value INTEGER)");
+    using database = openNodeSqliteDatabase(source);
+    database.exec("BEGIN EXCLUSIVE");
+    const priorities: number[] = [];
+    vi.mocked(fork).mockImplementationOnce((...args) => {
+      const child = nativeFork(...args);
+      child.on("message", (message) => {
+        if ((message as { phase?: string }).phase === "opening") {
+          priorities.push(getPriority(expectDefined(child.pid, "integrity child PID")));
+          database.exec("COMMIT");
+        }
+      });
+      return child;
+    });
+    await assertSqliteIntegrityInWorker(
+      source,
+      5_000,
+      new AbortController().signal,
+      undefined,
+      undefined,
+      undefined,
+      { priority: "background" },
+    );
+    expect(priorities).toEqual([constants.priority.PRIORITY_LOW]);
+  });
+
   it.each(["payload", "schema_meta"])(
     "preserves schema-only migration scope with damage in %s",
     (damagedTable) => {
@@ -183,6 +211,7 @@ describe("SQLite integrity child", () => {
     const { source } = fixture("progress");
     progress.mockClear();
     const worker = createIntegrityChild();
+    const send = vi.spyOn(worker, "send");
     worker.kill = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGKILL"));
       return true;
@@ -192,7 +221,7 @@ describe("SQLite integrity child", () => {
     vi.useFakeTimers();
     try {
       const check = inScope(() => inspect(source, controller.signal));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
       worker.emit("message", { type: "phase", phase: "checking" });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(progress).toHaveBeenCalledTimes(3);
@@ -227,6 +256,7 @@ describe("SQLite integrity child", () => {
     fs.writeFileSync(source, bytes);
     const timing: SqliteIntegrityCheckTiming = {};
     vi.mocked(fork).mockClear();
+    const stat = vi.spyOn(fs, "statSync");
     const check = inScope(() => inspect(source, undefined, timing));
     await expect(check).rejects.toMatchObject({
       name: "SqliteIntegrityError",
@@ -235,6 +265,7 @@ describe("SQLite integrity child", () => {
       ),
     });
     expectForksClosed();
+    expect(stat.mock.calls.filter(([pathname]) => pathname === source)).toHaveLength(0);
   });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {

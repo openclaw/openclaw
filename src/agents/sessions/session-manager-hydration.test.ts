@@ -32,6 +32,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
+import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
 
@@ -109,10 +110,10 @@ it("shares physical text strings with active history across reloads without shar
       assert.notEqual(reloaded.message.content, before.message.content);
       assert.deepEqual(reloaded.message.content, active.content);
       retained.firstReload = reloaded.message.content[0].text;
-      active.content.push({ type: "text", text: "runtime-only mutation" });
+      assert.throws(() => active.content.push({ type: "text", text: "runtime-only mutation" }), TypeError);
       assert.equal(reloaded.message.content.length, 1);
       reloaded.message.content.push({ type: "text", text: "manager-only mutation" });
-      assert.equal(active.content.at(-1).text, "runtime-only mutation");
+      assert.equal(active.content.length, 1);
       await manager.reloadPersistedTranscriptAsync();
       assert.equal(manager.getEntry(ids[0]).message.content.length, 1);
       assert.equal(manager.getEntry(ids[0]).message.content[0].text, retained.active);
@@ -502,6 +503,17 @@ it("keeps absent storage absent, lazy headers unpersisted, and malformed retarge
   await withOpenClawTestState({ label: "session-hydration-empty" }, async (state) => {
     const target = canonicalTarget(state, "empty");
     await expect(SessionManager.openAsync(target)).rejects.toThrow("storage");
+    expect(fs.existsSync(target.storePath)).toBe(false);
+    const consumeCohort = vi.fn();
+    await expect(
+      SessionManager[sessionManagerOpenTranscriptCohort](
+        target,
+        { maxBytes: 4096, maxEvents: 5 },
+        { sessionKey: target.sessionKey, entryIds: [] },
+        consumeCohort,
+      ),
+    ).rejects.toThrow("storage");
+    expect(consumeCohort).not.toHaveBeenCalled();
     expect(fs.existsSync(target.storePath)).toBe(false);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const empty = await SessionManager.openAsync(target);

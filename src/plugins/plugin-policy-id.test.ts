@@ -43,11 +43,11 @@ describe("mixed-case plugin policy ids", () => {
     ).toMatchObject({ enabled: false, activated: false, reason: "blocked by denylist" });
   });
 
-  it("rejects a mixed-case spelling of a core reserved id", () => {
+  it.each(["Node-MCP", "OpenClaw", "openclaw"])("rejects a core reserved id: %s", (id) => {
     const dir = tempDirs.make("plugin-id-case-");
     fs.writeFileSync(
       path.join(dir, "openclaw.plugin.json"),
-      JSON.stringify({ id: "Node-MCP", configSchema: { type: "object" } }),
+      JSON.stringify({ id, configSchema: { type: "object" } }),
       "utf-8",
     );
     const result = loadPluginManifest(dir);

@@ -13,6 +13,29 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 Remote clients can continue the same Gateway-owned conversation by URL or short
 reference. See [Session synchronization and attachment](/concepts/session-attachment).
 
+## OpenClaw ID from a source checkout
+
+Maintainers running from `main` must build the local iroh transport before using
+OpenClaw ID. From the repository root, run:
+
+```bash
+pnpm build:iroh
+```
+
+Install [rustup](https://rustup.rs/) and your platform's native build tools first
+(a C/C++ toolchain and linker; Xcode Command Line Tools on macOS). The crate pins
+Rust 1.99.0, matching its CI builds, without changing your default toolchain.
+If your shell sets `RUSTUP_TOOLCHAIN`, unset it for this command so rustup uses
+the crate pin.
+The command writes the native `.node` file beside
+`crates/openclaw-iroh-node/index.js` and skips compilation when it is newer than
+the crate's sources and build inputs. Run it again after pulling native changes.
+It is opt-in: `pnpm build` does not compile Rust. Restart your source Gateway
+after building to use the binding.
+
+An installed build without the transport cannot enable OpenClaw ID remote access;
+the Gateway keeps running and other access methods remain available.
+
 ## OpenClaw ID nodes (Labs)
 
 With **OpenClaw ID** enabled in Labs, headless nodes can reach a claw through its

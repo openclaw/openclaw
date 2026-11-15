@@ -86,6 +86,51 @@ function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
 }
 
 describe("reconcileChatRunFromSessionRow transient projections", () => {
+  it.each(["done", "interrupted"] as const)(
+    "retires only the terminal run's live tail while retaining captured partials (%s)",
+    (outcome) => {
+      const host = makeHost({ chatRunId: "r1" });
+      for (const runId of ["r1", "r2"]) {
+        const liveOutput = { text: `latest ${runId}`, omittedChars: 12_000 };
+        const identity = buildToolStreamIdentity(runId, "command");
+        const message = {
+          content: [{ type: "toolresult", name: "exec", text: "older captured output" }],
+          __openclawToolStreamLiveOutput: liveOutput,
+        };
+        host.toolStreamById.set(identity, {
+          toolCallId: "command",
+          runId,
+          name: "exec",
+          startedAt: 1,
+          receivedAt: 1,
+          output: "captured beginning",
+          liveOutput,
+          message,
+          messageDirty: runId === "r1",
+        });
+        host.toolStreamOrder.push(identity);
+      }
+      const siblingMessage = host.toolStreamById.get(
+        buildToolStreamIdentity("r2", "command"),
+      )?.message;
+      reconcileChatRunLifecycle(host, { outcome, runId: "r1", clearLocalRun: true });
+      const terminal = host.toolStreamById.get(buildToolStreamIdentity("r1", "command"));
+      expect(terminal?.liveOutput).toBeUndefined();
+      expect(host.chatToolMessages[0]?.content).toContainEqual({
+        type: "toolresult",
+        name: "exec",
+        text: "captured beginning",
+      });
+      expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamLiveOutput");
+      expect(terminal?.output).toBe("captured beginning");
+      expect(host.chatToolMessages[1]).toBe(siblingMessage);
+      expect(host.chatToolMessages[1]?.["__openclawToolStreamLiveOutput"]).toEqual({
+        text: "latest r2",
+        omittedChars: 12_000,
+      });
+    },
+  );
+
   it("clears only the terminal run's tool stream", () => {
     const runId = "r1";
     const siblingRunId = "r2";

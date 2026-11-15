@@ -69,6 +69,21 @@ describe("createAckReactionHandle", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("reports a synchronous scope failure during deferred ack removal", async () => {
+    const error = new Error("Plugin invocation scope is closed");
+    const { handle } = makeAck({
+      remove: () => {
+        throw error;
+      },
+    });
+    const onError = vi.fn();
+    removeAckReactionHandleAfterReply({ removeAfterReply: true, onError, ackReaction: handle });
+    for (let i = 0; i < 5; i++) {
+      await Promise.resolve();
+    }
+    expect(onError).toHaveBeenCalledWith(error);
+  });
+
   it("tracks a failed ack send without throwing", async () => {
     const error = new Error("nope");
     const onSendError = vi.fn();

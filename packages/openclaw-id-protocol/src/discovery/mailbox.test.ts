@@ -9,6 +9,13 @@ import {
 const FP = `fp:${"ab".repeat(32)}` as const;
 
 describe("mailbox notices", () => {
+  it("sends member device notices to owners, never to self", () => {
+    expect(isValidNotice("member_device_added", `fp:${"ab".repeat(32)}`)).toBe(true);
+    expect(noticeRecipientAllowed("member_device_added", "owners")).toBe(true);
+    for (const event of MAILBOX_NOTICE_EVENTS) {
+      expect(noticeRecipientAllowed(event, "self")).toBe(false);
+    }
+  });
   it("lists seq_conflict among the notice events", () => {
     expect(MAILBOX_NOTICE_EVENTS).toContain("seq_conflict");
   });
@@ -20,6 +27,14 @@ describe("mailbox notices", () => {
     expect(noticeRecipientAllowed("kit_used", "owners")).toBe(true);
     expect(noticeRecipientAllowed("kit_used", FP)).toBe(true);
     expect(noticeRecipientAllowed("kit_used", "gateway")).toBe(false);
+  });
+
+  it("sends rebind only to all owner devices, with the new binding_seq as ref", () => {
+    expect(noticeRecipientAllowed("rebind", "owners")).toBe(true);
+    expect(noticeRecipientAllowed("rebind", FP)).toBe(false);
+    expect(noticeRecipientAllowed("rebind", "gateway")).toBe(false);
+    expect(isValidNotice("rebind", "2")).toBe(true);
+    expect(isValidNotice("rebind", "two")).toBe(false);
   });
 
   it.each([

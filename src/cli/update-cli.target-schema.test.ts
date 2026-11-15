@@ -416,7 +416,7 @@ PATH Node: not found.`,
   });
 
   it("previews explicit artifacts without claiming staged plugin admission", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-local-preview"));
+    await mockPackageInstallAtCaseDir("openclaw-local-preview");
     await runUpdate({ dryRun: true, json: true, tag: "/tmp/candidate.tgz" });
     expect(check.lastWriteJsonCall()).toMatchObject({
       dryRun: true,

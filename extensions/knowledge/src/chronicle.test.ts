@@ -147,13 +147,14 @@ it("late imports distinguish occurrence, recording, update and due dates before 
   expect(search.total).toBe(3);
   expect(search.hits.length).toBe(1);
   expect(
-    (await f.service.records({ timeField: "recorded_at", since: "2026-10-04" }, f.owner)).total,
+    (await f.service.records_detail({ timeField: "recorded_at", since: "2026-10-04" }, f.owner))
+      .total,
   ).toBe(4);
   expect(
-    (await f.service.records({ timeField: "due_at", until: "2026-10-05" }, f.owner)).total,
+    (await f.service.records_detail({ timeField: "due_at", until: "2026-10-05" }, f.owner)).total,
   ).toBe(1);
   await expect(f.service.grep({ query: "launch", since: "nonsense" }, f.owner)).rejects.toThrow();
-  await expect(f.service.records({ since: "2026-02-30" }, f.owner)).rejects.toThrow();
+  await expect(f.service.records_detail({ since: "2026-02-30" }, f.owner)).rejects.toThrow();
 });
 
 it("day/week queries honor IANA zones and retain literal date-only dates", async () => {
@@ -488,7 +489,9 @@ it("high precision storage dates remain queryable and equivalent source instants
   });
   for (const timeField of ["recorded_at", "updated_at"] as const) {
     expect((await f.service.timeline({ timeField, since: "2026-10-04" }, f.owner)).total).toBe(1);
-    expect((await f.service.records({ timeField, since: "2026-10-04" }, f.owner)).total).toBe(1);
+    expect(
+      (await f.service.records_detail({ timeField, since: "2026-10-04" }, f.owner)).total,
+    ).toBe(1);
     expect(
       (await f.service.grep({ query: "launch", timeField, since: "2026-10-04" }, f.owner)).total,
     ).toBe(1);

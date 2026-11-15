@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { resolveRequiredOsHomeDir } from "./home-dir.js";
 
 /** The only released migrations allowed to look outside the active state directory. */
 export function resolveLegacyProfileMigrationExceptions(params: {
@@ -18,7 +19,8 @@ export function resolveLegacyProfileMigrationExceptions(params: {
     homedir,
   );
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  const legacyStateDir = resolveProfileStateDir("default", {}, homedir);
+  // The default SDK layout uses the OS home, without another profile's OPENCLAW_HOME.
+  const legacyStateDir = path.join(resolveRequiredOsHomeDir(env, homedir), ".openclaw");
   const standaloneAgent = path.join(legacyStateDir, "agent");
   const ownsStandaloneAgent =
     (!profile && path.resolve(resolveStateDir(env, homedir)) === path.resolve(legacyStateDir)) ||

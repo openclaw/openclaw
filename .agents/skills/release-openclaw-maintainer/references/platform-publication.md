@@ -2,8 +2,10 @@
 
 ## Decoupling
 
-npm + ClawHub publication is the priority path. Native app publication
-(macOS, Windows, Linux, Android) runs in parallel and never gates it: a native
+Successful plugin npm publication precedes core npm. ClawHub runs
+independently from its existing dispatch point and does not gate core, GitHub
+finalization, main closeout, or the retrospective PR. Native app publication
+(macOS, Windows, Linux, Android) runs in parallel and never gates npm: a native
 failure is classified and fixed in parallel, not a reason to re-cut or re-run
 npm validation. Each native lane starts as soon as its own prerequisites
 exist, alongside npm publication rather than queued behind it: macOS from the

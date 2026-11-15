@@ -27,6 +27,7 @@ import type {
   SessionDiffProps,
   SidebarSelection,
 } from "./components/chat-sidebar-content-types.ts";
+import type { SidebarPanelHostRegistration } from "./components/chat-sidebar-panel-host.ts";
 import type {
   ChatDetailPanelProps,
   SessionWorkspaceProps,
@@ -34,6 +35,7 @@ import type {
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 export type ChatDetailSlotProps = {
+  registerPanelHost?: SidebarPanelHostRegistration;
   active?: boolean;
   presentation?: "desktop" | "mobile";
   fileBack?: ChatDetailPanelProps["fileBack"];

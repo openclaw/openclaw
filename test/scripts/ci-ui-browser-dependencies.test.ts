@@ -10,6 +10,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it.each([
   "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts",
   "ui/src/e2e/tooltip-first-activation.e2e.test.ts",
+  "ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts",
   "ui/src/e2e/logs-scroll.e2e.test.ts",
   "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
   "ui/src/e2e/chat-history-reading-stability.e2e.test.ts",

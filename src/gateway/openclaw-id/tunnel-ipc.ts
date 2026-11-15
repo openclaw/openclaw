@@ -6,14 +6,40 @@
 export const TUNNEL_EXIT_UNAVAILABLE = 78;
 /** Child exit code: the endpoint key file is unsafe or corrupt. Not retried. */
 export const TUNNEL_EXIT_KEY_REFUSED = 77;
+/** Child exit code: no file holds the endpoint key the claw is bound to. Not retried. */
+export const TUNNEL_EXIT_KEY_MISSING = 76;
+/** Child exit code: the endpoint key file holds another key than the bound one. Not retried. */
+export const TUNNEL_EXIT_KEY_MISMATCH = 75;
+
+/** argv flag for a one-shot child that stages the next endpoint key and binds nothing. */
+export const TUNNEL_STAGE_ARG = "--stage";
+
+/**
+ * Sent once to a child started with {@link TUNNEL_STAGE_ARG}, which answers `staged` and
+ * exits. `stage` creates the key at `keyPath` (the staged `.next` file) unless it exists.
+ * `discard` deletes that file unless it holds `keep`, the K_srv the stored binding names
+ * (a committed re-bind not promoted yet).
+ */
+export type TunnelStageMessage =
+  | { type: "stage"; keyPath: string }
+  | { type: "discard"; keyPath: string; keep: string };
+
+/** A staged child's answer: the K_srv the staged key file holds, or null when there is none. */
+type TunnelStagedMessage = { type: "staged"; endpointKey: string | null };
 
 /** Sent once, right after the child starts. */
 export type TunnelStartMessage = {
   type: "start";
   /** The only relay in the endpoint's relay map. */
   relayUrl: string;
-  /** Endpoint secret key file (32 raw bytes, 0600); created by the child on first start. */
+  /** Endpoint secret key file (32 raw bytes, 0600); created by the child while unlinked. */
   keyPath: string;
+  /**
+   * K_srv the stored binding names (`iroh:<hex>`), once the claw is linked. The child
+   * then loads only that key (promoting a staged `.next` file that holds it) and never
+   * creates one.
+   */
+  expectedEndpointKey?: string;
   /** Optional UDP bind address (`host:port`). */
   bindAddr?: string;
   /** Gateway ingress the child proxies every stream to. */
@@ -60,7 +86,11 @@ type TunnelStateMessage = {
 };
 
 /** Child -> Gateway. */
-export type TunnelToGatewayMessage = TunnelReadyMessage | TunnelPongMessage | TunnelStateMessage;
+export type TunnelToGatewayMessage =
+  | TunnelReadyMessage
+  | TunnelPongMessage
+  | TunnelStateMessage
+  | TunnelStagedMessage;
 
 /** Narrows an untrusted IPC payload to a child message. */
 export function parseTunnelToGatewayMessage(value: unknown): TunnelToGatewayMessage | undefined {
@@ -81,6 +111,10 @@ export function parseTunnelToGatewayMessage(value: unknown): TunnelToGatewayMess
               : [],
             keyCreated: message.keyCreated === true,
           }
+        : undefined;
+    case "staged":
+      return typeof message.endpointKey === "string" || message.endpointKey === null
+        ? { type: "staged", endpointKey: message.endpointKey }
         : undefined;
     case "pong":
       return typeof message.id === "number" && typeof message.rssBytes === "number"

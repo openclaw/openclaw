@@ -1178,6 +1178,15 @@ describe("cache lease completion", () => {
           configs.map((config) => runPlan(config)),
         );
       }
+      const workerCompiler = createControlledWorkerCompiler(
+        tempDirs.make("scheduler-worker-"),
+        process.env,
+      );
+      commands.prepare.mockImplementation((command) =>
+        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+          : Promise.resolve(0),
+      );
       const selections: unknown[] = [];
       await assertSchedulerDrain({
         args: focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,
@@ -1408,6 +1417,7 @@ describe("test-projects build admission", () => {
     build: boolean;
   }>([
     { args: [avatarTarget], build: true },
+    { args: ["ui/src/e2e/home-readonly.real-gateway.e2e.test.ts"], build: true },
     { args: [uiConfig], include: [avatarTarget], build: true },
     {
       args: [uiConfig],
@@ -1440,6 +1450,12 @@ describe("test-projects build admission", () => {
     await start(args);
     await expectPassed();
     expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
+    if (build) {
+      expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
+        args: currentRuntimeArgs,
+        env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
+      });
+    }
     expect(commands.uiAssets).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(
       commands.prepare.mock.calls.some(([command]) => command.args[0] === "scripts/ui.js"),

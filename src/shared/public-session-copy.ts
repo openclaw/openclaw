@@ -34,6 +34,7 @@ export const PUBLIC_SESSION_COPY = {
   messageOne: "{count} message",
   messageOther: "{count} messages",
   live: "Live",
+  publicSession: "Public session",
   publicReadOnly: "Public · Read-only",
   earlierConversation: "Earlier conversation",
   backToLatest: "Back to latest",

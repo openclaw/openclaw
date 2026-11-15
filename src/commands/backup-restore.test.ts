@@ -1,8 +1,9 @@
 // Backup restore tests cover verified whole-archive extraction and fresh-target safety.
+import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
@@ -112,13 +113,16 @@ async function writeUnextractableArchive(archivePath: string) {
 
 describe("backupRestoreCommand", () => {
   it.skipIf(process.platform === "win32")(
-    "escapes terminal controls in restore output while preserving the restored payload",
+    "escapes terminal controls and resolves symlinked parents while preserving the payload",
     async () => {
       await withState(async (state) => {
         const text = "café\u001b[31m\nforged\tend\rrow\u0007 ";
-        const archive = state.path(`${text}.tar.gz `);
+        const archive = `${state.path("link")}/../${text}.tar.gz `;
         const target = state.path(`restored-${text}`);
-        await writeArchive({ archivePath: archive });
+        await fs.mkdir(state.path("real", "sub"), { recursive: true });
+        await fs.symlink("real/sub", state.path("link"));
+        await writeUnextractableArchive(state.path(`${text}.tar.gz `));
+        await writeArchive({ archivePath: state.path("real", `${text}.tar.gz `) });
         const runtime = createTestRuntime();
         const result = await backupRestoreCommand(runtime, { archive, target });
         const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -252,6 +256,10 @@ describe("backupRestoreCommand", () => {
       const targetPath = state.path("restored");
       await fs.mkdir(outputDir, { recursive: true });
       await state.writeText("operator-note.txt", "restore me\n");
+      // Incompressible and larger than two compression blocks, so the archive
+      // must hold several gzip members that verify and restore read as one stream.
+      const largePayload = randomBytes(9 * 1024 * 1024);
+      await fs.writeFile(state.statePath("large-payload.bin"), largePayload);
       const pluginSkillTarget = state.statePath("plugin-source", "canvas");
       if (process.platform !== "win32") {
         await fs.mkdir(pluginSkillTarget, { recursive: true });
@@ -317,6 +325,16 @@ describe("backupRestoreCommand", () => {
         expect(await listFilesystemLeafEntries(targetPath)).toEqual(
           await listArchiveLeafEntries(backup.archivePath),
         );
+        const archiveBytes = await fs.readFile(backup.archivePath);
+        const secondMember = archiveBytes.indexOf(archiveBytes.subarray(0, 10), 10);
+        expect(secondMember).toBeGreaterThan(0);
+        expect(gunzipSync(archiveBytes.subarray(secondMember)).length).toBeGreaterThan(0);
+        const largeEntry = (await listArchiveLeafEntries(backup.archivePath)).find((entry) =>
+          entry.endsWith("/large-payload.bin"),
+        );
+        expect(
+          (await fs.readFile(path.join(targetPath, largeEntry ?? ""))).equals(largePayload),
+        ).toBe(true);
         const databaseEntry = (await listArchiveLeafEntries(backup.archivePath)).find((entry) =>
           entry.endsWith("/state/openclaw.sqlite"),
         );
@@ -464,6 +482,34 @@ describe("backupRestoreCommand", () => {
     });
   });
 
+  it("refuses --postgres-connection-env without a usable variable or PostgreSQL stores", async () => {
+    await withState(async (state) => {
+      const archivePath = state.path("backup.tar.gz");
+      const target = state.path("restored");
+      await writeArchive({ archivePath });
+      const run = (postgresConnectionEnv: string) =>
+        backupRestoreCommand(createTestRuntime(), {
+          archive: archivePath,
+          target,
+          postgresConnectionEnv,
+        });
+      await expect(run("not a name")).rejects.toThrow(/requires an environment variable name/u);
+      delete process.env.OPENCLAW_RESTORE_TEST_UNSET_PG;
+      await expect(run("OPENCLAW_RESTORE_TEST_UNSET_PG")).rejects.toThrow(
+        /OPENCLAW_RESTORE_TEST_UNSET_PG is not set; nothing was restored/u,
+      );
+      process.env.OPENCLAW_RESTORE_TEST_SET_PG = "postgresql:///unused";
+      try {
+        await expect(run("OPENCLAW_RESTORE_TEST_SET_PG")).rejects.toThrow(
+          /requires an archive with PostgreSQL stores; nothing was restored/u,
+        );
+      } finally {
+        delete process.env.OPENCLAW_RESTORE_TEST_SET_PG;
+      }
+      await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("refuses insufficient target capacity before extraction and counts hardlink data once", async () => {
     await withState(async (state) => {
       const archivePath = state.path("backup.tar.gz");
@@ -554,10 +600,7 @@ describe("backupRestoreCommand", () => {
     await withState(async (state) => {
       const archivePath = state.path("corrupt.tar.gz");
       const targetPath = state.path("restore-target");
-      await writeArchive({
-        archivePath,
-        manifest: "{not-json}\n",
-      });
+      await writeArchive({ archivePath, manifest: "{not-json}\n" });
       await fs.mkdir(targetPath);
 
       await expect(restore(archivePath, targetPath)).rejects.toThrow(

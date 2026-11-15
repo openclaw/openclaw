@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
@@ -18,6 +19,7 @@ import {
   createServiceRegistration,
   startPluginServices,
 } from "../plugins/services.test-support.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -35,6 +37,7 @@ export function registerGatewayResourceRetirementTests(
   {
     mocks,
     sharedStateLifecycle,
+    resolveGatewayContext,
     createHeldCloseSource,
   }: {
     mocks: Pick<
@@ -45,14 +48,70 @@ export function registerGatewayResourceRetirementTests(
       | "closeProviderTransportDispatcherPool"
       | "disposeAgentHarnesses"
       | "triggerInternalHook"
+      | "logInfo"
+      | "logWarn"
     >;
     sharedStateLifecycle: Map<string, boolean>;
+    resolveGatewayContext: GatewayCloseParams["resolveGatewayContext"];
     createHeldCloseSource: (runId: string) => Promise<{
       source: RpcSourceRef;
       release: (() => void) | undefined;
     }>;
   },
 ): void {
+  it("logs bounded admissions pending facts without session or run identifiers", async () => {
+    const admissions = await Promise.all(
+      Array.from({ length: 40 }, async (_, index) => {
+        const held = await createHeldCloseSource(`private-run-${index}-${"x".repeat(1_000)}`);
+        const target = held.source.input.mailbox.owner.target;
+        assert(target);
+        const effect = await beginSessionEffect({
+          target,
+          sourceInput: held.source.input,
+          operation: held.source.input.claim!.operation!,
+          resolveGatewayContext,
+          isSettling: () => false,
+          assertAllowed() {},
+        });
+        return { ...held, effect };
+      }),
+    );
+    vi.useFakeTimers();
+    const closing = createGatewayCloseHandler()({ exitAfterClose: true });
+    try {
+      await vi.advanceTimersByTimeAsync(5_001);
+      const pending = mocks.logWarn.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) =>
+          message.startsWith("session-admissions: resources remain after grace"),
+        );
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toContain('"effects":40');
+      expect(pending[0]).toContain('"phase":"acquired"');
+      expect(pending[0]).toContain('"sourcePhase":');
+      expect(pending[0]).toContain('"operationPhase":');
+      expect(pending[0]).toContain('"settling":false');
+      expect(pending[0]).toContain('"interrupted":true');
+      const span = mocks.logInfo.mock.calls
+        .map(([message]) => String(message))
+        .find(
+          (message) =>
+            message.startsWith("shutdown pending:") &&
+            message.includes("restart.close.session-admissions="),
+        );
+      expect(span).toContain("effects=40.0 phase=acquired");
+      expect(span).not.toMatch(/private-run|agent:main|sessionKey|runId/);
+      expect(pending[0]).not.toMatch(/private-run|agent:main|sessionKey|runId/);
+      expect(pending[0]!.length).toBeLessThan(300);
+    } finally {
+      for (const { release, effect } of admissions) {
+        effect.release();
+        release?.();
+      }
+      await closing;
+    }
+  });
+
   it("joins cron persistence past both grace warnings and then retires shared state", async () => {
     vi.useFakeTimers();
     const cronCleanup = createDeferredCore();

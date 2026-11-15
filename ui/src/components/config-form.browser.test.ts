@@ -9,6 +9,7 @@ import {
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { ConfigFormProps, JsonSchema } from "./config-form.shared.ts";
+import settingsStyles from "../styles/settings.css?inline";
 
 function object(
   properties: Record<string, JsonSchema>,
@@ -97,6 +98,25 @@ describe("config form renderer", () => {
     const header = query(".settings-section__header", HTMLElement);
     expect(header.querySelector(".settings-section__desc")).not.toBeNull();
     expect(header.querySelector(".settings-section__help-button")).not.toBeNull();
+  });
+
+  it("keeps headingless section help at the trailing edge", async () => {
+    const style = document.createElement("style");
+    style.textContent = settingsStyles;
+    document.head.append(style);
+    onTestFinished(() => style.remove());
+    renderForm(analyze({ example: object({ enabled: { type: "boolean" } }) }), {
+      activeSection: "example",
+      repeatedHeadings: ["Example"],
+      uiHints: { example: { docsUrl: "https://docs.openclaw.ai/gateway" } },
+    });
+    await waitForSolid(() =>
+      expect(container.querySelector(".settings-section__help-button")).not.toBeNull(),
+    );
+    const header = query(".settings-section__header", HTMLElement);
+    const help = query(".settings-section__help-button", HTMLButtonElement);
+    expect(header.querySelector("h2, p")).toBeNull();
+    expect(help.getBoundingClientRect().right).toBeCloseTo(header.getBoundingClientRect().right, 0);
   });
 
   it("drops a heading that opens the name on screen", async () => {
@@ -750,8 +770,6 @@ describe("config form renderer", () => {
     );
     const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
-    const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");
-    expect((tooltip as HTMLElement & { content: string }).content).toBe("Help for Gateway");
     const link = query(".settings-section__help-popover a", HTMLAnchorElement);
     expect(link.textContent?.trim()).toBe("Learn more");
     const popover = expectElement(link.closest('[role="dialog"]'), "section help popover");

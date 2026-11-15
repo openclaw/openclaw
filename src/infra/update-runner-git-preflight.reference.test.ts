@@ -154,7 +154,7 @@ describe("reference source candidate preparation", () => {
           failureObserved = phase !== "cleanup-uncertain";
           throw phase === "candidate-uncertain" ? uncertainFailure : joinedFailure;
         }
-        if (phase === "cleanup-uncertain" && argv.includes("worktree") && argv.includes("prune")) {
+        if (phase === "cleanup-uncertain" && argv.includes("worktree") && argv.includes("remove")) {
           expect(result.code, result.stderr).toBe(0);
           failureObserved = true;
           throw uncertainFailure;
@@ -173,7 +173,7 @@ describe("reference source candidate preparation", () => {
         assert(worktree);
         if (phase === "joined-failure") {
           expect(commandsAfterFailure.some((argv) => argv.includes("remove"))).toBe(true);
-          expect(commandsAfterFailure.some((argv) => argv.includes("prune"))).toBe(true);
+          expect(commandsAfterFailure.some((argv) => argv.includes("prune"))).toBe(false);
           await expectMissing(path.dirname(worktree));
           await expectMissing(path.dirname(mirror));
         } else {

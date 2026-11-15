@@ -30,7 +30,10 @@ import {
   type PendingFinalDeliverySource,
 } from "../pending-final-delivery-marker.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
-import type { SessionMaintenanceRequest } from "../session-maintenance/run.js";
+import {
+  prepareSessionMaintenanceRequest,
+  type SessionMaintenanceRequest,
+} from "../session-maintenance/run.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import {
@@ -109,6 +112,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     provider,
     model,
     effectiveTurnThinkLevel,
+    effectiveTurnThinkingCatalog,
     internalSessionTarget,
     attemptExecutionRuntime,
     messageChannel,
@@ -266,8 +270,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
-      admittedSource: params.admittedDeliverySource,
-      compactionTransitions: compactionFact?.admissionTransitions,
+      // The runner fact already names the committed writer and accepted successor.
+      admittedSource: compactionFact?.target ?? params.admittedDeliverySource,
       assertCurrent: () => {
         assertSourceCurrent?.();
         operatorAuthority?.assertCurrent();
@@ -343,7 +347,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       !sessionReboundDuringRun &&
       cfg.agents?.defaults?.compaction?.enabled !== false &&
       embeddedMaintenance
-        ? {
+        ? await prepareSessionMaintenanceRequest({
             prepared: { cfg, sessionKey, storePath, timeoutMs },
             followupRun: createCommandMaintenanceFollowup({
               prepared: params.prepared,
@@ -352,6 +356,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               provider: agentMeta?.provider ?? fallbackProvider,
               model: agentMeta?.model ?? fallbackModel,
               thinkLevel: effectiveTurnThinkLevel,
+              thinkingCatalog: effectiveTurnThinkingCatalog,
               auth: params.attempt.maintenanceAuthProfile,
               senderIsOwner: params.opts.senderIsOwner,
             }),
@@ -362,7 +367,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
             oneShotCliRun: params.opts.oneShotCliRun,
             agentHarnessId: agentMeta?.agentHarnessId,
             compactionRequestBudget: params.attempt.compactionRequestBudget,
-          }
+          })
         : undefined;
 
     // Generic CLI backends may rely on this sole host-compaction path. Keep its

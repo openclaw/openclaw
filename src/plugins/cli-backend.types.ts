@@ -224,7 +224,7 @@ export type CliBackendMessageInjection = {
 /** Graceful end of the admitted turn without retiring its reusable native session. */
 export type CliBackendTurnInterrupt = {
   /** Request the turn end; its execution stream must then finish normally. */
-  interrupt(reason: "yield"): Promise<void>;
+  interrupt(reason: "yield" | "source_reply"): Promise<void>;
 };
 
 /** Turn-only context that must not become an operator-authored native transcript row. */
@@ -345,9 +345,16 @@ export type CliBackendParseJsonlEvent = (
   ctx: CliBackendParseJsonlEventContext,
 ) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
 
+/** Sizes and trigger the CLI reports with a completed native compaction. */
+export type CliCompactionMeasurement = {
+  trigger?: "auto" | "manual";
+  tokensBefore?: number;
+  tokensAfter?: number;
+};
+
 export type CliBackendParsedJsonlLifecycleEvent =
   | { kind: "compaction"; phase: "start" }
-  | { kind: "compaction"; phase: "end"; completed: boolean };
+  | ({ kind: "compaction"; phase: "end"; completed: boolean } & CliCompactionMeasurement);
 
 export type CliBackendParseJsonlLifecycleEvent = (
   line: string,
@@ -399,6 +406,11 @@ type CliBackendManualCompaction = Readonly<{
   buildPrompt: (customInstructions?: string) => string;
   /** Prompt transport required by the backend control command. */
   input: "arg" | "stdin";
+  /**
+   * System-prompt file flag for the control process when the backend's live turns send
+   * the prompt through another transport, so the control request keeps the turns' prefix.
+   */
+  systemPromptFileArg?: string;
   /** Positively confirms that a successful process exit performed compaction. */
   validateOutput: (rawOutput: string) => { ok: true } | { ok: false; reason: string };
 }>;
@@ -545,11 +557,14 @@ type CliBackendPluginBase = {
   /** Native tool that only discovers schemas from the authorized MCP catalog. */
   nativeToolSearch?: string;
   /**
-   * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
-   * otherwise expose no native tools. Core applies the same list to ordinary and
-   * verified completion turns, so return only tools that confer no capability
-   * through `projectNativeToolAuthority`; caller caps, restricted senders,
-   * delegated execution, and workspace-only runs still receive none.
+   * Native tools kept on OpenClaw-mediated agent turns (the backend's default or
+   * the operator's selection), which otherwise expose no native tools. Core applies
+   * the same list to ordinary and verified completion turns. A tool that confers a
+   * capability through `projectNativeToolAuthority` is kept only while the turn's
+   * tool policy allows that capability and OpenClaw's own catalog does not already
+   * serve it, and its calls are refused on completion turns; caller caps,
+   * restricted senders, delegated execution, and workspace-only runs still receive
+   * none.
    */
   resolveManagedNativeTools?: (ctx: {
     config?: OpenClawConfig;

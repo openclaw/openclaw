@@ -34,6 +34,8 @@ export type GatewayAssistantInjection = {
   sessionKey: string;
   agentId?: string;
   message: string;
+  /** Trusted in-process display content; never accepted from chat.inject wire params. */
+  content?: Array<Record<string, unknown>>;
   label?: string;
   idempotencyKey?: string;
   humanMentions?: readonly HumanMention[];
@@ -52,6 +54,32 @@ export async function injectGatewayAssistantMessage(
   context: GatewayAssistantInjectionContext,
   params: GatewayAssistantInjection,
   sessionMutationCommitGuard?: () => void,
+): Promise<Result<{ messageId: string; replayed?: true }, ErrorShape>> {
+  return await injectGatewayMessage(context, params, sessionMutationCommitGuard);
+}
+
+/** System notices share session custody, durable append and live projection with injections. */
+export async function injectGatewaySystemNotice(
+  context: GatewayAssistantInjectionContext,
+  params: Pick<
+    GatewayAssistantInjection,
+    "agentId" | "sessionKey" | "message" | "idempotencyKey"
+  > & { sourceTool: string },
+  sessionMutationCommitGuard: () => void,
+): Promise<Result<{ messageId: string; replayed?: true }, ErrorShape>> {
+  return await injectGatewayMessage(
+    context,
+    { ...params, literal: true },
+    sessionMutationCommitGuard,
+    { sourceTool: params.sourceTool },
+  );
+}
+
+async function injectGatewayMessage(
+  context: GatewayAssistantInjectionContext,
+  params: GatewayAssistantInjection,
+  sessionMutationCommitGuard?: () => void,
+  systemNotice?: { sourceTool: string },
 ): Promise<Result<{ messageId: string; replayed?: true }, ErrorShape>> {
   const rawSessionKey = params.sessionKey;
   const agentIdOverride = normalizeOptionalString(params.agentId);
@@ -131,7 +159,9 @@ export async function injectGatewayAssistantMessage(
         return await appendInjectedAssistantMessageToTranscript({
           sessionKey,
           message: params.message,
+          content: params.content,
           label: params.label,
+          systemNotice,
           idempotencyKey: params.idempotencyKey,
           humanMentions: params.humanMentions,
           ...(params.literal ? { literal: true as const } : {}),

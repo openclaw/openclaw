@@ -73,6 +73,7 @@ async function assembleWithCapturedHookCtx({
   };
   const captured: PluginHookAgentContext[] = [];
   const prompts: string[] = [];
+  const continuities: unknown[] = [];
   const hookRunner = createHookRunner({
     hooks: [],
     plugins: [],
@@ -82,9 +83,13 @@ async function assembleWithCapturedHookCtx({
         hookName: "before_prompt_build",
         source: "test",
         requiresToolAuthority,
-        handler: async (event: { prompt: string }, ctx: PluginHookAgentContext) => {
+        handler: async (
+          event: { prompt: string; continuity?: unknown },
+          ctx: PluginHookAgentContext,
+        ) => {
           captured.push(ctx);
           prompts.push(event.prompt);
+          continuities.push(event.continuity);
           return hookResult;
         },
       },
@@ -112,7 +117,7 @@ async function assembleWithCapturedHookCtx({
     },
   });
   expect(session.messages).toEqual(priorMessages);
-  return { captured, prompts, systemPrompt };
+  return { captured, prompts, continuities, systemPrompt };
 }
 
 describe("prompt-build hook context input provenance", () => {
@@ -189,6 +194,14 @@ describe("prompt-build hook context input provenance", () => {
       expect(prompts).toEqual(["Recall the Orion launch checklist"]);
     },
   );
+
+  it("reports a fresh embedded session to authorized prompt enrichment", async () => {
+    const { continuities } = await assembleWithCapturedHookCtx({
+      attempt: { toolAuthorityFingerprint: "authority-test" },
+      requiresToolAuthority: true,
+    });
+    expect(continuities).toEqual([{ state: "fresh", history: "none" }]);
+  });
 
   it.each([
     undefined,

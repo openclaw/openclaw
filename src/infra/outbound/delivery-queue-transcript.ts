@@ -54,7 +54,6 @@ export async function commitRecoveredVisibleMessages(
       expectedGeneration: entry.sessionGeneration
         ? {
             sessionKey: entry.sessionGeneration.sessionKey,
-            sessionId: entry.sessionGeneration.sessionId,
             lifecycleRevision: entry.sessionGeneration.lifecycleRevision ?? undefined,
           }
         : undefined,

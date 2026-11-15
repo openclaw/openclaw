@@ -50,6 +50,7 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
+import { resolveInventoryInput } from "./prepared-model-runtime.owner.js";
 import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
 import {
   normalizeThinkingCatalogProviders,
@@ -168,6 +169,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   full: PreparedModelRuntimeInput;
   activationExact: PreparedModelRuntimeInput;
   activationFull: PreparedModelRuntimeInput;
+  inventory: PreparedModelRuntimeInput;
 } {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
@@ -203,6 +205,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   return {
     exact,
     full,
+    inventory: resolveInventoryInput(full),
     activationFull,
     activationExact:
       activationFull === full
@@ -233,8 +236,11 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     return undefined;
   }
-  const { activationExact, activationFull, exact, full } = resolveInputs(params);
-  return findPreparedCatalogOwner([full, activationFull, exact, activationExact], "exact");
+  const { activationExact, activationFull, exact, full, inventory } = resolveInputs(params);
+  return findPreparedCatalogOwner(
+    [full, activationFull, exact, activationExact, inventory],
+    "exact",
+  );
 }
 
 /**
@@ -247,8 +253,8 @@ export function getPublishedPreparedModelCatalogOwnerSnapshot(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     return undefined;
   }
-  const { activationFull, full } = resolveInputs(params);
-  return findPreparedCatalogOwner([full, activationFull], "published");
+  const { activationFull, full, inventory } = resolveInputs(params);
+  return findPreparedCatalogOwner([full, activationFull, inventory], "published");
 }
 
 /** Requests expiry renewal for an inventory consumer without waiting for discovery. */
@@ -274,8 +280,8 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
   preparePublishedOwner = preparePublishedCatalogOwner,
   selection: "owner" | "completed-inventory" = "owner",
 ): Promise<PreparedModelCatalogOwner | undefined> {
-  const { activationFull, full } = resolveInputs(params);
-  for (const candidate of new Set([full, activationFull])) {
+  const { activationFull, full, inventory } = resolveInputs(params);
+  for (const candidate of new Set([full, activationFull, inventory])) {
     try {
       // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
       const prepared = await preparePublishedOwner(candidate);

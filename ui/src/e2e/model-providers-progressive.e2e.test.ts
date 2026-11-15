@@ -440,9 +440,8 @@ suite.define(() => {
               await page.goto(`${suite.server.baseUrl}settings/appearance`);
             }
             await waitForControlUiRoute(page, { routeId: "appearance" });
-            await gateway.deferNext("models.authStatus");
-            previousAuthLoads = (await gateway.getRequests("models.authStatus")).length;
             if (moduleState === "cached") {
+              previousAuthLoads = await gateway.deferNext("models.authStatus");
               await gateway.emitGatewayEvent("chat.metadata.changed", {});
             }
             await evaluateControlUiContext(page, async (application) => {
@@ -460,7 +459,7 @@ suite.define(() => {
           }
           if (moduleState === "cold") {
             await gateway.waitForRequest("models.authStatus");
-          } else {
+          } else if (moduleState === "cached") {
             await expect
               .poll(async () => (await gateway.getRequests("models.authStatus")).length)
               .toBeGreaterThan(previousAuthLoads);
@@ -469,11 +468,13 @@ suite.define(() => {
           if (moduleState === "cached") {
             await page.locator('[data-provider-id="openai"]').waitFor();
           }
-          expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
-          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
-          await gateway.resolveDeferred("models.authStatus");
+          // Prewarming also warms the rail's auth cache; only the other cases hold auth.
+          if (moduleState !== "prewarmed") {
+            expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
+            await gateway.resolveDeferred("models.authStatus");
+          }
           await waitForControlUiRoute(page, { routeId: "model-providers" });
-          await gateway.waitForRequest("usage.status");
+          await gateway.waitForRequest("usage.status", { after: previousLoads });
           const provider = page.locator('[data-provider-id="openai"]');
           await provider.waitFor();
           expect(await provider.locator(".provider-row__plan").count()).toBe(0);
