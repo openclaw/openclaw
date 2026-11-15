@@ -11,6 +11,7 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { sidebarSectionForRoute } from "../app-navigation.ts";
 import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -87,6 +88,17 @@ function AppSidebarContent(
   sidebarOwners.set(host, owner);
   owner.navigationCatalog = catalog;
   owner.bindContext(context);
+  // A section page shows its own sidebar however it was reached: rail, link or history.
+  createEffect(
+    () => props.activeRouteId,
+    (route, previous) => {
+      const section = route ? sidebarSectionForRoute(route) : undefined;
+      if (section && route !== previous && owner.navigationView !== section) {
+        owner.navigationView = section;
+        owner.invalidate();
+      }
+    },
+  );
   owner.attention = createSessionAttention(
     context,
     owner.attentionQuestions,

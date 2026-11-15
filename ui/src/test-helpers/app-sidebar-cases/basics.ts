@@ -270,6 +270,10 @@ it("switches the Skills owner without opening an agent conversation", async () =
   sidebar.connected = true;
   sidebar.onNavigate = onNavigate;
   await sidebar.updateComplete;
+  // Skills opens the Customize list; the agent menu belongs to Sessions.
+  sidebar.navigationView = "sessions";
+  sidebar.invalidate();
+  await sidebar.updateComplete;
 
   await clickAgentMenu(sidebar);
   await clickAgentMenu(sidebar, "agent:research");
