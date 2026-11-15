@@ -59,6 +59,7 @@ import {
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
+  shouldCaptureAbort,
   deferAbortedPartialPersistence,
   prepareChatAbortSessionSnapshot,
   withAbortedPartialPersistenceWarning,
@@ -617,7 +618,7 @@ export async function handleChatAbortRequestWithLifecycle(
     onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
-      if (active.adapter.controlUiVisible === false) {
+      if (!shouldCaptureAbort(text, selectedSession, sessionId, active.adapter.controlUiVisible)) {
         return undefined;
       }
       snapshot = captureAbortedPartial({
