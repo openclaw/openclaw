@@ -9,7 +9,10 @@ import {
   appendTranscriptEvent,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { CRON_RUN_ENDED_ERROR } from "../../infra/agent-run-registry.automation.js";
+import {
+  CRON_RUN_ENDED_ERROR,
+  cronRunAcceptance,
+} from "../../infra/agent-run-registry.automation.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -117,6 +120,8 @@ it("admits a cron run turn only while its executor owns the run", () =>
     const live = vi.fn<RespondFn>();
     expect(await prepare(live)).toMatchObject({ canonicalKey: sessionKey });
     expect(live).not.toHaveBeenCalled();
+    // A caller that has not resolved the physical session id still sees the live executor.
+    expect(() => cronRunAcceptance(sessionKey, undefined)).not.toThrow();
 
     // An accepted follow-up turn on the same session must not keep the ended origin alive.
     const followup = claimAgentRunContext("accepted-followup", scope, { trackOwner: true });

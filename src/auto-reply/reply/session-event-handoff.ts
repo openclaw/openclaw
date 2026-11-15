@@ -106,7 +106,7 @@ function enqueueSessionEventAttempt(
     text,
     options,
   );
-  let acceptanceAssertion = cronRunAcceptance(sessionKey, options, assertAcceptanceCurrent);
+  let acceptanceAssertion = cronRunAcceptance(sessionKey, assertAcceptanceCurrent);
   const cleanupContinuation = prepareCronRunContinuationCleanup(sessionKey, storePath, env);
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;

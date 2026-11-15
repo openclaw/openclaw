@@ -130,7 +130,7 @@ async function prepareAdmittedAgentSession(
     return undefined;
   }
   // The cron executor resumes its own yields in place; nothing else starts a turn on its run.
-  if (isEndedCronRun(canonicalKey, entry?.sessionId)) {
+  if (isEndedCronRun(canonicalKey)) {
     respondError(params.respond, ErrorCodes.INVALID_REQUEST, CRON_RUN_ENDED_ERROR);
     return undefined;
   }

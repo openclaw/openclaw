@@ -18,10 +18,12 @@ export const CRON_RUN_ENDED_ERROR = "cron run has ended; inspect the result in i
  * follow-up turn on the same session does not keep the origin alive. Results stay in their
  * durable records.
  */
-export function isEndedCronRun(sessionKey: string, sessionId: string | undefined): boolean {
+export function isEndedCronRun(sessionKey: string): boolean {
+  // The run id is part of the key, so the key alone names this run's one executor; callers
+  // that have not resolved a physical session id yet get the same answer.
   return (
     isCronRunSessionKey(sessionKey) &&
-    !listAgentRunsForSession({ sessionKey, sessionId }).some(
+    !listAgentRunsForSession({ sessionKey, anySessionId: true }).some(
       (run) =>
         getAgentRunContext(run.runId)?.cronRunsByJobId?.size &&
         hasAgentRunContextExecutionOwner(run.runId),
@@ -35,12 +37,11 @@ export function isEndedCronRun(sessionKey: string, sessionId: string | undefined
  */
 export function cronRunAcceptance(
   sessionKey: string,
-  { expectedTarget }: { expectedTarget?: { sessionId?: string } },
   producer: (() => void) | undefined,
 ): (() => void) | undefined {
   const assertAccepted = () => {
     producer?.();
-    if (isEndedCronRun(sessionKey, expectedTarget?.sessionId)) {
+    if (isEndedCronRun(sessionKey)) {
       throw new Error(CRON_RUN_ENDED_ERROR);
     }
   };
