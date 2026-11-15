@@ -42,7 +42,7 @@ import {
   releaseCronRunQueue,
   wakeCronRunQueues,
 } from "./run-queue-wake.js";
-import { resolveCronFreeMemoryRuns, resolveCronRunSlots } from "./run-slots.js";
+import { resolveCronRunSlots } from "./run-slots.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   busyConversationCronJobIds,
@@ -361,7 +361,6 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             nowMs: state.deps.nowMs(),
             defaultAgentId: resolveCurrentDefaultAgentId(state),
             maxConcurrentRuns: resolveCronRunSlots(),
-            freeMemoryRuns: resolveCronFreeMemoryRuns(),
             // Worker ticks wait for open Gateway admission; this drain must not activate timed
             // occurrences that a draining Gateway can only refuse.
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
