@@ -10,6 +10,7 @@ import type { CommandRunner } from "./update-runner-types.js";
 const target = vi.hoisted(() => ({
   beforeRuntimeVerified: [] as boolean[],
   conversionTargets: [] as string[],
+  runtimeVerified: false,
 }));
 vi.mock("./update-runner-git-preflight.js", () => ({
   // The first release is built from the commit that serves now.
@@ -52,10 +53,10 @@ vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
 vi.mock("./update-git-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-git-runtime.js")>()),
   // The running release is at the requested commit but its runtime artifacts are incomplete.
-  verifyGitUpdateRecovery: async () => ({
-    serviceRestartSafe: false,
-    reason: "runtime-verification-failed",
-  }),
+  verifyGitUpdateRecovery: async () =>
+    target.runtimeVerified
+      ? { serviceRestartSafe: true, version: "1.0.0", buildId: "serving" }
+      : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
 }));
 
 const { updateGitRelease } = await import("./update-runner-git-release.js");
@@ -69,6 +70,9 @@ async function git(root: string, ...args: string[]) {
 const roots: string[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
+  target.beforeRuntimeVerified.length = 0;
+  target.conversionTargets.length = 0;
+  target.runtimeVerified = false;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -118,6 +122,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it("builds the first release from the serving worktree's commit, not the checkout's HEAD", async () => {
+    target.runtimeVerified = true;
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-conv-")));
     roots.push(dir);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
@@ -161,5 +166,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     });
 
     expect(target.conversionTargets).toEqual([serving]);
+    // The healthy serving commit differs from the checkout, so the target is still built.
+    expect(target.beforeRuntimeVerified).toEqual([false]);
   });
 });

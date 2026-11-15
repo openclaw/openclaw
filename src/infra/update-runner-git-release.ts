@@ -219,8 +219,8 @@ export async function updateGitRelease(params: {
       channel,
       devTarget: opts.devTarget,
       // Same source is current only when the running release's artifacts verify (#158931).
-      beforeRuntimeVerified:
-        recovery.serviceRestartSafe && (converting || beforeSha === runningSha),
+      // A conversion from a linked worktree can serve a different commit than the checkout.
+      beforeRuntimeVerified: recovery.serviceRestartSafe && beforeSha === runningSha,
       beforeGitStaging: opts.beforeGitStaging,
       validateCandidate: opts.validateCandidate,
       needsCheckoutMain: channel === "dev" && !opts.devTarget && branch !== DEV_BRANCH,

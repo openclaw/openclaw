@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
-  UPDATE_GIT_RELEASE_ENV,
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
   UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
 } from "../../commands/doctor/shared/update-phase.js";
@@ -112,7 +111,10 @@ export async function convergeUpdatePlugins(params: {
   const retainedDifferentRuntime =
     params.coreAlreadyCurrent === true &&
     (runtimeRootChanged || (versionComparison !== null && versionComparison !== 0));
+  // A switched Git release converges here: its fresh process would need Doctor maintenance,
+  // which the still-serving Gateway holds, and older targets cannot skip it.
   const shouldResumePostCoreInFreshProcess =
+    !gitRelease &&
     (!params.coreAlreadyCurrent || retainedDifferentRuntime) &&
     !params.candidateRuntime &&
     shouldResumePostCoreUpdateInFreshProcess({
@@ -156,11 +158,12 @@ export async function convergeUpdatePlugins(params: {
     );
   }
 
-  const compatibilityHostVersion = params.candidateRuntime
-    ? (postUpdateInstalledVersion ?? VERSION)
-    : versionComparison != null && versionComparison > 0
-      ? postUpdateInstalledVersion
-      : null;
+  const compatibilityHostVersion =
+    params.candidateRuntime || gitRelease
+      ? (postUpdateInstalledVersion ?? VERSION)
+      : versionComparison != null && versionComparison > 0
+        ? postUpdateInstalledVersion
+        : null;
   // Downgraded parents and candidate workers select the installed target version.
   const convergenceEnv = {
     ...(compatibilityHostVersion
@@ -170,7 +173,6 @@ export async function convergeUpdatePlugins(params: {
       params.deferPostActivationInspections === true
         ? UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE
         : "0",
-    ...(gitRelease ? { [UPDATE_GIT_RELEASE_ENV]: "1" } : {}),
   };
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
     withUpdateEnv(convergenceEnv, () =>

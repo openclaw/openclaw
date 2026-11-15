@@ -182,7 +182,7 @@ describe("candidate convergence Doctor dispatch authority", () => {
     ]);
     expect(report.markdown).not.toContain("Let the current update or repair finish.");
   });
-  it("converges plugins for a switched Git release without Doctor maintenance", async () => {
+  it("converges plugins for a switched Git release in the updater, without Doctor", async () => {
     const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
     const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
     const freshDoctor = await import("./update-command-fresh-doctor.js");
@@ -190,16 +190,15 @@ describe("candidate convergence Doctor dispatch authority", () => {
     const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
     await fs.mkdir(releaseRoot, { recursive: true });
     await publishGitRelease({ prefix, releaseRoot, trial: false });
-    const childEnv: Array<string | undefined> = [];
-    vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockImplementationOnce(async () => {
-      childEnv.push(process.env.OPENCLAW_UPDATE_GIT_RELEASE);
-      return { resumed: true, pluginUpdate };
-    });
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+    // An older target's fresh process would require Doctor maintenance the serving Gateway holds.
+    const child = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
     const doctor = vi.spyOn(freshDoctor, "completePostCorePluginUpdate");
     const { resultWithPostUpdate } = await converge({
       root: gitReleaseSlot(prefix),
       result: {
         root: gitReleaseSlot(prefix),
+        sourceRuntimePrepared: true,
         before: { version: VERSION },
         after: { version: "2026.9.4" },
       },
@@ -207,7 +206,10 @@ describe("candidate convergence Doctor dispatch authority", () => {
       downgradeRisk: true,
     });
     expect(resultWithPostUpdate.status).toBe("ok");
-    expect(childEnv).toEqual(["1"]);
+    expect(child).not.toHaveBeenCalled();
+    expect(mocks.convergeCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedChannel: "beta", root: gitReleaseSlot(prefix) }),
+    );
     expect(doctor).not.toHaveBeenCalled();
   });
   it("records the failed post-core child even without supplied failure facts", async () => {

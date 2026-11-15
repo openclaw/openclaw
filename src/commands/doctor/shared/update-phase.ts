@@ -20,12 +20,6 @@ export const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
 export const UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV =
   "OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS";
 export const UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE = "reported-checks";
-/**
- * Set by an updater that switched a Git release while the previous Gateway serves.
- * That Gateway owns state, and the release's Gateway upgrades it at boot, so
- * post-core work converges plugins and config without Doctor maintenance.
- */
-export const UPDATE_GIT_RELEASE_ENV = "OPENCLAW_UPDATE_GIT_RELEASE";
 
 export function isUpdateDoctorInspectionReportMode(env: NodeJS.ProcessEnv): boolean {
   return (
