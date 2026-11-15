@@ -503,7 +503,11 @@ export function PickerContent<Option extends PickerOption>(props: {
           menu.setHighlightedValue(row.option().value);
         }
       },
-      onClick: () => commit(row.option().value),
+      onClick: (event) => {
+        // A value choice must not also activate an enclosing label's trigger.
+        event.preventDefault();
+        commit(row.option().value);
+      },
     });
     return (
       <Show

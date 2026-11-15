@@ -155,6 +155,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
     expect(advancedP).not.toBe(f.workflowSha);
     expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
+    expect(result.stdout).not.toContain("WARNING: Cross-revision diagnostics");
     const retained = f.record();
     expect(retained.admission.workflowSha).toBe(advancedP);
     expect(retained.request.workflowSha).toBe(f.targetSha);

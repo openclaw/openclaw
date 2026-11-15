@@ -30,7 +30,7 @@ import {
 } from "./doctor-session-transcript-scan.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
-const NOTE_TITLE = "Session transcript headers";
+const NOTE_TITLE = "Chat history headers";
 
 type HeaderRepairContext = {
   sessionKey: string;
@@ -136,7 +136,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       cfg: params.cfg,
       env,
       title: NOTE_TITLE,
-      failureLabel: "Failed to inspect transcript headers",
+      failureLabel: "Failed to inspect chat history headers",
       selectSessionIds: (reader, reportError) => reader.headerlessSessionIds(reportError),
     },
     async ({ reader, target, databaseOptions, reportError, sessionId }) => {
@@ -241,13 +241,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
 
   if (params.shouldRepair && repaired > 0) {
     note(
-      `- Prepended missing headers to ${countLabel(repaired, "session transcript")}.`,
+      `- Prepended missing headers to ${countLabel(repaired, "chat history file")}.`,
       NOTE_TITLE,
     );
   } else if (!params.shouldRepair && found > 0) {
     note(
       [
-        `- Found ${countLabel(found, "stored session transcript")} without a header.`,
+        `- Found ${countLabel(found, "stored chat history file")} without a header.`,
         `- Run "openclaw doctor --fix" to repair ${found === 1 ? "it" : "them"} before resuming the session.`,
       ].join("\n"),
       NOTE_TITLE,

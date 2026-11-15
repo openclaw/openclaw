@@ -43,9 +43,9 @@ export function WhatsAppCard(props: {
     const value = status();
     return [
       booleanFact("configured", configured()),
-      booleanFact("linked", value?.linked === true),
-      booleanFact("running", value?.running === true),
-      booleanFact("connected", value?.connected === true),
+      booleanFact("linked", value?.linked),
+      booleanFact("running", value?.running),
+      booleanFact("connected", value?.connected),
       {
         key: "lastConnect",
         label: t("common.lastConnect"),
@@ -128,7 +128,8 @@ export function WhatsAppCard(props: {
               {phone() ? t("channels.whatsapp.phoneNumber") : t("common.linked")}
             </span>
             <span class="settings-row__desc">
-              {phone() ?? t(linked() ? "common.yes" : "common.no")}
+              {phone() ??
+                (status()?.linked == null ? null : t(linked() ? "common.yes" : "common.no"))}
             </span>
           </div>
           <div class="settings-row__control">
@@ -192,7 +193,7 @@ export function WhatsAppCard(props: {
           config = node;
         }}
       />
-      <details class="settings-group settings-disclosure">
+      <details class="settings-group settings-disclosure" hidden={facts().length === 0}>
         <summary class="settings-row settings-row--nav settings-disclosure__summary">
           <div class="settings-row__text">
             <span class="settings-row__title">{t("common.details")}</span>

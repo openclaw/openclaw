@@ -498,6 +498,8 @@ export type ToolOutputMetadata = {
   captureTruncated?: true;
 };
 
+export type LiveToolOutput = { text: string; omittedChars: number };
+
 export type ToolCard = {
   id: string;
   callId?: string;
@@ -507,6 +509,8 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  /** Transient newest stdout after captured output fills; never transcript output. */
+  liveOutput?: LiveToolOutput;
   /** Result identity stays distinct from the assistant call after presentation grouping. */
   resultMessageId?: string;
   /** Gateway display projection omitted content; the durable result may still be complete. */
@@ -532,9 +536,9 @@ export type ToolCard = {
   previewRevision?: string;
   /** Tab actions can identify a route without a previewable page URL. */
   browserTab?: BrowserTabTarget;
-  preview?:
-    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & { surface: "assistant_message" })
-    | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
+  preview?: NonNullable<ReturnType<typeof extractCanvasFromText>> & {
+    surface: "assistant_message";
+  };
 };
 
 export type ToolCardOutcome =

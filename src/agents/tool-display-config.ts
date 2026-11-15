@@ -261,11 +261,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     },
     sessions_send: {
       ...displayTool("send", "Session Send", ["label", "sessionKey", "agentId", "timeoutSeconds"]),
-      progress: { label: "Send to session", detailKeys: ["label"] },
+      progress: { label: "Send to session", detailKeys: ["label"], referenceKey: "sessionKey" },
     },
     sessions_history: {
       ...displayTool("fileText", "Session History", ["sessionKey", "limit", "includeTools"]),
-      progress: { label: "Read session history", detailKeys: [] },
+      progress: { label: "Read session history", detailKeys: [], referenceKey: "sessionKey" },
     },
     sessions_search: displayTool("search", "Session Search", ["query", "sessionKey", "limit"]),
     transcripts: {
@@ -312,8 +312,14 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Subagents",
       actions: {
         list: displayAction("list", ["recentMinutes"]),
-        kill: displayAction("kill", ["target"]),
-        steer: displayAction("steer", ["target"]),
+        kill: {
+          ...displayAction("kill", ["target"]),
+          progress: { label: "Stop subagent", detailKeys: ["target"], referenceKey: "target" },
+        },
+        steer: {
+          ...displayAction("steer", ["target"]),
+          progress: { label: "Send to subagent", detailKeys: ["target"], referenceKey: "target" },
+        },
       },
     },
     agents_list: displayTool("users", "Agents", []),

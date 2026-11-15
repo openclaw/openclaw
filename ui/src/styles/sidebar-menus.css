@@ -3,17 +3,35 @@
 .people-menu__search {
   position: sticky;
   top: 0;
-  z-index: 1;
-  padding: 6px 8px;
+  /* Focused menu rows use layer 1; they must not cover the search field. */
+  z-index: 2;
+  margin-block-end: 4px;
+  padding: 6px 8px 0;
   background: var(--popover);
 }
 
-/* Owner rows lead with a 24px avatar slot. */
+/* Cover the menu gutters too, including a focused row's outline. */
+.oc-menu > .people-menu__search:first-child {
+  top: calc(-1 * var(--menu-padding));
+  margin-block-start: calc(-1 * var(--menu-padding));
+  margin-inline: calc(-1 * var(--menu-padding));
+  padding-block-start: calc(6px + var(--menu-padding));
+  padding-inline: calc(8px + var(--menu-padding));
+}
+
+/* Owner rows lead with a 24px avatar slot. The divider is the sticky edge, so scrolled rows
+   tuck under it instead of showing as fragments below it. */
 .people-menu__search > .header-search {
   --header-search-icon-slot: 24px;
   --header-search-gap: 6px;
 
+  margin-block-end: 0;
   padding-inline-start: 0;
+}
+
+/* Group rows have no leading icon, so the search icon starts on their text. */
+.session-menu__group-search > .header-search {
+  --header-search-icon-slot: 14px;
 }
 
 .people-menu__status {
@@ -22,11 +40,15 @@
   font-size: 11px;
 }
 
-.people-menu__submenu + .oc-menu {
-  width: min(320px, calc(100vw - 24px));
-  max-height: min(420px, 60vh);
+/* Long session-menu lists share one cap; about ten rows and half of the next show it scrolls. */
+.session-menu__list-submenu + .oc-menu {
+  max-height: min(366px, 60vh);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.people-menu__submenu + .oc-menu {
+  width: min(320px, calc(100vw - 24px));
 }
 
 .session-menu__advanced + .oc-menu {

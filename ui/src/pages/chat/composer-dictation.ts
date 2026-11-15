@@ -4,6 +4,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type { ComposerDictationSession } from "./composer-dictation-session.ts";
+import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -98,6 +99,10 @@ export class ComposerDictationOwner extends EventTarget {
 
   get locksComposer(): boolean {
     return this.phase !== "idle";
+  }
+
+  get inputLevel(): RealtimeTalkLevelSignal | undefined {
+    return this.session?.inputLevel;
   }
 
   get transcript(): string {
@@ -277,7 +282,11 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  private readonly handleWindowBlur = (): void => this.cancel();
+  // Losing the window interrupts capture but keeps dictated text in the draft.
+  private readonly handleWindowBlur = (): void => {
+    this.clearClickSuppression();
+    void this.finishActive();
+  };
 
   private canHold(): boolean {
     return (

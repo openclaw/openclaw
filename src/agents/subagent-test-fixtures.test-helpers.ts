@@ -54,16 +54,16 @@ export type MockSubagentRegistryRows = (
 ) => void | Promise<void>;
 
 /** Policy fixtures supply commit facts; native delivery is covered by real-worker tests. */
-export function acknowledgeMockSubagentRegistryWrite(
+export async function acknowledgeMockSubagentRegistryWrite(
   createAdmission: SqliteWorkerAdmissionFactory | undefined,
   writeId: string,
-): void {
+): Promise<void> {
   if (!createAdmission) {
     throw new Error("Registry policy fixture requires a native receipt consumer");
   }
   const { admission } = createAdmission({ settled: Promise.resolve({ kind: "completed" }) });
   Object.defineProperty(admission, "committed", { value: { facts: { writeId, notices: [] } } });
-  admission.finish();
+  await admission.finish();
 }
 
 /** Policy fixtures retain the real row owner and stub only the worker transport ACK. */
@@ -105,7 +105,7 @@ export async function configureMockSubagentRegistryPersistence(methods: {
           );
           await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
           options?.assertCurrent?.();
-          acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
+          await acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
         }),
       });
     });

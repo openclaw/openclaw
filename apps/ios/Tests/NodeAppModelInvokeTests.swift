@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import Observation
 import OpenClawProtocol
+import Synchronization
 import Testing
 import UIKit
 import UserNotifications
@@ -3388,6 +3389,84 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.purgeChatTranscriptCache(gatewayID: stableID)
     }
 
+    @Test @MainActor func `foreground storage recovers removals before import and retries preserved sources`() async throws {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        let directory = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let suffix = UUID().uuidString
+        let keptID = "foreground-kept-\(suffix)"
+        let forgottenID = "foreground-forgotten-\(suffix)"
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: keptID, kind: .manual, name: "Foreground test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil)))
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        defer {
+            try? databases.removeGatewayData(gatewayID: keptID)
+            try? databases.removeGatewayData(gatewayID: forgottenID)
+            try? databases.close()
+        }
+        try databases.stageGatewayRemoval(gatewayID: keptID)
+        try databases.stageGatewayRemoval(gatewayID: forgottenID)
+
+        func writeLegacyIdentity(gatewayID: String, mainSessionKey: String, updatedAt: Int) throws -> URL {
+            let url = OpenClawClientDatabases.legacyPerGatewayDatabaseURL(
+                gatewayID: gatewayID, directoryURL: directory)
+            let legacy = try DatabaseQueue(path: url.path)
+            defer { try? legacy.close() }
+            try legacy.write { db in
+                try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS gateway_routing_identity(
+                    gateway_id TEXT PRIMARY KEY, scope TEXT NOT NULL, main_session_key TEXT NOT NULL,
+                    default_agent_id TEXT NOT NULL, updated_at REAL NOT NULL
+                );
+                PRAGMA user_version = 6;
+                """)
+                try db.execute(sql: """
+                INSERT OR REPLACE INTO gateway_routing_identity
+                    (gateway_id, scope, main_session_key, default_agent_id, updated_at)
+                VALUES (?, 'per-sender', ?, 'main', ?)
+                """, arguments: [gatewayID, mainSessionKey, updatedAt])
+            }
+            return url
+        }
+
+        let keptURL = try writeLegacyIdentity(gatewayID: keptID, mainSessionKey: "restored", updatedAt: 1)
+        let forgottenURL = try writeLegacyIdentity(gatewayID: forgottenID, mainSessionKey: "excluded", updatedAt: 1)
+        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        defer { appModel.voiceWake.stop() }
+
+        // The first activation must recover even without a chat facade or active gateway.
+        appModel.setScenePhase(.active)
+
+        #expect(!databases.hasPendingGatewayRemoval(gatewayID: keptID))
+        #expect(!databases.hasPendingGatewayRemoval(gatewayID: forgottenID))
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: keptID)?.mainSessionKey == "restored")
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: forgottenID) == nil)
+        #expect(!FileManager.default.fileExists(atPath: keptURL.path))
+        #expect(!FileManager.default.fileExists(atPath: forgottenURL.path))
+
+        // A source that could not be imported must remain retryable on a later activation,
+        // including inactive -> active without a background transition.
+        let preserved = try DatabaseQueue(path: keptURL.path)
+        try await preserved.write { db in try db.execute(sql: "PRAGMA user_version = 99") }
+        try preserved.close()
+        appModel.setScenePhase(.inactive)
+        appModel.setScenePhase(.active)
+        #expect(FileManager.default.fileExists(atPath: keptURL.path))
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: keptID)?.mainSessionKey == "restored")
+
+        _ = try writeLegacyIdentity(gatewayID: keptID, mainSessionKey: "retried", updatedAt: 2)
+        // A late source for a forgotten gateway is still excluded on the warm path.
+        _ = try writeLegacyIdentity(gatewayID: forgottenID, mainSessionKey: "must-not-return", updatedAt: 2)
+        appModel.setScenePhase(.inactive)
+        appModel.setScenePhase(.active)
+
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: keptID)?.mainSessionKey == "retried")
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: forgottenID) == nil)
+        #expect(!FileManager.default.fileExists(atPath: keptURL.path))
+        #expect(!FileManager.default.fileExists(atPath: forgottenURL.path))
+    }
+
     @Test @MainActor func `offline stores keep byte-distinct gateway owners isolated`() async throws {
         let appModel = NodeAppModel()
         let suffix = UUID().uuidString
@@ -3875,7 +3954,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             requestId: "req-talk",
             retryable: false,
             pauseReconnect: true)
-        appModel.gatewayAutoReconnectEnabled = false
         appModel.applyOperatorGatewayConnectionProblem(pairingProblem, route: nil)
         appModel.setTalkEnabled(false)
         #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
@@ -3990,13 +4068,30 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "draft from speech",
             isFinal: false,
             captureId: captureId)
+        let tabInvalidated = Mutex(false)
+        let control = withObservationTracking {
+            ChatProTab.dictationControl(appModel: appModel)
+        } onChange: {
+            tabInvalidated.withLock { $0 = true }
+        }
+        let waveformInvalidated = Mutex(false)
+        let row = ChatDictationActivityRow(control: control, onCancel: control.cancel)
+        withObservationTracking {
+            _ = row.body
+        } onChange: {
+            waveformInvalidated.withLock { $0 = true }
+        }
         talkMode.micLevel = 0.6
+        #expect(!tabInvalidated.withLock { $0 })
+        #expect(waveformInvalidated.withLock { $0 })
+        #expect(control.resolvedLevel == 0.6)
         #expect(appModel.chatDictationPartialTranscript == "draft from speech")
         #expect(appModel.chatDictationLevel == 0.6)
 
-        appModel.finishChatDictation()
+        control.finish()
         #expect(appModel.chatDictationPhase == .processing)
         #expect(appModel.chatDictationLevel == 0)
+        #expect(control.resolvedLevel == 0)
         let transcript = try await transcription.value
         #expect(transcript == "draft from speech")
         #expect(!appModel.isChatDictationActive)
@@ -4676,7 +4771,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.backgroundReconnectSuppressed)
         await waitForTalkCondition { !talkMode.isGatewayConnected }
         #expect(!appModel.gatewayConnected)
-        #expect(appModel.gatewayStatusText == "Background idle")
+        #expect(appModel.connection.node == .idle)
     }
 
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
@@ -4771,7 +4866,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.isBackgrounded)
         #expect(!appModel.backgroundReconnectSuppressed)
-        #expect(appModel.gatewayStatusText != "Background idle")
     }
 
     @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
@@ -4785,7 +4879,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         appModel.activeGatewayConnectConfig = config
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
-        appModel.gatewayStatusText = "Connected"
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
 
         appModel.setScenePhase(.background)
@@ -4800,7 +4893,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.isBackgrounded)
         #expect(appModel.gatewayConnected)
         #expect(appModel.isOperatorGatewayConnected)
-        #expect(appModel.gatewayStatusText == "Connected")
         #expect(!appModel._test_hasGatewayLoopTasks().node)
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
     }
@@ -6074,7 +6166,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         configureMockApprovalRoute(appModel, stableID: gatewayStableID)
-        appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
 
@@ -6140,7 +6231,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let (watchService, appModel) = makeWatchModel()
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
-        appModel.gatewayStatusText = "Connected"
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6169,7 +6259,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `watch app snapshot preserves gateway connection progress`() async throws {
         let (watchService, appModel) = makeWatchModel()
-        appModel.setGatewayConnectionProgress(reconnecting: false)
+        appModel.setGatewayConnectionProgress(.connecting)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6257,7 +6347,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
         let (watchService, appModel) = makeWatchModel()
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
-        appModel.gatewayStatusText = "Connected"
+        appModel.apply(.attemptStarted, to: .operator, route: nil)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6271,6 +6361,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
+        // The node is up, so the attempting operator is what the Watch waits on.
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayConnecting)
 
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         for _ in 0..<20 {

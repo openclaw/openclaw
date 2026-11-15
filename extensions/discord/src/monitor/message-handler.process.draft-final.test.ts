@@ -164,6 +164,15 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(getDeliveredFinalTexts()[0]).not.toContain("\n-# ");
   });
 
+  it("stops narration when dispatch ends without a final reply", async () => {
+    const stopTurn = vi.fn();
+    mockDispatch(async (params) => {
+      params?.replyOptions?.onProgressNarratorLifecycle?.({ beginTurn: vi.fn(), stopTurn });
+    });
+    await runDraft({ discordConfig: { streaming: progressStreaming } });
+    expect(stopTurn).toHaveBeenCalled();
+  });
+
   it("renders narration updates into the Discord progress draft", async () => {
     vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();

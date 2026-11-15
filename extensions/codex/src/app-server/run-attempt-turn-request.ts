@@ -337,10 +337,7 @@ export async function prepareCodexAttemptTurnRequest(
     });
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
+      developerInstructions: buildRenderedCodexInstructions(),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
     });

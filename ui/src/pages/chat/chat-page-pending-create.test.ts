@@ -217,6 +217,7 @@ it("previews a background start's prompt and retries its failure in place", asyn
   await settleChatPage(page);
   await settleChatPage(page);
   expect(page.querySelector("openclaw-pending-session-create")).not.toBeNull();
+  await vi.dynamicImportSettled();
   await vi.waitFor(() =>
     expect(page.querySelector(".chat-group.user")?.textContent).toContain(
       "Fix the automation timing",

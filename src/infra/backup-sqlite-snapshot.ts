@@ -18,6 +18,7 @@ import type { BackupManifestPostgresAnchor } from "../commands/backup-verify-man
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
@@ -38,6 +39,7 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
+import type { ReportBackupProgress, BackupProgressStage } from "./backup-progress.js";
 import {
   assertBackupSqliteSourceGroup,
   captureBackupSqliteSourceGroup,
@@ -306,6 +308,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
   /** Only in an isolated backup process; preserves source artifacts and snapshot row IDs. */
   preserveSourceArtifacts?: boolean;
   localCompanion?: boolean;
+  onProgress?: ReportBackupProgress;
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
@@ -350,12 +353,48 @@ export async function createBackupSqliteSnapshotPlan(params: {
     assertNotUpdateCapturePath(archiveSourcePath, params.resources.stateDir);
     assertNotUpdateCapturePath(sourceDatabasePath, params.resources.stateDir);
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
+    const stages = {
+      "source-acquisition": "sqlite-source-acquisition",
+      "source-integrity": "sqlite-source-integrity",
+      "online-copy": "sqlite-online-copy",
+      vacuum: "sqlite-vacuum",
+      hash: "sqlite-hash",
+      "published-integrity": "sqlite-published-integrity",
+    } as const satisfies Record<string, BackupProgressStage>;
+    let currentStage: keyof typeof stages = "online-copy";
     let hasPostgresAnchor: boolean | undefined;
     try {
       const capture = () =>
         createVerifiedSqliteSnapshot({
           sourcePath: sourceDatabasePath,
           targetPath: sourcePath,
+          ...(params.onProgress
+            ? {
+                onStage: (stage: keyof typeof stages, phase: "start" | "done", bytes: number) => {
+                  if (phase === "start") {
+                    currentStage = stage;
+                  }
+                  params.onProgress?.({
+                    stage: stages[stage],
+                    phase,
+                    ...(phase === "start" ? { sourceBytes: bytes } : { bytes }),
+                  });
+                },
+                onProgress: ({
+                  totalPages,
+                  remainingPages,
+                }: import("node:sqlite").BackupProgressInfo) => {
+                  if (totalPages > 0) {
+                    params.onProgress?.({
+                      stage: stages[currentStage],
+                      phase: "progress",
+                      pages: totalPages - remainingPages,
+                      totalPages,
+                    });
+                  }
+                },
+              }
+            : {}),
           ...(params.preserveSourceArtifacts
             ? {
                 sourceAcquisition: {
@@ -567,6 +606,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
       }),
     },
     {
+      role: "services",
+      sourcePath: resolveDaemonRuntimePinStorePath({
+        OPENCLAW_STATE_DIR: params.resources.stateDir,
+      }),
+    },
+    {
       role: "quarantine" as const,
       sourcePath: resolveQuarantineStorePath({
         ...process.env,
@@ -657,6 +702,7 @@ export async function createLegacyAuditStateSnapshotPlan(params: {
   stateDir: string;
   tempDir: string;
   preserveSourceArtifacts?: boolean;
+  onProgress?: ReportBackupProgress;
 }): Promise<BackupStateSnapshotPlan> {
   const stateDir = params.stateDir;
   // Legacy audit reconciliation takes a source write lease, unlike private-image capture.
@@ -680,6 +726,7 @@ export async function createLegacyAuditStateSnapshotPlan(params: {
         tempDir: attemptDir,
         legacyAuditSnapshots: firstCapture.snapshots,
         legacyAuditDatabaseWitness: firstCapture.databaseWitness,
+        onProgress: params.onProgress,
       });
       await fs.mkdir(verificationDir, { recursive: true });
       const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>

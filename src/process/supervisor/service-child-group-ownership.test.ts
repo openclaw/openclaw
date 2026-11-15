@@ -1,23 +1,48 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-const { census, definitelyDead, directory, readStat, darwinCommand, nativeDarwinCensus } =
+const { census, definitelyDead, directory, readStat, readlink, darwinCommand, nativeDarwinCensus } =
   vi.hoisted(() => ({
     census: vi.fn(),
     nativeDarwinCensus: vi.fn(),
     definitelyDead: vi.fn(),
     directory: vi.fn(),
     readStat: vi.fn(),
+    readlink: vi.fn(),
     darwinCommand: vi.fn(),
   }));
 vi.mock("../darwin-process-inspection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../darwin-process-inspection.js")>()),
   readDarwinProcessCensus: nativeDarwinCensus,
 }));
-vi.mock("node:child_process", () => ({ spawnSync: census, execFile: vi.fn() }));
-vi.mock("node:fs", () => ({ readdirSync: directory, readFileSync: readStat }));
-vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: census,
+  execFile: vi.fn(),
+}));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  readdirSync: directory,
+  readFileSync: readStat,
+  readlinkSync: readlink,
+}));
+// Both transports consume the same synthetic records; the real scope test counts native calls.
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readdir: async (file: string) => directory(file),
+    readFile: async (file: string, encoding: string) => readStat(file, encoding),
+    readlink: async (file: string) => readlink(file),
+  },
+}));
+vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/pid-alive.js")>()),
+  isPidDefinitelyDead: definitelyDead,
+  isPidDefinitelyDeadAsync: async (pid: number) => definitelyDead(pid),
+}));
 import {
   hasLiveOwnedProcessGroupMembers,
+  isProcessGroupGoneByCensus,
+  isProcessGroupGoneByCensusAsync,
+  readLinuxProcessGroupMembersAsync,
   readProcessGroupMembers,
 } from "./service-child-group-ownership.js";
 
@@ -54,6 +79,7 @@ beforeEach(() => {
   rows = new Map([[owner, stat(owner, owner)]]);
   commands = new Map([[owner, "openclaw-doctor\0"]]);
   identities = new Map();
+  readlink.mockReset().mockImplementation(() => String(owner));
   directory.mockReset().mockImplementation(() => ["self", ...Array.from(rows.keys(), String)]);
   readStat.mockReset().mockImplementation((file: string) => {
     const match = /^\/proc\/(\d+)\/(stat|cmdline|status)$/.exec(file);
@@ -114,14 +140,65 @@ it.each([
   }
 });
 
-it("does not report an empty Linux group after its existing census budget expires", () => {
+const targetGroup = foreignPid + 10;
+it.each([
+  ["live member", stat(foreignPid, targetGroup, "S"), false, false, false],
+  ["zombie with live threads", stat(foreignPid, targetGroup, "Z"), false, true, false],
+  ["dead zombie only", stat(foreignPid, targetGroup, "Z"), true, true, true],
+  ["member of another group only", stat(foreignPid, foreignPid, "S"), false, false, true],
+  ["unreadable member row", denied, false, false, false],
+] as const)(
+  "confirms a denied group probe from the Linux census: %s",
+  async (_name, row, dead, checksLiveness, expected) => {
+    rows.set(foreignPid, row);
+    definitelyDead.mockReturnValue(dead);
+    for (const observe of [isProcessGroupGoneByCensus, isProcessGroupGoneByCensusAsync]) {
+      definitelyDead.mockClear();
+      expect(await observe(targetGroup)).toBe(expected);
+      // Only a zombie needs the liveness probe; a running member is alive by its state alone.
+      expect(definitelyDead).toHaveBeenCalledTimes(checksLiveness ? 1 : 0);
+      expect(census).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("keeps a group alive when /proc is not this PID namespace's or the census fails", async () => {
+  // A foreign procfs maps PIDs to unrelated processes, so an empty target group proves nothing.
+  readlink.mockReturnValue("1");
+  expect(isProcessGroupGoneByCensus(targetGroup)).toBe(false);
+  expect(await isProcessGroupGoneByCensusAsync(targetGroup)).toBe(false);
+  expect(directory).not.toHaveBeenCalled();
+  readlink.mockImplementation(() => {
+    throw denied;
+  });
+  expect(isProcessGroupGoneByCensus(targetGroup)).toBe(false);
+  expect(await isProcessGroupGoneByCensusAsync(targetGroup)).toBe(false);
+  readlink.mockReturnValue(String(owner));
+  directory.mockImplementation(() => {
+    throw denied;
+  });
+  expect(isProcessGroupGoneByCensus(targetGroup)).toBe(false);
+  expect(await isProcessGroupGoneByCensusAsync(targetGroup)).toBe(false);
+});
+
+it("does not report an empty Linux group after its existing census budget expires", async () => {
   let now = 0;
+  let budget = 50;
   vi.spyOn(Date, "now").mockImplementation(() => now);
   readStat.mockImplementation(() => {
-    now = 51;
+    now = budget + 1;
     return stat(owner, owner);
   });
   expect(hasLiveOwnedProcessGroupMembers(50)).toBeUndefined();
+  now = 0;
+  await expect(readLinuxProcessGroupMembersAsync(50).next()).rejects.toThrow(
+    "Process group census exceeded its deadline",
+  );
+  budget = 1_000;
+  for (const observe of [isProcessGroupGoneByCensus, isProcessGroupGoneByCensusAsync]) {
+    now = 0;
+    expect(await observe(targetGroup)).toBe(false);
+  }
   expect(census).not.toHaveBeenCalled();
 });
 

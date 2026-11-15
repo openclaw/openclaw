@@ -1,6 +1,7 @@
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
+  readLiveModelChatCapability,
   projectUpstreamProviderCatalogModel,
   readLiveModelCatalogId,
   type ProjectedUpstreamProviderCatalogModel,
@@ -66,7 +67,15 @@ export function projectProviderCatalogSnapshotRows(
     seen.add(id);
     const entry = snapshot.get(id);
     if (entry && !entry.status) {
-      models.push(entry.model);
+      const chat = readLiveModelChatCapability(row);
+      models.push(
+        chat === undefined
+          ? entry.model
+          : {
+              ...entry.model,
+              inference: { ...entry.model.inference, chat },
+            },
+      );
     }
   }
   return models;
@@ -81,6 +90,7 @@ export function listProviderCatalogSnapshotEntries(
     name: model.name,
     ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
     api: model.api,
+    ...(model.inference ? { inference: model.inference } : {}),
     baseUrl: model.baseUrl,
     reasoning: model.reasoning,
     input: model.input,

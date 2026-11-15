@@ -10,6 +10,7 @@ it("benchmarks warm identity filtering across viewers", () => {
   const cfg = { agents: { entries: { main: {} } } };
   const owner = createSessionRowProjectionContext(
     createSubagentSessionListReadView({ env: process.env }),
+    { state: () => ({ cfg, epoch: 0, disposed: false }), prepareRegistry: () => undefined },
   );
   onTestFinished(owner.dispose);
   const context = owner.current;

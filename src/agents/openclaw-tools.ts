@@ -484,6 +484,12 @@ function* createOpenClawToolsSteps(
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     requesterTurnRunId: options?.runId,
+    // A scheduled owner run carries no sender bit; its children record the owner
+    // bit the occurrence was admitted with, as the run's own memory audience does.
+    senderIsOwner: scheduledTargets?.spawnSenderIsOwner ?? options?.senderIsOwner,
+    ...(scheduledTargets?.spawnSenderIsOwner
+      ? { assertSenderOwnerCurrent: scheduledTargets.assertOwnerCurrent }
+      : {}),
     completionOwnerKey: options?.runSessionKey,
     currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
     currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,

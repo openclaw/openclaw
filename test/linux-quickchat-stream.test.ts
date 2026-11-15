@@ -1039,7 +1039,7 @@ for (const outcome of ["retained", "evicted", "repaired", "recovered"] as const)
     expectState(harness, {
       replyText: outcome === "evicted" ? "" : "prefix suffix more",
       replyError:
-        outcome === "evicted" ? "Reply text is incomplete. Open the dashboard to recover it." : "",
+        outcome === "evicted" ? "Reply text is incomplete. Open OpenClaw to recover it." : "",
       readOnly: false,
       pendingCount: 0,
     });

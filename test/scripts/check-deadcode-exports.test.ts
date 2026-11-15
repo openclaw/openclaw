@@ -218,6 +218,12 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ];
     expectEntries(scriptRootWorkspace.entry, sourceTestConsumers);
     expectEntries(scriptRootWorkspace.project, sourceTestConsumers);
+    const bootstrapConsumers = [
+      "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+      "src/gateway/worker-environments/node-bootstrap-runtime-chunks.ts!",
+    ];
+    expectEntries(scriptRootWorkspace.entry, bootstrapConsumers);
+    expectEntries(scriptRootWorkspace.project, bootstrapConsumers);
     expect(scriptRootWorkspace.entry).not.toContain("src/**/*.test.ts!");
     expect(
       scriptExportsKnipConfig.ignoreIssues["scripts/lib/vitest-resource-reporter.mts"],
@@ -239,6 +245,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
         "scripts/control-ui-parity/vitest.config.ts",
         "scripts/control-ui-retention/vitest.config.ts",
         "test/vitest.codex-worker-authority.config.ts",
+        "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
       ],
     });
   });

@@ -20,7 +20,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
 import {
@@ -113,8 +113,8 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
       const requester = client("alice", "Alice");
       const entered = createDeferred();
       const release = createDeferred();
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&

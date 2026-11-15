@@ -1,6 +1,12 @@
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../../agents/workspace-state-guard.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
@@ -23,6 +29,7 @@ import {
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import { readSessionEntryInWorker as readWorkerEntry } from "./session-entry-read-runtime.js";
+import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -179,6 +186,89 @@ describe("generic session entry APIs with actor memory storage", () => {
         model: "kept-model",
       });
     });
+  });
+
+  it.each(["phase", "storage"] as const)(
+    "refuses a memory %s effect after its selected file source changes",
+    async (effect) => {
+      const { actor, binding, scope } = await fixture(`file-source-${effect}`);
+      const before = bindStorage(binding, () => loadSessionEntryReadOnly(scope));
+      const root = pinDirs.make();
+      const original = path.join(root, "original.sqlite");
+      const replacement = path.join(root, "replacement.sqlite");
+      const alias = path.join(root, "selected.sqlite");
+      await fs.writeFile(original, "original");
+      await fs.writeFile(replacement, "replacement");
+      await fs.symlink(original, alias);
+      const selected = {
+        ...authority,
+        readCustody: [
+          { sourcePath: original, candidates: [captureSessionStoreReadCandidate(alias)] },
+        ],
+      };
+      const mutate = () =>
+        effect === "phase"
+          ? actor.patch(
+              {
+                commandId: "activity",
+                phaseId: "turn",
+                reducers: [{ kind: "activity", updatedAt: 50 }],
+              },
+              selected,
+            )
+          : actor.storage!.mutate(
+              {
+                type: "session.entry.patch",
+                input: { operation: { kind: "fields", patch: { label: "Updated" } } },
+              },
+              selected,
+            );
+      await fs.unlink(alias);
+      await fs.symlink(replacement, alias);
+      expect(await mutate()).toMatchObject({ kind: "rolled-back" });
+      expect(bindStorage(binding, () => loadSessionEntryReadOnly(scope))).toEqual(before);
+      await fs.unlink(alias);
+      await fs.symlink(original, alias);
+      expect(await mutate()).toMatchObject({ kind: "committed" });
+    },
+  );
+
+  it("refuses incognito creation after its workspace alias moves without synchronous filesystem checks", async () => {
+    const { actor, binding, scope, creationScope } = await fixture("workspace-source");
+    const root = pinDirs.make();
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "workspace");
+    await fs.mkdir(original);
+    await fs.mkdir(replacement);
+    await fs.symlink(original, alias, "junction");
+    const source = createWorkspaceFilesystemSource(
+      await captureWorkspaceFilesystemEvidence(alias),
+      () => {},
+    );
+    const stats = vi.spyOn(syncFs, "lstatSync");
+    await bindStorage(binding, async () => {
+      await expect(
+        createEntry(
+          creationScope,
+          async () => {
+            await fs.unlink(alias);
+            await fs.symlink(replacement, alias, "junction");
+            return { ok: true, entry: { sessionId: "uncommitted", updatedAt: 20 } };
+          },
+          { commitGuard: source },
+        ),
+      ).rejects.toMatchObject({ name: "WorkspaceAliasRepointedError" });
+      expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+        sessionId: "workspace-source",
+        label: "Original",
+      });
+      expect(await readHistory(actor.storage!)).toMatchObject({
+        kind: "full",
+        snapshot: { events: [] },
+      });
+    });
+    expect(stats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
   });
 
   it("creates over an existing entry with its transcript, owner, and explicit label together", async () => {

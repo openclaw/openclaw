@@ -41,6 +41,21 @@ const loadStabilityBundleModule = createLazyPromise(
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 
+/**
+ * Cancellation follows established read-only CLI contracts, not authorization
+ * scopes: operator.read also covers side-effecting flows such as GitHub sign-in.
+ * Other generic calls can write, so preserve their settlement receipts during
+ * cleanup.
+ */
+const READ_ONLY_GATEWAY_CALL_METHODS = new Set([
+  "health",
+  "status",
+  "system-presence",
+  "usage.cost",
+  "diagnostics.stability",
+  "diagnostics.capabilities",
+]);
+
 function gatewayCallOpts(cmd: Command): Command {
   return addGatewayClientOptions(cmd, { timeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS }).option(
     "--json",
@@ -281,7 +296,17 @@ export function registerGatewayCli(program: Command) {
               : opts;
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
           const params = parseGatewayCallParams(String(opts.params ?? "{}"));
-          const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
+          // Established read-only methods cancel their read on Ctrl+C and do not
+          // print a reply that lands after it. Generic calls can execute writes,
+          // so their settlement receipt is preserved during cleanup.
+          const abortable = READ_ONLY_GATEWAY_CALL_METHODS.has(method);
+          const reply = abortable
+            ? await callGatewayReadOnlyCliUnlessAborted(method, rpcOpts, params)
+            : { result: await callGatewayReadOnlyCli(method, rpcOpts, params) };
+          if (!reply) {
+            return;
+          }
+          const result = reply.result;
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;

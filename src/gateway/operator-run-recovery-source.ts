@@ -9,7 +9,7 @@ import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import {
@@ -93,13 +93,14 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
       assignedRole: profile.assignedRole,
       githubLogin: profile.githubLogin ?? null,
       rolePolicy: sourceRolePolicy(
-        openclawIdTunnelRolePolicy(authority.openclawIdPrincipal) ??
+        openclawIdSubjectRolePolicy(authority.openclawIdPrincipal, () =>
           resolveOperatorRolePolicyForAssignment(
             profile.profileId,
             profile.assignedRole,
             params.config,
             profile.githubLogin ?? null,
           ),
+        ),
       ),
       modelPolicy,
       grant: authority.gatewayAccessGrant,
@@ -146,13 +147,14 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     assignedRole: profile.assignedRole,
     githubLogin: profile.githubLogin ?? null,
     rolePolicy: sourceRolePolicy(
-      openclawIdTunnelRolePolicy(authority.openclawIdPrincipal) ??
+      openclawIdSubjectRolePolicy(authority.openclawIdPrincipal, () =>
         resolveOperatorRolePolicyForAssignment(
           profile.profileId,
           profile.assignedRole,
           params.config,
           profile.githubLogin ?? null,
         ),
+      ),
     ),
     modelPolicy,
     grant: authority.gatewayAccessGrant,
