@@ -178,24 +178,26 @@ function hasUnbundledDynamicImport(
   node: unknown,
   isBundled: (specifier: string) => boolean,
 ): boolean {
-  if (!isRecord(node)) {
-    return false;
-  }
-  if (node.type === "ImportExpression") {
-    const source = node.source;
-    if (
-      !isRecord(source) ||
-      source.type !== "Literal" ||
-      typeof source.value !== "string" ||
-      !isBundled(source.value)
-    ) {
-      return true;
+  const pending: unknown[] = [node];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!isRecord(current)) {
+      continue;
     }
-  }
-  for (const value of Object.values(node)) {
-    for (const child of Array.isArray(value) ? value : [value]) {
-      if (hasUnbundledDynamicImport(child, isBundled)) {
+    if (current.type === "ImportExpression") {
+      const source = current.source;
+      if (
+        !isRecord(source) ||
+        source.type !== "Literal" ||
+        typeof source.value !== "string" ||
+        !isBundled(source.value)
+      ) {
         return true;
+      }
+    }
+    for (const value of Object.values(current)) {
+      for (const child of Array.isArray(value) ? value : [value]) {
+        pending.push(child);
       }
     }
   }

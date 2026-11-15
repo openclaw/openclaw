@@ -314,7 +314,7 @@ fail with an explanation rather than falling back to host execution.
 
 The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
-this checkout while capturing or applying changes. An existing session first
+this checkout when capture or application requires a stable live tree. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
@@ -323,9 +323,11 @@ check for the guest workspace: commands that leave accepted files unchanged do
 not pause the sandbox. Small, fast workspaces capture directly into an immutable
 Git result. A probe taking at least half a second or an accepted inventory of at
 least 20,000 entries selects filesystem capture for private checkouts provisioned
-as btrfs subvolumes. These checkpoints settle pending recovery while paused, take
-a snapshot, then resume while the captured files are scanned and reconciled into
-the managed worktree. The first capture after substantial workspace growth can
+as btrfs subvolumes. Clean command checkpoints take an atomic snapshot without
+pausing, then scan and reconcile the captured files into the managed worktree.
+Pending recovery retains its consistency pause. A container pause does not flush
+application buffers; neither capture path promises application-level transactions
+across background writes. The first capture after substantial workspace growth can
 still use the direct path; later probes see the larger accepted inventory.
 Other checkouts pause until their files are stored in an immutable Git
 result. A snapshot that omits nested subvolumes is discarded and captured again
@@ -340,8 +342,9 @@ After acceptance and runtime resume, the workspace lease transfers the snapshot
 to a unique retired path for asynchronous cleanup. The next command can run while
 cleanup continues. Before another snapshot, capture admission waits for cleanup
 and retries any interrupted removal, keeping the cleanup backlog bounded.
-Snapshot creation may wait for dirty data to flush, so the short paused operation
-does not guarantee a fixed maximum pause duration.
+Snapshot creation may wait for dirty data to flush. Clean command exports keep
+the guest running during that wait; captures requiring recovery still have no
+fixed maximum pause duration.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.

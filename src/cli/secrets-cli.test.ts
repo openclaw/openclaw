@@ -183,8 +183,8 @@ async function withPlanFile(
     os.tmpdir(),
     `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
   );
-  await fs.writeFile(planPath, contents, "utf8");
   try {
+    await fs.writeFile(planPath, contents, "utf8");
     await run(planPath);
   } finally {
     await fs.rm(planPath, { force: true });

@@ -1,2 +1,0 @@
-# Bedrock Converse request text matches its uncached system prompt.
-3

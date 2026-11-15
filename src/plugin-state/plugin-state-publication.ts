@@ -107,11 +107,73 @@ export function pluginStatePublicationKey(row: EntryKey): string {
   return JSON.stringify([row.plugin_id, row.namespace, toUSVString(row.entry_key)]);
 }
 
+/** Separate singleton so an older loaded copy of `state` keeps its original shape. */
+const reconciliation = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginStatePublicationReconciliation"),
+  () => ({
+    /** Bumped on every indeterminate outcome; a reconciliation only clears its own epoch. */
+    epochs: new Map<string | symbol, number>(),
+    active: new Map<string | symbol, Promise<boolean>>(),
+  }),
+);
+
 publication.subscribeFacts((change) => {
   if (change.kind === "unknown") {
     state.unavailable.add(change.identity);
+    reconciliation.epochs.set(
+      change.identity,
+      (reconciliation.epochs.get(change.identity) ?? 0) + 1,
+    );
   }
 });
+
+export function isPluginStatePublicationUnavailable(identity: string | symbol): boolean {
+  return state.unavailable.has(identity);
+}
+
+/**
+ * Restore authority after an indeterminate outcome only from re-read committed truth.
+ * `confirmCommitted` must complete a committed read through the canonical writer queue for
+ * this identity, so the uncertain write has either landed or been discarded. Elapsed time,
+ * a cached view, or a failed confirmation never clears denial, and a newer indeterminate
+ * outcome observed while confirming keeps the identity latched. Concurrent callers share
+ * one confirmation per identity.
+ */
+export function reconcilePluginStatePublication(
+  identity: string | symbol,
+  confirmCommitted: () => Promise<void>,
+): Promise<boolean> {
+  if (!state.unavailable.has(identity)) {
+    return Promise.resolve(true);
+  }
+  const active = reconciliation.active.get(identity);
+  if (active) {
+    return active;
+  }
+  const epoch = reconciliation.epochs.get(identity);
+  const run = (async () => {
+    try {
+      await confirmCommitted();
+    } catch {
+      return false;
+    }
+    if (!state.unavailable.has(identity)) {
+      return true;
+    }
+    if (reconciliation.epochs.get(identity) !== epoch) {
+      return false;
+    }
+    state.unavailable.delete(identity);
+    reconciliation.epochs.delete(identity);
+    return true;
+  })().finally(() => {
+    if (reconciliation.active.get(identity) === run) {
+      reconciliation.active.delete(identity);
+    }
+  });
+  reconciliation.active.set(identity, run);
+  return run;
+}
 
 /** Owns committed-fact staging and observation; raw/foreign authority remains separate. */
 export const pluginStatePublication = {
@@ -291,7 +353,10 @@ function isRow(value: unknown): value is PluginStateRow {
   );
 }
 
-/** Deny affected pending writes; an indeterminate outcome retires the whole source. */
+/**
+ * Deny affected pending writes; an indeterminate outcome retires the whole source until
+ * `reconcilePluginStatePublication` confirms committed truth.
+ */
 export function assertPluginStatePublicationSettled(
   identity: string,
   scope?: PluginStatePublicationScope,
@@ -304,7 +369,7 @@ export function assertPluginStatePublicationSettled(
   }
 }
 
-/** Descriptive views may reload after unknown settlement; authority remains unavailable. */
+/** Descriptive views may reload after unknown settlement; authority waits for reconciliation. */
 export function hasPendingPluginStatePublication(
   identity: string,
   scope?: PluginStatePublicationScope,

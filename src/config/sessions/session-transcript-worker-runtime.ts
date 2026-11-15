@@ -19,26 +19,24 @@ import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import {
-  createSessionHistoryWorkerReaders,
-  type SessionHistoryWorkerRequestRunner,
-} from "./session-transcript-worker-readers.js";
+import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
-  targetDiscoveryLane,
   type HistoryDatabaseResource,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
+  SessionHistoryWorkerRequestOptions,
+  SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
@@ -63,6 +61,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
+    case "compaction-source":
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -85,7 +84,7 @@ export function runSessionBranchSummaryWorkerRequest(
   return withSessionHistoryWorkerDatabase(
     database,
     (owner) => owner.readBranchSummaries({ request: read }, signal),
-    maintenanceLane,
+    sessionStoreLane,
   );
 }
 
@@ -174,7 +173,7 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
-      timeoutMs = 60_000,
+      { timeoutMs = 60_000, pointRead }: SessionHistoryWorkerRequestOptions = {},
     ) => {
       let retirement: Promise<void> | undefined;
       const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
@@ -211,7 +210,7 @@ export function retainSessionHistoryWorkerDatabase(
           !(options.readIdentity
             ? hasSqliteDatabaseSchemaAdmissionForIdentity(options.readIdentity)
             : hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path));
-        const requestLane = cold ? targetDiscoveryLane : requestedLane;
+        const requestLane = cold ? sessionStoreLane : requestedLane;
         if (requestLane !== requestedLane) {
           clearDatabaseWorkerIdleRetirement(requestLane);
           requestLane.pending++;
@@ -335,6 +334,7 @@ export function retainSessionHistoryWorkerDatabase(
                     inputBytes: inputBytes + (validation?.inputBytes ?? 0),
                     timeoutMs: remaining,
                     signal: requestSignal,
+                    pointRead,
                     onRequest: onRequest
                       ? (value, context) => {
                           const effect = (async () => {

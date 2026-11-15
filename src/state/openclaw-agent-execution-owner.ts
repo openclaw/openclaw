@@ -1,4 +1,3 @@
-import { addAbortListener } from "node:events";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -98,7 +97,6 @@ export function createAgentDatabaseExecution(
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
-  let idleDrainListener: Disposable | undefined;
 
   const acceptFileIdentity = (received: AgentDatabaseExecutionFileIdentity) => {
     if (
@@ -112,8 +110,6 @@ export function createAgentDatabaseExecution(
   };
 
   const clearIdleTimer = () => {
-    idleDrainListener?.[Symbol.dispose]();
-    idleDrainListener = undefined;
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
@@ -363,7 +359,7 @@ export function createAgentDatabaseExecution(
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
-      if (fileIdentity) {
+      if (fileIdentity && (creatingTarget || borrowedPath !== identity.canonicalPath)) {
         assertExistingDatabaseIdentity(
           borrowedPath,
           `file:${fileIdentity.physicalIdentity}`,
@@ -608,12 +604,6 @@ export function createAgentDatabaseExecution(
               );
               idleTimer = timer;
               timer.unref();
-              // Marker persistence precedes shutdown retirement of idle generations.
-              idleDrainListener = addAbortListener(cleanupSignal, () => {
-                runInDetachedAsyncContext(() => {
-                  void owner.closeIdle().catch(reportCleanupFailure);
-                });
-              });
               return;
             }
             // The completed command stays acknowledged; the resource owner retains cleanup.
@@ -625,6 +615,10 @@ export function createAgentDatabaseExecution(
       return borrowed;
     },
     async closeIdle() {
+      // Shutdown drains retained idle owners after readers; active borrowers still join close.
+      if (getGatewayShutdownCleanupSignal().aborted && executionState.idle.has(owner)) {
+        return;
+      }
       await closeNative();
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {

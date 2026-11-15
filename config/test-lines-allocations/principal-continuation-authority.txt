@@ -1,9 +1,0 @@
-# PR #193098: net regression proof for original ingress issuance, restart-before-
-# scheduling, fail-closed revocation, same-job transient retry, real admin tool
-# gates, independently scoped siblings, and principal replay anonymization.
-# Owning-boundary fixtures caught real admission and settlement defects that
-# helper-only tests missed. Preserve those distinct contracts; scalar unchanged.
-# Includes exact-issuance migration, awaited startup and declared warning feedback.
-# Adds +108 counted lines for genuine person allowlist revocation before/after restore.
-# Adds +92 counted lines for live/recovered person enablement policy parity.
-1208

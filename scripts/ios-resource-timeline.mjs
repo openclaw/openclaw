@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   mkdirSync,
@@ -437,7 +437,7 @@ function startTimeline(output) {
       };
       pending.set(name, observation);
       // Only observation subprocesses are deprioritized; the wrapped workload is unchanged.
-      observation.child = execFile(
+      observation.child = childProcess.execFile(
         "/usr/bin/nice",
         ["-n", "10", command, ...args],
         {
@@ -634,7 +634,7 @@ function main() {
   if (timeline) {
     env.OPENCLAW_IOS_RESOURCE_PHASE_PATH = timeline.phaseFile;
   }
-  const child = spawn(command, args, {
+  const child = childProcess.spawn(command, args, {
     stdio: "inherit",
     env,
     detached: process.platform !== "win32",

@@ -1,3 +1,0 @@
-# Exact 51-line regression growth for retrying a refused compaction summary once
-# on the next distinct fallback route (succeeds, refuses again, fails setup, or has no route).
-51

@@ -2,6 +2,7 @@ import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promise
 import { dirname, join, resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
@@ -18,11 +19,15 @@ export const TEMPLATE_BUILD_RESULT_SCHEMA_VERSION = "openclaw.templateBuild.v1" 
 // zlib's public numeric API defines Z_FILTERED as strategy 1.
 const ZLIB_FILTERED_STRATEGY = 1;
 
-async function readSelectedProjectFile(projectRoot: string, path: string): Promise<Buffer> {
+async function readSelectedProjectFile(
+  projectRoot: string,
+  path: string,
+  maxBytes = MAX_MANAGED_FILE_BYTES,
+): Promise<Buffer> {
   const sourceRoot = await fsSafeRoot(projectRoot);
   const read = await sourceRoot.read(path, {
     hardlinks: "reject",
-    maxBytes: MAX_MANAGED_FILE_BYTES,
+    maxBytes,
     symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;
@@ -113,7 +118,11 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
       files.set("LICENSE", license);
     }
     if (project.template.packageBootstrap) {
-      const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
+      const bootstrap = await readSelectedProjectFile(
+        project.root,
+        "BOOTSTRAP.md",
+        MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      );
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.template.packageBootstrap);
       files.set("BOOTSTRAP.md", bootstrap);
     }

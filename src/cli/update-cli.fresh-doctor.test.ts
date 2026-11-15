@@ -27,9 +27,9 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
+    const root = f.createCaseDir("openclaw-git-downgrade");
+    await fs.mkdir(root, { recursive: true });
+    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(root);
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });
@@ -176,7 +176,7 @@ describe("update-cli", () => {
     mocks.serviceDefinitionMutationCapability.mockResolvedValue({ kind, reason });
   };
 
-  it("preserves split-root package updates when the service definition is writable-overridden", async () => {
+  it("preserves split-root package updates when service environment overrides cannot be inspected", async () => {
     const oldInstall = await f.setupServicePackageAtPrefix({
       prefix: f.tempDirs.make("sealed-node-a-"),
     });
@@ -191,7 +191,7 @@ describe("update-cli", () => {
       programArguments: originalCommand,
       environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
       managedDefinition: { programArguments: originalCommand },
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      managedOverrides: { environment: true },
     };
     mocks.serviceReadCommand.mockResolvedValue(overriddenCommand);
     f.primeNpmChannelTag("latest", "2026.5.20");
@@ -227,17 +227,7 @@ describe("update-cli", () => {
     const installCalls = commandCalls().filter(
       ([argv]) => argv[2] === "gateway" && argv[3] === "install",
     );
-    expect(installCalls).toHaveLength(1);
-    expect(installCalls[0]?.[0].slice(0, 4)).toEqual([
-      oldInstall.serviceNode,
-      oldInstall.entrypoint,
-      "gateway",
-      "install",
-    ]);
-    expect(installCalls[0]?.[1]).toMatchObject({
-      cwd: oldInstall.root,
-      input: expect.stringContaining('"targetRoot":' + JSON.stringify(oldInstall.root)),
-    });
+    expect(installCalls).toHaveLength(0);
     expect(mocks.serviceStop).toHaveBeenCalledOnce();
     expect(getLogOutput()).toContain("Gateway: restarted and verified");
   });

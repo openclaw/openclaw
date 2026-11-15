@@ -76,6 +76,7 @@ const PUBLIC_CODES = new Set<string>([
   "preflight-worktree-failed",
   "preflight-node-runtime-incompatible",
   "preflight-no-good-commit",
+  "preflight-local-replay-conflict",
   "reference-source-not-fast-forward",
   "reference-source-pnpm-unavailable",
   "preferred-manager-unavailable",

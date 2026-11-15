@@ -359,7 +359,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       if (!options.changedCoreTestSupport) {
         writeFixture(
           "scripts/changed-lanes.mts",
-          reexport("detectChangedLanes", "scripts/changed-lanes.mts"),
+          reexport("detectChangedLanes, detectChangedLanesForPaths", "scripts/changed-lanes.mts"),
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -595,6 +595,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "ci-node-test-capacity.mts",
       "vitest-shard-metadata.mts",
       "ci-skills-python-plan.mjs",
+      "ci-test-observations.mjs",
       "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);

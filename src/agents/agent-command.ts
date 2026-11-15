@@ -84,6 +84,7 @@ async function agentCommandInternal(
       detached: prepared.opts.sessionEffects === "internal",
     },
     async (_operation, abortSignal) => {
+      prepared.opts.assertTurnAdmissionCurrent?.();
       return await agentCommandInternalOwned(
         { ...prepared, opts: { ...prepared.opts, abortSignal } },
         admissionIngress,
@@ -410,6 +411,36 @@ async function agentCommandInternalOwned(
         });
       }
 
+      if (
+        !isRawModelRun &&
+        sessionKey &&
+        opts.inputProvenance?.kind === "inter_session" &&
+        opts.inputProvenance.sourceTool === "sessions_send"
+      ) {
+        // A sessions_send resume continues the session like an ordinary turn, so it adopts the
+        // passive notices queued since its last turn through the same drain owner. Other
+        // agent-method callers (CLI, hooks, completions) keep their existing behavior.
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+        const { drainFormattedSystemEvents } =
+          await import("../auto-reply/reply/session-system-events.js");
+        const eventsBlock = await drainFormattedSystemEvents({
+          cfg,
+          agentId: sessionAgentId,
+          sessionKey,
+          // The channel summary introduces a new main conversation; a resume continues one.
+          isMainSession: false,
+          isNewSession: false,
+        });
+        if (eventsBlock) {
+          opts = {
+            ...opts,
+            runtimeContextFragments: [
+              ...(opts.runtimeContextFragments ?? []),
+              { kind: "conversation-data", text: eventsBlock },
+            ],
+          };
+        }
+      }
       const embeddedSessionState = await measureAgentStartup(
         "session-state",
         () =>
@@ -618,7 +649,7 @@ async function agentCommandFromIngressInternal(
             });
 
         if (result && preparedAgentDir) {
-          emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+          await emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
         }
         return result;
       } finally {

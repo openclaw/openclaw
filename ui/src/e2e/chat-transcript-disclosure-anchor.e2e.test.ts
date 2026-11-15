@@ -630,7 +630,7 @@ suite.define(() => {
               type: "toolCall",
               id: "call-anchor-read",
               name: "read",
-              arguments: { path: "ui/src/pages/chat/components/chat-tool-cards.ts" },
+              arguments: { path: "ui/src/pages/chat/components/chat-tool-expanded.solid.tsx" },
             },
           ],
           timestamp: 100,

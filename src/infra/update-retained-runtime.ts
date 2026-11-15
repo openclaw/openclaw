@@ -47,7 +47,9 @@ type RetainedUpdateRuntimeMetrics = {
   /** Allocated footprint estimate, including directories and aliases; not copied bytes. */
   estimatedBytes: number;
   linked: number;
+  /** Published without a hard link; clones and byte copies are not told apart. */
   copied: number;
+  linkFallback?: { count: number; code: string };
 };
 
 export type RetainUpdateRuntime = (params: {
@@ -251,6 +253,17 @@ async function runWithRetainedUpdateRuntime<T>(
             return undefined;
           }
           const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
+          if (metrics.linkFallback) {
+            const { count, code } = metrics.linkFallback;
+            const cause =
+              code === "EXDEV"
+                ? ". The updater temporary directory is on a different filesystem or subvolume than the installation"
+                : "";
+            // Retention still succeeded; say why it cost a copy per file instead of a link.
+            log.warn(
+              `Runtime retention could not hard-link ${count} of ${metrics.linked + metrics.copied} files (first error ${code}); each was cloned or copied instead${cause}`,
+            );
+          }
           const files = await readRetainedRuntimeFileList(privateRoot, { fileCount });
           assertCurrent();
           const relocations = prepareRuntimeRelocations(

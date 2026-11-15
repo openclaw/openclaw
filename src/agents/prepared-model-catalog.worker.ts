@@ -448,8 +448,16 @@ async function runCatalogRequest(
       models.push(model);
       runtimeModels.set(provider, models);
     }
-    for (const outcome of facts.modelCatalog.providerOutcomes ?? []) {
-      const provider = normalizeProviderId(outcome.provider);
+    // Saved catalogs seed the template registry. Every provider this plan saves publishes its
+    // live rows, so an accepted empty listing withdraws the saved ones.
+    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) =>
+      // SAFETY: the models.json plan serializes each generated catalog with a providers record.
+      Object.keys((JSON.parse(contents) as { providers?: object }).providers ?? {}),
+    );
+    for (const provider of [
+      ...(facts.modelCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
+      ...plannedProviders,
+    ].map(normalizeProviderId)) {
       if (!runtimeModels.has(provider)) {
         runtimeModels.set(provider, []);
       }
@@ -469,6 +477,7 @@ async function runCatalogRequest(
       snapshot: facts.modelCatalog,
       runtimeModels,
       providerExpiries: source.providerExpiries ?? new Map(),
+      pluginCatalogs: source.pluginCatalogs,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels:

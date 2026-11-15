@@ -21,8 +21,6 @@ export type LabFeature = {
   enableAlso: Readonly<Record<string, LabFeatureValue>> | null;
   /** Reset the parent when its presence changes defaults; null retains required gates. */
   resetScope: LabFeatureResetScope;
-  /** Plugin whose own settings page owns this lab's options; Labs links there. */
-  settingsPluginId?: string;
 };
 
 export type LabFeatureDefinition = Omit<LabFeature, "title" | "description">;

@@ -1,16 +1,22 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureGitRepo, findGitCheckoutRoot, hasWorkspaceGitCheckout } from "./workspace-git.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(actual.existsSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
   vi.useRealTimers();
 });
 
@@ -20,8 +26,7 @@ it("retains workspace Git presentation while current admission and external chan
   });
   const workspace = tempDirs.make("workspace-git-projection-");
   const metadata = path.join(workspace, ".git");
-  const exists = vi.spyOn(fs, "existsSync");
-  syncBuiltinESMExports();
+  const exists = vi.mocked(fs.existsSync).mockClear();
   expect(findGitCheckoutRoot(workspace)).toBeNull();
   expect(exists).toHaveBeenCalled();
   expect(hasWorkspaceGitCheckout(workspace)).toBe(false);

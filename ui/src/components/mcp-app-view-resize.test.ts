@@ -213,6 +213,7 @@ describe("mcp-app-view localization", () => {
         new MessageEvent("message", {
           data: { method: "ui/notifications/sandbox-proxy-ready" },
           source: secondFrame.contentWindow,
+          origin: new URL(secondFrame.src).origin,
         }),
       );
       await waitForSolid(() => {

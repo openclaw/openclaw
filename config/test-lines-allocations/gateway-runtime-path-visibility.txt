@@ -1,2 +1,0 @@
-40
-# Covers status, cached health, refreshed health, and caller scope at the RPC response owner.

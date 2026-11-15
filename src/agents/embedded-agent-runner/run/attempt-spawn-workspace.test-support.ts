@@ -3,6 +3,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
@@ -29,12 +30,13 @@ import {
   agentSessionQueuePromptContext,
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
-import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
+import type { CreateAgentSessionOptions } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -71,8 +73,6 @@ type CapturedTrajectoryEvent = {
   type: string;
   workspaceDir?: string;
 };
-
-const normalizeMockProviderId = normalizeLowercaseStringOrEmpty;
 
 const hoisted = vi.hoisted(() => {
   const mock = () => vi.fn<(...args: unknown[]) => unknown>();
@@ -239,25 +239,21 @@ vi.mock("../../sessions/resource-loader.js", () => ({
   },
 }));
 
-// mock-isolation: Keep session storage and provider runtime inside the in-memory attempt fixture.
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  function ModelRegistry() {}
-  const estimateTokens = (value: unknown) =>
-    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
+// mock-isolation: Keep session storage inside the in-memory attempt fixture.
+vi.mock("../../sessions/session-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-manager.js")>()),
+  SessionManager: {
+    inMemory: hoisted.sessionManagerOpenMock,
+    openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+  },
+}));
 
-  return {
-    AuthStorage,
-    createAgentSession: hoisted.createAgentSessionMock,
-    estimateTokens,
-    generateSummary: async () => "",
-    ModelRegistry,
-    SessionManager: {
-      inMemory: hoisted.sessionManagerOpenMock,
-      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-    },
-  };
-});
+vi.mock("../../sessions/compaction/compaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/compaction/compaction.js")>()),
+  estimateTokens: (value: unknown) =>
+    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4)),
+  generateSummary: async () => "",
+}));
 
 // mock-isolation: Keep session storage and provider runtime outside the attempt fixture.
 vi.mock("../../sessions/sdk.js", () => ({
@@ -462,7 +458,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 // mock-isolation: Workspace attempts pin synthetic models without loading the provider registry.
 vi.mock("../../model-selection.js", () => ({
   findNormalizedProviderValue,
-  normalizeProviderId: normalizeMockProviderId,
+  normalizeProviderId: normalizeLowercaseStringOrEmpty,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -983,6 +979,10 @@ export async function createContextEngineAttemptRunner(params: {
           },
         },
         ...params.attemptOverrides,
+      };
+      // This runner owns a fresh store per call, even when its fixture session ID is reused.
+      using _ = {
+        [Symbol.dispose]: () => cleanupSessionResources(attempt.sessionId),
       };
       const admittedRunContext = params.attemptOverrides?.admittedRunContext;
       const runAttempt = async (context: NonNullable<typeof admittedRunContext>) => {

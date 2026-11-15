@@ -1,2 +1,0 @@
-# Malformed and oversized stdin decisions, including intentional noops.
-34

@@ -156,6 +156,7 @@ export const worktreeTemplateReadOperations = {
             .selectFrom("worktree_templates")
             .selectAll()
             .orderBy("last_used_at", "asc")
+            .orderBy("created_at", "asc")
             .orderBy("id", "asc"),
         ).rows.map(rowToRecord)
       : [],
@@ -304,7 +305,11 @@ export const worktreeTemplateOperations = {
             .where("id", "=", row.id),
         );
       }
-      if ("selection" in input && input.selection.now !== undefined) {
+      if (
+        "selection" in input &&
+        input.selection.now !== undefined &&
+        input.selection.now > row.last_used_at
+      ) {
         row.last_used_at = input.selection.now;
         executeSqliteQuerySync(
           db,

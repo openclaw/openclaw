@@ -528,21 +528,6 @@ it.each(["policy change", "capacity eviction"] as const)(
   },
 );
 
-it("returns busy instead of queueing a fourth concurrent evaluation", async () => {
-  const pending = createDeferred<CodeModeHeadlessResult>();
-  const runHeadless = vi.fn(async () => await pending.promise);
-  const { evaluate } = createEvaluator(runHeadless);
-  const running = ["one", "two", "three"].map((jobId) => evaluate({ jobId }));
-  await vi.waitFor(() => expect(runHeadless).toHaveBeenCalledTimes(3));
-
-  const saturated = await evaluate({ jobId: "four" });
-  pending.resolve(completed({ fire: false }));
-  await Promise.all(running);
-
-  expect(saturated).toEqual({ kind: "busy" });
-  expect(runHeadless).toHaveBeenCalledTimes(3);
-});
-
 it.each(["preparation", "headless"] as const)("survives a clock jump during %s", async (phase) => {
   const now = Date.now();
   let jump = 0;

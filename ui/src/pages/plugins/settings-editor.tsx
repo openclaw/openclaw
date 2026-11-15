@@ -54,7 +54,7 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
 
 export type PluginSettingsEditorProps = {
   model?: PluginSettingsEditorModel;
-  permissions?: { fields: PluginSettingsField[]; loading?: boolean };
+  permissions?: { fields: PluginSettingsField[]; loading?: boolean; known?: boolean };
   onAskSetting?: (field: PluginSettingsField) => void;
   resolveCredential?: (field: PluginSettingsField) => PluginCredentialEditorProps | undefined;
 };
@@ -211,6 +211,7 @@ function EditorSection(props: {
 type GroupsProps = Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCredential"> & {
   params: ConfigNodeRenderParams;
   permissions: PluginSettingsEditorProps["permissions"];
+  permissionsKnown: boolean;
   query: string;
 };
 function PluginSettingsGroups(props: GroupsProps) {
@@ -229,7 +230,7 @@ function PluginSettingsGroups(props: GroupsProps) {
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     ),
   );
-  const query = () => props.query.trim().toLocaleLowerCase();
+  const query = () => props.query.trim().toLocaleLowerCase().normalize("NFC");
   const fields = createMemo(() =>
     object()
       .fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
@@ -245,6 +246,7 @@ function PluginSettingsGroups(props: GroupsProps) {
           ]
             .join(" ")
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(query()),
       ),
   );
@@ -335,7 +337,7 @@ function PluginSettingsGroups(props: GroupsProps) {
             />
           </EditorSection>
         ) : null}
-        {!fields().length && !additional() && !props.permissions ? (
+        {!fields().length && !additional() && !props.permissions && props.permissionsKnown ? (
           <SettingsEmpty
             message={t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
           />
@@ -364,11 +366,12 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
   const permissionFields = createMemo(
     () =>
       props.permissions?.fields.filter((field) => {
-        const search = query().trim().toLocaleLowerCase();
+        const search = query().trim().toLocaleLowerCase().normalize("NFC");
         return (
           !search ||
           `${t("pluginsPage.editor.permissions")} ${field.label} ${field.help ?? ""}`
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(search) ||
           matchesNodeSearch({ ...field, criteria: { text: search, tags: [] } })
         );
@@ -411,7 +414,10 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
           </label>
           <PluginSettingsReadStatus
             model={props.model}
-            loading={props.model.configSchemaLoading || !props.model.configValue}
+            loading={
+              props.model.configSchemaLoading ||
+              (!props.model.configValue && props.model.configBusy)
+            }
             rows={2}
             renderError={(error, retry) => (
               <InlineAlert tone="danger" role="alert">
@@ -426,6 +432,7 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
             <PluginSettingsDraft
               params={params()!}
               permissions={permissions()}
+              permissionsKnown={props.permissions?.known !== false}
               query={query()}
               onAskSetting={props.onAskSetting}
               resolveCredential={props.resolveCredential}

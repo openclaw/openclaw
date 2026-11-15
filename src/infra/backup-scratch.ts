@@ -46,7 +46,13 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
     ) {
       throw new Error("Backup scratch directory identity changed");
     }
-    return { directory, boundary, release: acquireSqliteStagingToken(directory, "create") };
+    // Backup roots have one owner; nested snapshots have their own reader-sharing
+    // tokens. Exclusive creation keeps reclamation out of the retirement handoff.
+    return {
+      directory,
+      boundary,
+      release: acquireSqliteStagingToken(directory, "create", { exclusiveCreate: true }),
+    };
   } catch (error) {
     // Busy or retired tokens belong to reclamation; leave that owner's cleanup intact.
     if (isSqliteLockError(error) || error instanceof SqliteStagingRetiredError) {

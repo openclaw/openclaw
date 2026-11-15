@@ -13,6 +13,11 @@ function NodeRow(props: {
   onRemove: (node: NodeRecord) => void;
 }) {
   const [confirming, setConfirming] = createSignal(false);
+  // A node carried by an owner device's approval belongs to that device.
+  const ownerDevice = () =>
+    props.node.ownerDevice
+      ? props.link.ownerDevices?.find((device) => device.deviceFp === props.node.ownerDevice)
+      : undefined;
   const addedBy = () =>
     props.node.addedBy === "root"
       ? "recovery kit"
@@ -21,16 +26,31 @@ function NodeRow(props: {
   return (
     <li class="ocid-access__row">
       <div class="ocid-access__node-info">
-        <div class="ocid-access__title">{props.node.label}</div>
+        <div class="ocid-access__title">
+          {ownerDevice() ? `${ownerDevice()!.label} · Your device` : props.node.label}
+        </div>
         <p class="ocid-access__hint ocid-access__node-details">
           {props.node.description.display_name} · {props.node.description.platform} · Last seen{" "}
-          {new Date(props.node.lastSeen * 1000).toLocaleString(props.locale)} · Added by {addedBy()}
+          {new Date(props.node.lastSeen * 1000).toLocaleString(props.locale)}
+          {ownerDevice() ? "" : ` · Added by ${addedBy()}`}
         </p>
         <Show when={confirming()}>
-          <p role="note">
-            Removing this node disconnects it and deletes its node pairing. It needs a new
-            invitation to return.
-          </p>
+          <Show
+            when={ownerDevice()}
+            fallback={
+              <p role="note">
+                Removing this node disconnects it and deletes its node pairing. It needs a new
+                invitation to return.
+              </p>
+            }
+          >
+            {(device) => (
+              <p role="note">
+                {device().label} stops running tools for this claw. It stays one of your devices and
+                can still open this claw. To remove the Mac completely, use Your devices.
+              </p>
+            )}
+          </Show>
         </Show>
       </div>
       <div class="ocid-access__actions">
@@ -39,11 +59,11 @@ function NodeRow(props: {
           fallback={
             <button
               type="button"
-              class="btn btn--sm ocid-access__node-remove"
+              class={ownerDevice() ? "btn btn--sm" : "btn btn--sm ocid-access__node-remove"}
               disabled={props.disabled}
               onClick={() => setConfirming(true)}
             >
-              Remove node
+              {ownerDevice() ? "Stop using for tools" : "Remove node"}
             </button>
           }
         >
@@ -56,7 +76,9 @@ function NodeRow(props: {
             disabled={props.disabled}
             onClick={() => props.onRemove(props.node)}
           >
-            Remove {props.node.label}
+            {ownerDevice()
+              ? `Stop using ${ownerDevice()!.label} for tools`
+              : `Remove ${props.node.label}`}
           </button>
         </Show>
       </div>

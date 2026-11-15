@@ -82,6 +82,7 @@ export class TranscriptLayoutOwner {
       font?.customTheme,
       props.showThinking,
       props.showToolCalls,
+      props.inlineCommands,
       props.persistCommentary,
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
       ...getExpandedToolCards(props.sessionKey),

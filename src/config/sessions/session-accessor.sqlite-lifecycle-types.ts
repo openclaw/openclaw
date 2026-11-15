@@ -178,6 +178,7 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 };
 
 export type SqliteSessionReclamationCallbacks = {
+  preparedReferenceOwners?: (sessionKey: string) => Map<string, string> | undefined;
   beforeMutation?: () => void;
   onCommit?: (database: OpenClawAgentDatabase, result?: SqliteSessionReclamationResult) => void;
   afterCommit?: () => void;

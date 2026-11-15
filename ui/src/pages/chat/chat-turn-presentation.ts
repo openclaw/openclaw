@@ -3,6 +3,13 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
+import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -20,6 +27,29 @@ import {
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
+
+export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false): boolean {
+  if (normalizeRoleForGrouping(group.role) !== "tool") {
+    return false;
+  }
+  if (
+    bubbleMode &&
+    group.messages.some(
+      (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
+    )
+  ) {
+    return false;
+  }
+  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  return (
+    bubbleMode ||
+    group.messages.length > 1 ||
+    cards.length > 1 ||
+    (cards.length === 0 &&
+      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
+    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+  );
+}
 
 type RenderChatItem = ChatItem | MessageGroup;
 export type StreamRunRenderItem = {
@@ -79,8 +109,6 @@ export type WorkGroupRenderItem = {
   replyRunId?: string;
   /** No visible reply owns this rollup; nested execution identities must not frame it. */
   ownerless?: true;
-  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
-  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -126,6 +154,15 @@ function groupHasFailedResult(group: MessageGroup): boolean {
 }
 
 function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean): boolean {
+  if (group.role.toLowerCase() === "tool") {
+    // Inspection media stays with its activity. Explicit inline widgets instead
+    // own a visible output surface, even when their source is a tool result.
+    return group.messages.some(({ message }) =>
+      normalizeMessage(message).content.some(
+        (part) => part.type === "canvas" && part.preview.surface === "assistant_message",
+      ),
+    );
+  }
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 
@@ -196,27 +233,18 @@ export function resolveTurnRunDurations(
       }
     }
   }
-  // Historical timing is prompt-to-last-persisted-write, not message creation
-  // or lifecycle runtime. Missing either same-run endpoint leaves it unavailable.
+  // Use the same persisted endpoints for newest and historical replies. Switching
+  // to lifecycle runtime here changes the clock when the session moves on.
+  // Missing either same-run endpoint leaves the elapsed duration unavailable.
   for (const [runId, startedAt] of starts) {
     const endedAt = ends.get(runId);
     if (endedAt !== undefined && endedAt >= startedAt) {
       durations.set(runId, endedAt - startedAt);
     }
   }
-  // The lifecycle owner takes precedence, including clearing an active or invalid
-  // current run instead of falling back to a partial transcript interval.
-  if (session?.lastRunId) {
+  // The live run has only a partial interval, not a completed duration.
+  if (session?.lastRunId && !TERMINAL_WORK_STATUSES.has(session.status ?? "")) {
     durations.delete(session.lastRunId);
-    const runtimeMs = session.runtimeMs;
-    if (
-      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
-      typeof runtimeMs === "number" &&
-      Number.isFinite(runtimeMs) &&
-      runtimeMs >= 0
-    ) {
-      durations.set(session.lastRunId, runtimeMs);
-    }
   }
   return durations;
 }
@@ -387,8 +415,6 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
-    const previewAfterGroup = new Map<string, string>();
-    let precedingAnswerKey: string | undefined;
     // CLI runtimes import tool rows and interim text without a run id; only the
     // persisted reply that follows them carries it. Such rows belong to that run.
     const workRunIds = new Set<string | undefined>();
@@ -411,12 +437,8 @@ export function collapseCompletedTurnWork(
           }
           workRunIds.add(runId);
         }
-        if (precedingAnswerKey) {
-          previewAfterGroup.set(item.key, precedingAnswerKey);
-        }
       } else {
         answers.push(item);
-        precedingAnswerKey = item.key;
       }
     }
     if (groups.length === 0) {
@@ -461,7 +483,6 @@ export function collapseCompletedTurnWork(
       // Above several runs' replies, work owned by none of them stays unframed
       // even when its rows share one run.
       ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
-      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));

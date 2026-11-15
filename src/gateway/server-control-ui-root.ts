@@ -47,6 +47,7 @@ type RootFiles = {
   cacheEnabled: boolean;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
   cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
+  assetNames?: Promise<Map<string, fs.Dirent> | null>;
 };
 type FileRuntime = {
   pool?: WorkerTaskPool<ControlUiFileRead, ControlUiFileSnapshot | null>;
@@ -54,6 +55,7 @@ type FileRuntime = {
 };
 const MAX_PREPARED_BYTES = 96 * 1024 * 1024;
 const MAX_PREPARED_ENTRIES = 2_048;
+const FINGERPRINTED_ASSET_NAME = /^[A-Za-z0-9_.-]+-[A-Za-z0-9_-]{8}\.(?:js|css)$/;
 
 function fileRuntime() {
   return resolveGlobalSingleton<FileRuntime>(
@@ -149,12 +151,61 @@ export function readControlUiRootAsset(
       filePath: path.resolve(root.path, fileRel),
       rejectHardlinks: root.kind !== "bundled",
     };
+    const assetDirectory =
+      root.kind === "bundled" &&
+      owner.cacheEnabled &&
+      root.realPath &&
+      preferences.length > 0 &&
+      preferences[0] !== "identity"
+        ? path.join(root.realPath, "assets")
+        : undefined;
+    const listAssetNames = () =>
+      assetDirectory
+        ? (owner.assetNames ??= fs.promises
+            .readdir(assetDirectory, { withFileTypes: true })
+            // Presence remains conservative on case-insensitive filesystems;
+            // only an exact ordinary filename can select the initial body read.
+            .then((entries) => new Map(entries.map((entry) => [entry.name.toLowerCase(), entry])))
+            .catch(() => null))
+        : Promise.resolve(null);
+    const requestedName = path.basename(fileRel);
+    const requestedNames =
+      assetDirectory &&
+      path.dirname(fileRel) === "assets" &&
+      FINGERPRINTED_ASSET_NAME.test(requestedName)
+        ? await listAssetNames()
+        : null;
+    owner.controller.signal.throwIfAborted();
+    const requestedEntry = requestedNames?.get(requestedName.toLowerCase());
+    const identityIndex = preferences.indexOf("identity");
+    const knownIdentity =
+      requestedEntry?.name === requestedName &&
+      requestedEntry.isFile() &&
+      identityIndex >= 0 &&
+      preferences
+        .slice(0, identityIndex)
+        .every(
+          (encoding) =>
+            !requestedNames?.has(
+              `${requestedName}.${encoding === "br" ? "br" : "gz"}`.toLowerCase(),
+            ),
+        );
     // Pin the source's metadata and canonical path even when serving a sidecar.
-    const file = await read(location, readBody && preferences[0] === "identity");
+    // Known identity-only bundled files need one admitted read for metadata and body.
+    const file = await read(location, readBody && (preferences[0] === "identity" || knownIdentity));
     if (!file) {
       return null;
     }
+    owner.controller.signal.throwIfAborted();
     const asset: ControlUiRootAsset = { file };
+    // Optional variants are sparse. One listing per bundled root generation
+    // avoids opening known-absent sidecars; canonical admission still owns every read.
+    const assetNames =
+      assetDirectory &&
+      path.dirname(file.path) === assetDirectory &&
+      FINGERPRINTED_ASSET_NAME.test(path.basename(file.path))
+        ? (requestedNames ?? (await listAssetNames()))
+        : null;
     for (const encoding of preferences) {
       if (encoding === "identity") {
         if (readBody && !file.body) {
@@ -166,10 +217,13 @@ export function readControlUiRootAsset(
         }
         break;
       }
-      const sidecar = await read(
-        { ...location, filePath: `${file.path}${encoding === "br" ? ".br" : ".gz"}` },
-        readBody,
-      ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+      const sidecarPath = `${file.path}${encoding === "br" ? ".br" : ".gz"}`;
+      if (assetNames && !assetNames.has(path.basename(sidecarPath).toLowerCase())) {
+        continue;
+      }
+      const sidecar = await read({ ...location, filePath: sidecarPath }, readBody).catch(
+        (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+      );
       asset[encoding] = sidecar;
       // A missing file falls through; the selector owns errors for the chosen encoding.
       if (sidecar) {
@@ -373,6 +427,7 @@ export function createGatewayControlUiRootLifecycle(
       const files = rootFiles(fileRuntime(), state);
       files.cacheEnabled = enabled;
       files.cached.clear();
+      files.assetNames = undefined;
       if (enabled) {
         if (state.kind === "failed") {
           Object.assign(state, { kind: "preparing" });
@@ -389,6 +444,7 @@ export function createGatewayControlUiRootLifecycle(
       // Retire even an unused root: a late HTTP handler must not start its first read after stop.
       const files = rootFiles(fileRuntime(), state);
       files.controller.abort();
+      files.assetNames = undefined;
       await Promise.allSettled(files.pending.values());
       files.cached.clear();
     },

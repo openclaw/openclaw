@@ -1,2 +1,0 @@
-34
-# Packaged Bun postinstall crosses an unavailable Node sentinel; preinstall stays fail-closed.

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 import Synchronization
 import Testing
 import UniformTypeIdentifiers
@@ -141,6 +142,49 @@ struct ChatComposerStateTests {
         #expect(
             changes.withLock { $0 } == 0,
             "Constructing the closed picker must not group or observe the full catalog")
+    }
+
+    @Test func `slash panel owns draft observation rather than its construction caller`() throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        defer { vm.detachTransport() }
+        vm.input = "/"
+        let composer = OpenClawChatComposer(
+            viewModel: vm,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: .clean,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        // Exercise the production boundary without pretending to measure mounted SwiftUI body work.
+        let constructionChanges = Mutex(0)
+        let panel = withObservationTracking {
+            composer.slashCommandPanel
+        } onChange: {
+            constructionChanges.withLock { $0 += 1 }
+        }
+
+        vm.input = "/skill"
+
+        try #require(
+            constructionChanges.withLock { $0 } == 0,
+            "Constructing the production slash panel must not subscribe its caller to the draft")
+
+        let bodyChanges = Mutex(0)
+        withObservationTracking {
+            withExtendedLifetime(panel.body) {}
+        } onChange: {
+            bodyChanges.withLock { $0 += 1 }
+        }
+
+        vm.input = "/skill calendar"
+
+        #expect(bodyChanges.withLock { $0 } == 1, "The panel body must still observe query edits")
+        #expect(constructionChanges.withLock { $0 } == 0)
     }
 
     @Test(arguments: ComposerRouteTransition.allCases)

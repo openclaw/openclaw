@@ -27,7 +27,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
-import type { CompactionRequestBudget } from "./compaction/request-budget.js";
+import type { CompactionRequestBudget } from "./compaction/request-budget.types.js";
 import {
   type ExtensionCommandContextActions,
   type ExtensionErrorListener,

@@ -74,11 +74,15 @@ export type SqliteAuthProfileReadOptions = {
   source: "canonical" | "snapshot";
   expectedIdentity: string;
   artifactPreserving?: true;
+  immutable?: true;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   stagingRoot?: never;
 };
-export type SqliteReadOnlyOperationOptions = Omit<SqliteAuthProfileReadOptions, "mode"> & {
+export type SqliteReadOnlyOperationOptions = Omit<
+  SqliteAuthProfileReadOptions,
+  "mode" | "immutable"
+> & {
   mode: "operation";
   command: SqliteReadOnlyOperationCommand;
 };

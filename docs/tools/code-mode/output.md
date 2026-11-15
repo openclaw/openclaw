@@ -427,5 +427,5 @@ still shorten or replace historical tool text. Already-sent results stay
 unchanged during ordinary continuation. Conventional tools keep their own text
 and image formats: a declared output schema describes `details`, not model-visible
 text. The file-read producer reserves its exact paging footer within the same
-model limits, and oversized skill instructions are refused rather than silently
-served in part.
+model limits. Oversized skill instructions page through that same continuation
+rather than being silently served in part.

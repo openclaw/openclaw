@@ -72,6 +72,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
   function tool(
     autoReviewer: ExecAutoReviewer,
@@ -137,6 +138,57 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(review).not.toHaveBeenCalled();
     expect(boundary.spawn).not.toHaveBeenCalled();
   });
+
+  it.each(["/bin/bash", "/usr/bin/false"])(
+    "executes a safe-bin pipeline without synchronous probes (SHELL=%s)",
+    async (shell) => {
+      vi.stubEnv("SHELL", shell);
+      const syncCalls: string[] = [];
+      const ownerCall = (method: string) => {
+        if (
+          /\/(?:exec-safe-bin-trust|exec-command-resolution|executable-path|system-run-(?:cwd-binding|file-snapshot|mutable-file-(?:operand|policy)|approval-binding))\.(?:ts|js):/.test(
+            new Error().stack ?? "",
+          )
+        ) {
+          syncCalls.push(method);
+        }
+      };
+      const statSync = fs.statSync;
+      const accessSync = fs.accessSync;
+      const realpathSync = fs.realpathSync;
+      vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+        ownerCall("stat");
+        return statSync(file, options);
+      });
+      vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+        ownerCall("access");
+        return accessSync(file, mode);
+      });
+      vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+        ownerCall("realpath");
+        return realpathSync(file, options);
+      });
+      const exec = createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode: "allowlist",
+        safeBins: ["wc"],
+        cwd: root,
+        notifyOnExit: false,
+      });
+      const result = await exec.execute("safe-bin-pipeline", {
+        command: "pwd | wc -l",
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: expect.stringMatching(/^\s*1\s*$/),
+      });
+      expect(boundary.spawn).toHaveBeenCalledTimes(1);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(syncCalls).toEqual([]);
+    },
+  );
 
   it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
     saveExecApprovals({
