@@ -16,6 +16,7 @@ import {
   formatSqliteErrorCodeSuffix,
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
+  sqliteExtendedResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import {
@@ -72,6 +73,8 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       mode !== "staged-sync" &&
       mode !== "staged-async" &&
       mode !== "metadata" &&
+      mode !== "backup-engine" &&
+      mode !== "backup-engine-preserving" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -89,6 +92,8 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         mode !== "sync" &&
         mode !== "staged-sync" &&
         mode !== "metadata" &&
+        mode !== "backup-engine" &&
+        mode !== "backup-engine-preserving" &&
         mode !== "private-fork")
     ) {
       throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
@@ -100,6 +105,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const staged = mode === "staged-sync" || mode === "staged-async";
     if (staged && !stagingRoot) {
       throw new Error("SQLite staged snapshot requires its owner-allocated directory");
+    }
+    if (mode === "backup-engine" || mode === "backup-engine-preserving") {
+      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      return {
+        ok: true,
+        engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),
+      };
     }
     if (mode === "update-generation") {
       const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
@@ -227,8 +239,14 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const prefix =
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
+    // Only engine probes transport native codes; released snapshot responses stay unchanged.
+    const errcode =
+      mode === "backup-engine" || mode === "backup-engine-preserving"
+        ? sqliteExtendedResultCode(error)
+        : undefined;
     return {
       ok: false,
+      ...(errcode === undefined ? {} : { errcode }),
       message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
     };
   }

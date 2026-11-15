@@ -1,0 +1,2 @@
+5
+# Preserve native SQLite errcode metadata in the unreadable backup-engine regression test.

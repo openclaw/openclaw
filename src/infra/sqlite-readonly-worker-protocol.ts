@@ -1,7 +1,8 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { BackupEngine } from "./database-engine/physical-store.js";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {
@@ -15,6 +16,8 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
+  | "backup-engine"
+  | "backup-engine-preserving"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -41,11 +44,12 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 }
 
 export type SqliteReadOnlyWorkerResult =
+  | { ok: true; engine: BackupEngine }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
   | { ok: true; warnings: string[] }
-  | { ok: false; message: string };
+  | { ok: false; message: string; errcode?: number };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
 
@@ -128,6 +132,7 @@ export type SqliteReadOnlyWorkerOutput =
     }
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
+  | BackupEngine
   | string
   | string[]
   | SqliteAuthProfileRows
@@ -138,18 +143,40 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
+  if (
+    "ok" in value &&
+    value.ok === false &&
+    "message" in value &&
+    typeof value.message === "string"
+  ) {
+    return (
+      Object.keys(value).length === 2 ||
+      (Object.keys(value).length === 3 &&
+        "errcode" in value &&
+        typeof value.errcode === "number" &&
+        Number.isInteger(value.errcode) &&
+        value.errcode >= 0 &&
+        value.errcode <= 0x7fff_ffff)
+    );
+  }
   if (Object.keys(value).length !== 2 || !("ok" in value)) {
     return false;
   }
   return (
+    (value.ok === true &&
+      "engine" in value &&
+      isRecord(value.engine) &&
+      (value.engine.engine === "sqlite" ||
+        (value.engine.engine === "postgres" &&
+          typeof value.engine.storeId === "string" &&
+          typeof value.engine.namespace === "string"))) ||
     (value.ok === true && "location" in value && typeof value.location === "string") ||
     (value.ok === true &&
       "contentVersion" in value &&
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true && "generation" in value && typeof value.generation === "string") ||
-    (value.ok === true && "warnings" in value && isStringArray(value.warnings)) ||
-    (value.ok === false && "message" in value && typeof value.message === "string")
+    (value.ok === true && "warnings" in value && isStringArray(value.warnings))
   );
 }
 
@@ -185,6 +212,10 @@ function parseSqliteReadOnlyWorkerResult(
   return message;
 }
 
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "backup-engine" | "backup-engine-preserving",
+): BackupEngine;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode:
@@ -240,6 +271,14 @@ export function readSqliteReadOnlyWorkerValue(
       params.stderr,
       { cause: params.cause },
     );
+    if (
+      !result.ok &&
+      result.errcode !== undefined &&
+      (mode === "backup-engine" || mode === "backup-engine-preserving") &&
+      (params.status === 0 || params.status === 1)
+    ) {
+      Object.assign(error, { errcode: result.errcode });
+    }
     if (contention) {
       const failure = new SqliteReadOnlyInspectionContentionError(error.message);
       throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
@@ -258,6 +297,9 @@ export function readSqliteReadOnlyWorkerValue(
     "location" in result
   ) {
     return result.location;
+  }
+  if ((mode === "backup-engine" || mode === "backup-engine-preserving") && "engine" in result) {
+    return result.engine;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

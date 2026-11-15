@@ -351,6 +351,7 @@ it.each(["sync", "async"] as const)(
     const { cache } = createFixture();
     const abandoned = createSqliteSnapshotStagingDirectorySync(cache);
     fs.writeFileSync(path.join(abandoned, "database.sqlite"), "recent private snapshot");
+    fs.writeFileSync(path.join(abandoned, "database.sqlite.partial"), "interrupted compaction");
     releaseSnapshotTempDirectory(abandoned);
 
     const allocated = createSqliteSnapshotStagingDirectorySync(cache);

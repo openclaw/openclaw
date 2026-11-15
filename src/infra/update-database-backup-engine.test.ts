@@ -405,7 +405,6 @@ it.each(["acquisition", "settlement"] as const)(
     const f = await fixture();
     const failure = new Error(`generation ${phase} unavailable`);
     const before = fs.readFileSync(f.shared);
-    const engineImages = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
     if (phase === "acquisition") {
       f.generationImages.mockImplementationOnce(() => {
         throw failure;
@@ -417,9 +416,6 @@ it.each(["acquisition", "settlement"] as const)(
     }
 
     const backup = await f.capture();
-    expect(engineImages.mock.calls.map(([file]) => file)).toEqual(
-      phase === "acquisition" ? [f.shared] : [],
-    );
     expect(f.generationImages.mock.calls.map(([file]) => file)).toEqual([f.shared, f.shared]);
     expect(backup.sourceGenerations[f.shared]).toBeUndefined();
     expect(backup.warnings).toEqual(
