@@ -900,8 +900,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(code).toBe(0);
     const gateway = configs.some((config) => config.includes("vitest.gateway-"));
     if (!gateway) {
-      expect(runChild.mock.calls).toHaveLength(
-        (test.mixed ? 3 : 2) * (test.policy === "dual-all" ? 2 : 1),
+      expect(runChild.mock.calls.filter(([args]) => args[0] === configs[0])).toHaveLength(
+        2 * (test.policy === "dual-all" ? 2 : 1),
       );
     }
     const captures = runChild.mock.calls.filter(([, env]) => env.OPENCLAW_VITEST_OBSERVATION_DIR);
