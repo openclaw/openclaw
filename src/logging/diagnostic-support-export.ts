@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { readRegularFileSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
@@ -11,7 +11,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { collectRuntimeCapabilities } from "../infra/runtime-capabilities.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -425,6 +425,21 @@ function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
   return summary;
 }
 
+/**
+ * Resolve an explicit `--output` through the filesystem, so a directory symlink
+ * followed by `..` names the directory the operator selected instead of a
+ * lexically equal sibling. An input whose parent chain is not created yet keeps
+ * the previous lexical result: no symlink can redirect a missing segment.
+ */
+function resolveSupportExportPath(raw: string): string {
+  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
+  const parent = resolvePathPrefixSync(path.dirname(expanded));
+  if (parent.unresolvedSegments.includes("..")) {
+    return path.resolve(expanded);
+  }
+  return path.join(parent.existingPath, ...parent.unresolvedSegments, path.basename(expanded));
+}
+
 export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
   const env = process.env;
   const stateDir = resolveStateDir(env);
@@ -436,7 +451,7 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
   if (!raw) {
     outputPath = path.join(stateDir, "logs", "support", filename);
   } else {
-    const resolved = raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
+    const resolved = resolveSupportExportPath(raw);
     outputPath = resolved;
     try {
       if (fs.statSync(resolved).isDirectory()) {
