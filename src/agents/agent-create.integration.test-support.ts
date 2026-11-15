@@ -4,6 +4,13 @@ import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  FsSafeStoreCommand,
+  FsSafeStoreReply,
+} from "../infra/fs-safe-copy-worker-contract.js";
+import * as filesystemWorker from "../infra/fs-safe-filesystem-worker.js";
+import { withWorkerFsSafeNativeMode } from "../infra/worker-fs-safe.js";
+import { workerMutationAssertion } from "../infra/worker-mutation-authority.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
@@ -21,6 +28,13 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import type {
+  WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
+  WorkspaceFilesystemReply,
+} from "./workspace-filesystem.types.js";
+import { executeWorkspaceFilesystemOperation } from "./workspace-filesystem.worker.js";
 
 export async function createAgentTestState(
   label: string,
@@ -86,6 +100,7 @@ export function installWorkspacePreparationPause(
   workspace: string,
   phase: PreparationPhase,
   pause: (phase: PreparationPhase) => Promise<void>,
+  signal: AbortSignal,
 ): () => void {
   const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
   if (phase === "workspace-write") {
@@ -124,7 +139,49 @@ export function installWorkspacePreparationPause(
     }
     return handle;
   });
+  const run = filesystemWorker.runFsSafeFilesystemTask;
+  type Options = Parameters<typeof run>[1];
+  function intercept(
+    command: WorkspaceFilesystemReadCommand,
+    options?: Options,
+  ): Promise<WorkspaceFilesystemReadReply>;
+  function intercept(
+    command: WorkspaceFilesystemCommand,
+    options?: Options,
+  ): Promise<WorkspaceFilesystemReply>;
+  function intercept(command: FsSafeStoreCommand, options?: Options): Promise<FsSafeStoreReply>;
+  function intercept(
+    command: WorkspaceFilesystemReadCommand | WorkspaceFilesystemCommand | FsSafeStoreCommand,
+    options?: Options,
+  ) {
+    if (command.type === "workspace") {
+      if (command.operation.kind === "publish" && command.operation.dir === workspace) {
+        const notify = options?.onNotification;
+        if (!notify) {
+          throw new Error("Bootstrap publication must retain its live authority callback");
+        }
+        // Keep the real write/cleanup owner beside this fixture's mid-write pause.
+        return withWorkerFsSafeNativeMode(command.nativeMode, () =>
+          executeWorkspaceFilesystemOperation(
+            command,
+            workerMutationAssertion(
+              command.decision,
+              () => notify("authority"),
+              () => signal.throwIfAborted(),
+            ),
+          ),
+        );
+      }
+      return run(command, options);
+    }
+    return command.type === "workspace-read" ? run(command, options) : run(command, options);
+  }
+  const dispatch =
+    phase === "workspace-write"
+      ? vi.spyOn(filesystemWorker, "runFsSafeFilesystemTask").mockImplementation(intercept)
+      : undefined;
   return () => {
+    dispatch?.mockRestore();
     open.mockRestore();
     for (const restore of restoreWrites) {
       restore();

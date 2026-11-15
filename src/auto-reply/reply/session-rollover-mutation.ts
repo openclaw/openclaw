@@ -4,6 +4,8 @@ import {
   SessionMutationPreemptTimeoutError,
   type SessionMutationPreemptOptions,
 } from "../../sessions/session-controller.mutation-preemption.js";
+import { ReplySessionInitConflictError } from "./session-init-conflict-retry.js";
+import { SessionResetCleanupConflictError } from "./session-reset-cleanup.js";
 
 type StopChildren = NonNullable<SessionMutationPreemptOptions["stopChildren"]>;
 
@@ -40,6 +42,10 @@ export async function runReplySessionRolloverMutation<T>(params: {
       run: params.run,
     });
   } catch (error) {
+    if (params.explicitReset && error instanceof SessionResetCleanupConflictError) {
+      // Retry only after the mutation has joined the interrupted owners and released its fence.
+      throw new ReplySessionInitConflictError(params.sessionKey);
+    }
     if (error instanceof SessionMutationPreemptTimeoutError) {
       throw new Error(
         `timed out draining work before reply session rollover: ${params.sessionKey}`,

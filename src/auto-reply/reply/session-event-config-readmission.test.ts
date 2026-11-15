@@ -241,7 +241,7 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         expect(executionScope).toHaveBeenCalledOnce();
         expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
         expect(outcome).toMatchObject({ status: "failed", executionStarted: true });
-        expect(outcome.error).not.toContain("Plugin invocation scope is closed");
+        expect(outcome.error).not.toContain("reloaded or disabled");
         expect(outcome.error).toContain("couldn't finish this reply");
         expect(check.mock.results.some((result) => result.type === "return" && result.value)).toBe(
           true,
