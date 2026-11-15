@@ -4,6 +4,7 @@ import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
+import { formatCronCadence } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { FailureDetails } from "./view-attention.tsx";
 import {
@@ -118,9 +119,14 @@ function DetailHeader(
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunSuffix = () =>
     props.selectedJob ? ` · ${describeJobNextRun(props.selectedJob)}` : "";
+  // The cadence reads as the Automations sidebar does ("Daily"); event triggers keep their source.
   const subtitle = () =>
     props.mode === "job" && props.selectedJob
-      ? `${describeJobSchedule(props.selectedJob)}${nextRunSuffix()}`
+      ? `${
+          props.selectedJob.schedule.kind === "event"
+            ? describeJobSchedule(props.selectedJob)
+            : formatCronCadence(props.selectedJob)
+        }${nextRunSuffix()}`
       : t("cron.detail.newSubtitle");
   return (
     <div class="cron-detail-header">
