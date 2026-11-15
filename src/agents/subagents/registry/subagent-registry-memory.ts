@@ -15,7 +15,10 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
-import { hasSameSubagentCompletionSource } from "./subagent-completion-source.js";
+import {
+  hasSharedSubagentCompletionRequester,
+  hasSameSubagentCompletionSource,
+} from "./subagent-completion-source.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
@@ -392,18 +395,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   ): T {
     const batch = observed.map((entry) => this.currentValue(entry));
     batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
+    const sources = batch.map(
+      (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
+    );
+    const sameRequester = hasSharedSubagentCompletionRequester(sources);
     const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
     if (!resultEntry) {
-      const sources = batch.map(
-        (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
-      );
       const first = sources[0];
-      const original = first?.operatorAuthority;
       // A cancellation-only cohort can share its retained requester. Otherwise its
       // independently admitted cancellation caller still owns the notices.
       if (
-        !first ||
-        !original ||
+        !first?.operatorAuthority ||
+        !sameRequester ||
         sources.some((source) => !hasSameSubagentCompletionSource(source, first))
       ) {
         return run();
@@ -424,7 +427,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         throw new Error("Subagent completion batch has incompatible operator authority");
       }
     }
-    return this.runWithCompletionAuthority(resultEntry, run);
+    // Mixed humans keep the existing operator-owned delivery path. Never select
+    // one member's personal identity for the whole wave, or strand its results.
+    return this.runWithCompletionAuthority(resultEntry, (authority) =>
+      run(sameRequester ? authority : undefined),
+    );
   }
 
   /** Committed replacement transfers custody without reviving a retired source. */
