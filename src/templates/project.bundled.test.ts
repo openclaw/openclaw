@@ -62,35 +62,6 @@ describe("bundled Template project sources", () => {
       ]);
     },
   );
-  it.each(["checked", "other"])(
-    "plans bundled and referenced skills with explicit destination conflicts (%s)",
-    async (ref) => {
-      const root = await project([{ path: "bundles/checked" }, { ref, version: "1.0.0" }]);
-      const validated = await validateTemplateProject(root);
-      assert(validated.ok, JSON.stringify(validated.diagnostics));
-      const plan = await buildTemplateAddPlan({
-        ...validated.template,
-        context: {
-          workspace: join(root, "new-workspace"),
-          config: {},
-          packagePreflight: async (dependency, workspace, source) =>
-            dependency.source === "bundled"
-              ? preflightTemplatePackage(dependency, workspace, { ...source, config: {} })
-              : { ok: true, action: "install", integrity: `sha256:${"a".repeat(64)}` },
-        },
-      });
-      if (ref === "checked") {
-        expect(plan.blockers).toContainEqual(
-          expect.objectContaining({ code: "bundled_skill_collision" }),
-        );
-      } else {
-        expect(plan.blockers).toEqual([]);
-        expect(
-          plan.actions.filter((action) => action.kind === "package").map((action) => action.target),
-        ).toEqual(["bundled:bundles/checked", "clawhub:other@1.0.0"]);
-      }
-    },
-  );
   it("blocks two bundled plugin folders that share a plugin id", async () => {
     const root = await project([]);
     for (const folder of ["one", "two"]) {
@@ -132,6 +103,35 @@ describe("bundled Template project sources", () => {
       }),
     ]);
   });
+  it.each(["checked", "other"])(
+    "plans bundled and referenced skills with explicit destination conflicts (%s)",
+    async (ref) => {
+      const root = await project([{ path: "bundles/checked" }, { ref, version: "1.0.0" }]);
+      const validated = await validateTemplateProject(root);
+      assert(validated.ok, JSON.stringify(validated.diagnostics));
+      const plan = await buildTemplateAddPlan({
+        ...validated.template,
+        context: {
+          workspace: join(root, "new-workspace"),
+          config: {},
+          packagePreflight: async (dependency, workspace, source) =>
+            dependency.source === "bundled"
+              ? preflightTemplatePackage(dependency, workspace, { ...source, config: {} })
+              : { ok: true, action: "install", integrity: `sha256:${"a".repeat(64)}` },
+        },
+      });
+      if (ref === "checked") {
+        expect(plan.blockers).toContainEqual(
+          expect.objectContaining({ code: "bundled_skill_collision" }),
+        );
+      } else {
+        expect(plan.blockers).toEqual([]);
+        expect(
+          plan.actions.filter((action) => action.kind === "package").map((action) => action.target),
+        ).toEqual(["bundled:bundles/checked", "clawhub:other@1.0.0"]);
+      }
+    },
+  );
   it("packs deterministic binary contents while excluding repository and installed dependencies", async () => {
     const root = await project();
     const skill = join(root, "bundles", "checked");
