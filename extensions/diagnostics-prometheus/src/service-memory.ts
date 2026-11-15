@@ -137,7 +137,7 @@ export function recordMemorySample(
         const componentLabels = { request_class: requestClass, component };
         store.counterValue(
           "openclaw_worker_authority_component_sampled_bytes_total",
-          "Sampled worker-to-main actor facts bytes; marginal V8 sizes, one in 128 operations.",
+          "Sampled worker-to-main actor facts bytes; marginal V8 sizes, one in 128 operations on average.",
           componentLabels,
           sample.bytes,
         );

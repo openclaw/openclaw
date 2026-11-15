@@ -41,20 +41,13 @@ export type WorkerMessageMetric = {
   payloadComponents?: Record<string, Partial<Record<AuthorityComponent, ComponentSample>>>;
 };
 
-const authorityOperations = resolveGlobalSingleton(
-  Symbol.for("openclaw.workerAuthorityPayloadSamples"),
-  () => new Map<string, number>(),
-);
-
-/** Select whole operations, not periodic frames that can alias transaction/commit stages. */
+/** Whole-operation Bernoulli samples avoid aliasing alternating user/assistant appends. */
 function sampleWorkerAuthorityOperation(requestClass: string | undefined): boolean {
-  const label = normalizeWorkerRequestClass(requestClass);
-  if (!isMainThread || !label.startsWith("session.actor.")) {
-    return false;
-  }
-  const sequence = authorityOperations.get(label) ?? 0;
-  authorityOperations.set(label, (sequence + 1) % 128);
-  return sequence === 0;
+  return (
+    isMainThread &&
+    normalizeWorkerRequestClass(requestClass).startsWith("session.actor.") &&
+    Math.random() < 1 / 128
+  );
 }
 
 /** The admission owner retains this sampling decision for all frames in one operation. */

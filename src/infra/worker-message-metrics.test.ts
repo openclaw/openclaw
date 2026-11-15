@@ -150,6 +150,8 @@ describe("worker message metrics", () => {
 });
 
 it.each([false, true])("samples complete actor operations with entry reference=%s", (reference) => {
+  let draw = 0;
+  using random = vi.spyOn(Math, "random").mockImplementation(() => ((draw++ % 128) + 0.5) / 128);
   const requestClass = "session.actor.appendTranscriptEvent";
   const read = () =>
     getWorkerMessageMetrics().find(
@@ -222,6 +224,7 @@ it.each([false, true])("samples complete actor operations with entry reference=%
       void admission.finish();
     }
   }
+  expect(random).toHaveBeenCalledTimes(128);
   const after = read();
   const delta = (component: keyof NonNullable<typeof after>, field: "bytes" | "samples") =>
     (after?.[component]?.[field] ?? 0) - (before?.[component]?.[field] ?? 0);

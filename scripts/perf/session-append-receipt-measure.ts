@@ -12,9 +12,10 @@
  * excludes fixture preparation and sender-thread CPU. This is not Gateway load proof.
  * --authority replays all native authority frames per append through the byte counter;
  * Use --sessions 2 --rows 4 for resident and --sessions 100 --rows 4 for evicted entries.
- * Compare timing and allocation separately, counterbalanced, >=2000 iterations/arm.
+ * Each replay arm warms 8192 appends; compare timing and allocation separately, >=2000 measured appends/arm.
  * --compare-metrics-file <baseline> runs AB/BA plus A/A in one process on the same captured frames.
  * The saved baseline exports recordWorkerAuthorityMessage as the original counter call returning false.
+ * --extra-pair runs only one additional AB pair after a mixed-sign result.
  * Authority acceptance: unchanged frames, <=3% added main/worker CPU per append.
  */
 import assert from "node:assert/strict";
@@ -45,9 +46,11 @@ const { values } = parseArgs({
     "check-compact": { type: "boolean", default: false },
     authority: { type: "boolean", default: false },
     "compare-metrics-file": { type: "string" },
+    "extra-pair": { type: "boolean", default: false },
   },
 });
 assert(values.output && ["census", "timing", "allocation"].includes(values.mode));
+assert(!values["extra-pair"] || values["compare-metrics-file"]);
 const iterations = Number(values.iterations),
   rounds = Number(values.rounds),
   sessions = Number(values.sessions),
@@ -333,7 +336,10 @@ try {
           continue;
         }
         if (values.authority) {
-          assert(currentFrames.some((frame) => frame.kind === "native-settlement"));
+          assert.equal(
+            currentFrames.filter((frame) => frame.kind === "native-settlement").length,
+            1,
+          );
           authorityFrames.push(currentFrames);
         }
         requestBytes += metric("sqlite_request") - requestsBefore;
@@ -402,9 +408,11 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
     `const { parentPort, workerData } = require('node:worker_threads');
     let sent = 0;
     let cpuUs = 0;
-    parentPort.on('message', () => {
+    let limit = 0;
+    parentPort.on('message', (count) => {
+      if (typeof count === 'number') { sent = 0; cpuUs = 0; limit = count; }
       const cpu = process.threadCpuUsage();
-      const end = Math.min(sent + 32, workerData.iterations);
+      const end = Math.min(sent + 32, limit);
       while (sent < end) {
         const item = workerData.receipts[sent++ % workerData.receipts.length];
         if (workerData.authority) {
@@ -413,7 +421,7 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
       }
       const used = process.threadCpuUsage(cpu);
       cpuUs += used.user + used.system;
-      if (sent === workerData.iterations) parentPort.postMessage({ benchmarkCpuUs: cpuUs });
+      if (sent === limit) parentPort.postMessage({ benchmarkCpuUs: cpuUs });
     });
     parentPort.postMessage('ready');`,
     {
@@ -425,39 +433,18 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
       },
     },
   );
-  const inspector = new Session(),
-    gc = new GCProfiler();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      worker.once("message", () => resolve());
-      worker.once("error", reject);
-    });
-    globalThis.gc?.();
-    await setImmediate();
-    if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
-    }
-    const memoryBefore = process.memoryUsage(),
-      hostLoadBefore = loadavg();
-    gc.start();
-    const cpu = process.threadCpuUsage(),
-      start = performance.now();
-    const metricsBefore = getWorkerMessageMetrics();
-    let workerCpuUs = 0;
-    await new Promise<void>((resolve, reject) => {
+  const replayFrames = (count: number) =>
+    new Promise<number>((resolve, reject) => {
       let received = 0;
       let samplePayload: boolean | undefined;
       worker.once("error", reject);
-      worker.on("message", (message: unknown) => {
+      const onMessage = (message: unknown) => {
         assert(isRecord(message));
         if (typeof message.benchmarkCpuUs === "number") {
-          workerCpuUs = message.benchmarkCpuUs;
-          resolve();
+          assert.equal(received, count);
+          worker.off("message", onMessage);
+          worker.off("error", reject);
+          resolve(message.benchmarkCpuUs);
           return;
         }
         if (values.authority) {
@@ -475,12 +462,39 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
           assert(message.kind === "committed");
         }
         received++;
-        if (received < iterations && received % 32 === 0) {
+        if (received < count && received % 32 === 0) {
           worker.postMessage("next", []);
         }
-      });
-      worker.postMessage("next", []);
+      };
+      worker.on("message", onMessage);
+      worker.postMessage(count, []);
     });
+
+  const inspector = new Session(),
+    gc = new GCProfiler();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.once("message", () => resolve());
+      worker.once("error", reject);
+    });
+    await replayFrames(8192);
+    globalThis.gc?.();
+    await setImmediate();
+    if (values.mode === "allocation") {
+      inspector.connect();
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval: 32768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
+    const memoryBefore = process.memoryUsage(),
+      hostLoadBefore = loadavg();
+    gc.start();
+    const cpu = process.threadCpuUsage(),
+      start = performance.now();
+    const metricsBefore = getWorkerMessageMetrics();
+    const workerCpuUs = await replayFrames(iterations);
     const used = process.threadCpuUsage(cpu),
       elapsedMs = performance.now() - start;
     const pauses = gc.stop();
@@ -491,6 +505,7 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
         : undefined;
     const replay = {
       arm,
+      warmupIterations: 8192,
       iterations,
       elapsedMs,
       mainThreadCpuUsPerReceipt: (used.user + used.system) / iterations,
@@ -518,7 +533,9 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
 }
 if (values.mode !== "census") {
   for (const arm of baselineMetrics
-    ? ["base", "candidate", "candidate", "base", "base", "base"]
+    ? values["extra-pair"]
+      ? ["base", "candidate"]
+      : ["base", "candidate", "candidate", "base", "base", "base"]
     : ["candidate"]) {
     replays.push(await measureReplay(arm));
   }

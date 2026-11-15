@@ -318,8 +318,8 @@ instead of appearing as measured zero-byte messages. Compare byte rankings with
 this coverage counter before drawing conclusions; nested worker-to-worker traffic
 does not cross the main-thread boundary.
 
-Actor authority component counters sample one complete operation in 128, separately
-for each fixed `session.actor.*` request class. They include native admission facts
+Actor authority component counters independently sample each complete operation
+with probability 1/128, grouped by fixed `session.actor.*` request class. They include native admission facts
 that have no `payloadBytes` and therefore remain absent from the older payload byte
 counter. The older counter is unchanged: do not add it to the sampled series.
 Only numbers and fixed labels are retained; sampling does not change worker frames.
@@ -351,7 +351,8 @@ scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class=
 Check sample counts and unmeasured samples before interpreting a short window.
 Rejected admissions can contribute bytes without a receipt; oversized transferred
 outcomes appear under admission-other rather than decoded receipt components.
-Systematic sampling can correlate with periodic workloads; compare longer windows.
+Independent sampling avoids aliasing alternating user/assistant appends; use longer
+windows when sample counts are low.
 
 Foreign Worker instances with accessor or read-only methods, or nonextensible
 instances, retain CPU and lifecycle tracking but exclude per-message traffic.
