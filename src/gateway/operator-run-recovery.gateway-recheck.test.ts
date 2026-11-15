@@ -7,9 +7,11 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import {
   type createOperatorRecoveryFixture,
@@ -17,7 +19,13 @@ import {
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
 import { isScheduledOccurrenceCommandAuthorized } from "./plugin-command-scheduled-run.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
+import { registerIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
 
 type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
 
@@ -188,4 +196,146 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
       expect(outcomes).toContain(false);
     });
   });
+});
+
+// A remote person needs trusted-proxy auth and named roles to resume, as on the live ingress.
+const REMOTE_PERSON_CONFIG: OpenClawConfig = {
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+      },
+    },
+    roles: {
+      default: "writer",
+      definitions: {
+        writer: {
+          scopes: ["operator.read", "operator.write"],
+          agents: "*",
+          sessions: { others: "none" },
+        },
+      },
+    },
+  },
+};
+
+describe("remote operator-UI schedule source round-trips through the production restore", () => {
+  it.each([
+    {
+      label: "person, remote Control UI",
+      kind: "person",
+      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      recorded: true,
+    },
+    {
+      label: "owner, remote Control UI",
+      kind: "owner",
+      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      recorded: false,
+    },
+    {
+      label: "person, host-side request",
+      kind: "person",
+      id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      recorded: false,
+    },
+  ] as const)("$label", ({ kind, id, recorded }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      ensureGatewayOwnerProfile("Gateway owner");
+      const profile = ensureProfileForEmail("remote@example.test");
+      const principal = kind === "person" ? { kind, profileId: profile.id } : { kind };
+      const resolved = createRemoteControlUiIngressTestContext({ principal }).resolvePrincipal();
+      const recoverySource = { pluginId: "remote-ui-test", audienceId: "test-grant" };
+      const remote = { ...resolved, recoverySource: { ...recoverySource, recoveryId: "r1" } };
+      const profileId = remote.authenticatedUserProfile.profileId;
+      // The client a remote browser peer gets: its own client id plus the ingress principal.
+      const client = createOperatorClient({ profileId, scopes: ["operator.write"] });
+      delete client.authenticatedUserId;
+      client.connect.client.id = id;
+      client.connect.client.mode = id === GATEWAY_CLIENT_IDS.CONTROL_UI ? "webchat" : "backend";
+      client.internal = {
+        remoteIngressPrincipal: remote,
+        operatorRoleActor: remote.operatorRoleActor,
+      };
+      // The plugin's grant store outlives the peer; a restore resumes from it, never the client.
+      const context = createContext([], () => REMOTE_PERSON_CONFIG);
+      const owner = new AbortController();
+      let granted = true;
+      registerIngressPrincipalRecovery(context, recoverySource.pluginId, {
+        resume: async (audienceId) =>
+          granted && audienceId === recoverySource.audienceId
+            ? {
+                audienceId,
+                recoveryId: "r1",
+                principal,
+                operatorScopeCeiling: [...remote.scopes],
+                signal: owner.signal,
+                assertCurrent: () => owner.signal.throwIfAborted(),
+              }
+            : undefined,
+        signal: owner.signal,
+        assertCurrent: () => owner.signal.throwIfAborted(),
+      });
+      const identity = await prepareUserProfileIdentity(profileId);
+      let persisted: string;
+      try {
+        const snapshot = captureGatewayOperatorRecoverySnapshot({
+          client,
+          authority: {
+            profileId,
+            scopes: [...remote.scopes],
+            gatewayAccessGrant: null,
+            assertCurrent: () => {},
+            openclawIdPrincipal: undefined,
+          },
+          modelPolicy: undefined,
+          identity,
+          config: REMOTE_PERSON_CONFIG,
+        });
+        expect(snapshot).toMatchObject({ sourceIngress: "principal", ingress: recoverySource });
+        expect(snapshot?.commandSenderProfileIdOnly).toBe(recorded ? true : undefined);
+        persisted = JSON.stringify({ kind: "gateway", snapshot });
+      } finally {
+        identity.release();
+      }
+      const restore = () =>
+        restoreGatewayQueuedOperatorRecovery({
+          source: JSON.parse(persisted),
+          context,
+          assertCurrent: () => {},
+        });
+      try {
+        const restored = await restore();
+        try {
+          expect(restored.requester).toEqual(
+            recorded ? { channel: "webchat", commandSenderId: profileId } : undefined,
+          );
+          const live = resolveChatSendCallerContext(client);
+          for (const allowFrom of [[profileId], ["other-operator"], []]) {
+            const cfg = allowFromConfig({ "*": allowFrom });
+            const liveAuthorized = resolveCommandAuthorization({
+              ctx: live,
+              cfg,
+              commandAuthorized: true,
+            }).isAuthorizedSender;
+            // The occurrence refuses exactly when a live command from this client would.
+            expect(isScheduledOccurrenceCommandAuthorized(cfg, restored.requester, "webchat")).toBe(
+              recorded ? liveAuthorized : true,
+            );
+            if (recorded) {
+              expect(liveAuthorized).toBe(allowFrom[0] === profileId);
+            }
+          }
+        } finally {
+          restored.release();
+        }
+        granted = false;
+        await expect(restore()).rejects.toThrow("original ingress grant");
+      } finally {
+        owner.abort();
+      }
+    }),
+  );
 });

@@ -236,10 +236,11 @@ call rechecks the link, role, and command authorization. A requester removed
 from `commands.allowFrom` after a schedule is accepted refuses at the next
 occurrence, the same as a live command from that sender. The same
 `commands.allowFrom` recheck applies to a Gateway operator-UI requester (Control
-UI, browser copilot, or TUI) signed in as a person: like its live commands, the
-occurrence is checked against the `""` list, else the `*` list, with the
-person's profile id. A Gateway requester without a per-person sender (a
-shared-token owner), one matched by a client-supplied sender id, one whose
+UI, including one reached through a remote-ingress plugin, browser copilot, or
+TUI) signed in as a person: like its live commands, the occurrence is checked
+against the `""` list, else the `*` list, with the person's profile id. A
+Gateway requester without a per-person sender (a shared-token owner), one
+matched by its client id (a CLI, or a plugin's own Gateway requests), one whose
 command was routed with an external origin, or a schedule accepted before this
 recheck existed keeps its original admission. Demoting that person,
 removing their role, or unlinking the identity revokes the requester's retained

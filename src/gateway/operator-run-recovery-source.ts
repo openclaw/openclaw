@@ -116,6 +116,10 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
       ingress: remote.recoverySource,
       controlUiAdmin: false,
       localOperator: false,
+      // A remote operator UI's live command sender is the person's profile id, as on a local one.
+      ...(isLiveCommandSenderProfileIdOnly(client, authority.profileId)
+        ? { commandSenderProfileIdOnly: true }
+        : {}),
     });
   }
   const ocid = authority.openclawIdPrincipal?.authority !== undefined;
