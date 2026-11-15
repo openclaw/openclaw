@@ -2,13 +2,14 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
   gitReleaseSlot,
   resolveGitReleaseEntrypointForLauncher,
   resolveGitReleaseLauncherForEntrypoint,
+  usesGitReleases,
 } from "./git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
 
@@ -132,5 +133,20 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     });
 
     expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
+  });
+
+  it("takes the in-place runner with a reason when the release link cannot be used", async () => {
+    const { stateDir, prefix } = await setup();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      expect(usesGitReleases(false)).toBe(true);
+      // Something other than a release link sits at the package path.
+      await fs.mkdir(gitReleaseSlot(prefix), { recursive: true });
+      const reasons: string[] = [];
+      expect(usesGitReleases(false, (reason) => reasons.push(reason))).toBe(false);
+      expect(reasons).toEqual([`${gitReleaseSlot(prefix)} is not a release link`]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

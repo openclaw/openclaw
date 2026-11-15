@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  PACKAGE_RELEASES_DIR,
   packageReleaseGlobalRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
@@ -12,10 +14,30 @@ export const GIT_RELEASE_TRIAL = ".trial";
 
 /**
  * Whether a Git update runs from releases. POSIX only: #198835's link is POSIX-only, so
- * Windows checkouts and package-to-Git switches keep the in-place runner.
+ * Windows checkouts and package-to-Git switches keep the in-place runner. The layout never
+ * fails an update (#197949 decision 8): when it cannot be used, `onUnavailable` hears why
+ * and the update takes the in-place runner. The next update tries the layout again.
  */
-export function usesGitReleases(switchToGit: boolean): boolean {
-  return !switchToGit && process.platform !== "win32";
+export function usesGitReleases(
+  switchToGit: boolean,
+  onUnavailable?: (reason: string) => void,
+): boolean {
+  if (switchToGit || process.platform === "win32") {
+    return false;
+  }
+  const prefix = resolveGitReleasePrefix();
+  const slot = gitReleaseSlot(prefix);
+  try {
+    fs.mkdirSync(path.join(prefix, PACKAGE_RELEASES_DIR), { recursive: true });
+    if (fs.lstatSync(slot, { throwIfNoEntry: false }) && !readPackageReleaseSlotSync(slot)) {
+      onUnavailable?.(`${slot} is not a release link`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    onUnavailable?.(`${prefix} is unavailable: ${String(error)}`);
+    return false;
+  }
 }
 
 /**

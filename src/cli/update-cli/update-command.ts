@@ -430,7 +430,13 @@ async function updateCommandInternal(
     let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
     let mutableUpdatePrepared = false;
     let retainedRuntimeStep: UpdateStepResult | undefined;
-    const gitRelease = updateInstallKind === "git" && usesGitReleases(switchToGit);
+    let releaseLayoutWarning: string | undefined;
+    const gitRelease =
+      updateInstallKind === "git" &&
+      usesGitReleases(switchToGit, (reason) => {
+        releaseLayoutWarning = `Git release layout unavailable (${reason}); updating the checkout in place. The next update tries the release layout again.`;
+        defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
+      });
     const prepareMutableUpdate: Parameters<
       typeof executeMutableUpdate
     >[0]["prepareMutableUpdate"] = async (
@@ -534,6 +540,16 @@ async function updateCommandInternal(
     const { result } = executionState;
     if (retainedRuntimeStep) {
       result.steps.unshift(retainedRuntimeStep);
+    }
+    if (releaseLayoutWarning) {
+      result.steps.unshift({
+        name: "git-release-layout",
+        command: "select Git release layout",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: releaseLayoutWarning },
+      });
     }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {
