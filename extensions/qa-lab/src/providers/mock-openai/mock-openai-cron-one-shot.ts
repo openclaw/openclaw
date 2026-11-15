@@ -2,7 +2,7 @@ import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js
 import { buildAssistantEvents } from "./mock-openai-events.js";
 
 const QA_CRON_ONE_SHOT_RE = /Cron one-shot QA mode=(yield|service|spawn)/;
-const QA_CRON_ONE_SHOT_CHILD_RE = /Cron one-shot QA child/;
+const QA_CRON_ONE_SHOT_CHILD_MARKER = "Cron one-shot QA child";
 export const QA_CRON_ONE_SHOT_YIELD_OUTPUT = "QA-ONE-SHOT-YIELD-DONE";
 export const QA_CRON_ONE_SHOT_SERVICE_OUTPUT = "QA-ONE-SHOT-SERVICE-EXIT";
 export const QA_CRON_ONE_SHOT_CHILD_RESULT = "QA-ONE-SHOT-CHILD-RESULT";
@@ -25,7 +25,7 @@ export function planCronOneShotTurn(params: {
   input: ResponsesInputItem[];
   buildToolCall: (name: string, args: Record<string, unknown>) => StreamEvent[];
 }): StreamEvent[] | null {
-  if (QA_CRON_ONE_SHOT_CHILD_RE.test(params.prompt)) {
+  if (params.prompt.includes(QA_CRON_ONE_SHOT_CHILD_MARKER)) {
     return buildAssistantEvents(QA_CRON_ONE_SHOT_CHILD_RESULT);
   }
   const start = params.input.findLastIndex(
