@@ -15,6 +15,30 @@ export type McpToolCatalogMetadata = {
   validatorForCall(toolName: string): McpToolResultValidator | undefined;
 };
 
+function createResultValidator(
+  toolName: string,
+  validator: JsonSchemaValidator<unknown>,
+): McpToolResultValidator {
+  return (result) => {
+    if (result.isError === true) {
+      return;
+    }
+    if (result.structuredContent === undefined) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidRequest,
+        `Tool ${toolName} has an output schema but did not return structured content`,
+      );
+    }
+    const validation = validator(result.structuredContent);
+    if (!validation.valid) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
+        `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
+      );
+    }
+  };
+}
+
 /** Canonicalizes one server catalog before policy, publication, and call metadata diverge. */
 export function normalizeMcpToolCatalog(
   tools: readonly Tool[],
@@ -37,6 +61,9 @@ export function normalizeMcpToolCatalog(
   const included: Tool[] = [];
   const deniedTools: Tool[] = [];
   const excludedTools: Tool[] = [];
+  const outputSchemas = new Map<string, NonNullable<Tool["outputSchema"]>>();
+  // Compiled on first call: most listed tools are never called, and every
+  // session runtime normalizes its own catalog (#199327).
   const resultValidators = new Map<string, McpToolResultValidator>();
   for (const [index, sourceTool] of tools.entries()) {
     const toolName = canonicalNames[index] ?? "";
@@ -58,27 +85,7 @@ export function normalizeMcpToolCatalog(
     if (disposition === "include") {
       included.push(tool);
       if (tool.outputSchema) {
-        const validator: JsonSchemaValidator<unknown> = schemaValidator.getValidator(
-          tool.outputSchema,
-        );
-        resultValidators.set(toolName, (result) => {
-          if (result.isError === true) {
-            return;
-          }
-          if (result.structuredContent === undefined) {
-            throw new ProtocolError(
-              ProtocolErrorCode.InvalidRequest,
-              `Tool ${toolName} has an output schema but did not return structured content`,
-            );
-          }
-          const validation = validator(result.structuredContent);
-          if (!validation.valid) {
-            throw new ProtocolError(
-              ProtocolErrorCode.InvalidParams,
-              `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
-            );
-          }
-        });
+        outputSchemas.set(toolName, tool.outputSchema);
       }
     } else {
       deniedTools.push(tool);
@@ -90,7 +97,17 @@ export function normalizeMcpToolCatalog(
     excludedTools,
     metadata: {
       validatorForCall(toolName) {
-        return resultValidators.get(toolName);
+        const cached = resultValidators.get(toolName);
+        const outputSchema = outputSchemas.get(toolName);
+        if (cached || !outputSchema) {
+          return cached;
+        }
+        const validator = createResultValidator(
+          toolName,
+          schemaValidator.getValidator(outputSchema),
+        );
+        resultValidators.set(toolName, validator);
+        return validator;
       },
     },
     deniedTools,
