@@ -232,6 +232,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
             ? {
                 pluginCommand: commandCreation.creation.envelope,
                 pluginCommandSourceDigest: commandCreation.creation.sourceDigest,
+                pluginCommandRequester: commandCreation.creation.commandRequester,
               }
             : {}),
           commitGuard,

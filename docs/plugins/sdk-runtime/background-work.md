@@ -232,11 +232,29 @@ when its verified sender has a
 person whose current role grants `operator.admin`. That sender must also pass the
 channel's command authorization. Unlinked, unverified, or demoted senders see
 `undefined`, even when the channel lets them run the command, and every native
-call rechecks the link and role. Demoting that person, removing their role, or
-unlinking the identity revokes the requester's retained work as it does for a
-Gateway operator: a child still waiting for a Swarm slot fails at once with a
-visible error, and work that missed the change refuses at its next admission
-check. The host records the channel command text once,
+call rechecks the link, role, and command authorization. A requester removed
+from `commands.allowFrom` after a schedule is accepted refuses at the next
+occurrence, the same as a live command from that sender. The same
+`commands.allowFrom` recheck applies to a Gateway requester signed in as a
+person (Control UI, including one reached through a remote-ingress plugin,
+browser copilot, TUI, CLI, or another Gateway client): the occurrence is checked
+with the sender ids and channel account the person's live command used (the
+profile id, plus the client id for a client that is not an operator UI) against
+the same list: the `""` list for an internal command, the channel's list for a
+command routed with an external origin (for example a TUI command delivered into
+a channel session), else the `*` list. A Gateway requester without a per-person
+sender (a shared-token owner, whose client id is not rechecked, or a plugin's
+own Gateway requests), or a Gateway
+person's schedule accepted before this recheck existed, keeps its original
+admission. Demoting that
+person,
+removing their role, or unlinking the identity revokes the requester's retained
+work as it does for a Gateway operator: a child still waiting for a Swarm slot
+fails at once with a visible error, and work that missed the change refuses at
+its next admission check. A channel's reachability controls (a DM `allowFrom`
+list or `dmPolicy`) gate inbound messages, not this authority: to stop retained
+scheduled work, demote, unlink or remove the requester's role, or disable the
+schedule. The host records the channel command text once,
 as that message's input: a reply adds only the response, and a continuing agent
 turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.

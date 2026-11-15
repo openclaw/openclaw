@@ -37,6 +37,12 @@ import {
 } from "./command-owner-authority.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import {
+  type CommandsAllowFromRequester,
+  isCommandsAllowFromListed,
+  isWildcardAllowFromEntry,
+  resolveCommandsAllowFromList,
+} from "./commands-allow-from.js";
+import {
   formatAllowFromList,
   normalizeAllowFromEntry,
   resolveSenderCandidates,
@@ -148,10 +154,6 @@ function resolveInferredProvider(
     hadResolutionError:
       droppedResolutionError || inferredCandidates.some((entry) => entry.hadResolutionError),
   };
-}
-
-function isWildcardAllowFromEntry(entry: string): boolean {
-  return entry.trim() === "*";
 }
 
 function stripWildcardAllowFrom(list: string[]): string[] {
@@ -368,16 +370,7 @@ function resolveCommandAuthorizationState(
   );
 
   const providerContext = { plugin, cfg, accountId: ctx.AccountId, providerId };
-  const commandsAllowFrom = cfg.commands?.allowFrom;
-  let commandsAllowFromList: string[] | null = null;
-  if (commandsAllowFrom && typeof commandsAllowFrom === "object") {
-    const providerList = commandsAllowFrom[providerId ?? ""];
-    const globalList = commandsAllowFrom["*"];
-    const rawList = Array.isArray(providerList) ? providerList : globalList;
-    if (Array.isArray(rawList)) {
-      commandsAllowFromList = formatAllowFromList({ ...providerContext, allowFrom: rawList });
-    }
-  }
+  const commandsAllowFromList = resolveCommandsAllowFromList(providerContext);
   const resolvedAllowFrom =
     prepared?.allowFrom ??
     resolveProviderAllowFrom({
@@ -570,6 +563,18 @@ export function resolveConfiguredCommandOwners(
   const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
   const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
   return resolveExplicitOwnerList({ cfg, plugin, providerId, accountId: requester.accountId });
+}
+
+/** Scheduled occurrences resolve the requester's provider the same way live commands do. */
+export function isCommandsAllowFromAuthorized(
+  cfg: OpenClawConfig,
+  requester: CommandsAllowFromRequester,
+): boolean {
+  const providerId = resolveExplicitProviderFromContext({
+    Provider: requester.channel,
+    Surface: requester.channel,
+  })?.providerId;
+  return isCommandsAllowFromListed(cfg, providerId, requester);
 }
 
 export function isConfiguredCommandOwner(

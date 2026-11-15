@@ -487,7 +487,16 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   source: unknown;
   context: GatewayRequestContext;
   assertCurrent: () => void;
-}): Promise<Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">> {
+}): Promise<
+  Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release"> & {
+    /** Absent when not re-derivable; a scheduled channel occurrence then fails closed. */
+    requester?: {
+      channel: string;
+      accountId?: string;
+      senderId?: string;
+    };
+  }
+> {
   params.assertCurrent();
   const source = decodeQueuedOperatorRecoverySource(params.source);
   if (source.kind === "unavailable") {
@@ -582,7 +591,21 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
       },
     });
     authority.assertCurrent();
-    return { authority, controlUiAdmin: false, release };
+    const identity = prepared.requesterIdentity;
+    return {
+      authority,
+      controlUiAdmin: false,
+      release,
+      ...(identity
+        ? {
+            requester: {
+              channel: identity.channelId,
+              accountId: identity.accountId,
+              senderId: identity.senderId,
+            },
+          }
+        : {}),
+    };
   } catch (error) {
     release();
     throw error;

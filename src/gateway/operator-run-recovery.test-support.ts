@@ -80,6 +80,8 @@ export async function createOperatorRecoveryFixture(params: {
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
+  /** Drop the per-user authenticated id, so a live command from this client has no sender. */
+  withoutCommandSender?: boolean;
   openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
 }) {
   let config = params.config;
@@ -89,6 +91,9 @@ export async function createOperatorRecoveryFixture(params: {
     profileId: params.profileId,
     scopes: params.scopes ?? ["operator.admin"],
   });
+  if (params.withoutCommandSender) {
+    delete client.authenticatedUserId;
+  }
   client.connect.client.id =
     params.clientInfo?.id ?? (params.sourceIngress === "internal" ? "cli" : "openclaw-control-ui");
   client.connect.client.mode =

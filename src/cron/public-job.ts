@@ -22,6 +22,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   const state = { ...job.state };
   delete state.pluginCommandRuns;
   delete state.pluginCommandBinding;
+  delete state.pluginCommandRequester;
   delete state.queuedAtMs;
   delete state.runningReceiptId;
   delete state.conditionCheckReceiptId;

@@ -71,7 +71,10 @@ export function createRequestNativeSubagentRuntime(
   guard: { pluginId: string; assertCurrent: () => void },
 ): NativeSubagentRuntime & {
   prepareCommand: () => Promise<boolean>;
-  prepareScheduledTurns: (channel: string) => Promise<PluginCommandScheduledTurns | undefined>;
+  prepareScheduledTurns: (
+    channel: string,
+    requester?: Parameters<typeof preparePluginCommandScheduledTurns>[0]["requester"],
+  ) => Promise<PluginCommandScheduledTurns | undefined>;
 } {
   const scope = getPluginRuntimeGatewayRequestScope();
   const resolveGatewayContext =
@@ -223,7 +226,7 @@ export function createRequestNativeSubagentRuntime(
     return result;
   };
   return {
-    async prepareScheduledTurns(channel) {
+    async prepareScheduledTurns(channel, requester) {
       const surface = await tools();
       if (!admitted || !surface.some((tool) => tool.name === AUTOMATIONS_TOOL_NAME)) {
         return undefined;
@@ -232,6 +235,7 @@ export function createRequestNativeSubagentRuntime(
         source,
         pluginId: guard.pluginId,
         channel,
+        requester,
         assertCurrent,
         tools,
         withCaller,

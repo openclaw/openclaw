@@ -94,6 +94,11 @@ export async function withRequesterNativeSubagents<T>(
     }) => PreparedAgentRunAdmission;
     /** Only the live external-command owner sets this; scheduled runs cannot recursively schedule. */
     enableScheduledTurns?: boolean;
+    /** The live command's sender inputs; a schedule keeps them to recheck commands.allowFrom. */
+    commandRequester?: Omit<
+      import("../commands-allow-from.js").CommandsAllowFromRequester,
+      "channel"
+    >;
     ingress?: Pick<
       Parameters<typeof prepareChannelRunAdmission>[0],
       "ingressKind" | "boundary" | "evidence" | "gatewayLocalUserIngress"
@@ -235,7 +240,10 @@ export async function withRequesterNativeSubagents<T>(
         const scheduledTurns =
           state.enableScheduledTurns &&
           guard.command?.runtimeCapabilities?.includes("scheduledTurns")
-            ? await runtime.prepareScheduledTurns(state.messageChannel ?? "")
+            ? await runtime.prepareScheduledTurns(
+                state.messageChannel ?? "",
+                state.commandRequester,
+              )
             : undefined;
         assertCurrent();
         return {

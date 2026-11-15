@@ -2,6 +2,7 @@ import { readChannelContextAdmissionEvidence } from "../../channels/message-acce
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { withNativeSubagentRequest } from "../../plugins/runtime/native-subagent-context.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { readCommandsAllowFromSender } from "../commands-allow-from.js";
 import {
   type CommandUserTurn,
   prepareChannelCommandUserTurn,
@@ -178,6 +179,7 @@ export const runWithCommandNativeSubagents = async <T>(
       ingress: { ...requester.ingress, boundary: "auto-reply.plugin-command" },
       commandIngressEligible: true,
       enableScheduledTurns: true,
+      commandRequester: readCommandsAllowFromSender(state.ctx),
     },
     run,
   );

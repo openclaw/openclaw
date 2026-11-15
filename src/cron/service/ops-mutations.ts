@@ -137,6 +137,7 @@ export async function add(
       options: {
         pluginCommand: opts?.pluginCommand,
         pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
+        pluginCommandRequester: opts?.pluginCommandRequester,
         streamSandbox: opts?.streamSandbox,
         streamOperatorSource: opts?.streamOperatorSource,
         enabledExplicit: opts?.enabledExplicit,

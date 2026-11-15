@@ -30,7 +30,14 @@ import {
 // Every test doubles as a no-fallback guard: no scheduled occurrence may reach an ordinary
 // session prompt or the embedded model runner. Model choice is stubbed only for the child
 // lineage case, whose isolated state has no provider catalog; it is not the behavior under test.
-const guards = vi.hoisted(() => ({ embeddedRuns: 0, stubModelChoice: false }));
+const guards = vi.hoisted(() => ({
+  embeddedRuns: 0,
+  stubModelChoice: false,
+  // The live command's sender inputs as they reach schedule preparation, and an optional
+  // record forced onto the creation, to observe the store's requester gate.
+  requesters: [] as unknown[],
+  forcedRequester: undefined as { commandSenderId: string } | undefined,
+}));
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
   runEmbeddedAgent: async () => {
@@ -49,7 +56,34 @@ vi.mock("../../agents/model-runtime-choice.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../agents/plugin-scheduled-command.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/plugin-scheduled-command.js")>();
+  return {
+    ...actual,
+    preparePluginCommandScheduledTurns: (
+      params: Parameters<typeof actual.preparePluginCommandScheduledTurns>[0],
+    ) => {
+      guards.requesters.push(params.requester);
+      return actual.preparePluginCommandScheduledTurns(params);
+    },
+  };
+});
+vi.mock("../../cron/plugin-command-creation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../cron/plugin-command-creation.js")>();
+  return {
+    ...actual,
+    withPluginCommandScheduleCreation: (
+      ...args: Parameters<typeof actual.withPluginCommandScheduleCreation>
+    ) => {
+      args[5] = guards.forcedRequester ?? args[5];
+      return actual.withPluginCommandScheduleCreation(...args);
+    },
+  };
+});
+
 afterEach(() => {
+  guards.requesters = [];
+  guards.forcedRequester = undefined;
   expect(guards.embeddedRuns, "no embedded model run").toBe(0);
   guards.embeddedRuns = 0;
   guards.stubModelChoice = false;
@@ -636,4 +670,93 @@ describe("native scheduled command execution", () => {
       });
     },
   );
+  it("refuses a removed identity before command or input acceptance", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const before = await fixture.userInputs();
+      // Unlinked after scheduling: refused at restore, before the allowFrom recheck.
+      fixture.removeOwner();
+      fixture.handler.mockClear();
+      await fixture.cron.run(id, "force");
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "error",
+        executionStarted: false,
+      });
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(await fixture.userInputs()).toEqual(before);
+    });
+  });
+  it.each(["narrowed", "emptied"] as const)(
+    "refuses an occurrence after the requester loses commands.allowFrom authorization (%s)",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        // The requester is command-authorized by commands.allowFrom when the schedule is accepted.
+        fixture.setCommandsAllowFrom([fixture.requesterSenderId]);
+        const id = await createContinuation(fixture);
+        const before = await fixture.userInputs();
+        // After scheduling, an operator removes the requester from commands.allowFrom.
+        fixture.setCommandsAllowFrom(change === "narrowed" ? ["99999999"] : []);
+        // Without the recheck the occurrence would dispatch this and return ok.
+        fixture.handler.mockImplementation(() => ({ text: "occurrence ran" }));
+        // Measure only the occurrence dispatch, as in the reset / revoked-operator case.
+        fixture.handler.mockClear();
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults).toHaveLength(1);
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          executionStarted: false,
+        });
+        expect(fixture.scheduledResults[0]?.error).toMatch(/no longer command-authorized/i);
+        // The plugin command never ran and no input was committed to the parent.
+        expect(fixture.handler).not.toHaveBeenCalled();
+        expect(await fixture.userInputs()).toEqual(before);
+        // Authorization can return, so the schedule is refused per occurrence, not retired.
+        const [job] = await fixture.readJobs();
+        expect(job).toMatchObject({ enabled: true });
+      });
+    },
+  );
+  it("keeps running an occurrence while the requester stays in commands.allowFrom", async () => {
+    await withCommandPlugin(async (fixture) => {
+      fixture.setCommandsAllowFrom([fixture.requesterSenderId]);
+      const id = await createContinuation(fixture);
+      fixture.handler.mockImplementation(() => ({ text: "still authorized" }));
+      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "ok",
+        executionStarted: true,
+        outputText: "still authorized",
+      });
+      expect(fixture.handler).toHaveBeenCalled();
+    });
+  });
+
+  it("hands the live command's sender inputs to schedule preparation", async () => {
+    await withCommandPlugin(async (fixture) => {
+      await createContinuation(fixture);
+      // The same context the live commands.allowFrom check read; a channel has no profile sender.
+      expect(guards.requesters).toEqual([
+        expect.objectContaining({
+          senderId: fixture.requesterSenderId,
+          commandSenderId: undefined,
+        }),
+      ]);
+    });
+  });
+  it("passes the creation's requester record through cron.add to the store's gate", async () => {
+    await withCommandPlugin(async (fixture) => {
+      // A record that does not name the stored source's person must reach the store and fail.
+      guards.forcedRequester = { commandSenderId: "other-operator" };
+      fixture.handler.mockImplementation(async (ctx) => {
+        await expect(
+          expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability").schedule(
+            scheduleRequest(),
+          ),
+        ).rejects.toThrow("plugin command sender must match its operator source");
+        return { text: "refused" };
+      });
+      expect((await commandInvocation(fixture).run())?.reply?.text).toBe("refused");
+      expect(await fixture.readJobs()).toEqual([]);
+    });
+  });
 });
