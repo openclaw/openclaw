@@ -53,7 +53,7 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
       error: {
         message: err instanceof Error ? err.message : "Session changed while starting work. Retry.",
         type: "invalid_request_error",
-        code: (err as { code?: string }).code,
+        code: err.code,
       },
     };
   }

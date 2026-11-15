@@ -8,10 +8,15 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
+import {
+  SessionWorkStartInvalidatedError,
+  createSessionWorkStartChangedError,
+} from "../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { parseSseEvents } from "./http-stream.test-support.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
@@ -60,6 +65,90 @@ const requestHeaders = {
 };
 
 const publishConfig = (config: OpenClawConfig) => setRuntimeConfigSnapshot(config, config);
+
+it.each(endpoints.flatMap((endpoint) => [false, true].map((stream) => ({ endpoint, stream }))))(
+  "$endpoint stream=$stream preserves session work-start conflicts without retrying",
+  async ({ endpoint, stream }) => {
+    const conflicts = [
+      {
+        error: createSessionWorkStartChangedError("agent:main:conflict"),
+        code: "SESSION_WORK_START_CHANGED",
+        message: 'Session "agent:main:conflict" changed while starting work. Retry.',
+      },
+      {
+        error: new SessionWorkStartInvalidatedError("Session was invalidated. Retry."),
+        code: "SESSION_WORK_START_INVALIDATED",
+        message: "Session was invalidated. Retry.",
+      },
+      {
+        error: Object.assign(new Error("wrapped conflict"), { code: "SESSION_WORK_START_CHANGED" }),
+        code: "SESSION_WORK_START_CHANGED",
+        message: "wrapped conflict",
+      },
+      {
+        error: { code: "SESSION_WORK_START_INVALIDATED" },
+        code: "SESSION_WORK_START_INVALIDATED",
+        message: "Session changed while starting work. Retry.",
+      },
+    ];
+    await withGatewayServer({
+      prefix: "openai-compat-work-start-conflicts",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { openAiChatCompletionsEnabled: true, openResponsesEnabled: true },
+      run: async (server) => {
+        publishConfig({ agents: { entries: { main: {} } } });
+        const origin = await listen(server);
+        const initialRoots = getActiveGatewayRootWorkCount();
+        try {
+          for (const { error, code, message } of conflicts) {
+            vi.mocked(agentCommandFromGatewayIngress).mockClear().mockRejectedValueOnce(error);
+            const response = await fetch(`${origin}${routes[endpoint]}`, {
+              method: "POST",
+              headers: { ...requestHeaders, "x-openclaw-session-key": "agent:main:conflict" },
+              body: JSON.stringify({
+                model: "openclaw/main",
+                stream,
+                ...(endpoint === "chatCompletions"
+                  ? { messages: [{ role: "user", content: "hi" }] }
+                  : { input: "hi" }),
+              }),
+            });
+            expect(response.status).toBe(stream ? 200 : 409);
+            let body: { status?: string; error?: unknown };
+            if (stream) {
+              const events = parseSseEvents(await response.text());
+              expect(events.filter((event) => event.data === "[DONE]")).toHaveLength(1);
+              expect(events.at(-1)?.data).toBe("[DONE]");
+              const chunks = events
+                .filter((event) => event.data !== "[DONE]")
+                .map((event) => JSON.parse(event.data));
+              const failures = chunks.filter(
+                (chunk) => chunk.error || chunk.type === "response.failed",
+              );
+              expect(failures).toHaveLength(1);
+              expect(chunks.some((chunk) => chunk.type === "response.completed")).toBe(false);
+              body = endpoint === "responses" ? failures[0].response : failures[0];
+            } else {
+              body = await response.json();
+            }
+            expect(body.error).toEqual({
+              message,
+              code,
+              ...(endpoint === "chatCompletions" ? { type: "invalid_request_error" } : {}),
+            });
+            if (endpoint === "responses") {
+              expect(body.status).toBe("failed");
+            }
+            expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(1);
+            await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(initialRoots));
+          }
+        } finally {
+          await close(server);
+        }
+      },
+    });
+  },
+);
 
 it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) => {
   const path = routes[endpoint];
