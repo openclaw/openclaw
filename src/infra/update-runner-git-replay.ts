@@ -10,43 +10,55 @@ const REPLAY_CONFLICT_COMPARE_MAX_PATHS = 64;
 
 type ReplayConflictGit = { worktreeDir: string; runCommand: CommandRunner; timeoutMs: number };
 
-/** Read the paused rebase before it is aborted, and name the conflict on its step. */
+type ReplayProbeResult = Awaited<ReturnType<CommandRunner>>;
+
+const isInterruptedProbe = (result: ReplayProbeResult) =>
+  result.termination === "signal" ||
+  Boolean(result.signal) ||
+  result.code === 130 ||
+  result.code === 143;
+
+/**
+ * Read the paused rebase before it is aborted, and name the conflict on its step.
+ * Runner errors propagate to the preflight owner; null means a probe was interrupted.
+ */
 async function readReplayConflictPaths(
   params: ReplayConflictGit,
   rebase: UpdateStepResult,
-): Promise<string[]> {
+): Promise<string[] | null> {
   const git = ["git", "-C", params.worktreeDir];
   const options = { cwd: params.worktreeDir, timeoutMs: params.timeoutMs };
-  try {
-    const unmerged = await params.runCommand(
-      [...git, "diff", "--name-only", "--diff-filter=U", "-z"],
-      options,
-    );
-    const paths = unmerged.code === 0 ? unmerged.stdout.split("\0").filter(Boolean) : [];
-    if (paths.length === 0) {
-      return [];
-    }
-    const commit = await params.runCommand(
-      [...git, "rev-parse", "--short", "--verify", "--quiet", "REBASE_HEAD"],
-      options,
-    );
-    const sha = commit.code === 0 ? commit.stdout.trim() : "";
-    const check = rebase.name;
-    rebase.failureFacts = [
-      {
-        check,
-        code: LOCAL_REPLAY_CONFLICT_REASON,
-        message: `${sha ? `Local commit ${sha}` : "A local commit"} conflicts with the update target in ${paths.length} path(s): ${paths.join(", ")}`,
-      },
-      ...paths
-        .slice(0, 4)
-        .map((affectedKey) => ({ check, code: LOCAL_REPLAY_CONFLICT_REASON, affectedKey })),
-    ].map((fact) => createUpdateFailureFact(fact));
-    return paths;
-  } catch {
-    // Diagnostics only: an unreadable rebase state keeps the ordinary failure.
+  const unmerged = await params.runCommand(
+    [...git, "diff", "--name-only", "--diff-filter=U", "-z"],
+    options,
+  );
+  if (isInterruptedProbe(unmerged)) {
+    return null;
+  }
+  const paths = unmerged.code === 0 ? unmerged.stdout.split("\0").filter(Boolean) : [];
+  if (paths.length === 0) {
     return [];
   }
+  const commit = await params.runCommand(
+    [...git, "rev-parse", "--short", "--verify", "--quiet", "REBASE_HEAD"],
+    options,
+  );
+  if (isInterruptedProbe(commit)) {
+    return null;
+  }
+  const sha = commit.code === 0 ? commit.stdout.trim() : "";
+  const check = rebase.name;
+  rebase.failureFacts = [
+    {
+      check,
+      code: LOCAL_REPLAY_CONFLICT_REASON,
+      message: `${sha ? `Local commit ${sha}` : "A local commit"} conflicts with the update target in ${paths.length} path(s): ${paths.join(", ")}`,
+    },
+    ...paths
+      .slice(0, 4)
+      .map((affectedKey) => ({ check, code: LOCAL_REPLAY_CONFLICT_REASON, affectedKey })),
+  ].map((fact) => createUpdateFailureFact(fact));
+  return paths;
 }
 
 /**
@@ -63,28 +75,24 @@ export async function hasSameReplayConflictObjects(
   if (paths.length === 0 || paths.length > REPLAY_CONFLICT_COMPARE_MAX_PATHS) {
     return false;
   }
-  try {
-    const result = await params.runCommand(
-      [
-        "git",
-        "-C",
-        params.worktreeDir,
-        "rev-parse",
-        ...[conflict.sha, sha].flatMap((revision) => paths.map((file) => `${revision}:${file}`)),
-      ],
-      { cwd: params.worktreeDir, timeoutMs: params.timeoutMs },
-    );
-    const objects = result.code === 0 ? result.stdout.trim().split(/\s+/u) : [];
-    return (
-      objects.length === paths.length * 2 &&
-      paths.every((_, index) => {
-        const object = objects[index];
-        return Boolean(object) && object === objects[index + paths.length];
-      })
-    );
-  } catch {
-    return false;
-  }
+  const result = await params.runCommand(
+    [
+      "git",
+      "-C",
+      params.worktreeDir,
+      "rev-parse",
+      ...[conflict.sha, sha].flatMap((revision) => paths.map((file) => `${revision}:${file}`)),
+    ],
+    { cwd: params.worktreeDir, timeoutMs: params.timeoutMs },
+  );
+  const objects = result.code === 0 ? result.stdout.trim().split(/\s+/u) : [];
+  return (
+    objects.length === paths.length * 2 &&
+    paths.every((_, index) => {
+      const object = objects[index];
+      return Boolean(object) && object === objects[index + paths.length];
+    })
+  );
 }
 
 /** Replay local commits onto a checked-out candidate; null means the replay applied. */
@@ -130,6 +138,7 @@ export async function replayLocalCommits(
       ? await readReplayConflictPaths(params, rebase)
       : [];
   if (
+    !replayConflictPaths ||
     isInterruptedGitStep(rebase) ||
     (!source &&
       (await abortGitPreflightRebase(
