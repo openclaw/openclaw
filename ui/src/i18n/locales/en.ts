@@ -1591,6 +1591,7 @@ const startupEnglish = {
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
+      background: "Running in background",
       running: "Running",
       failed: "Failed",
       stopped: "Stopped",

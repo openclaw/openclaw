@@ -1,21 +1,57 @@
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
+import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
 import { commandError, gitEnvironment, requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+  type PreparedSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
-import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
 
 const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+
+type CheckoutAuthority = {
+  signal: AbortSignal;
+  assertCurrent: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
+};
+
+function checkoutCurrent(source: PreparedSessionSourceEffect, params: CheckoutAuthority) {
+  const assertCurrent = () => {
+    params.signal.throwIfAborted();
+    source.assertCurrent();
+  };
+  const workspaceEvidence = [
+    ...new Set([
+      ...(source.workspaceEvidence ?? []),
+      ...(params.workerAuthority?.workspaceEvidence ?? []),
+    ]),
+  ];
+  // Git borrows the source held by this checkout until its effects settle.
+  return Object.assign(assertCurrent, {
+    prepareSessionSourceEffect: async () => ({
+      ...source,
+      release: undefined,
+      assertCurrent,
+      workspaceEvidence,
+    }),
+  });
+}
 
 function checkoutGitEnvironment(home: string) {
   return {
@@ -30,11 +66,9 @@ function checkoutGitEnvironment(home: string) {
 }
 
 async function configureProjectionFetch(
-  params: {
+  params: CheckoutAuthority & {
     source: string;
     destination: string;
-    signal: AbortSignal;
-    assertCurrent: () => void;
   },
   cleanEnv: NodeJS.ProcessEnv,
 ) {
@@ -43,6 +77,7 @@ async function configureProjectionFetch(
     env: cleanEnv,
     signal: params.signal,
     beforeRun: params.assertCurrent,
+    stateOwnerPath: params.workerAuthority?.stateOwnerPath,
   };
   // Git-owned projection metadata; shared base clones must never get shallow defaults.
   await requireGit(
@@ -76,12 +111,14 @@ async function configureProjectionFetch(
   }
 }
 
-export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
+export async function localWorkspaceProjectionPath(
+  owner: Pick<LocalWorkspaceOwner, "worktree" | "env">,
+) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }
   return path.join(
-    realpathSync(resolveStateDir(owner.env)),
+    await fs.realpath(resolveStateDir(owner.env)),
     "worktree-projections",
     owner.worktree.id,
     "workspace",
@@ -89,19 +126,28 @@ export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "w
 }
 
 /** Build or refresh private source-only metadata before any guest can write this checkout. */
-export async function prepareLocalWorkspaceCheckout(params: {
-  source: string;
-  destination: string;
-  temporaryRoot: string;
-  baseCommit: string;
-  /** The exclusive template owner has validated this existing checkout. */
-  retainedCommit?: string;
-  branch: string;
-  signal: AbortSignal;
-  assertCurrent: () => void;
-}) {
+export async function prepareLocalWorkspaceCheckout(
+  params: CheckoutAuthority & {
+    source: string;
+    destination: string;
+    temporaryRoot: string;
+    baseCommit: string;
+    /** The exclusive template owner has validated this existing checkout. */
+    retainedCommit?: string;
+    branch: string;
+  },
+) {
   using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.checkout.pack`);
-  const { signal, assertCurrent: current, destination: repo } = params;
+  const { signal, destination: repo } = params;
+  const source = await prepareSessionSourceEffect(
+    composeSessionSourceAssertion([params.assertCurrent, params.workerAuthority?.assertCurrent]),
+  );
+  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+  const current = checkoutCurrent(source, params);
+  const filesystem = { commitGuard: current, signal, workerAuthority: params.workerAuthority };
+  const prepare = () => prepareWorktreeFilesystemMutation(filesystem, source);
+  await prepare();
+  current();
   const temporary = await fs.mkdtemp(path.join(params.temporaryRoot, "git-"));
   try {
     const pack = await withWorktreeGitConfig(
@@ -110,6 +156,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
       {
         signal,
         beforeRun: current,
+        stateOwnerPath: params.workerAuthority?.stateOwnerPath,
       },
       (git) =>
         git.withContentEnvironment((baseEnv) =>
@@ -123,6 +170,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
           }),
         ),
     );
+    await prepare();
     current();
     phases.mark(`${RECONCILE_PHASE}.checkout.index`);
     await fs.mkdir(repo, { recursive: true, mode: 0o700 });
@@ -134,6 +182,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
         input,
         signal,
         beforeRun: current,
+        stateOwnerPath: params.workerAuthority?.stateOwnerPath,
       });
     if (!params.retainedCommit) {
       await git([
@@ -143,16 +192,32 @@ export async function prepareLocalWorkspaceCheckout(params: {
         "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
       ]);
     }
-    current();
-    await runWorkspaceInventoryCommandToFile({
-      argv: ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
-      inputPath: pack,
-      outputPath: path.join(temporary, "index-pack-result"),
-      baseEnv: gitEnvironment(cleanEnv),
-      signal,
-      timeoutMs: 300_000,
-      maxOutputBytes: 4096,
-    });
+    const input = await fs.open(pack, "r");
+    try {
+      await prepare();
+      current();
+      const result = await withGitProcessOperation(
+        "workspace.inventory",
+        () =>
+          runCommandWithTimeout(["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"], {
+            stdinFileDescriptor: input.fd,
+            baseEnv: gitEnvironment(cleanEnv),
+            signal,
+            timeoutMs: 300_000,
+            maxOutputBytes: 4096,
+            terminateOnOutputLimit: true,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          }),
+        "default",
+      );
+      if (result.code !== 0 || result.termination !== "exit") {
+        throw commandError("git index-pack", result);
+      }
+    } finally {
+      await input.close();
+    }
+    await prepare();
     current();
     phases.mark(`${RECONCILE_PHASE}.checkout.materialize`);
     // Earlier snapshot commits remain in objects/reflogs and still lack their ancestors.
@@ -173,11 +238,12 @@ export async function prepareLocalWorkspaceCheckout(params: {
       await git(["reflog", "expire", "--expire=all", "--all"]);
       // Reuse compressed objects without searching the entire snapshot for new deltas.
       await git(["repack", "-ad", "--window=0"]);
+      await prepare();
       current();
       await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
     }
     phases.mark(`${RECONCILE_PHASE}.checkout.configure`);
-    await configureProjectionFetch(params, cleanEnv);
+    await configureProjectionFetch({ ...params, assertCurrent: current }, cleanEnv);
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
@@ -196,24 +262,51 @@ export async function assertLocalWorkspaceDirectory(directory: string) {
 }
 
 /** Only an unpublished projection reservation may replace an interrupted initial checkout. */
-export async function initializeLocalWorkspaceProjection(params: {
-  owner: LocalWorkspaceOwner;
-  projectionPath: string;
-  baseCommit: string;
-  signal: AbortSignal;
-  assertCurrent: () => void;
-  buildCacheInputs: () => Promise<string[]>;
-  dependencies?: { sandbox: SandboxConfig; allocation: WorktreeAllocationGuard };
-}) {
+export async function initializeLocalWorkspaceProjection(
+  params: CheckoutAuthority & {
+    owner: LocalWorkspaceOwner;
+    projectionPath: string;
+    baseCommit: string;
+    buildCacheInputs: () => Promise<string[]>;
+    dependencies?: { sandbox: SandboxConfig; allocation: WorktreeAllocationGuard };
+  },
+) {
   using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.initialize`);
-  const { signal, assertCurrent: current, dependencies } = params;
+  const { signal, dependencies } = params;
+  const workerAuthority = {
+    ...params.owner.workerAuthority,
+    ...params.workerAuthority,
+    workspaceEvidence: [
+      ...new Set([
+        ...(params.owner.workerAuthority?.workspaceEvidence ?? []),
+        ...(params.workerAuthority?.workspaceEvidence ?? []),
+      ]),
+    ],
+  };
+  const source = await prepareSessionSourceEffect(
+    composeSessionSourceAssertion([
+      params.assertCurrent,
+      params.owner.assertCurrent,
+      params.owner.workerAuthority?.assertCurrent,
+      params.workerAuthority?.assertCurrent,
+    ]),
+  );
+  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+  const current = checkoutCurrent(source, { ...params, workerAuthority });
+  const filesystem = { commitGuard: current, signal, workerAuthority };
+  const prepare = () => prepareWorktreeFilesystemMutation(filesystem, source);
   const parent = path.dirname(params.projectionPath);
+  await prepare();
+  current();
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   await assertLocalWorkspaceDirectory(parent);
+  await prepare();
   current();
   // No runtime can use an uncommitted initial projection. Only this durable
   // reservation owns interrupted preparation; never recreate a ready checkout.
   await fs.rm(params.projectionPath, { recursive: true, force: true });
+  await prepare();
+  current();
   const temporary = await fs.mkdtemp(path.join(parent, ".prepare-"));
   try {
     const repo = path.join(temporary, "workspace");
@@ -225,6 +318,7 @@ export async function initializeLocalWorkspaceProjection(params: {
       branch: params.owner.worktree.branch,
       signal,
       assertCurrent: current,
+      workerAuthority,
     };
     const buildCacheInputs = await params.buildCacheInputs();
     phases.mark(`${RECONCILE_PHASE}.template`);
@@ -244,9 +338,26 @@ export async function initializeLocalWorkspaceProjection(params: {
           signal: dependencies.allocation.signal
             ? AbortSignal.any([signal, dependencies.allocation.signal])
             : signal,
-          commitGuard: () => {
-            dependencies.allocation.commitGuard();
-            current();
+          commitGuard: composeSessionSourceAssertion([
+            dependencies.allocation.commitGuard,
+            current,
+          ]),
+          workerAuthority: {
+            ...dependencies.allocation.workerAuthority,
+            assertCurrent: composeSessionSourceAssertion([
+              dependencies.allocation.workerAuthority.assertCurrent,
+              workerAuthority.assertCurrent,
+              current,
+            ]),
+            stateOwnerPath:
+              workerAuthority.stateOwnerPath ??
+              dependencies.allocation.workerAuthority.stateOwnerPath,
+            workspaceEvidence: [
+              ...new Set([
+                ...(dependencies.allocation.workerAuthority.workspaceEvidence ?? []),
+                ...(workerAuthority.workspaceEvidence ?? []),
+              ]),
+            ],
           },
         },
       }));
@@ -268,6 +379,7 @@ export async function initializeLocalWorkspaceProjection(params: {
           signal,
         }),
       ));
+    await prepare();
     current();
     phases.mark(`${RECONCILE_PHASE}.publish`);
     await fs.rename(repo, params.projectionPath);

@@ -249,7 +249,7 @@ it("attributes worker receipts without retaining labels or treating unsized mess
     const { pathToFileURL } = await import("node:url");
     const v8 = await import("node:v8");
     process.channel.ref();
-    process.on("message", message => {
+    process.on("message", async message => {
       if (!message.run) return;
       if (message.run === "tasks") {
         void (async () => {
@@ -284,7 +284,8 @@ it("attributes worker receipts without retaining labels or treating unsized mess
       admission.port.postMessage({ stage: "transaction", decision: new SharedArrayBuffer(4), facts: { publication: { kind: "session-actor-admission", snapshot: { entry: { skillsSnapshot: "s".repeat(1024) } } } } });
       admission.port.postMessage({ kind: "native-commit", payloadBytes: 40, committed: { version: 1, sequence: 1, facts: { kind: "committed", receipt: { kind: "session-actor-committed", phase: "appendTranscriptEvent", postimage: { entry: { systemPromptReport: "p".repeat(2048) } } } } } });
       admission.service();
-      admission.finish();
+      const pending = admission.finish();
+      if (pending) await pending;
       const { port1, port2 } = new MessageChannel();
       observeWorkerMessage({ status: "notification", port: port1 }, "from_worker");
       port1.close(); port2.close();

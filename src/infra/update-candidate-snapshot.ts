@@ -190,10 +190,11 @@ export async function assessInitialUpdateSnapshotCapacity(
         ...step,
         durationMs: Date.now() - started,
         exitCode: 1,
+        // The instruction line leads; the blank line keeps the diagnostics out of the terminal.
         stderrTail: [
-          "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
+          `Update refused: no eligible directory has ${formatDiskSpaceBytes(capacity.requiredBytes)} free for the state snapshot. Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry openclaw update. No changes were made.`,
+          "",
           ...diagnostics,
-          "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
         ].join("\n"),
         snapshotCapacity: capacity,
       };
@@ -212,11 +213,7 @@ export async function assessInitialUpdateSnapshotCapacity(
           ...step,
           durationMs: Date.now() - started,
           exitCode: 1,
-          stderrTail: [
-            "snapshot-capacity-insufficient: activation database backup or rollback cannot fit before validation.",
-            error.message,
-            ...diagnostics,
-          ].join("\n"),
+          stderrTail: [`Update refused: ${error.message}`, "", ...diagnostics].join("\n"),
         };
       }
     }

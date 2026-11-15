@@ -242,6 +242,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // Node worker ports have no browser target origin.
+        "scripts/perf/remote-catalog-inheritance-measure.mjs|unicorn/require-post-message-target-origin|1",
         // SQLite observers preserve native methods for restoration and forward each live receiver.
         "scripts/perf/schema-crossing-observer.ts|@typescript-eslint/unbound-method|1",
         // Native transaction timing forwards the live receiver and restores the original method.
@@ -254,6 +256,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The resource probe forwards the live pool receiver and restores the exact captured method.
+        "scripts/perf/skill-resource-admission-measure.mjs|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.
         "scripts/perf/state-read-worker-bench.ts|typescript/unbound-method|1",
         // Backup attribution forwards the native SQLite receiver and restores both methods in finally.

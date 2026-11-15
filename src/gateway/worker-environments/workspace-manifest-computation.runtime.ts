@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import { deserialize } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
@@ -320,6 +321,52 @@ export async function executeWorkspaceManifestComputation(
       return await withHashes(input.hashes, () =>
         readWorkspaceFileSnapshotWithLimit(input.path, input.maxBytes, input.root),
       );
+    }
+    case "workspace.reconcile.temporary": {
+      const { join } = await import("node:path");
+      const { resolvePreferredOpenClawTmpDir } = await import("../../infra/tmp-openclaw-dir.js");
+      return join(resolvePreferredOpenClawTmpDir(), command.input.prefix);
+    }
+    case "workspace.reconcile.ownership": {
+      const { assertWorkspaceInputOwnership } = await import("./workspace-reconcile-core.js");
+      return await assertWorkspaceInputOwnership(command.input);
+    }
+    case "workspace.reconcile.recover": {
+      const { recoverWorkerWorkspaceReconciliation } =
+        await import("./workspace-reconcile-recovery.js");
+      return await recoverWorkerWorkspaceReconciliation({
+        ...command.input,
+        journal: {
+          ...command.input.journal,
+          basePack: await fs.readFile(command.input.basePackPath),
+        },
+        assertCurrent: assertBeforeMutation,
+      });
+    }
+    case "workspace.reconcile.apply": {
+      const { root, appliedEntries, buildCacheInputs, patchPath } = command.input;
+      const { root: openRoot } = await import("../../infra/fs-safe.js");
+      const { createStagedInputPathMatcher } = await import("../../media/staged-inputs.js");
+      const { prepareNonDirectoryTargets } = await import("./workspace-reconcile-derived-paths.js");
+      const { applyWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      const { applyWorkspaceDirectoryChanges } = await import("./workspace-reconcile-core.js");
+      const staged = createStagedInputPathMatcher(await openRoot(root));
+      await prepareNonDirectoryTargets(
+        root,
+        appliedEntries,
+        async (entryPath) => Boolean(buildCacheInputs?.has(entryPath)) || (await staged(entryPath)),
+        assertBeforeMutation,
+        buildCacheInputs !== undefined,
+      );
+      await applyWorkspacePatch({
+        root,
+        patch: await fs.readFile(patchPath),
+        assertCurrent: assertBeforeMutation,
+      });
+      return await applyWorkspaceDirectoryChanges({
+        ...command.input,
+        assertCurrent: assertBeforeMutation,
+      });
     }
     case "workspace.reconcile.diff": {
       const { readWorkspacePatch } = await import("./workspace-reconcile-recovery.js");

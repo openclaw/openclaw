@@ -123,13 +123,14 @@ import type {
   SessionStoreProjectionWorkerInput,
   SessionStoreProjectionWorkerResult,
 } from "./session-store-projection.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetPreparationRequest,
-  SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type {
   SessionTranscriptHydrationWorkerInput,
@@ -370,6 +371,7 @@ export type SessionTranscriptWorkerInput =
 /** Only the dispatch owner attaches live physical proof; caller-prepared inputs cannot supply it. */
 export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
   validation?: OpenClawAgentDatabaseReadValidation;
+  readCustody?: readonly SessionStoreReadCustody[];
   projectionReceipt?: SessionTranscriptProjectionReceipt;
 };
 
@@ -385,8 +387,11 @@ export type SessionHistoryWorkerRequestRunner = <
   receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
-  timeoutMs?: number,
+  options?: SessionHistoryWorkerRequestOptions,
 ) => Promise<TResult>;
+
+/** `pointRead` places an access check on the worker pool's reserved class-0 lane. */
+export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };
 
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;

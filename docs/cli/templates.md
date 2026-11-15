@@ -205,8 +205,9 @@ only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
 per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
 excluded regardless of case. Links, nonregular files, unsafe portable paths,
 overlapping bundled directories, and conflicting skill identities or workspace
-destinations are rejected. Build and Add reject changed source bytes or folder
-membership after review. File modes follow ordinary Template packaging.
+destinations are rejected. Build and Add preserve executable files and reject changes to source bytes,
+executable flags, or folder membership after review. Other permission bits are
+normalized when packaging and installing bundled folders.
 
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.

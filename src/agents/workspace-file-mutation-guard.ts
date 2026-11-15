@@ -18,7 +18,7 @@ export function assertCurrentAgentDeletionRecoveryHolds(
   );
 }
 
-/** Filesystem effects run outside worker grants and retain their current native recovery check. */
+/** Filesystem grants retain the current recovery read, outside SQLite writer grants. */
 export function createWorkspaceFileMutationGuard(
   guard?: WorkspaceStateGuard,
 ): (() => void) | undefined {

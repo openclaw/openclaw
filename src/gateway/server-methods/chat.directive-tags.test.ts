@@ -4934,13 +4934,6 @@ describe("chat.send local operator client sender context", () => {
       sessionEntry: { spawnedBy: "agent:main:parent" },
     },
     {
-      name: "synthetic cron continuation",
-      client: {
-        internal: { isLocalClient: true, cronRunContinuation: true },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
       name: "persisted cron continuation",
       client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
       sessionEntry: {

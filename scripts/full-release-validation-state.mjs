@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -66,7 +66,6 @@ import { verifyQualificationAdmission } from "./release-qualification-admission.
 
 export * from "./full-release-validation-policy.mjs";
 
-const execFileAsync = promisify(execFile);
 const RELEASE_SUMMARY_PATH =
   process.env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR ??
   fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url));
@@ -129,7 +128,7 @@ async function runGh(args, options = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const result = await execFileAsync("gh", args, {
+      const result = await promisify(childProcess.execFile)("gh", args, {
         encoding: "utf8",
         env: process.env,
         killSignal: "SIGKILL",
@@ -578,7 +577,7 @@ async function validateReuse(executionPlan, signal) {
         }),
       );
     }
-    const result = await execFileAsync(process.execPath, args, {
+    const result = await promisify(childProcess.execFile)(process.execPath, args, {
       encoding: "utf8",
       env: process.env,
       killSignal: "SIGKILL",
