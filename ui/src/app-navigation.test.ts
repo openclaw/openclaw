@@ -183,6 +183,7 @@ it("recognizes plugin hub routes", () => {
   expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, true, false, false]);
   expect(SIDEBAR_NAV_ROUTES).not.toContain("templates");
   expect(SIDEBAR_NAV_ROUTES).not.toContain("apps");
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("activity");
 });
 
 function expectRoutedPath(path: string, route: RouteId, base = "") {

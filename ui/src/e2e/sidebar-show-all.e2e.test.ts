@@ -62,17 +62,16 @@ suite.define(() => {
         await sidebar.getByText("No active sessions match this filter", { exact: true }).waitFor();
         expect(await ownerTitle.textContent()).toContain("My sessions");
         await captureSidebarUiProof(suite, page, "empty-my-sessions.png");
-        for (const panel of ["sessions", "pages", "online", "pages"] as const) {
-          const tab = sidebar.locator(`[data-navigation-view="${panel}"]`);
-          if (panel !== "sessions") {
-            await tab.click();
+        for (const panel of ["sessions", "online", "collapsed"] as const) {
+          if (panel === "online") {
+            await sidebar.locator('[data-navigation-view="online"]').click();
           }
-          if (panel === "pages") {
-            await tab.click();
+          if (panel === "collapsed") {
+            await page.keyboard.press("ControlOrMeta+B");
             await shellClass().toContain("shell--nav-collapsed");
           }
           if (panel !== "sessions") {
-            // Outside Sessions the avatar opens Sessions; the next click opens the switcher.
+            // Outside Sessions, or with the sidebar closed, the avatar opens Sessions; the next click opens the switcher.
             await switcher.click();
             await polledAttribute(sessionTab, "aria-pressed").toBe("true");
           }

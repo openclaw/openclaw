@@ -341,6 +341,27 @@ describe("sidebar rail pin menu", () => {
     expect(order()).toEqual(["route:usage", "pages"]);
   });
 
+  it("opens Activity and the people list from the People rail item", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(navigate).toHaveBeenCalledWith("activity");
+    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: false });
+    const overview = sidebar.querySelector<HTMLAnchorElement>(".sidebar-online__overview a")!;
+    expect(overview.textContent).toContain("Activity");
+    expect(overview.getAttribute("href")).toBe("/activity");
+  });
+
   it("opens Sessions, then the sidebar, then the agent menu from the rail avatar", async () => {
     const { sidebar } = await mountSidebar(
       createGateway(createTestGatewayClient(createGatewayRequestMock())),
