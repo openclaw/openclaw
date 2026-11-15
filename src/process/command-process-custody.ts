@@ -25,7 +25,10 @@ export async function settleCommandProcessGroups(
           return undefined;
         }
         // An orphaned group has no leader whose start identity can authorize a signal.
-        if (startedAt === null || (await readCommandProcessStartTime(pid)) !== startedAt) {
+        if (
+          startedAt === null ||
+          (await readCommandProcessStartTime(pid, { instance: true })) !== startedAt
+        ) {
           return unresolved("Recorded process identity could not be confirmed");
         }
         if (isProcessGroupGoneByKernel(pid)) {
@@ -33,7 +36,7 @@ export async function settleCommandProcessGroups(
         }
         killProcessTree(pid, { detached: true, force: true });
         const exit = await waitForCommandProcessGroupExit(pid, async () => {
-          const current = await readCommandProcessStartTime(pid);
+          const current = await readCommandProcessStartTime(pid, { instance: true });
           return current === null || current === startedAt;
         });
         if (exit === "replaced") {

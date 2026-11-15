@@ -266,7 +266,11 @@ async function runCommandWithOutputEncoding(
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
-  const startupReady = child.pid === undefined ? waitForCommandSpawn(child) : undefined;
+  // Native Linux PIDs arrive before asynchronous scoped custody admission completes.
+  const startupReady =
+    child.pid === undefined || process.platform === "linux" || process.platform === "android"
+      ? waitForCommandSpawn(child)
+      : undefined;
   let waitingForSpawn = startupReady !== undefined;
   const startupCanceled = createDeferredCore<Exclude<CommandTerminationReason, "exit">>();
   const nodeChild = child.nodeChildProcess;
@@ -406,44 +410,6 @@ async function runCommandWithOutputEncoding(
     noOutputTimer = undefined;
     signal?.removeEventListener("abort", onAbort);
   };
-  if (startupReady) {
-    let interrupted: Exclude<CommandTerminationReason, "exit"> | undefined;
-    try {
-      interrupted = await Promise.race([
-        startupReady.then(() => undefined),
-        startupCanceled.promise,
-      ]);
-    } catch (error) {
-      clearTimers();
-      throw failedProcess(
-        error,
-        nodeChild instanceof BrokerChild && nodeChild.notStarted ? "normal" : "uncertain",
-      );
-    }
-    if (interrupted) {
-      clearTimers();
-      // The result cannot claim extinction before PID delivery. Keep the same
-      // termination owner through late readiness and final output drainage.
-      void processCleanup.finally(() => releaseOutput?.()).catch(() => {});
-      const stopped = {
-        pid: nodeChild.pid,
-        code:
-          interrupted === "timeout" || interrupted === "no-output-timeout"
-            ? TIMEOUT_EXIT_CODE
-            : null,
-        signal: null,
-        killed: nodeChild.killed,
-        cleanup: "uncertain" as const,
-        termination: interrupted === "output-limit" ? ("signal" as const) : interrupted,
-        noOutputTimedOut: interrupted === "no-output-timeout",
-        outputLimitExceeded: interrupted === "output-limit" || undefined,
-      };
-      return raw
-        ? { ...stopped, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), windowsEncoding }
-        : { ...stopped, stdout: "", stderr: "" };
-    }
-    waitingForSpawn = false;
-  }
 
   const captureOutput = (
     capture: CapturedOutputBuffers,
@@ -538,30 +504,80 @@ async function runCommandWithOutputEncoding(
     Object.assign(terminatingOutputError, { outputErrorStream: stream });
     cancel("signal");
   };
-  child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
-  child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
   const outputStreams = [
     { stream: "stdout", capture: stdoutCapture, maxBytes: maxStdoutBytes, mode: stdoutCaptureMode },
     { stream: "stderr", capture: stderrCapture, maxBytes: maxStderrBytes, mode: stderrCaptureMode },
   ] as const;
-  for (const { stream, capture, maxBytes, mode } of outputStreams) {
-    child[stream]?.on("data", (chunk) => {
-      const buffer = observeOutputChunk(chunk, stream);
-      appendPreservedOutputLines({
-        capture,
-        chunk: buffer,
-        stream,
-        preserveOutputLine: options.preserveOutputLine,
-        maxPreservedOutputLines,
-        maxPendingLineBytes: maxPreservedPendingLineBytes,
+  const subscribeOutput = () => {
+    child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
+    child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
+    for (const { stream, capture, maxBytes, mode } of outputStreams) {
+      child[stream]?.on("data", (chunk) => {
+        const buffer = observeOutputChunk(chunk, stream);
+        appendPreservedOutputLines({
+          capture,
+          chunk: buffer,
+          stream,
+          preserveOutputLine: options.preserveOutputLine,
+          maxPreservedOutputLines,
+          maxPendingLineBytes: maxPreservedPendingLineBytes,
+        });
+        captureOutput(capture, buffer, maxBytes, stream, mode);
+        armNoOutputTimer();
       });
-      captureOutput(capture, buffer, maxBytes, stream, mode);
-      armNoOutputTimer();
-    });
+    }
+  };
+  if (nodeChild instanceof BrokerChild) {
+    // Remote pipes arrive at readiness, before their held readers are released.
+    // Do not wait for scoped custody: output must also drain during admission.
+    void nodeChild.ready().then(subscribeOutput, () => {});
+  } else {
+    // Execa can drain native unbuffered streams while custody is still pending.
+    subscribeOutput();
+  }
+  // Input remains behind custody admission; output subscribes at transport readiness above.
+  if (startupReady) {
+    let interrupted: Exclude<CommandTerminationReason, "exit"> | undefined;
+    try {
+      interrupted = await Promise.race([
+        startupReady.then(() => undefined),
+        startupCanceled.promise,
+      ]);
+    } catch (error) {
+      clearTimers();
+      throw failedProcess(
+        error,
+        nodeChild instanceof BrokerChild && nodeChild.notStarted ? "normal" : "uncertain",
+      );
+    }
+    // Known children still drain captured output and report observer errors below.
+    if (interrupted && nodeChild.pid === undefined) {
+      clearTimers();
+      // The result cannot claim extinction before PID delivery. Keep the same
+      // termination owner through late readiness and final output drainage.
+      void processCleanup.finally(() => releaseOutput?.()).catch(() => {});
+      const stopped = {
+        pid: nodeChild.pid,
+        code:
+          interrupted === "timeout" || interrupted === "no-output-timeout"
+            ? TIMEOUT_EXIT_CODE
+            : null,
+        signal: null,
+        killed: nodeChild.killed,
+        cleanup: "uncertain" as const,
+        termination: interrupted === "output-limit" ? ("signal" as const) : interrupted,
+        noOutputTimedOut: interrupted === "no-output-timeout",
+        outputLimitExceeded: interrupted === "output-limit" || undefined,
+      };
+      return raw
+        ? { ...stopped, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), windowsEncoding }
+        : { ...stopped, stdout: "", stderr: "" };
+    }
+    waitingForSpawn = false;
   }
 
   let inputAdmissionError: Error | undefined;
-  if (options.beforeInput) {
+  if (options.beforeInput && !termination) {
     nodeChild.stdin?.once("error", (cause) => {
       // Execa preserves the child's result when it closes input early; other faults still cancel.
       if (hasErrnoCode(cause, "EPIPE")) {

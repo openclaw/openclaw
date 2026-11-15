@@ -72,9 +72,10 @@ export async function runExec(
   let deadlineExpired = false;
   let releaseCancellation = () => {};
   try {
+    const signal = resolveCommandProcessSignal(resolvedOptions.signal);
     const subprocess = spawnCommand([command, ...args], {
       baseEnv: resolvedOptions.baseEnv,
-      cancelSignal: resolvedOptions.signal,
+      cancelSignal: signal,
       cwd: resolvedOptions.cwd,
       encoding: "buffer",
       executionTimeoutMs: timeout,
@@ -95,7 +96,6 @@ export async function runExec(
       subprocess.nodeChildProcess instanceof BrokerChild && subprocess.pid === undefined
         ? createDeferredCore<never>()
         : undefined;
-    const signal = resolveCommandProcessSignal(resolvedOptions.signal);
     let cancellationOpen = true;
     let deadline: ReturnType<typeof setProcessTimeout> | undefined;
     const stopCommand = (reason: "timeout" | "signal") => {
@@ -148,15 +148,19 @@ export async function runExec(
     }
     // Keep draining and settling a late process after a local startup failure returns.
     const completion = (async () => {
-      if (subprocess.pid === undefined) {
-        await waitForCommandSpawn(subprocess);
+      const needsAdmission = subprocess.pid === undefined;
+      if (subprocess.nodeChildProcess instanceof BrokerChild) {
+        // Subscribe before held pipes are released, independently of scoped custody.
+        // Execa retains the authoritative launch-error metadata on readiness failure.
+        await subprocess.nodeChildProcess.ready().catch(() => subprocess);
       }
-      awaitingStartup = false;
       const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
       let observer = acceptingOutput ? resolvedOptions.onOutputChunk : undefined;
       const observe = (chunk: Buffer, stream: CommandOutputStream) => {
         try {
-          observer?.(chunk, stream);
+          if (acceptingOutput && !signal?.aborted) {
+            observer?.(chunk, stream);
+          }
         } catch {
           // Diagnostic observers cannot replace the command's outcome.
           observer = undefined;
@@ -168,12 +172,19 @@ export async function runExec(
         subprocess.nodeChildProcess.stdout?.on("data", onStdout);
         subprocess.nodeChildProcess.stderr?.on("data", onStderr);
       }
-      const result = await subprocess.finally(() => {
+      let result;
+      try {
+        if (needsAdmission) {
+          await waitForCommandSpawn(subprocess);
+        }
+        awaitingStartup = false;
+        result = await subprocess;
+      } finally {
         releaseCancellation();
         releaseOutput();
         subprocess.nodeChildProcess.stdout?.off("data", onStdout);
         subprocess.nodeChildProcess.stderr?.off("data", onStderr);
-      });
+      }
       if (deadlineExpired) {
         const error = createSanitizedCommandError({ timedOut: true });
         throw Object.assign(error, result, {
