@@ -24,6 +24,7 @@ type Workflow = {
     string,
     {
       env?: Record<string, string>;
+      "runs-on"?: string;
       if?: string;
       needs?: string[];
       steps: Array<Record<string, unknown>>;
@@ -441,6 +442,15 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     }
     expect(source).not.toContain("continuationSource");
     expect(source).not.toContain("continuation_plan_json");
+  });
+
+  it("keeps immutable plan cache writers and admission readers on the same hosted backend", () => {
+    const reader = workflow.jobs.resolve_target?.["runs-on"];
+    const writer = workflow.jobs.release_execution_plan?.["runs-on"];
+    expect(writer).toBe(reader);
+    expect(reader).toContain("ubuntu-24.04");
+    expect(reader).not.toContain("OPENCLAW_CI_RUNNER_BACKEND");
+    expect(reader).not.toContain("blacksmith");
   });
 
   it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
