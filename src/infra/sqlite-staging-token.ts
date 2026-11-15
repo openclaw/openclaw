@@ -147,10 +147,10 @@ function acquireStagingToken(
   const token = Object.assign(release, { beginRetirement });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
-    if (mode === "create") {
-      db.exec(exclusive ? "BEGIN EXCLUSIVE" : "BEGIN IMMEDIATE");
-    } else if (mode === "reclaim") {
+    if (exclusive) {
       db.exec("BEGIN EXCLUSIVE");
+    } else if (mode === "create") {
+      db.exec("BEGIN IMMEDIATE");
     } else {
       db.exec("BEGIN");
     }
