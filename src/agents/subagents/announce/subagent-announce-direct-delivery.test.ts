@@ -28,6 +28,7 @@ import { createReplyOperation } from "../../../sessions/session-controller.opera
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
+import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -232,6 +233,43 @@ it("delivers a text fallback on the current generation after its producer releas
     restoreActivePluginRegistrySnapshot(original);
   }
 });
+
+it.for(["subagent_settle", "subagent_announce"] as const)(
+  "passes only retained requester identity into %s agent admission",
+  async (sourceTool, { signal }) => {
+    const fixture = setup(sourceTool);
+    const requesterOrigin = { sessionKey, messageProvider: "discord", senderId: "owner-fixture" };
+    const assertCurrent = vi.fn();
+    const delivery = withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey,
+        requesterOrigin,
+        personalToolIdentityScoped: true,
+        personalToolSelection: { requesterOrigin, assertCurrent },
+        fullPermission: true,
+        sessionEventToolsAllow: ["openclaw"],
+      },
+      fixture.startDelivery,
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "retained requester dispatch not reached",
+      ),
+      signal,
+    );
+    expect(fixture.dispatch.mock.calls[0]?.[2]?.agentToolCaller).toEqual({
+      agentId: "main",
+      sessionKey,
+      requesterOrigin,
+      assertCurrent,
+    });
+    fixture.dispatchDone.resolve(response([{ text: "Completed" }], sentDeliveryStatus));
+    await withinTest(delivery, signal);
+  },
+);
 
 it("preserves the direct completion phase without replacing controller custody", async () => {
   const fixture = setup("agent_harness_completion");
