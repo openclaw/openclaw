@@ -143,7 +143,7 @@ describeBrowserLayout.concurrent("chat run spacing", () => {
         expect(gaps).toEqual({
           intraTurn: 2,
           textToTool: 8,
-          toolToList: 8,
+          toolToList: 4,
           listToReply: 8,
           replyToWork: 8,
           workToReply: 4,

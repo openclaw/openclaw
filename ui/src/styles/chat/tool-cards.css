@@ -997,21 +997,24 @@
   overflow-y: auto;
 }
 
-/* The outer stack has a 2px gap; unwrapped run bodies have no gap. */
+/* Run bodies use display: contents, so both paths share the outer 2px gap. */
 .chat-group-messages > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
 .chat-group-messages > .chat-activity-group + .chat-tool-msg-collapse,
 .chat-group-messages > .chat-tool-msg-collapse + .chat-activity-group,
 .chat-group-messages > .chat-activity-group + .chat-bubble--tool-shell,
-.chat-group-messages > .chat-bubble--tool-shell + .chat-activity-group {
-  margin-block-start: 2px;
-}
-
+.chat-group-messages > .chat-bubble--tool-shell + .chat-activity-group,
+.chat-group-messages > .chat-tool-msg-collapse + .chat-bubble--tool-shell,
+.chat-group-messages > .chat-bubble--tool-shell + .chat-tool-msg-collapse,
+.chat-group-messages > .chat-bubble--tool-shell + .chat-bubble--tool-shell,
 .chat-agent-run-body > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
 .chat-agent-run-body > .chat-activity-group + .chat-tool-msg-collapse,
 .chat-agent-run-body > .chat-tool-msg-collapse + .chat-activity-group,
 .chat-agent-run-body > .chat-activity-group + .chat-bubble--tool-shell,
-.chat-agent-run-body > .chat-bubble--tool-shell + .chat-activity-group {
-  margin-block-start: 4px;
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-activity-group,
+.chat-agent-run-body > .chat-tool-msg-collapse + .chat-bubble--tool-shell,
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-tool-msg-collapse,
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-bubble--tool-shell {
+  margin-block-start: 2px;
 }
 
 /* Grouped activity owns vertical scrolling; inline trails keep per-card bounds. */
