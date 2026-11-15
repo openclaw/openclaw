@@ -62,6 +62,10 @@ const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, () => JSX.El
 <path class="lob-telephone-receiver" d="M103 30 Q110 34 116 30" fill="none" stroke="#bc955c" stroke-width="2" stroke-linecap="round"></path>
 <path class="lob-telephone-receiver" d="M105 56 Q101 63 108 65 Q115 67 110 71 Q106 74 112 77" fill="none" stroke="#574631" stroke-width="1.8" stroke-linecap="round"></path>
 `),
+  santaclaws: staticSprite(`
+<path class="lob-candy-cane" d="M104 58 L109.5 25 Q111.5 16 117.5 17.5 Q122 19 120 25" fill="none" stroke="#f6f1e8" stroke-width="4.5" stroke-linecap="round"></path>
+<path class="lob-candy-cane" d="M104 58 L109.5 25 Q111.5 16 117.5 17.5 Q122 19 120 25" fill="none" stroke="#c41f2b" stroke-width="4.5" stroke-dasharray="3 3"></path>
+`),
 };
 
 // Every registered pattern suppresses freckles. Null entries use geometry or CSS instead of an overlay.
@@ -224,6 +228,28 @@ const PALETTE_PATTERNS: Partial<Record<LobsterPetPaletteId, (() => JSX.Element) 
   <path d="M51 52 Q60 57 69 52 M49 65 Q60 72 71 65" fill="none" stroke="#b8beba" stroke-width="1.5" stroke-linecap="round"></path>
   <path d="M50 78 L60 81 L70 78 V86 L60 83 L50 86 Z" fill="#8f3347"></path>
   <circle cx="60" cy="91" r="1.8" fill="#bc955c"></circle>
+</g>
+`),
+  // Suit trim, belt and beard sit on the red shell; the hat covers the
+  // antennae and flops away from the candy-cane claw. Belt ends meet the outline.
+  santaclaws: staticSprite(`
+<g class="lob-santaclaws">
+  <path d="M56 82 L64 82 L64 96.6 Q60 97.3 56 96.6 Z" fill="#f6f1e8"></path>
+  <path d="M21.8 74 Q60 78 98.2 74 L95.4 80 Q60 84 24.6 80 Z" fill="#26252b"></path>
+  <rect x="53.5" y="75.2" width="13" height="7.6" rx="1.5" fill="none" stroke="#e8b422" stroke-width="2"></rect>
+  <path d="M31 40 Q40 47 47 44 Q60 50 73 44 Q80 47 89 40 Q90 56 80 63 Q76 70 68 69 Q64 74 60 72 Q56 74 52 69 Q44 70 40 63 Q30 56 31 40 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#d8cdbd" stroke-width="1.2" stroke-linecap="round">
+    <path d="M40 55 Q44 59 48 56 M54 62 Q60 66 66 62 M72 56 Q76 59 80 55"></path>
+  </g>
+  <path d="M56 52.5 Q60 55.5 64 52.5" fill="none" stroke="#8f1720" stroke-width="1.6" stroke-linecap="round"></path>
+  <path d="M43 47 Q51 41.5 60 46.5 Q69 41.5 77 47 Q69 51.5 60 49.5 Q51 51.5 43 47 Z" fill="#e9e1d3"></path>
+  <path d="M96 20 C94 6 76 -1 56 0 C38 1 22 8 14 23 L20 24.5 Q21.5 21 24 20 Q60 6 96 20 Z" fill="#c41f2b"></path>
+  <path d="M50 3 Q31 8 21 19" fill="none" stroke="#8f1720" stroke-width="1.2" stroke-linecap="round" opacity="0.55"></path>
+  <path d="M24 20 Q60 6 96 20 L97 28 Q60 14 23 28 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#d8cdbd" stroke-width="1" stroke-linecap="round">
+    <path d="M30 18.5 V25.5 M38 16 V23 M46 14.3 V21.4 M54 13.4 V20.4 M66 13.4 V20.4 M74 14.3 V21.4 M82 16 V23 M90 18.5 V25.5"></path>
+  </g>
+  <circle cx="16" cy="25.5" r="5" fill="#f6f1e8"></circle>
 </g>
 `),
   clawtron: staticSprite(`
