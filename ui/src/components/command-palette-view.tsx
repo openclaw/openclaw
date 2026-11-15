@@ -19,6 +19,7 @@ import {
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
+import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -134,7 +135,7 @@ function handleKeydown(
   if (event.defaultPrevented) {
     return;
   }
-  if (props.composing || event.isComposing || event.keyCode === 229) {
+  if (props.composing || isComposingKeyboardEvent(event)) {
     event.stopPropagation();
     return;
   }

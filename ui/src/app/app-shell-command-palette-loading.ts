@@ -14,6 +14,7 @@ import { CommandPaletteModes, paletteDraftShape } from "../components/command-pa
 import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { keepMobileReturnNative } from "../lib/browser-platform.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
+import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -417,7 +418,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       if (keepMobileReturnNative(event)) {
         return;
       }
-      if (composing || event.isComposing || event.keyCode === 229) {
+      if (composing || isComposingKeyboardEvent(event)) {
         event.stopPropagation();
         return;
       }

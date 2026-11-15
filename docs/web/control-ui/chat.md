@@ -336,13 +336,18 @@ plain Enter to add a line after composition has finished.
 
 ## Mobile message input
 
-On iPhone, iPad (including desktop mode), and Android, Return adds a line break;
-use the **Send**, **Start**, **Ask**, or queued-edit save button to submit.
-Keyboard modifiers do not submit either, including while suggestion menus are open.
+On iPhone, iPad (including desktop mode), and Android software keyboards, Return
+adds a line break; use the **Send**, **Start**, **Ask**, or queued-edit save button
+to submit. Software Return does not submit while suggestion menus are open either.
+
+An iPad or iPhone hardware keyboard uses the desktop send shortcut when the browser
+reports a physical Enter or numpad Enter key. **Shift+Enter** still adds a line,
+and Enter that confirms an input-method composition does not send. If a browser
+does not identify the physical key, Return stays native; use the submit button.
+Android Return behavior is unchanged.
 
 **Settings → Appearance → Chat → Send shortcut** stays visible and synced on all
-devices, but only controls desktop submission. Narrow windows and touchscreen
-computers retain desktop shortcuts. Android browsers identifying as desktop Linux
+devices. Narrow windows and touchscreen computers retain desktop shortcuts. Android browsers identifying as desktop Linux
 also retain desktop behavior; touch and window size alone cannot distinguish them.
 
 ## Context breakdown

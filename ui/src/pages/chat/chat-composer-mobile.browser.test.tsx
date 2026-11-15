@@ -239,6 +239,7 @@ it.each([
   ["rail", "iPhone", "enter"],
   ["rail", "iPhone", "modifier-enter"],
   ["chat", "iPhone", "enter"],
+  ["chat", "iPad", "enter"],
   ["new-session", "iPhone", "enter"],
   ["chat", "Android", "enter"],
   ["new-session", "Android", "enter"],
@@ -274,6 +275,14 @@ it.each([
     const textarea = container.querySelector("textarea")!;
     textarea.focus();
     textarea.setSelectionRange(5, 6);
+    // Project software-keyboard identity while retaining real browser editing.
+    textarea.addEventListener(
+      "keydown",
+      (event) => {
+        Object.defineProperty(event, "code", { value: "" });
+      },
+      { capture: true },
+    );
     await userEvent.keyboard("{Enter}");
     expect(textarea.value).toBe("first\nsecond");
     expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([6, 6]);
@@ -295,6 +304,84 @@ it.each([
             surface === "rail" ? "button[type=submit]" : ".new-session-page__start-submit",
           )!;
     button.click();
+    expect(submit).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(
+  (["chat", "new-session", "rail"] as const).flatMap((surface) =>
+    [false, true].map((requiresModifier) => ({ surface, requiresModifier })),
+  ),
+)(
+  "uses physical iPad Enter in $surface (modifier=$requiresModifier) without consuming Shift or IME Return",
+  async ({ surface, requiresModifier }) => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    vi.spyOn(navigator, "maxTouchPoints", "get").mockReturnValue(5);
+    onTestFinished(() => vi.restoreAllMocks());
+    await page.viewport(1194, 834);
+    const submit = vi.fn();
+    const { container } =
+      surface === "rail"
+        ? mountSolid(() => (
+            <SessionRailComposer
+              sessionKey="agent:test:main"
+              client={null}
+              presented={true}
+              textareaRef={() => {}}
+              companion={{ draft: "A physical keyboard draft", turns: [], loading: false }}
+              connected={true}
+              pending={false}
+              sendShortcut={requiresModifier ? "modifier-enter" : "enter"}
+              attachmentProps={{}}
+              submit={submit}
+            />
+          ))
+        : surface === "chat"
+          ? renderComposerFixture({
+              draft: "A physical keyboard draft",
+              onSend: submit,
+              sendShortcut: requiresModifier ? "modifier-enter" : "enter",
+            })
+          : renderNewSession({
+              message: "A physical keyboard draft",
+              onSubmit: submit,
+              requiresModifier,
+            });
+    document.body.append(container);
+    const textarea = container.querySelector("textarea")!;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(textarea.value).toBe("A physical keyboard draft\n");
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      const enter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...composition,
+      });
+      textarea.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(false);
+    }
+    expect(submit).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Enter}");
+    if (requiresModifier) {
+      expect(submit).not.toHaveBeenCalled();
+      await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+    }
+    expect(submit).toHaveBeenCalledOnce();
+    // Detaching the keyboard does not latch physical submission for later Return.
+    for (const code of ["", "Unidentified"]) {
+      const softwareReturn = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code,
+        bubbles: true,
+        cancelable: true,
+      });
+      textarea.dispatchEvent(softwareReturn);
+      expect(softwareReturn.defaultPrevented).toBe(false);
+    }
     expect(submit).toHaveBeenCalledOnce();
   },
 );

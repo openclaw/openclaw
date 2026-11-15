@@ -412,6 +412,32 @@ describe("command palette attachments", () => {
   });
 });
 
+it("keeps iPad IME-confirming hardware Enter native in the loaded palette", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPad");
+  const { input, start, context } = await mount();
+  paste(input, [image()]);
+  finishRead(0);
+  setInputValue(input, "A composed planning prompt");
+  await vi.waitFor(() => expect(start().disabled).toBe(false));
+  input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  const end = new CompositionEvent("compositionend", { bubbles: true });
+  input.dispatchEvent(end);
+  const enter = new KeyboardEvent("keydown", {
+    key: "Enter",
+    code: "Enter",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(enter, "timeStamp", { value: end.timeStamp + 1 });
+  input.dispatchEvent(enter);
+  expect(enter.defaultPrevented).toBe(false);
+  expect(context.sessions.createResult).not.toHaveBeenCalled();
+  input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+  key(input, { key: "Enter", code: "Enter", metaKey: true });
+  await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+});
+
 it("keeps mobile attachment Return native and starts only from its button", async () => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
   const { palette, input, query, start, context, expectSubmit } = await mount();
