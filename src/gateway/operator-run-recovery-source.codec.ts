@@ -72,7 +72,8 @@ const parentSourceSchema = z.strictObject({
   version: z.literal(1),
   agentId: boundedString,
   sessionKey: boundedString,
-  sessionId: boundedString,
+  // Older sources also recorded the conversation's transcript id and revision; both are ignored.
+  sessionId: boundedString.optional(),
   lifecycleRevision: boundedString.optional(),
   sourceRunId: boundedString,
   snapshot: operatorRunRecoverySnapshotSchema,
