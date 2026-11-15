@@ -8,6 +8,7 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { dashboardAuthor, dashboardsFilter } from "../lib/dashboards-filter.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -15,7 +16,11 @@ import {
   createSectionSidebarPresence,
   rememberSectionLocation,
 } from "../lib/section-navigation.ts";
-import { resolveSessionPreferredFace } from "../lib/sessions/route-navigation.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import {
+  resolveSessionNavigationAgentId,
+  resolveSessionPreferredFace,
+} from "../lib/sessions/route-navigation.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -123,12 +128,27 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
   const app = useApplication();
   createSectionSidebarPresence("dashboards", () => props.host.navigationCollapsed);
   const dashboards = () => props.host.navigationCatalog.dashboards;
+  // The header's filter narrows to one author and orders the loaded rows.
+  const filteredDashboards = createMemo(() => {
+    const filter = dashboardsFilter();
+    const fallbackAgentId = resolveSessionNavigationAgentId(app);
+    const rows = (dashboards()?.result?.sessions ?? []).filter(
+      (row) => !filter.authorId || dashboardAuthor(row, fallbackAgentId).id === filter.authorId,
+    );
+    return filter.sort === "title"
+      ? rows.toSorted((left, right) =>
+          resolveSessionDisplayName(left.key, left).localeCompare(
+            resolveSessionDisplayName(right.key, right),
+          ),
+        )
+      : rows;
+  });
   const dashboardRows = createMemo(() =>
     props.host.sidebarSnapshot
       ? props.host.sidebarSnapshot.pages
           .filter((row) => !row.archived)
           .map((row) => restoreSnapshotSession(row, props.host.getRouteSessionKey()))
-      : (dashboards()?.result?.sessions ?? []).map((row) =>
+      : filteredDashboards().map((row) =>
           props.host.getSessionNavigationState().toSidebarSession(row),
         ),
   );

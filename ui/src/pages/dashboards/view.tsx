@@ -25,18 +25,14 @@ import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
+import { dashboardAuthor } from "../../lib/dashboards-filter.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import "../../styles/dashboards.css";
 import { DashboardDisplayMenu } from "./dashboard-display-menu.tsx";
-import {
-  DashboardEntry,
-  dashboardAuthor,
-  dashboardGroups,
-  type DashboardRow,
-} from "./dashboard-entry.tsx";
+import { DashboardEntry, dashboardGroups, type DashboardRow } from "./dashboard-entry.tsx";
 import {
   DashboardAuthorChip,
   DashboardAuthorFilter,

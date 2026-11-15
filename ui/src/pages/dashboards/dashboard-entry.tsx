@@ -3,11 +3,11 @@ import { Show, createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
+import { dashboardAuthor } from "../../lib/dashboards-filter.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import type { SessionCreatedActor } from "../../lib/session-owner.ts";
 import {
   isSessionKeyAddressable,
   sessionNavigationTarget,
@@ -21,17 +21,6 @@ import type {
 } from "./gallery-filters.ts";
 
 export type DashboardRow = SessionsListResult["sessions"][number];
-
-export function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
-  const actor = row.createdActor ?? row.owner?.actor;
-  const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
-  const label = actor?.label?.trim() || id;
-  // Without an actor id the author is the session's agent, drawn with its agent avatar.
-  const avatar: SessionCreatedActor = actor?.id?.trim()
-    ? actor
-    : { type: "agent", id, label, identity: { type: "agent", id } };
-  return { id, label, avatar };
-}
 
 type DashboardGroup = { key: string; label?: JSX.Element; rows: DashboardRow[] };
 

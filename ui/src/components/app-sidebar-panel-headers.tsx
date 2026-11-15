@@ -6,6 +6,7 @@ import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
 import { SidebarAutomationsFilter } from "./app-sidebar-automations-filter.tsx";
+import { SidebarDashboardsFilter } from "./app-sidebar-dashboards-filter.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
@@ -65,6 +66,7 @@ export function SidebarDashboardsHeader(props: { host: AppSidebarRenderHost }) {
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <span class="sidebar-panel-header__title">{titleForRoute("dashboards", t)}</span>
+      <SidebarDashboardsFilter host={props.host} />
     </SidebarPanelHeader>
   );
 }
