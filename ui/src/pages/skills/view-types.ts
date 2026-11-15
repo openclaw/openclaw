@@ -20,6 +20,8 @@ export type SkillsRouteData = {
   reportRead?: Promise<SkillStatusReport | undefined>;
   error: string | null;
   clawhubRef?: string;
+  /** An installed skill to open, as the Customize sidebar links it. */
+  skillKey?: string;
 };
 
 export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
