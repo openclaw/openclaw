@@ -158,7 +158,7 @@
     background-color 150ms ease,
     border-color 150ms ease;
 
-  &:not(.sidebar-new-session, :disabled, [aria-disabled="true"]) {
+  &:not(:disabled, [aria-disabled="true"]) {
     &[aria-expanded="true"] {
       --sidebar-rail-control-surface: color-mix(
         in srgb,
@@ -220,38 +220,6 @@
   }
 }
 
-/* The accent fill is the only thing that sets New session apart: it keeps the
-   rail's control size and 8px pitch so the column reads as one stack. */
-.sidebar-rail__create {
-  display: flex;
-  flex: 0 0 auto;
-  justify-content: center;
-  width: var(--sidebar-rail-control-size);
-}
-
-.sidebar-rail__create .sidebar-new-session {
-  background: var(--sidebar-rail-action-bg);
-  color: var(--sidebar-rail-action-foreground);
-}
-
-.sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--sidebar-rail-action-hover-bg);
-  color: var(--sidebar-rail-action-foreground);
-}
-
-.sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
-  background: var(--sidebar-rail-action-active-bg);
-  color: var(--sidebar-rail-action-foreground);
-}
-
-.sidebar-rail__create .sidebar-new-session:focus-visible {
-  outline-color: var(--ring);
-}
-
-.sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
-  cursor: not-allowed;
-}
-
 .sidebar-rail
   :is(
     .sidebar-rail__button > svg,
@@ -286,10 +254,6 @@
     .session-glyph__icon > svg
   ) {
   stroke-width: 2px;
-}
-
-.sidebar-rail__create .sidebar-new-session > svg {
-  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
 }
 
 .sidebar-rail .nav-item__text,
@@ -612,13 +576,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
     .sidebar-identity-card
   ) {
   border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1));
-}
-
-.shell--mobile-nav .sidebar-rail__create {
-  margin-block-end: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
-  padding-bottom: var(--sidebar-rail-block-gap);
-  border-bottom: var(--shell-divider-size) solid
-    var(--sidebar-rail-divider-color, var(--resize-handle-rest-color));
 }
 
 .shell--mobile-nav .sidebar-rail__pins {

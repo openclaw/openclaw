@@ -238,7 +238,12 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   }
   await focusChatSidePanel(page);
   await assertChromeClear();
-  await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+  // New session lives in the Sessions panel header; open the panel when it is closed.
+  const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+  if (!(await create.isVisible())) {
+    await page.locator('[data-navigation-view="sessions"]').click();
+  }
+  await create.click();
   await page.locator(".new-session-page__message").waitFor();
   await assertChromeClear();
   await page.evaluate(() =>
@@ -300,8 +305,9 @@ async function alignsNativeHeaders(
     : row.getByRole("button", { name: "Collapse sidebar" });
   await collapse.waitFor();
   expect(await collapse.getAttribute("aria-expanded")).toBe("true");
-  expect(await row.locator("a").count()).toBe(0);
-  expect(await row.getByRole("button", { name: /New (session|conversation)/ }).count()).toBe(0);
+  // The header's only link is New session, beside Filter & sort and Collapse.
+  expect(await row.locator("a").count()).toBe(1);
+  expect(await row.getByRole("link", { name: "New session", exact: true }).count()).toBe(1);
   const geometry = await row.evaluate((element) => {
     const box = (selector: string) =>
       document.querySelector(selector)!.getBoundingClientRect().toJSON();
