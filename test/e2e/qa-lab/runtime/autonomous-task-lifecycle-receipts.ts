@@ -128,7 +128,6 @@ async function runProof(options: QaProducerOptions): Promise<string> {
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       command: {
         executablePath: process.execPath,
