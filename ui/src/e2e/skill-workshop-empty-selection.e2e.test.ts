@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { SkillsWorkshopListResult } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -77,13 +74,6 @@ suite.define(() => {
             .locator(".sw-list__rows")
             .getByText(filter === "Archived" ? "No archived skills yet." : /^No drafts yet./);
           await empty.waitFor();
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".sw-layout"),
-            [empty],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(suite.artifactDir, filter.toLowerCase() + ".png"), frame.png);
           expect(await page.getByText("Select a skill to view it.", { exact: true }).count()).toBe(
             0,
           );
