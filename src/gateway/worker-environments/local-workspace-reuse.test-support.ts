@@ -426,6 +426,12 @@ export async function proveWarmWorkspaceReuseFailure(
   revoke: () => void,
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
+  if (failure === "observation") {
+    // An unchanged inode needs no acceptance; replace it without changing the content.
+    const source = path.join(first.workspaceDir, "source.txt");
+    await fs.copyFile(source, `${source}.replacement`);
+    await fs.rename(`${source}.replacement`, source);
+  }
   const stores = await import("./local-workspace-store.js");
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
