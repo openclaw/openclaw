@@ -1,0 +1,5 @@
+29
+# LOCAL 2026.11.8 row 225; source 59c620fc586d65097cf0989651571874ac0f848c.
+# Feishu native voice requires actual Ogg Opus header, while Vorbis uses existing transcode or visible file degradation.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
