@@ -1,7 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiFrameLayout,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -62,6 +65,16 @@ suite.define(() => {
                 Math.max(...controls.map((control) => control.getBoundingClientRect().right))
               );
             });
+          const expectButtonClearance = async () => {
+            await waitForControlUiFrameLayout([composer]);
+            const buttonWidth = await composer
+              .locator(".agent-chat__composer-actions .chat-send-btn:visible")
+              .last()
+              .evaluate((button) => button.getBoundingClientRect().width);
+            await expect.poll(rightControlGap).toBeGreaterThanOrEqual(buttonWidth);
+            await expect.poll(rightControlGap).toBeLessThan(buttonWidth + 16);
+            console.info("iPad clearance geometry", { buttonWidth, gap: await rightControlGap() });
+          };
           if (ipad) {
             await page.setViewportSize({ width: 600, height: 1000 });
             await textarea.blur();
@@ -72,7 +85,7 @@ suite.define(() => {
               await page.evaluate((value) => {
                 document.documentElement.dir = value;
               }, direction);
-              await expect.poll(rightControlGap).toBeGreaterThanOrEqual(64);
+              await expectButtonClearance();
             }
             await page.evaluate(() => {
               document.documentElement.dir = "ltr";
@@ -93,15 +106,17 @@ suite.define(() => {
             });
             await writeFile(path.join(suite.artifactDir, "ipad-composer.png"), frame.png);
           }
-          expect(await gap()).toBeGreaterThanOrEqual(ipad ? 64 : 6);
-          if (!ipad) {
+          if (ipad) {
+            await expectButtonClearance();
+          } else {
+            expect(await gap()).toBeGreaterThanOrEqual(6);
             expect(await gap()).toBeLessThan(16);
           }
           if (ipad) {
             await page.evaluate(() => {
               document.documentElement.dir = "rtl";
             });
-            await expect.poll(rightControlGap).toBeGreaterThanOrEqual(64);
+            await expectButtonClearance();
             await page.evaluate(() => {
               document.documentElement.dir = "ltr";
             });
@@ -112,7 +127,7 @@ suite.define(() => {
           if (ipad) {
             for (const width of [820, 600]) {
               await page.setViewportSize({ width, height: 1000 });
-              await expect.poll(gap).toBeGreaterThanOrEqual(64);
+              await expectButtonClearance();
               await send.click({ trial: true });
             }
           }

@@ -725,8 +725,8 @@
    controls without changing the visual viewport or safe-area insets. Keep a
    physical-right gutter, including RTL, and keep it stable across focus changes:
    the browser exposes neither the accessory bounds nor keyboard attachment. */
-:root[data-ipad-browser] {
-  --chat-composer-keyboard-clearance: 64px;
+:root[data-ipad-browser] .agent-chat__input {
+  --chat-composer-keyboard-clearance: var(--chat-composer-send-size);
 }
 
 :root[data-ipad-browser] .agent-chat__composer-footer {
