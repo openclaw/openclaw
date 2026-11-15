@@ -58,7 +58,7 @@ const parent = path.resolve(".local");
 await mkdir(parent, { recursive: true });
 const root = await mkdtemp(path.join(parent, "snapshot-holds-"));
 Object.assign(process.env, { OPENCLAW_STATE_DIR: root, OPENCLAW_HOME: root });
-const env = { ...process.env };
+const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_HOME: root };
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 setRuntimeConfigSnapshot({
   logging: { level: "silent", consoleLevel: "silent", file: path.join(root, "run.log") },

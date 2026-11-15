@@ -601,42 +601,43 @@ export function prepareTranscriptContextSnapshot(
         yield* iterateSessionContextMessages(entries, readEntry);
         return;
       }
-      const selected: Array<Parameters<typeof projectSessionContextMessage<ContextEntry>>[0]> = [];
-      let failure: { error: unknown } | undefined;
-      try {
-        for (const selection of iterateSessionContextEntries(entries)) {
-          if (selection.entry.type !== "reset") {
-            selected.push(selection);
-          }
-        }
-      } catch (error) {
-        // A short consumer must not observe a later malformed placement.
-        failure = { error };
-      }
-      for (let start = 0; start < selected.length;) {
-        let end = start + 1;
+      const selections = iterateSessionContextEntries(entries);
+      let next = selections.next();
+      while (!next.done) {
+        const batch: Array<Parameters<typeof projectSessionContextMessage<ContextEntry>>[0]> = [];
+        let failure: { error: unknown } | undefined;
         // Compaction and background placements can reorder rows. Split at each reversal
         // so the primary-key cursor preserves context order without sorting payloads.
         while (
-          end < selected.length &&
-          end - start < MODEL_CONTEXT_PAYLOAD_BATCH_SIZE &&
-          selected[end]!.entry.seq > selected[end - 1]!.entry.seq
+          !next.done &&
+          batch.length < MODEL_CONTEXT_PAYLOAD_BATCH_SIZE &&
+          (batch.length === 0 || next.value.entry.seq > batch.at(-1)!.entry.seq)
         ) {
-          end++;
+          if (next.value.entry.type !== "reset") {
+            batch.push(next.value);
+          }
+          try {
+            next = selections.next();
+          } catch (error) {
+            // A short consumer must not observe a later malformed placement.
+            failure = { error };
+            break;
+          }
         }
-        const batch = selected.slice(start, end);
         let index = 0;
-        for (const row of iterateSqliteQuerySync(
-          database.db,
-          base
-            .select(transcriptEventJsonSql(database.db).as("event_json"))
-            .where(
-              "seq",
-              "in",
-              batch.map(({ entry }) => entry.seq),
-            )
-            .orderBy("seq", "asc"),
-        )) {
+        for (const row of batch.length === 0
+          ? []
+          : iterateSqliteQuerySync(
+              database.db,
+              base
+                .select(transcriptEventJsonSql(database.db).as("event_json"))
+                .where(
+                  "seq",
+                  "in",
+                  batch.map(({ entry }) => entry.seq),
+                )
+                .orderBy("seq", "asc"),
+            )) {
           const message = projectSessionContextMessage(batch[index++]!, (entry) =>
             hydrateContextEntry(row.event_json, entry),
           );
@@ -644,10 +645,9 @@ export function prepareTranscriptContextSnapshot(
             yield message;
           }
         }
-        start = end;
-      }
-      if (failure) {
-        throw failure.error;
+        if (failure) {
+          throw failure.error;
+        }
       }
     },
     readModelEntrySizes: (requests) => {
