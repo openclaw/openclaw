@@ -608,7 +608,6 @@ export function dispatchGatewayCronFinishedNotifications(params: {
         runStartedAt: params.evt.runAtMs,
         conversation: {
           sessionKey,
-          sessionId: entry.sessionId,
           lifecycleRevision: entry.lifecycleRevision,
         },
         payloads: [

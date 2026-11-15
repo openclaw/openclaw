@@ -119,7 +119,7 @@ const readers: Readers & ThisType<ReaderContext> = {
       (value) => value.plan,
       options.signal,
       undefined,
-      options.timeoutMs,
+      { timeoutMs: options.timeoutMs },
     );
   },
   readCleanup: reader(
@@ -429,13 +429,15 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-reactions", ...input }),
     (value) => value.reactions,
   ),
-  async readExactEntries(input, signal) {
+  async readExactEntries({ pointRead, ...input }, signal) {
     const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
     return this.runRequest(
       () => ({ kind: "session-exact-entries", ...captured }),
       JSON.stringify(captured).length * 2,
       shareSummaryRowStrings,
       signal,
+      undefined,
+      { pointRead },
     );
   },
   async readRowFacts(input) {

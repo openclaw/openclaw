@@ -156,7 +156,7 @@ describe("cron context replay fixtures", () => {
     });
   });
 
-  it("keeps a changed lifecycle revision as a reset", () => {
+  it("keeps the parent bound across a lifecycle reset", () => {
     const fixture = parentFixture({ ...liveRow, lifecycleRevision: "private-rev-2" });
 
     expect(fixture.parentRow).toMatchObject({
@@ -165,7 +165,7 @@ describe("cron context replay fixtures", () => {
     });
     expect(replayScheduledContextFixture(fixture)).toMatchObject({
       status: "ready",
-      principal: "unbound-parent",
+      principal: "parent",
     });
   });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -144,7 +144,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 function git(repoRoot: string, args: string[]): string {
-  const result = spawnSync("git", args, {
+  const result = childProcess.spawnSync("git", args, {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: GIT_MAX_BUFFER,
@@ -166,7 +166,7 @@ async function runAbortableChild(params: {
   let stderr = "";
   let spawnError: Error | undefined;
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(params.command, params.args, {
+    const child = childProcess.spawn(params.command, params.args, {
       cwd: params.cwd,
       signal: params.signal,
       stdio: ["ignore", "pipe", "pipe"],

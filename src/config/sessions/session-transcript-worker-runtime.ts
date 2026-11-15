@@ -35,6 +35,7 @@ import {
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
+  SessionHistoryWorkerRequestOptions,
   SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
@@ -172,7 +173,7 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
-      timeoutMs = 60_000,
+      { timeoutMs = 60_000, pointRead }: SessionHistoryWorkerRequestOptions = {},
     ) => {
       let retirement: Promise<void> | undefined;
       const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
@@ -333,6 +334,7 @@ export function retainSessionHistoryWorkerDatabase(
                     inputBytes: inputBytes + (validation?.inputBytes ?? 0),
                     timeoutMs: remaining,
                     signal: requestSignal,
+                    pointRead,
                     onRequest: onRequest
                       ? (value, context) => {
                           const effect = (async () => {

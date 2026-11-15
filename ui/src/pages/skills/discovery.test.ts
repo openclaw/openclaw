@@ -35,6 +35,30 @@ const remoteSkill = (owner = "alice", slug = "repo", displayName = "Repo") => ({
 
 describe("unified skill discovery", () => {
   it.each(["", "calendar"])(
+    "waits for an accepted library before claiming empty discovery (query=%s)",
+    (clawhubQuery) => {
+      const props = { report: createReport([]), clawhubQuery, clawhubResults: [] };
+      const container = renderDiscovery({ ...props, libraryEntries: undefined });
+      expect(container.querySelector(".settings-empty")).toBeNull();
+      expect(container.querySelector<HTMLInputElement>('input[type="search"]')?.disabled).toBe(
+        false,
+      );
+
+      renderDiscovery(
+        { ...props, libraryEntries: undefined, clawhubResults: [remoteSkill()] },
+        container,
+      );
+      expect(container.querySelector('[data-skill-id="remote:@alice/repo"]')).not.toBeNull();
+
+      // An accepted empty library remains known during later refreshes or failures.
+      renderDiscovery({ ...props, libraryEntries: [] }, container);
+      expect(container.querySelector(".settings-empty")?.textContent).toBe(
+        clawhubQuery ? "No skills match your search." : "No skills yet. Search ClawHub to add one.",
+      );
+    },
+  );
+
+  it.each(["", "calendar"])(
     "does not infer empty discovery from a failed first report (query=%s)",
     (clawhubQuery) => {
       const error = "Installed skill inventory unavailable";

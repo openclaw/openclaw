@@ -398,10 +398,7 @@ it("keeps sandbox source authority through a real background notification commit
     const result = await commitBackgroundResultToSession({
       agentId: target.agentId,
       sessionKey: target.sessionKey,
-      expectedGeneration: {
-        sessionId: target.sessionId,
-        lifecycleRevision: target.lifecycleRevision,
-      },
+      expectedLifecycleRevision: target.lifecycleRevision,
       text: "Watcher found a new error.",
       idempotencyKey: "watcher-result:1",
       provenance: { kind: "cron", jobId: fixture.job.id, runId: "watcher-run:1" },

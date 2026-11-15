@@ -556,6 +556,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
   signal?: AbortSignal,
+  pointRead?: true,
 ): Promise<T> {
   const capturedCandidates = candidates.map(
     ({ path: requestedPath, physicalPath, scope, identity }) => ({
@@ -581,6 +582,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   try {
     let revoked = false;
     let dispatched = false;
+    const taskOptions = { timeoutMs: 60_000, signal, pointRead };
     const assertCurrent = () => {
       signal?.throwIfAborted();
       if (revoked) {
@@ -707,7 +709,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 lane.native = true;
                 return input;
               },
-              { inputBytes, timeoutMs: 60_000, signal, diagnosticOperation: input.kind },
+              { ...taskOptions, inputBytes, diagnosticOperation: input.kind },
             ),
           admissionFamilies,
           signal,
@@ -717,11 +719,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 candidate.identity ? [[candidate.physicalPath, candidate.identity] as const] : [],
               ),
             ),
-            physicalFamilies: capturedCandidates.every(
-              (candidate) => candidate.scope || candidate.identity,
-            )
-              ? true
-              : undefined,
+            physicalFamilies:
+              capturedCandidates.every((candidate) => candidate.scope || candidate.identity) ||
+              undefined,
             env:
               input.kind === "combined-store-topology"
                 ? input.request.options.discovery.env

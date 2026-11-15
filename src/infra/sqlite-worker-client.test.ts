@@ -63,6 +63,11 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const input = { value: "synthetic-private-payload" };
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
+    ["localWorkspace.prepare", "localWorkspace.prepare"],
+    ["localWorkspace.mutate", "localWorkspace.mutate"],
+    ["localWorkspace.manifest", "localWorkspace.manifest"],
+    ["localWorkspace.private-workspace", "localWorkspace"],
+    ["localWorkspace.prepare.private-workspace", "localWorkspace"],
     ["worktrees.private-customer-123", "worktrees"],
     ["session.entry.read", "session.entry.read"],
     ["session.entries.replace", "session.entries.replace"],

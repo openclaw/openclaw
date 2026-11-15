@@ -32,12 +32,16 @@ function startTimeOf(pid: number): number | undefined {
   }
 }
 
-/** The same live process we recorded: a reused PID has a different start time. */
-function isSameLiveProcess(entry: { pid: number; startTime?: number }): boolean {
+/** Unknown identity reads neither prove exit nor make a recorded PID safe to signal. */
+function isSameLiveProcess(entry: { pid: number; startTime?: number }): boolean | undefined {
   if (isPidDefinitelyDead(entry.pid)) {
     return false;
   }
-  return entry.startTime === undefined || startTimeOf(entry.pid) === entry.startTime;
+  if (entry.startTime === undefined) {
+    return true;
+  }
+  const startTime = startTimeOf(entry.pid);
+  return startTime === undefined ? undefined : startTime === entry.startTime;
 }
 
 function settle(entry: AdoptedProcess): void {
@@ -52,7 +56,7 @@ function settle(entry: AdoptedProcess): void {
 
 function reap(): void {
   for (const entry of state.adopted) {
-    if (!entry.stopping && !isSameLiveProcess(entry)) {
+    if (!entry.stopping && isSameLiveProcess(entry) === false) {
       settle(entry);
     }
   }
@@ -65,20 +69,24 @@ const KILL_CONFIRM_TIMEOUT_MS = 2_000;
 
 async function waitForExit(entry: { pid: number; startTime?: number }, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
-  while (isSameLiveProcess(entry) && Date.now() < deadline) {
+  while (isSameLiveProcess(entry) !== false && Date.now() < deadline) {
     await new Promise((resolve) => {
       setTimeout(resolve, 100);
     });
   }
-  return !isSameLiveProcess(entry);
+  return isSameLiveProcess(entry) === false;
 }
 
 /** SIGTERM, then SIGKILL after the cancel grace; each signal re-checks process identity. */
 async function terminate(entry: { pid: number; startTime?: number }): Promise<StopOutcome> {
   // "sent", "gone", or the reason the signal failed.
   const signal = (name: NodeJS.Signals): { result: "sent" | "gone" } | { failed: string } => {
-    if (!isSameLiveProcess(entry)) {
+    const same = isSameLiveProcess(entry);
+    if (same === false) {
       return { result: "gone" };
+    }
+    if (same === undefined) {
+      return { failed: "process identity could not be read" };
     }
     try {
       process.kill(entry.pid, name);
@@ -152,7 +160,7 @@ export function adoptReleasedProcess(
 export function forgetReleasedProcesses(scopeKey: string): ReleasedProcess[] {
   const handedOff: ReleasedProcess[] = [];
   for (const entry of state.adopted) {
-    if (entry.scopeKey === scopeKey && isSameLiveProcess(entry)) {
+    if (entry.scopeKey === scopeKey && isSameLiveProcess(entry) !== false) {
       state.adopted.delete(entry);
       handedOff.push(
         entry.command === undefined
