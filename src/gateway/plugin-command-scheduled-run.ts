@@ -126,9 +126,9 @@ export function assertPluginCommandScheduleRegistry(
   const plugin = registry.plugins.find((record) => record.id === schedule.pluginId);
   const liveIncarnation = plugin && getPluginInstanceIncarnation(plugin);
   if (!isPluginRegistryRetired(registry) && liveIncarnation !== pluginIncarnation) {
-    // A current registry that serves another live instance, or no longer loads the plugin, never
-    // adopts the bound instance again. A transient gap (retired registry, unloading or disposed
-    // instance of an enabled plugin) stays an ordinary refusal: adoption can keep it.
+    // A current registry serving another live instance, or listing the plugin disabled or not at
+    // all, never adopts the bound instance again. A transient gap (retired registry, unloading or
+    // disposed instance of an enabled plugin) stays an ordinary refusal: adoption can keep it.
     if (liveIncarnation !== undefined) {
       throw new PluginCommandScheduleEndedError(
         "Scheduled plugin command's original plugin instance was replaced; the schedule ended.",

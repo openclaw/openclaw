@@ -1,2 +1,0 @@
-# Plugin command schedules retire once their plugin is disabled or removed.
-29
