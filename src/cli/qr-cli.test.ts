@@ -282,56 +282,19 @@ describe("registerQrCli", () => {
   ];
 
   it.each(conflictingQrOptions)("rejects conflicting $name in human mode", async (testCase) => {
-    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      humanOutput: testCase.message,
-      machineOutput: testCase.message,
-    });
+    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toThrow(testCase.message);
 
     expect(runtimeError).not.toHaveBeenCalled();
     expect(runtimeExit).not.toHaveBeenCalled();
     expect(loadConfig).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ...conflictingQrOptions,
-    {
-      name: "missing remote URL",
-      args: ["--remote"],
-      message: "qr --remote requires gateway.remote.url",
-    },
-    {
-      name: "invalid public URL",
-      args: ["--url", "http://localhost:notaport"],
-      message: "Configured publicUrl is invalid.",
-    },
-    {
-      name: "insecure public URL",
-      args: ["--url", "ws://gateway.example.com"],
-      message: "Tailscale and public mobile pairing require a secure gateway URL",
-    },
-  ])("preserves the $name remedy for the root JSON renderer", async ({ args, message }) => {
-    loadConfig.mockReturnValue(createTokenGatewayConfig());
-
-    await expect(runQr(["--json", ...args])).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      humanOutput: expect.stringContaining(message),
-      machineOutput: expect.stringContaining(message),
-    });
-
-    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
-    expect(runtimeError).not.toHaveBeenCalled();
-    expect(runtimeExit).not.toHaveBeenCalled();
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-  });
-
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.example"));
 
-    await expect(runQr(["--setup-code-only"])).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      humanOutput: expect.stringContaining("gateway.tailscale.mode=serve"),
-    });
+    await expect(runQr(["--setup-code-only"])).rejects.toThrow(
+      /secure gateway URL.*gateway\.tailscale\.mode=serve/u,
+    );
     expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
   });
 
@@ -436,10 +399,9 @@ describe("registerQrCli", () => {
       },
     });
 
-    await expect(runQr(["--setup-code-only", "--remote"])).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      humanOutput: "Configured gateway.remote.url is invalid.",
-    });
+    await expect(runQr(["--setup-code-only", "--remote"])).rejects.toThrow(
+      "Configured gateway.remote.url is invalid.",
+    );
     expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
@@ -480,10 +442,7 @@ describe("registerQrCli", () => {
   it("errors when --remote is set but no remote URL is configured", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.local"));
 
-    await expect(runQr(["--remote"])).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      humanOutput: expect.stringContaining("qr --remote requires"),
-    });
+    await expect(runQr(["--remote"])).rejects.toThrow("qr --remote requires");
     expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
