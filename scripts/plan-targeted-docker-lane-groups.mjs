@@ -18,40 +18,16 @@ import {
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
 // The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
 const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
-// Rounded job-minute estimates from candidate checks 43594113208, attempt 1.
-// Use scenario/family costs rather than baseline versions or generated row ordinals:
-// every baseline of a costly scenario should start before the short tail. These
-// are ordering hints only, never timeouts or permission to omit a row.
-const ESTIMATED_JOB_MINUTES = new Map([
-  ["update-first-hop-compat", 25],
-  ["plugin-update", 24],
-  ["update-restart-auth", 23],
-  ["base", 22],
-  ["update-channel-switch", 21],
-  ["bootstrap-persona", 20],
-  ["package-publication-recovery", 20],
-  ["channel-post-core-restore", 18],
-  ["package-verification-recovery", 17],
-  ["acpx-openclaw-tools-bridge", 16],
-  ["feishu-channel", 16],
-  ["meeting-transcripts-sqlite", 16],
-  ["plugin-deps-cleanup", 16],
-  ["tilde-log-path", 16],
-  ["versioned-runtime-deps", 16],
-  ["update-corrupt-plugin", 14],
-  ["upgrade-survivor", 14],
-  ["root-managed-vps-upgrade", 14],
-  ["package-stranded-first-hop", 14],
-  ["update-first-hop-compat-missing-load-path", 13],
-  ["configured-plugin-installs", 13],
-  ["stale-source-plugin-shadow", 13],
-  ["legacy-operator-state", 11],
-  ["plugins-offline", 9],
-  ["doctor-switch", 8],
-  ["release-typed-onboarding", 8],
-  ["plugin-binding-command-escape", 8],
-  ["skill-install", 7],
-]);
+// Candidate checks 43754432638 (attempt 1) found first-hop upgrades and
+// legacy-state scenarios among the longest jobs. Admit these groups early;
+// leave every other group in its original order.
+const LONG_LANE_ORDER = [
+  "update-first-hop-compat",
+  "update-restart-auth",
+  "plugin-update",
+  "legacy-operator-state",
+  "root-managed-vps-upgrade",
+];
 
 function splitTokens(raw) {
   return [
@@ -114,7 +90,7 @@ export function planTargetedDockerLaneGroups({
   baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   assertSupportedUpgradeSurvivorBaselineSpec(predecessor);
   const hasExpandedSurvivorScenarios = splitTokens(upgradeSurvivorScenarios).length > 0;
-  // The same run's September scenario jobs took 14-16 minutes at the median,
+  // Earlier candidate checks 37729815008 had September scenarios at 14-16 minutes median,
   // versus about 10 minutes for June/August. Start recent pinned cohorts first;
   // unresolved tags retain their caller order until baseline resolution pins them.
   if (
@@ -287,24 +263,19 @@ export function planTargetedDockerLaneGroups({
     );
   }
   if (hasExpandedSurvivorScenarios) {
-    const estimatedMinutes = (group) => {
-      const scenarios = splitTokens(group.published_upgrade_survivor_scenarios);
-      if (scenarios.length > 0) {
-        return scenarios.reduce(
-          (sum, scenario) => sum + (ESTIMATED_JOB_MINUTES.get(scenario) ?? 15),
-          0,
-        );
-      }
-      return splitTokens(group.docker_lanes).reduce((total, lane) => {
-        const family = lane.startsWith("update-first-hop-compat-")
-          ? "update-first-hop-compat"
-          : lane;
-        return total + (ESTIMATED_JOB_MINUTES.get(lane) ?? ESTIMATED_JOB_MINUTES.get(family) ?? 15);
-      }, 0);
-    };
-    // Stable ties retain the selected baseline order. Do not regroup: a row owns
-    // its fresh runner state, baseline, artifact label and failure evidence.
-    groups.sort((left, right) => estimatedMinutes(right) - estimatedMinutes(left));
+    const priority = (group) =>
+      Math.min(
+        ...splitTokens(
+          `${group.docker_lanes} ${group.published_upgrade_survivor_scenarios ?? ""}`,
+        ).map((lane) => {
+          const family = lane.startsWith("update-first-hop-compat-")
+            ? "update-first-hop-compat"
+            : lane;
+          const index = LONG_LANE_ORDER.indexOf(family);
+          return index < 0 ? LONG_LANE_ORDER.length : index;
+        }),
+      );
+    groups.sort((left, right) => priority(left) - priority(right));
   }
   return groups;
 }
