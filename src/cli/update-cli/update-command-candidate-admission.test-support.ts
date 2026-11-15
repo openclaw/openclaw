@@ -548,17 +548,15 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(contexts).toEqual([]);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
-    const refusal = "Failing check node-runtime (node-runtime-preflight); key engines.node: ";
-    expect(defaultRuntime.log).toHaveBeenCalledWith(
-      [
-        `${refusal}Required: openclaw@2026.3.23-2 Node >=22.19.0; detected: Node ${process.versions.node} at ${process.execPath}`,
-        `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
-        `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
-        `${refusal}Gateway install root: unresolved`,
-        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
-        `Updater Node ${process.versions.node} at ${process.execPath}.`,
-        "PATH Node: not found.",
-      ].join("\n"),
+    // The terminal shows the one-line refusal and the owner's recovery steps; the diagnostics
+    // stay in the saved report.
+    const logged = vi.mocked(defaultRuntime.log).mock.calls.map(([line]) => line);
+    expect(logged).toEqual(
+      expect.arrayContaining([
+        `⚠️ Update refused: openclaw@2026.3.23-2 needs Node >=22.19.0, but this updater runs Node ${process.versions.node} at ${process.execPath}. No changes were made.`,
+        "2. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
+        `3. Run \`node ${path.join(root, "openclaw.mjs")} update --tag 2026.3.23-2\`.`,
+      ]),
     );
   });
 }
