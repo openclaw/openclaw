@@ -1,5 +1,6 @@
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
@@ -10,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -137,30 +139,28 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
           ]),
         },
       });
-      let catalogResponse: unknown;
-      try {
-        await vi.waitFor(
-          async () => {
-            const catalog = await rpcReq(ws, "talk.catalog", { sessionKey: ownKey });
-            catalogResponse = catalog;
-            expect(catalog.ok).toBe(true);
-            expect(catalog.payload).toEqual({
-              modes: ["transcription"],
-              transports: ["gateway-relay"],
-              brains: ["none"],
-              transcription: { ready: true, providers: [] },
-              realtime: { ready: false, providers: [] },
-              speech: { ready: false, providers: [] },
-            });
-          },
-          { timeout: 5000 },
-        );
-      } catch (error) {
-        throw new Error(
-          `Dictation catalog did not become ready: ${JSON.stringify(catalogResponse)}`,
-          { cause: error },
-        );
-      }
+      const catalogReleased = Promise.withResolvers<"settled" | "reset">();
+      configure = async () => {
+        const observe = expectDefined(captureGatewayRootWorkReleaseObserver(), "catalog root");
+        observe(catalogReleased.resolve);
+        return true;
+      };
+      expect(await rpcReq(ws, "talk.catalog", { sessionKey: ownKey })).toMatchObject({
+        ok: false,
+        error: { details: { reason: "talk-catalog-warming" } },
+      });
+      expect(await catalogReleased.promise).toBe("settled");
+      configure = undefined;
+      const catalog = await rpcReq(ws, "talk.catalog", { sessionKey: ownKey });
+      expect(catalog.ok).toBe(true);
+      expect(catalog.payload).toEqual({
+        modes: ["transcription"],
+        transports: ["gateway-relay"],
+        brains: ["none"],
+        transcription: { ready: true, providers: [] },
+        realtime: { ready: false, providers: [] },
+        speech: { ready: false, providers: [] },
+      });
       expect((await rpcReq(ws, "talk.config", {})).ok).toBe(false);
       expect(
         (await rpcReq(ws, "talk.session.create", { sessionKey: otherKey, mode: "transcription" }))

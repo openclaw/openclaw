@@ -725,3 +725,50 @@ describe("ordinary HTML preview transport", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 });
+
+it("bootstraps ordinary previews but keeps capability file previews on their own sandbox origin", async () => {
+  const shell = "<p>Trusted shell</p>";
+  const origin = "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz";
+  const request = vi
+    .fn()
+    .mockResolvedValue({ ...metadata, sandboxOrigin: origin, sandboxShellHtml: shell });
+  const { view } = mount(request);
+  const frame = await frameFor(view);
+  const post = vi.spyOn(frame.contentWindow!, "postMessage");
+  message(frame, { method: "ui/notifications/sandbox-bootstrap-ready", params: { version: 1 } });
+  expect(post).toHaveBeenCalledWith(
+    { jsonrpc: "2.0", method: "ui/notifications/sandbox-bootstrap-shell", params: { html: shell } },
+    origin,
+  );
+  view.remove();
+
+  const authored =
+    '<meta http-equiv="Content-Security-Policy" content="script-src \'self\'"><script src="app.js"></script>';
+  const file = mount(
+    vi.fn(async (method) =>
+      method === "canvas.document.preview"
+        ? { ...metadata, html: authored, sandboxOrigin: origin, sandboxShellHtml: shell }
+        : {
+            status: "ready",
+            html: authored,
+            omitted: 0,
+            sandboxPath: previewSandboxPath,
+            sandboxOrigin: "https://files.example",
+          },
+    ),
+    authored,
+  );
+  file.view.sessionFileSource = {
+    sessionKey: "agent:main:main",
+    path: "/report/index.html",
+    messageEntryId: "entry",
+  };
+  const fileFrame = await frameFor(file.view);
+  expect(fileFrame.src).toBe("https://files.example" + previewSandboxPath);
+  const filePost = vi.spyOn(fileFrame.contentWindow!, "postMessage");
+  message(fileFrame, {
+    method: "ui/notifications/sandbox-bootstrap-ready",
+    params: { version: 1 },
+  });
+  expect(filePost).not.toHaveBeenCalled();
+});

@@ -7,11 +7,15 @@ import {
   nextOwnerExpiry,
   type AuthorityState,
   type InviteRecord,
+  type NodeInviteRecord,
   type UnixSeconds,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 
 /** True when a pending redemption has waited longer than the pending window. */
-export function isPendingExpired(invite: InviteRecord, now: UnixSeconds): boolean {
+export function isPendingExpired(
+  invite: InviteRecord | NodeInviteRecord,
+  now: UnixSeconds,
+): boolean {
   return (
     invite.status === "pending" &&
     invite.pending !== null &&
@@ -27,17 +31,22 @@ export function expirePendingRedemptions(
   state: AuthorityState,
   now: UnixSeconds,
 ): { state: AuthorityState; expired: string[] } {
-  const expired = Object.entries(state.invites)
+  const expired = [...Object.entries(state.invites), ...Object.entries(state.node_invites)]
     .filter(([, invite]) => isPendingExpired(invite, now))
     .map(([inviteId]) => inviteId);
   if (expired.length === 0) {
     return { state, expired };
   }
   const invites = { ...state.invites };
+  const node_invites = { ...state.node_invites };
   for (const inviteId of expired) {
-    invites[inviteId] = { ...invites[inviteId]!, status: "consumed", pending: null };
+    if (Object.hasOwn(invites, inviteId)) {
+      invites[inviteId] = { ...invites[inviteId]!, status: "consumed", pending: null };
+    } else {
+      node_invites[inviteId] = { ...node_invites[inviteId]!, status: "consumed", pending: null };
+    }
   }
-  return { state: { ...state, invites }, expired };
+  return { state: { ...state, invites, node_invites }, expired };
 }
 
 /** Next visible invite deadline; a one-shot timer, never a polling interval. */
@@ -45,7 +54,10 @@ function nextInviteExpiry(
   state: AuthorityState | null | undefined,
   now: number,
 ): number | undefined {
-  const deadlines = Object.values(state?.invites ?? {}).flatMap((invite) => {
+  const deadlines = [
+    ...Object.values(state?.invites ?? {}),
+    ...Object.values(state?.node_invites ?? {}),
+  ].flatMap((invite) => {
     const deadline =
       invite.status === "pending" && invite.pending
         ? invite.pending.requested_at + PENDING_REDEMPTION_TTL_SECONDS

@@ -445,6 +445,8 @@ export function acquireGatewayOwnerLease(params: {
       }
       await heartbeat?.stop();
       try {
+        const assertCurrent = await custody?.prepareAccess();
+        assertCurrent?.();
         // Lost custody may join its worker, but cannot mutate the recorded lease.
         if (!custody?.signal.aborted) {
           mutateLease("release", (db) => {

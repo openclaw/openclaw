@@ -8,7 +8,7 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { useConnectionScopedSqliteDatabaseAdmissionFacts } from "./sqlite-database-admission.js";
@@ -462,10 +462,16 @@ function runSession(): void {
         const { readAuthProfileRowsReadOnly } =
           await import("../agents/auth-profiles/sqlite-json.js");
         const openReadOnlyDatabase: AuthProfileReadDatabaseOpener =
-          read.artifactPreserving === true
-            ? (await import("./sqlite-snapshot-source.js")).openSqliteReadOnlyDatabase
-            : (databasePath, options) =>
-                openNodeSqliteDatabase(databasePath, { ...options, readOnly: true });
+          read.immutable === true
+            ? (databasePath, options) =>
+                openNodeSqliteDatabase(resolveImmutableSqliteFileUri(databasePath), {
+                  ...options,
+                  readOnly: true,
+                })
+            : read.artifactPreserving === true
+              ? (await import("./sqlite-snapshot-source.js")).openSqliteReadOnlyDatabase
+              : (databasePath, options) =>
+                  openNodeSqliteDatabase(databasePath, { ...options, readOnly: true });
         if (stopping) {
           return;
         }

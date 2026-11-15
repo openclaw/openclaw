@@ -1180,8 +1180,16 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
 
   it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
     const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
-    const originalMessage =
-      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>";
+    const helpers = Array.from({ length: 21 }, (_, index) => ({
+      email: "helper" + (index + 1) + "@example.invalid",
+      login: index === 0 ? "original-helper" : "original-helper-" + (index + 1),
+    }));
+    const originalMessage = [
+      "fix: preserve playback errors (#21)\n\nFixes #20",
+      ...helpers.map(({ email }) => "Co-authored-by: Helper <" + email + ">"),
+      "Co-authored-by: Bot <bot@example.invalid>",
+      "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
+    ].join("\n");
     writeFileSync(join(cwd, "playback.txt"), "fixed\n");
     const original = commitAll(cwd, originalMessage);
     git(cwd, ["checkout", "-qb", "release", base]);
@@ -1203,12 +1211,26 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
       `#!${process.execPath}\n
 const original = ${JSON.stringify(original)};
 const target = ${JSON.stringify(target)};
+const helpers = ${JSON.stringify(helpers)};
+const cursorMode = process.env.COAUTHOR_CURSOR_MODE;
 const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
 const data = {};
-for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+for (const [, alias, hash, fields] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)([\\s\\S]*?)(?=c\\d+: repository|$)/g)) {
+  const authors = [
+    { email: "author@example.invalid", user: { login: "steipete" } },
+    ...helpers.map(({ email, login }) => ({ email, user: { login } })),
+    { email: "bot@example.invalid", user: { login: "clawsweeper" } },
+    { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } },
+    ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : []),
+  ];
+  const after = JSON.parse(fields.match(/authors\\(first: 20, after: (null|"[^"]+")\\)/)?.[1] ?? "null");
+  const hasNextPage = after === null || cursorMode === "repeated";
   data[alias] = { object: {
     associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
-    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    authors: {
+      nodes: after === null ? authors.slice(0, 20) : authors.slice(20),
+      pageInfo: { hasNextPage, endCursor: cursorMode === "missing" ? null : "authors-page-1" },
+    },
     author: { user: { login: "release-operator" } }
   } };
 }
@@ -1226,31 +1248,44 @@ console.log(JSON.stringify({ data }));
     );
     chmodSync(gh, 0o755);
     splitChangelog({ rootDir: cwd });
-    const run = (write: boolean) =>
+    const manifestPath = join(cwd, "manifest.json");
+    const run = (write: boolean, cursorMode = "complete") =>
       runVerifier(cwd, {
         base,
         target,
         mainRef: original,
         write,
-        extraArgs: ["--seed-ref", seed],
-        env: { PATH: `${cwd}:${process.env.PATH}` },
+        manifest: manifestPath,
+        extraArgs: ["--seed-ref", seed, "--no-github-snapshot"],
+        env: { PATH: `${cwd}:${process.env.PATH}`, COAUTHOR_CURSOR_MODE: cursorMode },
       });
     const generated = run(true);
     expect(generated.stderr).toBe("");
     expect(generated.status, generated.stdout).toBe(0);
     const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
     const section = readFileSync(entryPath, "utf8");
-    expect(section).toContain(
-      "- **PR #21** Related #20. Authored by @steipete. Thanks @original-helper and @reporter.",
+    const expectedThanks = ["steipete", ...helpers.map(({ login }) => login), "reporter"];
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
+      expectedThanks,
     );
     expect(section).toContain(
-      "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
+      "- **PR #21** Related #20. Authored by @steipete. Thanks " +
+        helpers.map(({ login }) => "@" + login).join(", ") +
+        ", and @reporter.",
     );
+    const editorial = section.split("\n").find((line) => line.startsWith("- Preserve playback"));
+    for (const login of expectedThanks) {
+      expect(editorial).toContain("@" + login);
+    }
+    expect(section).not.toContain("@clawsweeper");
     expect(section).not.toContain("@Copilot");
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);
     expect(checked.status, checked.stderr + checked.stdout).toBe(0);
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
+      expectedThanks,
+    );
     writeReleaseChangelog({
       rootDir: cwd,
       version: "2026.7.1",
@@ -1267,6 +1302,14 @@ console.log(JSON.stringify({ data }));
     const repaired = run(true);
     expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
     expect(readFileSync(entryPath, "utf8")).toBe(section);
+    for (const cursorMode of ["missing", "repeated"]) {
+      const malformed = run(false, cursorMode);
+      expect(malformed.status).toBe(1);
+      expect(malformed.stderr).toContain(
+        "GitHub returned an invalid authors cursor for commit " + original,
+      );
+      expect(readFileSync(entryPath, "utf8")).toBe(section);
+    }
   });
 
   it.each([0, 1, 2])(

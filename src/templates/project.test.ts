@@ -6,13 +6,14 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { buildTemplateAddPlan } from "./lifecycle.js";
 import { buildTemplateProject } from "./project-build.js";
 import { templateProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 import { TemplateProjectError, createTemplateProject, validateTemplateProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GOLDEN_ARTIFACT_INTEGRITY =
-  "sha256:4417f904720e4ea9f98246a64530691373f051c1b5fe47cb1d33009a21852915";
+  "sha256:0928d2e38435cec0af38ab3c63fd69880165ea18f708443801bf84eb3f9d73a0";
 const goldenProject = join(process.cwd(), "test", "fixtures", "templates", "project-v1");
 
 async function replaceManifest(root: string, from: string, to: string) {
@@ -45,18 +46,8 @@ async function writePackage(root: string, fields: Record<string, unknown> = {}) 
   );
 }
 
-async function relocateProfile(root: string, filename: string) {
-  await rename(join(root, "profiles", "openclaw.yml"), join(root, "profiles", filename));
-  await replaceManifest(
-    root,
-    "agent:\n  id: demo-template",
-    `agent:\n  id: demo-template\nmetadata:\n  openclaw.config: profiles/${filename}`,
-  );
-}
-
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
-  await mkdir(join(root, "profiles"), { recursive: true });
   await writePackage(root);
   await writeFile(
     join(root, "CLAW.md"),
@@ -64,11 +55,61 @@ async function writeRichProject(root: string): Promise<void> {
   );
   await writeFile(join(root, "workspace", "reference.md"), "# Reference\n");
   await writeFile(join(root, "BOOTSTRAP.md"), "Interview the user before starting.\n");
-  await writeFile(join(root, "profiles", "openclaw.yml"), "schemaVersion: 1\nagent: {}\n");
   await writeFile(join(root, "not-packed.txt"), "local scratch\n");
 }
 
 describe("Template projects", () => {
+  it("builds and plans native agent settings and exact dependencies from CLAW.md alone", async () => {
+    const project = tempDirs.make("openclaw-template-inline-");
+    await writePackage(project);
+    await writeFile(
+      join(project, "CLAW.md"),
+      `---
+schemaVersion: 1
+agent:
+  id: demo-template
+  sandbox: { mode: all, workspaceAccess: ro }
+  tools: { allow: [read], fs: { workspaceOnly: true } }
+  memory: { search: { enabled: false } }
+  humanDelay: { mode: custom, minMs: 50, maxMs: 100 }
+skills:
+  - { ref: "@acme/triage", version: 1.2.3 }
+plugins: []
+---
+You triage incidents.
+`,
+    );
+    const validated = await validateTemplateProject(project);
+    assert(validated.ok, JSON.stringify(validated.diagnostics));
+    const built = await buildTemplateProject(project, `${project}.tgz`);
+    expect(built.files).toEqual(["CLAW.md", "package.json"]);
+    const plan = await buildTemplateAddPlan({
+      ...validated.template,
+      context: {
+        workspace: join(project, "added-workspace"),
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+        }),
+      },
+    });
+    expect(plan.blockers).toEqual([]);
+    expect(plan.agent.config).toMatchObject({
+      sandbox: { mode: "all", workspaceAccess: "ro" },
+      tools: { profile: "full", allow: ["read"], fs: { workspaceOnly: true } },
+      memory: { search: { enabled: false } },
+      humanDelay: { mode: "custom", minMs: 50, maxMs: 100 },
+    });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "package",
+        id: "skill:@acme/triage",
+        target: "clawhub:@acme/triage@1.2.3",
+      }),
+    );
+  });
+
   it("matches the cross-platform golden artifact digest", async () => {
     const project = join(tempDirs.make("openclaw-template-golden-"), "project");
     await symlink(goldenProject, project, process.platform === "win32" ? "junction" : "dir");
@@ -230,7 +271,6 @@ describe("Template project packages", () => {
       "package/BOOTSTRAP.md",
       "package/CLAW.md",
       "package/package.json",
-      "package/profiles/openclaw.yml",
       "package/workspace/reference.md",
     ]);
   });
@@ -263,19 +303,13 @@ describe("Template project packages", () => {
     await expectInvalidProject(project, "project_license_invalid");
   });
 
-  it("preserves the canonical metadata-selected OpenClaw profile path", async () => {
-    await relocateProfile(project, "custom.yaml");
-
-    const validation = await validateTemplateProject(project);
-    const result = await buildTemplateProject(project, output);
-    const entries = await archiveEntries(output);
-
-    assert(validation.ok);
-    expect(validation.template.snapshot.openClawProfile?.sourcePath).toBe("profiles/custom.yaml");
-    expect(validation.excludedPaths).not.toContain("profiles/custom.yaml");
-    expect(result.files).toContain("profiles/custom.yaml");
-    expect(entries).toContain("package/profiles/custom.yaml");
-    expect(entries).not.toContain("package/profiles/openclaw.yml");
+  it("rejects retired profiles before building a partial agent", async () => {
+    await mkdir(join(project, "profiles"));
+    await writeFile(join(project, "profiles", "openclaw.yml"), "schemaVersion: 1\nagent: {}\n");
+    await expectInvalidProject(project, "retired_template_configuration");
+    await expect(buildTemplateProject(project, output)).rejects.toMatchObject({
+      code: "project_invalid",
+    });
   });
 
   it.each(["@notes.md", "..notes.md"])(
@@ -388,21 +422,6 @@ describe("Template project packages", () => {
     },
   );
 
-  it("rejects a custom profile selected from an excluded tree", async () => {
-    await rename(
-      join(project, "profiles", "openclaw.yml"),
-      join(project, "profiles", "unused.yml"),
-    );
-    await mkdir(join(project, ".git"), { recursive: true });
-    await writeFile(join(project, ".git", "profile.yaml"), "schemaVersion: 1\nagent: {}\n");
-    await replaceManifest(
-      project,
-      "agent:\n  id: demo-template",
-      "agent:\n  id: demo-template\nmetadata:\n  openclaw.config: .git/profile.yaml",
-    );
-    await expectInvalidProject(project, "project_excluded_source");
-  });
-
   it.runIf(process.platform !== "win32")(
     "rejects a workspace source that portably collides with CLAW.md",
     async ({ skip }) => {
@@ -415,16 +434,6 @@ describe("Template project packages", () => {
       }
       await writeFile(join(project, "claw.md"), "# Conflicting source\n");
       await replaceManifest(project, "workspace/reference.md", "claw.md");
-      await expectInvalidProject(project, "project_path_collision");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects a workspace source that portably collides with a custom profile",
-    async () => {
-      await relocateProfile(project, "custom.yaml");
-      await writeFile(join(project, "profiles", "CUSTOM.yaml"), "schemaVersion: 1\nagent: {}\n");
-      await replaceManifest(project, "workspace/reference.md", "profiles/CUSTOM.yaml");
       await expectInvalidProject(project, "project_path_collision");
     },
   );

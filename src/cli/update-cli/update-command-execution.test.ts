@@ -523,4 +523,118 @@ describe("mutable update execution", () => {
         }
       }),
   );
+
+  it.each(
+    (["git", "package"] as const).flatMap((kind) =>
+      (["absent", "owned", "unresolved"] as const).map((verdict) => ({ kind, verdict })),
+    ),
+  )(
+    "refuses a held PostgreSQL owner before $kind validation when $verdict service cannot stop",
+    async ({ kind, verdict }) =>
+      withTestDir({ prefix: "postgres-capture-early-" }, async (root) => {
+        const params = { ...(await runParams(root, kind)), shouldRestart: verdict === "absent" };
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        // An absent service or --no-restart cannot release the held owner.
+        mocks.maybeStopService.mockImplementation(async () => ({
+          ...inspectOrStopService("inspect"),
+          running: verdict !== "absent",
+          serviceEnv: env,
+          serviceUpdateVerdict:
+            verdict === "absent"
+              ? { kind: "absent" }
+              : { kind: verdict, root, fingerprint: "fixture", refreshDefinition: false },
+        }));
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          options?.role === "sqlite-maintenance" ? null : acquire(options),
+        );
+        const events: string[] = [];
+        let refusal = "";
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
+            await options.validateCandidate!(root);
+            events.push("validated");
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        // The package runner reports a thrown validation error as its own failed step.
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          try {
+            await options.validateCandidate(root);
+          } catch (error) {
+            refusal = String(error);
+            return { ...successfulUpdate, status: "error", reason: "global-install-failed" };
+          }
+          events.push("validated");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(mocks.validateCanary).not.toHaveBeenCalled();
+        expect(events).toEqual([]);
+        expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error", reason: "database-engine-preflight" },
+        });
+        expect(kind === "git" ? execution?.failure?.detail : refusal).toContain(
+          "exclusive state ownership",
+        );
+      }),
+  );
+
+  it.each(["owned", "unresolved"] as const)(
+    "keeps candidate validation when a running %s service will release the owner",
+    async (verdict) =>
+      withTestDir({ prefix: "postgres-capture-managed-" }, async (root) => {
+        const params = await runParams(root, "package");
+        mocks.nativeSupport.mockResolvedValue(true);
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+          const state = { ...inspectOrStopService(phase), serviceEnv: env };
+          if (verdict === "unresolved") {
+            state.serviceUpdateVerdict = { kind: "unresolved", root, fingerprint: "fixture" };
+          }
+          return state;
+        });
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          options?.role === "sqlite-maintenance" && !mocks.serviceStopped ? null : acquire(options),
+        );
+        const events: string[] = [];
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          await options.validateCandidate(root);
+          events.push("validated");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(events, JSON.stringify(execution?.failure)).toEqual(["validated"]);
+        expect(execution?.result.reason).not.toBe("database-engine-preflight");
+      }),
+  );
 });

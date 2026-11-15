@@ -59,10 +59,6 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
-  const [searching, setSearching] = createSignal(() => {
-    searchGeneration();
-    return false;
-  });
   const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
@@ -75,7 +71,7 @@ export function useSessionMenuDetails(
     ) {
       options.push({ ...currentOwner, type: "human", id });
     }
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return options.filter((owner) =>
       terms.every((term) =>
         [
@@ -86,6 +82,7 @@ export function useSessionMenuDetails(
         ]
           .join(" ")
           .toLocaleLowerCase()
+          .normalize("NFC")
           .includes(term),
       ),
     );
@@ -99,13 +96,10 @@ export function useSessionMenuDetails(
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
         <HeaderSearch
-          title={t("sessionsView.assignTo")}
           label={t("sessionsView.searchPeople")}
           query={query()}
-          open={searching()}
           controlRef={() => controls?.ref()}
           inputProps={{ "data-search": "", "data-form-control": "" }}
-          onOpenChange={setSearching}
           onQueryChange={setQuery}
         />
       </div>

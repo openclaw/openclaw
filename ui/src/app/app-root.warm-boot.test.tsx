@@ -466,6 +466,21 @@ describe("warm boot app root", () => {
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
   });
 
+  it("connects a paired browser to the Gateway that issued its approval", async () => {
+    const { container } = await createOfflineSurface();
+    const gate = loginGate(container);
+    const connect = vi.spyOn(runtime!.context.gateway, "connect").mockImplementation(() => {});
+    gate.props.onGatewayUrlChange("wss://edited.example");
+    gate.props.onBrowserPaired("wss://issuing.example");
+    // No session credentials, so the stored device token for that Gateway is selected.
+    expect(connect).toHaveBeenCalledWith({
+      gatewayUrl: "wss://issuing.example",
+      token: "",
+      password: "",
+      bootstrapToken: "",
+    });
+  });
+
   it("keeps credential drafts until the Gateway client changes", async () => {
     const { container, draw } = await createOfflineSurface();
     const gate = loginGate(container);

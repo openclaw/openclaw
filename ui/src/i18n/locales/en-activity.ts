@@ -5,12 +5,11 @@ import { en } from "./en.ts";
 // diagnostic inspector does not tax every Control UI startup.
 const enActivity = {
   activity: {
-    images: {
-      failed: "Couldn’t load images. Try again.",
-      older: "Older images",
-      incomplete: "Images too large to preview here",
-    },
     pulse: {
+      title: "Sessions by last activity",
+      lastYear: "Last 12 months",
+      empty: "No recorded activity in this period.",
+      descriptionEmpty: "{window}: no recorded activity.",
       sessionsOne: "session",
       sessions: "sessions",
       started: "started",
@@ -19,8 +18,8 @@ const enActivity = {
       running: "running now",
       bucketOne: "{period} · {count} session",
       bucket: "{period} · {count} sessions",
-      descriptionOne: "{window}: {count} session; busiest {period}",
-      description: "{window}: {count} sessions; busiest {period}",
+      descriptionOne: "{window}: {count} session by last activity; most sessions at {period}",
+      description: "{window}: {count} sessions by last activity; most sessions at {period}",
     },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",
@@ -267,7 +266,7 @@ const enActivity = {
         },
         disconnected: {
           title: "Disconnected",
-          description: "Run identity is saved. Reconnect to view it.",
+          description: "Reconnect to check the Gateway’s retained identity evidence for this run.",
         },
         unauthorized: {
           title: "Operator read access required",
@@ -292,6 +291,8 @@ const enActivity = {
   activityFeed: {
     partialHistory:
       "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
+    partialHistoryTooltip:
+      "Counts cover recorded sessions you can access. Older history and people may be missing.",
     sessionsMode: "Sessions",
     searchPlaceholder: "Search session titles…",
     time: "Time",

@@ -220,6 +220,10 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
         element("h2", "Pair with code"),
         element("p", `Connect an app as ${pairingCaller.principalLabel}.`),
       );
+      const actions = document.createElement("openclaw-modal-actions");
+      const dismiss = button(pairing ? "Done" : "Cancel", closeDialog);
+      dismiss.disabled = pairingBusy;
+      actions.append(dismiss);
       if (pairing) {
         content.append(element("p", "Enter this single-use code on the app’s connection page."));
         content.append(element("code", pairing.code, "mcp-connected-apps__code"));
@@ -246,21 +250,17 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
           true,
         );
         create.disabled = pairingBusy || !chosenCeiling(pairingFull).length;
-        content.append(create);
+        actions.append(create);
         for (const input of content.querySelectorAll("input")) {
           input.disabled = pairingBusy;
         }
       }
-      const dismiss = button(pairing ? "Done" : "Cancel", closeDialog);
-      dismiss.disabled = pairingBusy;
-      const actions = element("div", undefined, "mcp-connected-apps__actions");
-      actions.append(dismiss);
-      content.append(actions);
       if (pairingError) {
         const message = element("p", pairingError, "mcp-connected-apps__error");
         message.setAttribute("role", "alert");
         content.append(message);
       }
+      content.append(actions);
     };
     draw();
     dialog = host.components.mountDialog(overlay, {

@@ -13,6 +13,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { disableWorkshopWhenIdle } from "./skill-workshop-plugin-enable.test-support.ts";
 
 const PLUGIN_ID = "skill-workshop";
 
@@ -173,7 +174,7 @@ suite.define(() => {
         expect(await page.getByRole("button", { name: "Turn on Skill Workshop" }).count()).toBe(0);
 
         // Turned off elsewhere, the open page switches back to the off state.
-        await admin.request("plugins.setEnabled", { pluginId: PLUGIN_ID, enabled: false });
+        await disableWorkshopWhenIdle(admin);
         await page
           .getByRole("button", { name: "Turn on Skill Workshop" })
           .waitFor({ timeout: 60_000 });

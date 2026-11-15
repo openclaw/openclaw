@@ -229,7 +229,7 @@ function PluginSettingsGroups(props: GroupsProps) {
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     ),
   );
-  const query = () => props.query.trim().toLocaleLowerCase();
+  const query = () => props.query.trim().toLocaleLowerCase().normalize("NFC");
   const fields = createMemo(() =>
     object()
       .fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
@@ -245,6 +245,7 @@ function PluginSettingsGroups(props: GroupsProps) {
           ]
             .join(" ")
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(query()),
       ),
   );
@@ -364,11 +365,12 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
   const permissionFields = createMemo(
     () =>
       props.permissions?.fields.filter((field) => {
-        const search = query().trim().toLocaleLowerCase();
+        const search = query().trim().toLocaleLowerCase().normalize("NFC");
         return (
           !search ||
           `${t("pluginsPage.editor.permissions")} ${field.label} ${field.help ?? ""}`
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(search) ||
           matchesNodeSearch({ ...field, criteria: { text: search, tags: [] } })
         );

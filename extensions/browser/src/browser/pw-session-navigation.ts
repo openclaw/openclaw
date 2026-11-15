@@ -21,7 +21,7 @@ import {
   type NavigationDocumentRoute as Route,
   type NavigationDocumentRequest as Request,
 } from "./pw-session-navigation-fence.js";
-import { isConnectionScopedPage } from "./pw-session-page-target.js";
+import { pageCloseClosesConnection } from "./pw-session-page-target.js";
 
 /** Return true when an error is a browser navigation policy denial. */
 export function isPolicyDenyNavigationError(err: unknown): boolean {
@@ -59,7 +59,7 @@ export async function closeBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   await quarantineBlockedNavigationTarget(opts);
-  if (isConnectionScopedPage(opts.page)) {
+  if (pageCloseClosesConnection(opts.page)) {
     const browser = opts.page.context().browser();
     if (browser) {
       await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
@@ -84,6 +84,7 @@ export async function assertPageNavigationCompletedSafely(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    allowOperatorPages: opts.allowOperatorPages,
   });
   const policySignal = opts.signal ? { signal: opts.signal } : {};
   try {
@@ -374,6 +375,7 @@ export async function gotoPageWithNavigationGuard(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    allowOperatorPages: opts.allowOperatorPages,
   });
   let blockedError: unknown = null;
 

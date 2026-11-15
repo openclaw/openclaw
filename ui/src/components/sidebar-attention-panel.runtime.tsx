@@ -504,12 +504,15 @@ export function SidebarAttentionPanel(
                 when={visibleEntries().length === 0 && !mentionsLoading() && !showMentionStatus()}
               >
                 <div class="sidebar-issues-panel__empty">
+                  <span class="sidebar-issues-panel__empty-icon" aria-hidden="true">
+                    <Icon name="inbox" />
+                  </span>
                   <strong>
                     {t(mentionsTab() ? "attention.mentions.emptyTitle" : "attention.emptyTitle")}
                   </strong>
-                  <span>
-                    {t(mentionsTab() ? "attention.mentions.emptyBody" : "attention.emptyBody")}
-                  </span>
+                  <Show when={mentionsTab()}>
+                    <span>{t("attention.mentions.emptyBody")}</span>
+                  </Show>
                 </div>
               </Show>
               <For each={renderedEntries()} keyed={(row) => row.identity}>

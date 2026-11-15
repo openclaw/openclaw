@@ -230,13 +230,22 @@ export class SessionListViewCache {
     const history = (view.rowHistory ??= []);
     history.push(captureSessionRowGeneration(rows));
     view.historyRefs += rows.length;
-    if (history.length > ROW_HISTORY_LIMIT) {
-      view.historyRefs -= history.shift()!.ids.length;
-      emitTrustedDiagnosticEvent({
-        type: "sessions.list.baseline.retired",
-        cause: "history-evicted",
-      });
-    }
+  }
+
+  private retireOldestGeneration(view: SessionListView) {
+    const refs = view.rowHistory!.shift()!.ids.length;
+    const bytes = refs * 8 + 160;
+    view.historyRefs -= refs;
+    view.refs -= refs;
+    this.refs -= refs;
+    retainedRefs -= refs;
+    view.bytes -= bytes;
+    this.bytes -= bytes;
+    retainedBytes -= bytes;
+    emitTrustedDiagnosticEvent({
+      type: "sessions.list.baseline.retired",
+      cause: "history-evicted",
+    });
   }
 
   update(view: SessionListView) {
@@ -269,10 +278,33 @@ export class SessionListViewCache {
     this.bytes += bytes - view.bytes;
     view.refs = refs;
     view.bytes = bytes;
-    if (bytes > MAX_ESTIMATED_BYTES) {
+    if ((view.rowHistory?.length ?? 0) > ROW_HISTORY_LIMIT) {
+      this.retireOldestGeneration(view);
+    }
+    if (
+      view.bytes -
+        (view.historyRefs - (view.rowHistory?.at(-1)?.ids.length ?? 0)) * 8 -
+        Math.max(0, (view.rowHistory?.length ?? 0) - 1) * 160 >
+      MAX_ESTIMATED_BYTES
+    ) {
       this.remove(view);
     }
     while (this.lists.size > MAX_VIEWS || this.bytes > MAX_ESTIMATED_BYTES) {
+      // Retire old comparison witnesses before an active reader's entire view.
+      // Keep its newest generation even while current rows await reconstruction.
+      let history: SessionListView | undefined;
+      if (this.lists.size <= MAX_VIEWS) {
+        for (const candidate of this.lists.values()) {
+          if ((candidate.rowHistory?.length ?? 0) > 1) {
+            history = candidate;
+            break;
+          }
+        }
+      }
+      if (history) {
+        this.retireOldestGeneration(history);
+        continue;
+      }
       const oldest = this.lists.values().next().value!;
       this.remove(oldest);
     }

@@ -81,7 +81,10 @@ async function settle(element: { updateComplete: Promise<unknown> }, ms: number)
 
 it.each([false, true])("distinguishes retired vs unlisted (truncated: %s)", async (truncated) => {
   let result: SessionsProcessesListResult = { ...completeList, processes: [process()] };
-  const { connection, mount } = mountProcesses(() => result);
+  const refresh = createDeferred<SessionsProcessesListResult>();
+  let holdRefresh = false;
+  const { connection, mount } = mountProcesses(() => (holdRefresh ? refresh.promise : result));
+  onTestFinished(() => refresh.resolve(result));
   const panel = document.createElement("openclaw-chat-processes-panel");
   panel.sessionKey = "agent:main:parent";
   mount(panel);
@@ -115,11 +118,70 @@ it.each([false, true])("distinguishes retired vs unlisted (truncated: %s)", asyn
   if (truncated) {
     expect(panel.textContent).not.toContain("no longer retained");
   }
+  const empty = panel.querySelector(".chat-processes__detail .chat-processes__empty");
+  holdRefresh = true;
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
+  await settle(panel, 0);
+  expect(panel.querySelector(".chat-processes__detail .chat-processes__empty")).toBe(empty);
+  expect(panel.querySelector('[aria-label="Loading…"]')).toBeNull();
+  refresh.resolve(result);
+  await settle(panel, 0);
   panel.querySelector<HTMLButtonElement>('button[aria-label="Back to processes"]')!.click();
   await panel.updateComplete;
   expect(panel.querySelector(".chat-processes__list")?.textContent).toContain("No processes");
   expect(panel.querySelector(".chat-processes__list .empty-state__icon svg")).not.toBeNull();
 });
+
+it.each([false, true])(
+  "retains an accepted empty process list during event refresh (mobile: %s)",
+  async (mobile) => {
+    const initial = createDeferred<SessionsProcessesListResult>();
+    const refreshed = createDeferred<SessionsProcessesListResult>();
+    const replacement = createDeferred<SessionsProcessesListResult>();
+    const result = { ...completeList, processes: [] };
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(refreshed.promise)
+      .mockReturnValueOnce(replacement.promise);
+    const { connection, mount } = mountProcesses(request);
+    const panel = document.createElement("openclaw-chat-processes-panel");
+    panel.sessionKey = "agent:main:parent";
+    panel.mobile = mobile;
+    onTestFinished(() => {
+      initial.resolve(result);
+      refreshed.resolve(result);
+      replacement.resolve(result);
+    });
+    mount(panel);
+    await settle(panel, 0);
+    expect(panel.querySelector('[aria-label="Loading…"]')).not.toBeNull();
+    expect(panel.querySelector(".empty-state")).toBeNull();
+    initial.resolve(result);
+    await settle(panel, 0);
+    const empty = panel.querySelector(".empty-state");
+    expect(empty).not.toBeNull();
+    connection.publishEvent("sessions.processes.changed", {
+      sessionKey: panel.sessionKey,
+      agentId: "main",
+    });
+    await settle(panel, 0);
+    expect(request.mock.calls).toEqual([mainRead, mainRead]);
+    expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(panel.querySelector(".empty-state")).toBe(empty);
+    expect(panel.querySelector('[aria-label="Loading…"]')).toBeNull();
+    refreshed.resolve(result);
+    await settle(panel, 0);
+    expect(panel.querySelector(".empty-state")).toBe(empty);
+    panel.sessionKey = "agent:main:replacement";
+    await settle(panel, 0);
+    expect(panel.querySelector(".empty-state")).toBeNull();
+    expect(panel.querySelector('[aria-label="Loading…"]')).not.toBeNull();
+  },
+);
 
 it("keeps Stop separate from opening output and restores list focus after returning", async () => {
   const stopped = createDeferred<{ requested: boolean }>();

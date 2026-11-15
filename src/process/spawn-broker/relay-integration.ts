@@ -8,6 +8,8 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareAgentCoreDumpLimit } from "../linux-core-dump.js";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import { withChildProcessOperation } from "../spawn-diagnostics.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
@@ -140,6 +142,7 @@ function createServiceChildCleanup() {
 
 /** Publish cleanup ownership before waiting for the broker's pipe and IPC handoff. */
 export function spawnServiceChildRelay(params: {
+  executionIntent?: ProcessExecutionIntent;
   workerUrl: URL;
   stdio: SpawnOptions["stdio"];
   env: NodeJS.ProcessEnv;
@@ -152,6 +155,11 @@ export function spawnServiceChildRelay(params: {
   transportReady: Promise<void> | undefined;
 } {
   const executable = resolveLaunchableNodePath();
+  const limited = prepareAgentCoreDumpLimit(
+    executable,
+    resolveRuntimeWorkerArgv(params.workerUrl, executable),
+    params.executionIntent,
+  );
   const child = withChildProcessOperation(
     "service.relay",
     () => {
@@ -163,7 +171,7 @@ export function spawnServiceChildRelay(params: {
       if (params.nativeProcessOwner === params.workerUrl.href) {
         delete env.BUN_BE_BUN;
       }
-      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+      return spawnProcess(limited.command, limited.args, {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,
@@ -176,11 +184,11 @@ export function spawnServiceChildRelay(params: {
   params.onSpawnCleanup?.(cleanup.promise);
   let transportReady: Promise<void> | undefined;
   if (child instanceof BrokerChild) {
-    transportReady = child.ready().catch((error: unknown) => {
-      if (error instanceof Error) {
-        error.message = formatChildRuntimeSpawnWarning(error) ?? error.message;
-      }
+    transportReady = child.ready().catch(async (error: unknown) => {
       cleanup.completion.reject(error);
+      if (error instanceof Error) {
+        error.message = (await formatChildRuntimeSpawnWarning(error)) ?? error.message;
+      }
       throw error;
     });
   } else if (child.pid === undefined) {
@@ -194,7 +202,7 @@ export function spawnServiceChildRelay(params: {
     }).then(async (error) => {
       await closed;
       cleanup.completion.resolve();
-      error.message = formatChildRuntimeSpawnWarning(error) ?? error.message;
+      error.message = (await formatChildRuntimeSpawnWarning(error)) ?? error.message;
       throw error;
     });
   }

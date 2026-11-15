@@ -35,6 +35,11 @@ import { withSessionTranscriptDeltaReader } from "../config/sessions/session-tra
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
 import { normalizeRawDeltaLimits } from "../config/sessions/session-transcript-raw-cursor.js";
+import {
+  validateSessionTranscriptReplaySelection,
+  type SessionTranscriptReplayGroup,
+  type SessionTranscriptReplaySelection,
+} from "../config/sessions/session-transcript-replay.types.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { recordAssistantManagedMediaUrls } from "../config/sessions/transcript-assistant-delivery.js";
 import {
@@ -59,6 +64,7 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/sessi
 import type { PluginNotice } from "../shared/plugin-notice.js";
 import { PLUGIN_NOTICE_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "./agent-core.js";
+import { projectSessionTranscriptAppendOptions } from "./session-transcript-append-options.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -137,6 +143,25 @@ export function composeSessionTranscriptWriteAssertion(
 export type SessionTranscriptEvent = unknown;
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
+
+export type { SessionTranscriptReplayGroup };
+export type SessionTranscriptReplayGroupsParams = SessionTranscriptTargetParams &
+  SessionTranscriptReplaySelection;
+
+/**
+ * Read canonical active-branch users and their adjacent runtime/system-update carriers.
+ * Results follow requested ID order (duplicates once); absent, non-user, and fenced IDs are omitted.
+ * The uncompressed source-byte budget includes carriers and rejects the entire read on overflow.
+ */
+export async function readSessionTranscriptReplayGroups(
+  params: SessionTranscriptReplayGroupsParams,
+): Promise<SessionTranscriptReplayGroup[]> {
+  const { entryIds, maxBytes, ...target } = params;
+  validateSessionTranscriptReplaySelection({ entryIds, maxBytes });
+  const selection = { entryIds: [...entryIds], maxBytes };
+  const scope = bindSessionTranscriptStoreScope(target);
+  return withSessionTranscriptDeltaReader(scope, (reader) => reader.replayGroups(selection));
+}
 
 /** Persists a successful yield's private context through the admitted session writer. */
 export async function appendSessionYieldContext(
@@ -571,7 +596,7 @@ export async function appendSessionTranscriptMessageByIdentity<TMessage>(
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   return await appendTranscriptMessage(
     bindSessionTranscriptStoreScope(params, params.config),
-    params,
+    projectSessionTranscriptAppendOptions(params),
   );
 }
 
@@ -669,7 +694,11 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
 export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
   params: SessionTranscriptAppendMessagesParams<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage>[]> {
-  return await appendTranscriptMessages(params, params);
+  return await appendTranscriptMessages(params, {
+    config: params.config,
+    cwd: params.cwd,
+    messages: params.messages.map(projectSessionTranscriptAppendOptions),
+  });
 }
 
 /**

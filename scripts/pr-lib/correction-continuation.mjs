@@ -4,8 +4,8 @@ import fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { readRegular, requireCheckout, requireOperationOwner } from "./baseline-refresh.mjs";
 import { incomingReview } from "./incoming-review.mjs";
+import { readRegular, requireCheckout, requireOperationOwner } from "./preparation-state.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const executable = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git";
@@ -92,7 +92,42 @@ function publicationLineage(request) {
   return { ...lineage, archiveFiles: inventory(lineage.archive) };
 }
 
-function validateRequest(request) {
+function publicationBaseline(request, main) {
+  const [anchor, binding, incoming, review] = execFileSync(
+    "/bin/bash",
+    [
+      "-c",
+      'set -eu; source "$1/prep-context.env"; printf "%s\\0" "${PREP_BASELINE_REFRESH_HEAD:-}" "${PREP_BASELINE_REFRESH_OID:-}" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID"',
+      "continuation-baseline",
+      request.archive,
+    ],
+    { encoding: "utf8" },
+  ).split("\0");
+  if (!anchor && !binding && !present(join(request.archive, "prepare-baseline.json"))) {
+    return null;
+  }
+  if (![anchor, binding, incoming, review].every((value) => sha.test(value))) {
+    throw new Error("Missing retained continuation baseline identity.");
+  }
+  return execFileSync(
+    process.execPath,
+    [
+      join(scripts, "baseline-refresh.mjs"),
+      "continuation-baseline",
+      String(request.pr),
+      request.head,
+      anchor,
+      binding,
+      request.archive,
+      incoming,
+      review,
+      main,
+    ],
+    { encoding: "utf8" },
+  ).trim();
+}
+
+function validateRequest(request, main, proofBaseline, freshDirectory = ".local") {
   const { pr, head, tree, incoming, review, receipt, receiptOid, archive } = request;
   if (
     request.version !== 1 ||
@@ -111,11 +146,11 @@ function validateRequest(request) {
     "Retained publication lineage changed.",
   );
   for (const name of freshNames) {
-    if (digest(readRegular(`.local/${name}`)) !== request.fresh[name]) {
+    if (digest(readRegular(join(freshDirectory, name))) !== request.fresh[name]) {
       throw new Error(`Incoming continuation authority changed: ${name}`);
     }
   }
-  const { prMeta } = incomingReview(pr, incoming, review);
+  const { prMeta } = incomingReview(pr, incoming, review, freshDirectory);
   const publicationArchive = request.lineage?.archive ?? archive;
   if (oid(readRegular(join(publicationArchive, receipt))) !== receiptOid) {
     throw new Error("Selected publication receipt changed.");
@@ -131,7 +166,7 @@ set -euo pipefail
 source "$1/prepare-core.sh"
 source "$1/push.sh"
 pr_git() { "\${OPENCLAW_PR_GIT:-\${GIT_EXEC:-git}}" "$@"; }
-source .local/pr-meta.env
+source "$8/pr-meta.env"
 [ "$PR_NUMBER" = "$3" ] && [ "$PR_HEAD_SHA" = "$5" ] && [ "$PR_HEAD" = "$7" ]
 source "$2/prep-context.env"
 [ "$PR_NUMBER" = "$3" ] && [ "$PREP_BRANCH" = "pr-$3-prep" ] && [ "$PREP_REVIEW_MODE" = correction ]
@@ -149,6 +184,7 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
       incoming,
       receipt,
       prMeta.headRefName,
+      freshDirectory,
     ],
     { encoding: "utf8" },
   ).split("\0");
@@ -174,7 +210,20 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
   if (git("rev-parse", `${head}^{tree}`) !== tree) {
     throw new Error("Retained correction tree changed.");
   }
-  for (const commit of git("rev-list", `${incoming}..${head}`).split("\n")) {
+  const baseline = proofBaseline ?? publicationBaseline(request, main);
+  if (proofBaseline) {
+    // Only the baseline producer supplies this narrowly scoped exclusion. The
+    // ordinary continuation CLI never accepts a caller-selected baseline.
+    if (!sha.test(proofBaseline) || !sha.test(main)) {
+      throw new Error("Missing private canonical baseline checkpoint.");
+    }
+    git("merge-base", "--is-ancestor", proofBaseline, main);
+    git("verify-commit", head);
+  }
+  // Match publication admission: only the exact signed native baseline is
+  // inherited history. Task commits on either merge parent still need signatures.
+  const commits = git("rev-list", `${incoming}..${head}`, ...(baseline ? [`^${baseline}`] : []));
+  for (const commit of commits.split("\n").filter(Boolean)) {
     git("verify-commit", commit);
   }
   return Buffer.from(
@@ -192,8 +241,43 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
   );
 }
 
-function prepared(request, journal) {
-  const context = validateRequest(request);
+// Baseline proof admission composes the existing continuation owner without
+// installing its context or granting ordinary continuation a signature waiver.
+export function baselineProofContinuation(request, main, baseline, directory = ".local") {
+  return validateRequest(request, main, baseline, directory);
+}
+
+export function baselineProofContinuationRequest(
+  pr,
+  head,
+  tree,
+  incoming,
+  review,
+  receipt,
+  receiptOid,
+  archive,
+) {
+  const request = {
+    version: 1,
+    pr,
+    head,
+    tree,
+    incoming,
+    review,
+    receipt,
+    receiptOid,
+    archive,
+    archiveFiles: inventory(archive),
+    fresh: Object.fromEntries(
+      freshNames.map((name) => [name, digest(readRegular(join(archive, name)))]),
+    ),
+  };
+  request.lineage = publicationLineage(request);
+  return request;
+}
+
+function prepared(request, journal, main) {
+  const context = validateRequest(request, main);
   const before = {};
   for (const name of ["prep-context.env", ...retiredNames]) {
     const path = `.local/${name}`;
@@ -264,7 +348,7 @@ function writeOwned(path, bytes, checkCurrent) {
   }
 }
 
-function run(command, pr, root, lockRef, lockOid, args) {
+function run(command, pr, root, lockRef, lockOid, main, args) {
   if (command === "prepare") {
     const [head, tree, incoming, review, receipt, receiptOid, archive] = args;
     const request = {
@@ -294,7 +378,7 @@ function run(command, pr, root, lockRef, lockOid, args) {
         continuation: request,
       })}\n`,
     );
-    const facts = prepared(request, journal);
+    const facts = prepared(request, journal, main);
     if (present(journalPath)) {
       throw new Error("Retained transition blocks new continuation.");
     }
@@ -340,7 +424,7 @@ function run(command, pr, root, lockRef, lockOid, args) {
         "Selected continuation differs from the retained transition.",
       );
     }
-    const facts = prepared(request, bytes);
+    const facts = prepared(request, bytes, main);
     facts.before[journalPath] = digest(bytes);
     check(facts, pr, root, lockRef, lockOid);
     process.stdout.write(JSON.stringify(facts));
@@ -376,8 +460,8 @@ function run(command, pr, root, lockRef, lockOid, args) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    const [command, pr, root, lockRef, lockOid, ...args] = process.argv.slice(2);
-    run(command, Number(pr), root, lockRef, lockOid, args);
+    const [command, pr, root, lockRef, lockOid, main, ...args] = process.argv.slice(2);
+    run(command, Number(pr), root, lockRef, lockOid, main, args);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -33,7 +33,7 @@ function fields(container: ParentNode) {
       "Where trigger",
     ),
     search: expectDefined(
-      container.querySelector<HTMLButtonElement>(".header-search__toggle"),
+      container.querySelector<HTMLInputElement>(".header-search__input"),
       "environment search",
     ),
   };
@@ -86,7 +86,7 @@ describe("Where chip", () => {
     expect(document.activeElement).toBe(search);
     picker?.hide();
     picker?.show();
-    expect(container.querySelector(".header-search__toggle")).toBe(search);
+    expect(container.querySelector(".header-search__input")).toBe(search);
     expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
   });
 
@@ -153,7 +153,7 @@ describe("Where chip", () => {
       ),
     );
     expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
-    expect(container.querySelector(".header-search__toggle")).toBe(search);
+    expect(container.querySelector(".header-search__input")).toBe(search);
     expect(document.activeElement).toBe(search);
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
@@ -253,7 +253,6 @@ describe("Where chip", () => {
 
     expect(capacityCaption(option(container, "device:runner"))).toBe("1 of 2 session slots in use");
 
-    container.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
     await waitForSolid(() =>
       expect(container.querySelector('input[type="search"]')).not.toBeNull(),
     );

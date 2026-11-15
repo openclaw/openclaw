@@ -222,7 +222,9 @@ A transform-provided `sessionKey` is externally derived by default. Only trusted
 code producing a fixed key should mark `sessionKeySource: "static"`; never use
 that marker to bypass policy for a payload-derived key. Transforms execute as
 trusted Gateway code, not in the reader agent's sandbox. They are cached until
-hook configuration reload. Keep modules under the hooks transforms root, not
+hook configuration reload. Reloads reuse unchanged transform modules and their
+module-level state; edited transform source loads a new module. Relative imports
+keep Node's normal module caching behavior. Keep modules under the hooks transforms root, not
 workspace skill directories; move invalid modules there or remove an invalid
 `transformsDir` if doctor reports it.
 

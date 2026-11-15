@@ -60,13 +60,22 @@ export function UsagePageShell(props: {
   );
 }
 
-export function renderUsageEmptyState(onRefresh: () => void) {
+export function UsageEmptyState(props: { loading: boolean; onRefresh: () => void }) {
   return (
     <section class="settings-group usage-panel usage-empty-state">
       <div class="usage-empty-state__title">{t("usage.empty.title")}</div>
       <div class="card-sub usage-empty-state__subtitle">{t("usage.empty.subtitle")}</div>
       <div class="usage-empty-state__actions">
-        <button class="btn primary" onClick={onRefresh}>
+        {/* Keep keyboard focus on the retained action while its request is pending. */}
+        <button
+          class="btn primary"
+          aria-disabled={props.loading ? "true" : undefined}
+          onClick={() => {
+            if (!props.loading) {
+              props.onRefresh();
+            }
+          }}
+        >
           {t("common.refresh")}
         </button>
       </div>

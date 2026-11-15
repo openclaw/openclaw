@@ -26,6 +26,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../../../test-utils/retention.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
@@ -78,6 +79,39 @@ function writeEntries(storePath: string, entries: Record<string, SessionEntry>) 
 }
 
 describe("persisted subagent capability lookups", () => {
+  it("releases completed capability reads while their lookup remains reusable", async () => {
+    const { storePath, key } = fixture("subagent-capability-retention-");
+    writeEntries(storePath, { [key]: makeEntry("retained-child", { spawnDepth: 2 }) });
+    const store = createSubagentSessionStore(storePath, "main");
+    async function readRun() {
+      const run = { depth: 2 };
+      const observer = { reads: 0 };
+      const refs = [new WeakRef(run), new WeakRef(observer)];
+      await withPreparedRead(
+        () => {
+          expect(store.get(key)?.spawnDepth).toBe(run.depth);
+        },
+        { retain: true, onRead: () => observer.reads++ },
+      );
+      expect(observer.reads).toBe(1);
+      return refs;
+    }
+    const retired = await readRun();
+    // The cached scope must release both lazy error stacks and its observation callback.
+    await expectCollected(...retired);
+    await withPreparedRead(
+      () => {
+        expect(store.get(key)?.spawnDepth).toBe(2);
+        return (async () => {
+          await withPreparedRead(() => store.get(key), { retain: true });
+          // The nested scope copies its entries; releasing it must preserve the live parent.
+          expect(store.get(key)?.spawnDepth).toBe(2);
+        })();
+      },
+      { retain: true },
+    );
+  });
+
   it.each([false, true])(
     "resolves current requester policy without session SQL (default store: %s)",
     async (useDefault) => {

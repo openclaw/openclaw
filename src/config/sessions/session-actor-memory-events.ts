@@ -236,6 +236,7 @@ export function createSessionActorMemoryEvents(options: {
             message_role: message.role,
             context_free_command:
               message.excludeFromContext === true && internal?.contextFreeCommand === true ? 1 : 0,
+            human_addressed: internal?.humanAddressed === true ? 1 : 0,
             provenance_kind: provenance?.kind,
             provenance_source_channel: provenance?.sourceChannel,
           },

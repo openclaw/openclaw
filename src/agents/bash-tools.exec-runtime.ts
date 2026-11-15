@@ -280,6 +280,7 @@ export async function runExecProcess({
         command: opts.command,
         scopeKey: opts.scopeKey,
         sessionKey: opts.sessionKey,
+        sandboxContainerName: opts.sandbox?.containerName,
         cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
         agentId: opts.agentId,
         eventRouting: opts.eventRouting,

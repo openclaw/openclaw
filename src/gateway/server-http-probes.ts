@@ -8,7 +8,11 @@ import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
 import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
 import { isLocalDirectRequest } from "./net.js";
 import { getHttpAuthUtilsModule } from "./server-http-modules.js";
-import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
+import type {
+  PreparedReadinessChecker,
+  StartupChecker,
+  StartupResult,
+} from "./server/readiness.js";
 
 function startupProbeBody(result: StartupResult, includeDetails: boolean): string {
   if (!includeDetails) {
@@ -33,7 +37,7 @@ export async function handleGatewayProbeRequest(
   trustedProxies: string[],
   allowRealIpFallback: boolean,
   rateLimiter?: AuthRateLimiter,
-  getReadiness?: ReadinessChecker,
+  getReadiness?: PreparedReadinessChecker,
   getStartup?: StartupChecker,
 ): Promise<boolean> {
   const status = classifyGatewayProbePath(requestPath);
@@ -81,11 +85,17 @@ export async function handleGatewayProbeRequest(
         })
       ).ok;
     }
-    const includeDetails = await shouldIncludeGatewayProbeDetails();
     const readiness = status === "ready" ? getReadiness : undefined;
+    const readPrepared = await readiness?.prepare().then(
+      ({ publish }) => publish,
+      (error: unknown) => () => {
+        throw error;
+      },
+    );
+    const includeDetails = await shouldIncludeGatewayProbeDetails();
     try {
-      if (readiness) {
-        const result = readiness();
+      if (readPrepared) {
+        const result = readPrepared();
         statusCode = result.ready ? 200 : 503;
         const recentCrashes = includeDetails ? getGatewayRecentCrashes() : [];
         body = JSON.stringify(

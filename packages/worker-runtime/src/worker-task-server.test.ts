@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -126,4 +126,87 @@ it("cancels noninteractive owned work and joins cleanup before releasing native 
     expect.objectContaining({ status: "failed", taskId: 1, error: "worker task cancelled" }),
     [],
   );
+});
+
+it("preserves transferred results, failures, and resource ordering for synchronous stateless tasks", async () => {
+  const { port1: output, port2: replies } = new MessageChannel();
+  const { port1: beforeReceipt, port2: beforeReply } = new MessageChannel();
+  const { port1: afterReceipt, port2: afterReply } = new MessageChannel();
+  const parent = Object.assign(new EventEmitter(), {
+    postMessage: output.postMessage.bind(output),
+  });
+  boundary.port = parent;
+  const enteredClose = Promise.withResolvers<void>();
+  const finishClose = Promise.withResolvers<void>();
+  const order: string[] = [];
+  let produced: Uint8Array<ArrayBuffer> | undefined;
+  serveOwnedWorkerTasks<Uint8Array<ArrayBuffer>, undefined, string>(
+    {
+      synchronousStateless(input) {
+        order.push(`task:${input}`);
+        if (input === "fail") {
+          throw new Error("synthetic read failure");
+        }
+        produced = new Uint8Array([1, 2, 3]);
+        return produced;
+      },
+    },
+    {
+      transferList: (value) => [value.buffer],
+      closeResource: async (key) => {
+        order.push(`close:${key}`);
+        if (key === "before") {
+          enteredClose.resolve();
+          await finishClose.promise;
+        }
+        order.push(`closed:${key}`);
+      },
+    },
+    {
+      initialize: vi.fn(),
+      onMessage: vi.fn(),
+      installTaskContext: vi.fn(),
+      onIdle: vi.fn(),
+    },
+  );
+  const task = (taskId: number, input: string) => {
+    const reply = once(replies, "message");
+    parent.emit("message", { taskId, input, nativeSections: new SharedArrayBuffer(4) });
+    return reply;
+  };
+  const success = (taskId: number) => [{ status: "ok", taskId, value: new Uint8Array([1, 2, 3]) }];
+  try {
+    expect(await task(1, "first")).toEqual(success(1));
+    expect(produced?.byteLength).toBe(0);
+    expect(await task(2, "fail")).toEqual([
+      { status: "failed", taskId: 2, error: "synthetic read failure" },
+    ]);
+    const beforeClosed = once(beforeReply, "message");
+    parent.emit("message", { closeResource: true, key: "before", resourcePort: beforeReceipt });
+    await enteredClose.promise;
+    const waiting = task(3, "waiting");
+    const afterClosed = once(afterReply, "message");
+    parent.emit("message", { closeResource: true, key: "after", resourcePort: afterReceipt });
+    expect(order).toEqual(["task:first", "task:fail", "close:before"]);
+    finishClose.resolve();
+    expect(await beforeClosed).toEqual([{ ok: true }]);
+    expect(await waiting).toEqual(success(3));
+    expect(await afterClosed).toEqual([{ ok: true }]);
+    expect(await task(4, "last")).toEqual(success(4));
+    expect(order).toEqual([
+      "task:first",
+      "task:fail",
+      "close:before",
+      "closed:before",
+      "task:waiting",
+      "close:after",
+      "closed:after",
+      "task:last",
+    ]);
+  } finally {
+    finishClose.resolve();
+    for (const port of [output, replies, beforeReceipt, beforeReply, afterReceipt, afterReply]) {
+      port.close();
+    }
+  }
 });

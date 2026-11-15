@@ -525,6 +525,8 @@ function readPreflightArchive(repo: string, artifact: PublishPreflightRecord) {
     minEntries: 1,
     maxEntries: 1024,
     allowPath: (name: string) =>
+      // SDK evidence producers also upload this exact human-readable summary.
+      name === "plugin-sdk-api-release-diff.md" ||
       /^[A-Za-z0-9_.-]+\.(?:tgz|json|txt)$|^core-packages-SHA256SUMS$|^dependency-evidence\/[A-Za-z0-9_.-]+\.(?:json|md)$/u.test(
         name,
       ),

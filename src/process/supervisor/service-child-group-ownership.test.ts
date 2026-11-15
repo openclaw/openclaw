@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-const { census, definitelyDead, directory, readStat, darwinCommand, nativeDarwinCensus } =
+const { census, definitelyDead, directory, readStat, readlink, darwinCommand, nativeDarwinCensus } =
   vi.hoisted(() => ({
     census: vi.fn(),
     nativeDarwinCensus: vi.fn(),
     definitelyDead: vi.fn(),
     directory: vi.fn(),
     readStat: vi.fn(),
+    readlink: vi.fn(),
     darwinCommand: vi.fn(),
   }));
 vi.mock("../darwin-process-inspection.js", async (importOriginal) => ({
@@ -14,10 +15,15 @@ vi.mock("../darwin-process-inspection.js", async (importOriginal) => ({
   readDarwinProcessCensus: nativeDarwinCensus,
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census, execFile: vi.fn() }));
-vi.mock("node:fs", () => ({ readdirSync: directory, readFileSync: readStat }));
+vi.mock("node:fs", () => ({
+  readdirSync: directory,
+  readFileSync: readStat,
+  readlinkSync: readlink,
+}));
 vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
 import {
   hasLiveOwnedProcessGroupMembers,
+  isProcessGroupGoneByCensus,
   readProcessGroupMembers,
 } from "./service-child-group-ownership.js";
 
@@ -54,6 +60,7 @@ beforeEach(() => {
   rows = new Map([[owner, stat(owner, owner)]]);
   commands = new Map([[owner, "openclaw-doctor\0"]]);
   identities = new Map();
+  readlink.mockReset().mockImplementation(() => String(owner));
   directory.mockReset().mockImplementation(() => ["self", ...Array.from(rows.keys(), String)]);
   readStat.mockReset().mockImplementation((file: string) => {
     const match = /^\/proc\/(\d+)\/(stat|cmdline|status)$/.exec(file);
@@ -112,6 +119,41 @@ it.each([
   if (name.includes("zombie")) {
     expect(definitelyDead).toHaveBeenCalledExactlyOnceWith(foreignPid);
   }
+});
+
+const targetGroup = foreignPid + 10;
+it.each([
+  ["live member", stat(foreignPid, targetGroup, "S"), false, false, false],
+  ["zombie with live threads", stat(foreignPid, targetGroup, "Z"), false, true, false],
+  ["dead zombie only", stat(foreignPid, targetGroup, "Z"), true, true, true],
+  ["member of another group only", stat(foreignPid, foreignPid, "S"), false, false, true],
+  ["unreadable member row", denied, false, false, false],
+] as const)(
+  "confirms a denied group probe from the Linux census: %s",
+  (_name, row, dead, checksLiveness, expected) => {
+    rows.set(foreignPid, row);
+    definitelyDead.mockReturnValue(dead);
+    expect(isProcessGroupGoneByCensus(targetGroup)).toBe(expected);
+    // Only a zombie needs the liveness probe; a running member is alive by its state alone.
+    expect(definitelyDead).toHaveBeenCalledTimes(checksLiveness ? 1 : 0);
+    expect(census).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps a group alive when /proc is not this PID namespace's or the census fails", () => {
+  // A foreign procfs maps PIDs to unrelated processes, so an empty target group proves nothing.
+  readlink.mockReturnValue("1");
+  expect(isProcessGroupGoneByCensus(targetGroup)).toBe(false);
+  expect(directory).not.toHaveBeenCalled();
+  readlink.mockImplementation(() => {
+    throw denied;
+  });
+  expect(isProcessGroupGoneByCensus(targetGroup)).toBe(false);
+  readlink.mockReturnValue(String(owner));
+  directory.mockImplementation(() => {
+    throw denied;
+  });
+  expect(isProcessGroupGoneByCensus(targetGroup)).toBe(false);
 });
 
 it("does not report an empty Linux group after its existing census budget expires", () => {

@@ -12,6 +12,9 @@ vi.mock("../../lib/toast.ts", async (importOriginal) => ({
 function menuProps() {
   return {
     agentId: "alpha",
+    canCreateAgent: true,
+    canSetDefault: true,
+    canDeleteAgent: true,
     defaultLabel: "Set default",
     defaultDisabled: false,
     pinLabel: "Pin",
@@ -110,27 +113,27 @@ it("leads with New agent and adds Refresh on the phone", async () => {
   }
 });
 
-it("keeps the recovery reason on a denied New agent", async () => {
-  const onCreate = vi.fn();
+it("hides unavailable management actions while retaining personal actions and refresh", async () => {
   const container = document.body.appendChild(document.createElement("div"));
   const view = mountSolid(
     AgentsPageMenu,
     {
       ...menuProps(),
       showPhoneActions: true,
-      createDisabled: true,
-      createDisabledReason: "Reconnect with operator.admin",
-      onCreate,
+      canCreateAgent: false,
+      canSetDefault: false,
+      canDeleteAgent: false,
     },
     container,
   );
   try {
-    await vi.waitFor(() => {
-      const first = openItems(container)[0];
-      expect(first?.textContent).toContain("Reconnect with operator.admin");
-    });
-    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
-    expect(onCreate).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(openItems(container).map((item) => item.textContent?.trim())).toEqual([
+        t("agents.copyId"),
+        "Pin",
+        "Refresh",
+      ]),
+    );
   } finally {
     view.dispose();
     container.remove();

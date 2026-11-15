@@ -141,6 +141,9 @@ struct RootTabs: View {
             .overlay(alignment: .topLeading) {
                 self.uiTestReadinessMarker
             }
+            .task(id: self.appModel.agentAvatarRequest) {
+                await self.appModel.refreshAgentAvatars(self.appModel.agentAvatarRequest)
+            }
             .task(id: self.chatOwnerTaskIdentity) {
                 await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
                 guard !Task.isCancelled else { return }
@@ -198,7 +201,8 @@ struct RootTabs: View {
                 onShow: self.showSidebar,
                 onHide: self.hideSidebar,
                 sidebar: self.sidebarColumn(drawerSafeAreaInsets: isDrawerLayout ? proxy.safeAreaInsets : nil),
-                detail: self.sidebarDetailNavigationShell,
+                detail: self.sidebarDetailNavigationShell
+                    .environment(\.openClawChatIsObscured, isDrawerLayout && self.isSidebarVisible),
                 contentSafeAreaInsets: proxy.safeAreaInsets)
                 .onChange(of: layoutMode, initial: true) { _, mode in
                     self.updateSidebarLayout(mode)
@@ -1119,11 +1123,17 @@ private enum RootTabsPreviewGatewayState {
         case .offline:
             break
         case .connecting:
-            appModel.gatewayStatusText = "Connecting..."
+            appModel.setGatewayConnectionProgress(.connecting)
         case .connected:
             appModel.enterAppleReviewDemoMode()
         case .error:
-            appModel.gatewayStatusText = "Gateway error: connection refused"
+            guard let problem = GatewayConnectionProblemMapper.map(error: URLError(.cannotConnectToHost))
+            else { return }
+            appModel.failGatewayPreconnectVerification(
+                problem,
+                stableID: "preview",
+                host: nil,
+                expectedGeneration: appModel.gatewayConnectGeneration)
         }
     }
 }

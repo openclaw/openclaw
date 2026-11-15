@@ -113,8 +113,11 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
-  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
-  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  /** Best-effort host diagnostics after inventory publication, outside cron readiness and operations. */
+  describeJobLoadWarning?: (
+    job: CronStoredJob,
+    signal: AbortSignal,
+  ) => string | undefined | Promise<string | undefined>;
   /** Disallow automation jobs that run commands or scripts on the host. */
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
@@ -403,6 +406,8 @@ export type CronServiceState = {
   /** Retains stopped generations while an immediate restart admits new work. */
   schedulerDrain: Promise<void>;
   stopped: boolean;
+  /** A reload's replacement owns scheduling; runs already executing here still publish results. */
+  handedOver?: boolean;
   /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
   lifecycleGeneration: number;
   schedulingPaused: boolean;

@@ -19,6 +19,7 @@ import {
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
+import { ensureGitCommit } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
@@ -365,7 +366,7 @@ export async function renderPluginSdkApiRevisions(
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  const headCommit = git(repoRoot, ["rev-parse", "--verify", `${args.head}^{commit}`]);
+  const headCommit = ensureGitCommit(args.head, repoRoot);
   if (args.bases) {
     const { version } = JSON.parse(git(repoRoot, ["show", `${headCommit}:package.json`]));
     if (resolveNpmPreflightSdkSelectors(version, "beta").length !== 2) {
@@ -375,7 +376,7 @@ async function main(): Promise<void> {
   const bases = Object.entries(args.bases ?? { base: args.base }).map(([selector, ref]) => ({
     selector,
     ref,
-    commit: git(repoRoot, ["rev-parse", "--verify", `${ref}^{commit}`]),
+    commit: ensureGitCommit(ref, repoRoot),
   }));
   // Identical commits need no rendering, even when the caller's checkout is dirty.
   const commits = [

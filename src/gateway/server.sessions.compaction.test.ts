@@ -103,6 +103,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     totalLines: 1,
     entry: {
       spawnedCwd: "/tmp/task-repo",
+      contextTokens: 32_000,
       thinkingLevel: "medium",
       reasoningLevel: "stream",
       cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
@@ -217,6 +218,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     },
     workspaceDir: "/tmp/task-repo",
     cwd: "/tmp/task-repo",
+    contextTokenBudget: 32_000,
     config: {
       agents: {
         defaults: {

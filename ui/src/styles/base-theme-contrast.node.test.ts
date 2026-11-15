@@ -129,7 +129,6 @@ describe("Control UI theme contrast", () => {
   const controls = (
     [
       ["components.css", ".btn.active", "var(--accent-subtle)"],
-      ["sessions.css", ".session-label-chip"],
       ["sessions.css", ".session-kind--direct"],
     ] satisfies [string, string, string?][]
   ).flatMap(([file, selector, tint]) =>

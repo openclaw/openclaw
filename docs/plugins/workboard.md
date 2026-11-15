@@ -458,6 +458,7 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                                                       |
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                                                                 |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                                                          |
+| `workboard_verify`                                                                                                                               | Record what a checker checked on a card and what it concluded. Evidence only; see Result evidence.                                                                                                                              |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                                                               |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                                                            |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                                                              |
@@ -505,6 +506,42 @@ attempt cannot settle it again. Unblocking and promoting the card leaves it
 `ready` for a fresh dispatch and preserves the blocked attempt's failure. Ignored
 observations are logged with the card and attempt IDs. Explicitly linking a
 different session still allows that session's lifecycle to synchronize.
+
+### Result evidence
+
+Cards can carry optional result evidence in `metadata.automation.evidence`, kept
+apart by who produced it. Completion never waits on it, proof statuses keep their
+meaning, and dependency scheduling ignores it. Cards without evidence behave exactly
+as before.
+
+- **Claim** (`kind: "claim"`): something the worker says its result does. Pass
+  `claims: [{ statement, proofId? }]` (up to 4) to `workboard_complete`. Workboard
+  stamps `claimedBy` with the caller and `runId` with the card's run. A claim says
+  nothing about whether it holds.
+- **Observation** (`kind: "observation"`): a run outcome the execution system
+  observed. Only Workboard's session lifecycle sync writes these, when a linked
+  session's run ends (`source: "session-lifecycle"`, `outcome: "succeeded" | "failed"`,
+  with `sessionKey` and `runId`; the first report of a run wins). Agents cannot write them. Runs whose end event was
+  missed have no observation; Workboard does not infer one from `done`, a passed
+  proof, or a timestamp.
+- **Verification** (`kind: "verification"`): a check by an identified checker,
+  written with `workboard_verify`. It records `scope` (what was checked),
+  `outcome` (`confirmed`, `disputed`, or `inconclusive`), an optional `claimId`,
+  `proofId`, `artifactId`, or `runId` it covered, and an optional note and http(s)
+  URL. Workboard stamps `checkerId` with the caller and sets `checkedOwnWork` when
+  that caller is the card's assignee, claim owner, or a claim author. `false` only
+  means no match was found; it does not establish independence. A verification
+  never changes the card's status, including a `disputed` one on a `done` card.
+
+Generic metadata writes (`workboard_create`, `workboard.cards.update`) cannot add
+evidence, and Gateway `workboard.cards.complete` rejects `claims` because it has no
+agent identity to stamp. A card keeps the 4 newest records of each kind, within about
+6 KiB in total. Evidence only uses room the card's other records leave: when the
+card is near its 24 KiB metadata budget, Workboard drops the oldest evidence first,
+never proof, attempts, comments, or artifacts. Claims and observations that cannot
+fit are dropped without failing completion; `workboard_verify` returns an error
+instead. Workboard versions
+before this one ignore the field and may drop it on their next write to the card.
 
 ## Dispatch
 
@@ -574,12 +611,18 @@ dispatch that needs writes.
 ### Worker selection
 
 Each pass starts **at most 3 workers by default**. Ready cards are ordered by
-priority, then position, then creation time. A pass starts only one card per
-owner/agent and skips owners that already have running or review work on the
-board. Archived cards, cards with an active claim, and cards not in `ready`
-status are never selected for worker starts (they can still be affected by the
-data side of dispatch: stale-claim cleanup, dependency promotion, timeout
-cleanup).
+priority, then position, then creation time. Each owner/agent may hold one
+active card at a time by default: a card counts while it is `running`, its run
+is still marked running, or its claim has not expired, so a card waiting for
+review counts only in those cases. The count covers every board, and the
+board's `maxActivePerOwner` orchestration setting (1 to 20, default 1) raises
+the limit for cards on that board. Unassigned cards all share the
+`workboard-dispatcher` owner, so set it above 1 to run several of them at once.
+A pass tries one card per owner before starting extra cards for the same
+owner, and the per-pass cap still applies. Archived cards, cards with an
+active claim, and cards not in `ready` status are never selected for worker
+starts (they can still be affected by the data side of dispatch: stale-claim
+cleanup, dependency promotion, timeout cleanup).
 
 Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
@@ -611,9 +654,10 @@ as unavailable. They surface as command errors, and so does any Gateway
 failure when an explicit `--url`/`--token` target was given.
 
 Board metadata can set `autoDecompose`, `autoDecomposePerDispatch`,
-`defaultAssignee`, and `orchestratorProfile`. OpenClaw records this intent and
-exposes it in worker context. Actual specification/decomposition still runs
-through the normal Workboard tools.
+`defaultAssignee`, `orchestratorProfile`, and `maxActivePerOwner` (see
+[Worker selection](#worker-selection)). OpenClaw records the first four as
+intent and exposes them in worker context. Actual specification/decomposition
+still runs through the normal Workboard tools.
 
 ## CLI and slash command
 
@@ -875,9 +919,10 @@ openclaw workboard list --status ready
 
 If the CLI reports data-only dispatch, start or restart the Gateway and
 retry - data-only dispatch updates local board state but cannot start
-subagent worker runs. Cards can also be skipped when another card for the
-same owner or agent is already running or waiting for review. Complete,
-block, or release that active work before dispatching more for the same
+subagent worker runs. Cards can also be skipped when the same owner or agent
+already holds as many active cards as the board's
+`maxActivePerOwner` allows (default 1). Complete, block, or release that
+active work, or raise the board's limit, before dispatching more for the same
 owner.
 
 ## Related

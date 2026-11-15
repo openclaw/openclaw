@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import {
   openSessionArchiveDecodedStream,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
@@ -10,13 +12,19 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { iterateSessionColdRecords } from "../config/sessions/session-cold-storage-chunks.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { sha256Base64Url } from "./crypto-digest.js";
+import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   dropInheritedTranscriptEvents,
   projectUsageScanFields,
@@ -24,7 +32,112 @@ import {
 import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
+import type { UsageCostWorkerDatabase } from "./session-cost-usage-worker.types.js";
 import type { ParsedTranscriptEntry, UsageCostTranscriptFile } from "./session-cost-usage.types.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
+import { readThreadDiskReadBytes } from "./thread-disk-io.js";
+
+/** Read bounded transcript pages and release native custody before pacing the next read. */
+export function createUsageCostTranscriptReader(params: {
+  target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
+  readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
+  readFacts: (marker: SqliteSessionFileMarker) => { cold: boolean } | undefined;
+  control: WorkerTaskControl;
+  env: NodeJS.ProcessEnv;
+}) {
+  const { target, readStore, readFacts, control, env } = params;
+  let previousReadBytes = readThreadDiskReadBytes();
+  const yieldRead = async (bytes: number, startedAt: number) => {
+    control.throwIfCancelled();
+    const readBytes = readThreadDiskReadBytes();
+    const physicalBytes =
+      readBytes !== undefined && previousReadBytes !== undefined
+        ? Math.max(0, readBytes - previousReadBytes)
+        : 0;
+    previousReadBytes = readBytes;
+    // No idle credit: each completed page yields native custody to foreground work.
+    await delay(
+      Math.max(
+        1,
+        (Math.max(bytes, physicalBytes) / (16 * 1024 * 1024)) * 1000 -
+          (performance.now() - startedAt),
+      ),
+      undefined,
+      { signal: control.signal },
+    );
+    control.throwIfCancelled();
+  };
+  const readRows = async (
+    marker: SqliteSessionFileMarker,
+    afterSeq: number,
+    throughSeq: number,
+    consume: (seq: number, event: unknown) => void,
+  ): Promise<number> => {
+    if (throughSeq <= afterSeq) {
+      return afterSeq;
+    }
+    const database = target(marker.agentId, marker.storePath);
+    const startedAt = performance.now();
+    let bytes = 0;
+    const resultSeq = await readStore(marker.agentId, marker.storePath, () => {
+      const result = withOpenClawAgentDatabaseReadOnly(
+        (opened) => {
+          if (readFacts(marker)?.cold) {
+            const lastSeq = runSqliteReadSnapshotSync(opened.db, () => {
+              const archive = readSessionColdTranscript(opened.db, marker.sessionId);
+              if (!archive) {
+                return undefined;
+              }
+              let last = afterSeq;
+              // Exhaust every chunk before publishing; the decoder verifies totals at EOF.
+              for (const record of iterateSessionColdRecords(opened.db, database.path, archive)) {
+                control.throwIfCancelled();
+                if (
+                  record.kind === "event" &&
+                  record.row.seq > afterSeq &&
+                  record.row.seq <= throughSeq
+                ) {
+                  bytes += Buffer.byteLength(record.row.event_json);
+                  consume(record.row.seq, JSON.parse(record.row.event_json));
+                  last = record.row.seq;
+                }
+              }
+              return last;
+            });
+            if (lastSeq !== undefined) {
+              return lastSeq;
+            }
+          }
+          const query = getSessionKysely(opened.db)
+            .selectFrom("transcript_events")
+            .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
+            .where("session_id", "=", marker.sessionId)
+            .where("seq", ">", afterSeq)
+            .where("seq", "<=", throughSeq)
+            .orderBy("seq", "asc")
+            .limit(1_024);
+          let lastSeq = afterSeq;
+          // Bound each hot page; the consumer retains only usage and navigation fields.
+          for (const row of iterateSqliteQuerySync(opened.db, query)) {
+            const size = Buffer.byteLength(row.event_json);
+            if (lastSeq > afterSeq && bytes + size > 8 * 1024 * 1024) {
+              break;
+            }
+            consume(row.seq, JSON.parse(row.event_json));
+            lastSeq = row.seq;
+            bytes += size;
+          }
+          return lastSeq;
+        },
+        { ...database, env },
+      );
+      return result.found ? result.value : afterSeq;
+    });
+    await yieldRead(bytes, startedAt);
+    return resultSeq;
+  };
+  return { readRows, yieldRead };
+}
 
 /** Reuse resolved model prices across the bounded pages of one worker operation. */
 export function createUsageCostWorkerPriceResolver(

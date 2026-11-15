@@ -11,7 +11,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "../../infra/gateway-owner-lease.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
@@ -376,7 +376,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       const detectedSupervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,
       });
-      const gatewayOwner = readGatewayOwnerLease({ current: true });
+      const gatewayOwner = await readGatewayOwnerLeaseAsync();
       const foregroundOrigin: ForegroundUpdateOrigin | undefined =
         gatewayOwner?.mode === "foreground" &&
         gatewayOwner.state === "live" &&

@@ -239,10 +239,8 @@ suite.define(() => {
         if (await work.count()) {
           await work.click();
         }
-        const disclosure = pane.locator('.chat-bubble-activity__summary[aria-label="Reasoning"]');
-        if (await disclosure.count()) {
-          await disclosure.click();
-        }
+        // Collapsed reasoning is a one-line preview; its prose is selectable once opened.
+        await pane.getByRole("button", { name: "Reasoning", exact: true }).click();
         const reasoning = pane.locator(".chat-thinking").getByText(reasoningText, { exact: true });
         await reasoning.waitFor();
         await reasoning.scrollIntoViewIfNeeded();

@@ -412,6 +412,7 @@ suite.define(() => {
               await page.keyboard.press("ControlOrMeta+K");
               const palette = page.locator("openclaw-command-palette");
               const prompt = palette.locator(".cmd-palette__input");
+              await prompt.press("Tab");
               await prompt.fill("Start another task\nUsing configured defaults");
               const start = palette.getByRole("button", {
                 name: "Start new session in background",

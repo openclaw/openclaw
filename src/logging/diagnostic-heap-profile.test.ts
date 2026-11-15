@@ -472,7 +472,7 @@ describe("diagnostic heap profile owner", () => {
   });
 
   it.each([true, false])(
-    "retains allocation callers beyond recursive=%s dependency stacks",
+    "retains allocation listeners and outer callers beyond recursive=%s dependency stacks",
     async (recursive) => {
       const value = profile();
       // Zero-byte siblings force the public capture into its bounded summary path.
@@ -493,6 +493,18 @@ describe("diagnostic heap profile owner", () => {
               : "findJsonSchemaNodeError"
             : `dependency${index}`,
         ),
+        "notifyListeners",
+        "pluginListener",
+        "apply",
+        "run",
+        "invoke",
+        "enter",
+        "withPluginRuntimePluginScope",
+        "runWithPluginGatewayScope",
+        "runFrame",
+        "runWithAsyncStore",
+        "runInAsyncScope",
+        "enterAsyncStore",
         "allocateSchema",
       ];
       for (const [index, name] of names.entries()) {
@@ -522,9 +534,15 @@ describe("diagnostic heap profile owner", () => {
       expect(allocation.count).toBe(1);
       expect(allocation.stack[0].functionName).toBe("allocateSchema");
       expect(allocation.stack.map((entry) => entry.functionName)).toEqual(
-        expect.arrayContaining(["recreateSchemas", "refreshSchemas"]),
+        expect.arrayContaining([
+          "pluginListener",
+          "notifyListeners",
+          "recreateSchemas",
+          "refreshSchemas",
+        ]),
       );
-      expect(allocation.stack.length).toBeLessThanOrEqual(8);
+      expect(allocation.stack.length).toBeLessThanOrEqual(32);
+      expect(allocation.stack.at(-1)?.functionName).toBe(recursive ? "(root)" : "refreshSchemas");
       expect(allocation.stack.some((entry) => entry.functionName.includes("×20"))).toBe(recursive);
       expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
     },

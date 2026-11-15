@@ -26,7 +26,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 
 // Exercise the existing managed producer without enabling RUN resource disposal.

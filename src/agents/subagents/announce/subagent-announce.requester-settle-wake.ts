@@ -1,5 +1,6 @@
 import { withGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -435,7 +436,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         try {
           followup.assertCurrent();
           return true;
-        } catch {
+        } catch (error) {
+          if (isOperatorAuthorityUnavailable(error)) {
+            throw error;
+          }
           return false;
         }
       }

@@ -119,12 +119,7 @@ export function prepareInstalledSkillCatalog(params: {
           ? resource?.contentHash
           : skill.contentHash;
       return {
-        catalogRevision: contentHash
-          ? {
-              key: JSON.stringify([contentHash, skill.name, skill.description, skill.locationNote]),
-              contentHash,
-            }
-          : undefined,
+        catalogRevision: contentHash,
         name: skill.name,
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),

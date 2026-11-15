@@ -199,7 +199,10 @@ test.each([
     const deadlineAtMs = started.details.deadlineAtMs;
     if (args.timeoutSeconds === 0) {
       expect(deadlineAtMs).toBeUndefined();
-      expect(started.details.followUp).not.toContain("Automatic stop will be requested");
+      expect(started.content).not.toContainEqual({
+        type: "text",
+        text: expect.stringContaining("times out in"),
+      });
     } else {
       if (deadlineAtMs === undefined) {
         throw new Error("Expected the actual process timeout deadline");
@@ -208,7 +211,7 @@ test.each([
       expect(deadlineAtMs).toBeLessThanOrEqual(Date.now() + 5_001);
       expect(started.content).toContainEqual({
         type: "text",
-        text: expect.stringContaining(new Date(deadlineAtMs).toISOString()),
+        text: expect.stringMatching(/\), times out in [1-5]s\. /),
       });
     }
     expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
@@ -302,8 +305,12 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     try {
       const start = async () => {
         const started = await exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")');
-        const { sessionId: processSessionId } = runningSession(started.details);
+        const { sessionId: processSessionId, followUp } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
+        if (cron) {
+          expect(followUp).toContain("collect it before ending the turn");
+          expect(followUp).not.toContain("end this turn now");
+        }
         if (scenario === "queued cron") {
           const receipt = expectDefined(receipts[0], "queued cron completion receipt");
           expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
@@ -442,6 +449,87 @@ test("starts and notifies when identity enrichment fails, then resolves child id
   }
 });
 
+function waitForRelease(release: string) {
+  return `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const done = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("WAITER_DONE"); } }; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, done); done();`;
+}
+
+test("tells a woken conversation to end its wait and names its other running commands", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:waiters";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const release = path.join(state.workspaceDir, "release-waiters");
+  try {
+    const first = runningSession((await exec("first-waiter", waitForRelease(release))).details);
+    // Every exit wakes by default, so the waiter need not print its result.
+    expect(first.followUp).toContain(
+      "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn now; do not poll it or start another command for the same result.",
+    );
+    expect(first.followUp).toContain("run one command that loops until it holds");
+    expect(first.followUp).not.toContain("Also running");
+    // A second waiter in the same turn sees the first; the turn-start snapshot cannot.
+    const second = runningSession((await exec("second-waiter", waitForRelease(release))).details);
+    expect(second.followUp).toContain(`Also running in this conversation: ${first.sessionId} (`);
+    const idle = await createProcessTool({ scopeKey: sessionKey }).execute("idle-poll", {
+      action: "poll",
+      sessionId: first.sessionId,
+    });
+    expect(idle.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("end this turn instead of polling."),
+    });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("wakes a dashboard conversation on silent success, with exit, duration and a bounded tail", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:silent-waiter";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const [script, expected] of [
+    ["void 0", /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/],
+    [
+      'process.stdout.write("x".repeat(3000) + "TAIL_END")',
+      /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars \(process log has the rest\):\nx{1992}TAIL_END$/,
+    ],
+  ] as const) {
+    await exec("silent-waiter", script);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
+  }
+});
+
+test("does not promise a hidden subagent an exit wake", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:hidden-waiter";
+  await seedOrigin(sessionKey, "agent:main:main");
+  const release = path.join(state.workspaceDir, "release-hidden-waiter");
+  try {
+    const started = runningSession(
+      (await backgroundExec(sessionKey, { agentId: "main" })("hidden", waitForRelease(release)))
+        .details,
+    );
+    expect(started.followUp).toContain("poll with a timeout");
+    expect(started.followUp).not.toContain("wakes this conversation");
+    const idle = await createProcessTool({ scopeKey: sessionKey }).execute("idle-poll", {
+      action: "poll",
+      sessionId: started.sessionId,
+    });
+    expect(idle.details).toMatchObject({
+      followUp: expect.stringContaining("poll with a timeout"),
+    });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
 test("reports manual collection after destination capture fails, then recovers on the same tool", async ({
   signal,
 }) => {
@@ -476,10 +564,10 @@ test("reports manual collection after destination capture fails, then recovers o
       const handle = runningSession(started.details);
       const followUp = expectDefined(handle.followUp, "background continuation guidance");
       expect(followUp).toContain(
-        recovered ? "wake this conversation automatically" : "poll with a timeout",
+        recovered ? "Its exit wakes this conversation with the result" : "poll with a timeout",
       );
       if (!recovered) {
-        expect(followUp).not.toContain("wake this conversation automatically");
+        expect(followUp).not.toContain("wakes this conversation");
       }
       expect(started.content).toContainEqual({
         type: "text",

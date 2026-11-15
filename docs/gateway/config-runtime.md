@@ -87,7 +87,9 @@ The `models` root also owns global model-catalog behavior.
   release or declared under `models.providers.*.models[].cost`.
 - `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
   accepted only for explicit localhost testing). The default is
-  `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1 or v2.
+  `https://catalog.openclaw.ai/models/v3/catalog.json`. Mirrors can serve v1, v2, or v3.
+  After an upgrade, a catalog downloaded from the earlier v1 or v2 default keeps
+  serving, including offline, until the first v3 download succeeds.
   The Gateway checks in the background at startup and every six hours. A compatible download
   is prepared and published as one model-and-pricing generation without a
   Gateway restart. Readers retain the current generation until preparation
@@ -109,21 +111,30 @@ remain intact for older clients. Catalog publishers write both wires with
 `--out <v1-file> --out-v2 <v2-file>` when running
 `scripts/publish-model-catalog.mts`.
 
-Add `--out-v3 <v3-file>` to publish an opt-in task-capable catalog. V3 retains
+Add `--out-v3 <v3-file>` to publish the default task-capable catalog. V3 retains
 canonical `inference` facts for native Decision models and models that support
 both chat and Decisions. Native-only rows never become chat defaults or
-recommendations. Select a v3 mirror with the existing `models.catalogRefresh.url`;
-the default hosted URL and v1/v2 outputs stay unchanged. The v3 wire version is
+recommendations. The v1 and v2 outputs stay unchanged for released clients that
+still read them. The v3 wire version is
 independent of the Decision provider SDK version. Installed plugins still own
 route eligibility, authentication, and execution; catalog metadata grants none
 of those capabilities.
 
 V3 changes only by adding fields. Readers ignore fields they do not know, at any
 level, so a newer publisher never needs a v4 for an additive change. The
-publisher still rejects unknown row, provider, and pricing fields, so typos
-there fail before publication. Never
+publisher still rejects unknown row, provider, pricing, and `inference` fields, so
+typos there fail before publication. Never
 rename, retype, remove, or reuse a v3 field. Mark every non-chat row with
 `inference.chat: false` so older readers keep it out of chat.
+
+V3 readers also tolerate values they do not know, degrading only the affected
+field and warning with the row: `null` is treated as absent, pricing with an
+unknown status, unit, or currency (or invalid rates) becomes unknown pricing, an
+unknown row status is read as `deprecated`, and invalid context window options
+or an invalid `inference.decision` are dropped while the row stays. An unknown provider
+`api` is ignored, and invalid standalone pricing entries or recommendations are
+skipped. A row whose own `api` is unknown is skipped, since the client cannot
+call that transport; the installed release's bundled row, if any, stays in use.
 
 V2 includes pricing in each model row. Unknown or unavailable pricing does not
 mean a model is free. Models outside the catalog, such as older model IDs or

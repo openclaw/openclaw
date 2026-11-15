@@ -72,7 +72,6 @@ struct ChatCommandPalette: View {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.plain)
-                .help("Close command palette (Escape)")
                 .accessibilityLabel("Close command palette")
             }
             .padding(16)

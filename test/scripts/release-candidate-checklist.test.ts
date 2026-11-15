@@ -1962,7 +1962,6 @@ describe("release candidate checklist", () => {
         source?: string;
         separatePackage?: boolean;
         providerMode?: string;
-        waived?: boolean;
         qualificationSha?: string;
         qualificationRef?: string;
         transport?: "missing" | "moved";
@@ -1989,7 +1988,6 @@ describe("release candidate checklist", () => {
       "passed",
     ],
     ["live provider", { coveragePolicy: "npm-stable-v1", providerMode: "live-frontier" }, "passed"],
-    ["waiver", { coveragePolicy: "npm-stable-v1", waived: true }, "waived"],
     ["missing transport", { transport: "missing" }, /qualification ref/],
     ["moved transport", { transport: "moved" }, /qualification ref/],
     [
@@ -2076,16 +2074,7 @@ describe("release candidate checklist", () => {
             current: {
               manifest: {
                 releaseProfile: options.releaseProfile,
-                waivers: scenario.waived
-                  ? [
-                      {
-                        childRole: "releaseChecksCandidate",
-                        jobName:
-                          "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
-                        reason: "reviewed fixture outage",
-                      },
-                    ]
-                  : [],
+                waivers: [],
               },
             },
           },
@@ -2356,6 +2345,38 @@ describe("GitHub API public fallback", () => {
       expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
     },
   );
+});
+
+describe("receipt recovery checklist consumption", () => {
+  it.each([
+    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", true],
+    ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
+    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
+  ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {
+    const result = runInNewContext(
+      stripNodeTypeScriptTypes(
+        checklistFunctions("waitForSuccessfulRun") +
+          ';waitForSuccessfulRun("fixture/repo", "123", { workflowName: "Full Release Validation", workflowRef: "main" });',
+      ),
+      {
+        runInfo: async () => ({
+          workflowName,
+          workflowPath,
+          headBranch: "main",
+          status: "completed",
+          conclusion: "success",
+        }),
+        summarizePendingDeployments: () => undefined,
+        pendingDeployments: async () => [],
+        console: { log: () => {} },
+      },
+    );
+    if (accepted) {
+      await expect(result).resolves.toMatchObject({ run: { workflowName, workflowPath } });
+    } else {
+      await expect(result).rejects.toThrow("workflow mismatch");
+    }
+  });
 });
 
 describe("release run environment approval diagnostics", () => {

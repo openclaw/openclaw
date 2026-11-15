@@ -11,7 +11,7 @@ import {
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
 
-const SUMMARY_STACK_DEPTH = 8;
+const SUMMARY_STACK_DEPTH = 32;
 
 // Node's inspector declarations omit these fields from the current V8 protocol.
 type SamplingNode = Omit<HeapProfiler.SamplingHeapProfileNode, "children"> & {
@@ -191,7 +191,7 @@ export async function sanitizeDiagnosticHeapProfile(
     return raw;
   }
 
-  // Collapse repeated leaf-first call stacks, retaining eight frames per entry.
+  // Collapse repeated leaf-first call stacks, retaining bounded owner context per entry.
   // Intern exact sanitized frames so each stack key need not repeat their JSON.
   const frameIds = new Map<string, number>();
   const groups = new Map<string, AllocationSummary>();

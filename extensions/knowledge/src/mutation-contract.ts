@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { ExpectedHash } from "./hash-fence.js";
 import { BODY_INPUT_MAX_CHARS } from "./limits.js";
 import { text, name, Evidence, Envelope, id, strings, RecordAnnotations, Recall } from "./model.js";
 import { PageBudget } from "./page-budget.js";
@@ -36,7 +37,7 @@ export const SavePage = Type.Object(
     id: Type.Optional(Type.String({ pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{7,95}$" })),
     expectedVaultId: Type.Optional(requestId),
     expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
-    expectedHash: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
+    expectedHash: Type.Optional(ExpectedHash),
     expectedOntologyFingerprint: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
     aliases: Type.Optional(strings),
     tags: Type.Optional(strings),
@@ -105,7 +106,7 @@ const target = {
   requestId,
   id,
   expectedRevision: Type.Integer({ minimum: 1 }),
-  expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  expectedHash: ExpectedHash,
   expectedVaultId: Type.Optional(requestId),
   reason: Type.String({ minLength: 1, maxLength: 2000 }),
 };
@@ -133,7 +134,7 @@ const pageFence = (description: string) =>
     {
       id,
       expectedRevision: Type.Integer({ minimum: 1 }),
-      expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+      expectedHash: ExpectedHash,
     },
     { additionalProperties: false, description },
   );
@@ -273,7 +274,7 @@ const recallTarget = {
   requestId,
   id,
   expectedRevision: Type.Integer({ minimum: 1 }),
-  expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  expectedHash: ExpectedHash,
 };
 const RecallSet = Type.Object(
   {
@@ -399,6 +400,13 @@ export const Receipt = Type.Object(
     reason: Type.Optional(text(2000)),
     impact: Type.Optional(LifecycleImpact),
     indexed: Type.Literal(false),
+    ontologyFingerprint: Type.Optional(
+      Type.String({
+        maxLength: 64,
+        description:
+          "The ontology fingerprint this write was validated against; pass it as the next write's expectedOntologyFingerprint.",
+      }),
+    ),
     git: Type.Optional(GitCheckpoint),
     budget: Type.Optional({
       ...PageBudget,

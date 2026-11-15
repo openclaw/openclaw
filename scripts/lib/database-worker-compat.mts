@@ -835,6 +835,7 @@ export function inspectDatabaseWorkerBoundaries(
       pending.push(operation);
     }
   }
+  session.checkpoint?.("closure-expansion");
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
@@ -960,6 +961,7 @@ export function inspectDatabaseWorkerBoundaries(
       handledImports.add(dynamicImport);
     }
   }
+  session.checkpoint?.("binding-forwarding");
   const edges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const callerEdges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const runtimeReferences = new Set<BoundaryOperation>();
@@ -1056,23 +1058,19 @@ export function inspectDatabaseWorkerBoundaries(
     return { file, source, references };
   });
   // Reference discovery is independent across files in this immutable snapshot.
-  // Resolve the full batch before classifying callers instead of one RPC per file.
-  symbolsAt(sourceReferences.flatMap(({ references }) => references));
-  for (const { file, source, references } of sourceReferences) {
-    const symbols = symbolsAt(references);
+  // Shorthand properties use their value-symbol query during caller classification.
+  symbolsAt(
+    sourceReferences.flatMap(({ references }) =>
+      references.filter((node) => !ts.isShorthandPropertyAssignment(node.parent)),
+    ),
+  );
+  session.checkpoint?.("reference-prefetch");
+  // Pack immutable fallback lookups across files without retaining another full inventory.
+  const accessBatch: ts.Expression[] = [];
+  for (const { references } of sourceReferences) {
     const pendingAccesses = new Set<ts.Expression>();
-    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
-    for (const [index, node] of references.entries()) {
-      if (
-        ts.isIdentifier(node) &&
-        ts.isBindingElement(node.parent) &&
-        node.parent.name === node &&
-        !node.parent.propertyName &&
-        ts.isObjectBindingPattern(node.parent.parent)
-      ) {
-        receiverBindings.set(node, node.parent.parent);
-      }
-      if (symbols[index]) {
+    for (const node of references) {
+      if (compilerSymbols.get(node)) {
         continue;
       }
       const parent = node.parent;
@@ -1084,6 +1082,13 @@ export function inspectDatabaseWorkerBoundaries(
             : undefined;
       while (receiver && !pendingAccesses.has(receiver)) {
         pendingAccesses.add(receiver);
+        if (!compilerSymbols.has(receiver)) {
+          accessBatch.push(receiver);
+          if (accessBatch.length === 256) {
+            symbolsAt(accessBatch);
+            accessBatch.length = 0;
+          }
+        }
         receiver =
           ts.isAwaitExpression(receiver) ||
           ts.isParenthesizedExpression(receiver) ||
@@ -1095,9 +1100,22 @@ export function inspectDatabaseWorkerBoundaries(
               : undefined;
       }
     }
-    // Query the same receiver nodes as the fallback, without a round trip per access.
-    const accessLocations = [...pendingAccesses];
-    symbolsAt(accessLocations);
+  }
+  symbolsAt(accessBatch);
+  for (const { file, source, references } of sourceReferences) {
+    const symbols = references.map((node) => compilerSymbols.get(node));
+    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
+    for (const node of references) {
+      if (
+        ts.isIdentifier(node) &&
+        ts.isBindingElement(node.parent) &&
+        node.parent.name === node &&
+        !node.parent.propertyName &&
+        ts.isObjectBindingPattern(node.parent.parent)
+      ) {
+        receiverBindings.set(node, node.parent.parent);
+      }
+    }
     // Members of one destructuring share a receiver type; query each pattern once.
     const patterns = [...new Set(receiverBindings.values())];
     const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
@@ -1242,6 +1260,7 @@ export function inspectDatabaseWorkerBoundaries(
       }
     }
   }
+  session.checkpoint?.("caller-classification");
   const compatibilityReachable = new Set(
     [...registered.values()].filter((operation) => operation.reviewed && !operation.candidate),
   );

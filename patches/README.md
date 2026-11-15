@@ -2,6 +2,40 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
+`acorn@8.19.0` has an approved optional-member token-context patch. Keywords
+and contextual names (`of` and generator `yield`) after `?.` end a property
+access, just as after `.`, so a following slash remains division. Both published
+module formats are regenerated from upstream commit
+`0e0ece7cc7202624d4aca531be4b515b0114b5d0`. In `acorn/src/tokencontext.js`,
+extend the keyword property's `tt.dot` condition to `tt.questionDot`, and exclude
+`tt.questionDot` alongside `tt.dot` in `tt.name.updateContext`. In
+`acorn/src/expression.js`, keep `parseIdentNode` from popping a `class`/`function`
+context after either member operator, since neither now pushes one. Run upstream's
+`npm run build:main` with its locked Rollup 4.60.1 and
+`@rollup/plugin-buble@1.0.3`, copy the two generated runtime files into a
+`pnpm patch acorn@8.19.0` edit directory, then use `pnpm patch-commit`.
+The unmodified build reproduces the published runtime hashes below exactly.
+
+The published integrity is
+`sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw==`;
+the patch SHA-256 is
+`2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a`.
+
+| Target | Published SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `dist/acorn.js` | `b95392d79457d0357555c5ed3e56302d074b92dff119bcf3b44179500b10e9df` | `31913109325741386772ce3470877ba1ecc3d0ffb95211e34cab7c9a504c8543` |
+| `dist/acorn.mjs` | `76254fc76529713b4dfd2532972d17a991ffd9aafeebb1f977445b5506b9fb0b` | `d6ec452ae1a66ac40815ddf44bb88d0c46389c14cc0d48766772f0f058a02451` |
+
+The root package bundles Acorn so npm installations retain the patched runtime.
+Codex explicitly bundles only Acorn while retaining its native-heavy full-closure
+opt-out; the shared npm/ClawHub packaging owner preserves that selected patch.
+Remove this patch, its registration, Acorn bundle entries, and exact-version guard when
+an upstream release passes `src/agents/code-mode-engine-parity.test.ts` and the
+existing syntax/module-access controls without the patch. Upstream commit
+`e4516ce0f49aea06b98ae1a551644119958ed4e1` still has both ordinary-dot-only guards.
+Acorn's contribution policy excludes AI-written code; do not submit this patch
+upstream as a generated contribution.
+
 `@solidjs/web@2.0.0-rc.18` has an approved retention patch in its production,
 development, and observe browser builds. The lazy select-insertion callback is
 declared at module scope so it cannot retain the first value-bound select through

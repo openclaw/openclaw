@@ -196,3 +196,23 @@ export interface ProcessSupervisor {
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
 }
+
+export type OwnedRun = {
+  runId: string;
+  scopeKey?: string;
+  terminationReason?: TerminationReason;
+  cancel: (reason: TerminationReason) => void;
+  pending?: Promise<ManagedRun>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  cleanupOwners: ScopeCleanupOwner[];
+};
+
+export type ScopeCleanupOwner = {
+  processTree: ProcessScopeCleanupPolicy;
+  failure?: { error: unknown };
+};
+
+export type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};

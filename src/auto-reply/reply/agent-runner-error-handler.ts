@@ -238,12 +238,13 @@ export async function handleAgentExecutionError(params: {
         : externalReply.text;
     return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
-  const failoverFacts = resolveReplyFailoverFacts(err, message);
+  const failoverFacts = resolveReplyFailoverFacts(err, message, params.runtimeConfig);
   const failureSummary = resolveReplyFailureSummary({
     error: err,
     message,
-    reason: failoverFacts.reason,
+    facts: failoverFacts,
     attempts: isFailoverError(err) ? err.attempts : undefined,
+    config: params.runtimeConfig,
   });
   const failoverReason = failoverFacts.reason;
   const isBilling = failureSummary?.kind === "billing";
@@ -284,8 +285,8 @@ export async function handleAgentExecutionError(params: {
       // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
       text:
         failureSummary?.kind === "rate_limit" &&
-        isFailoverError(err) &&
-        err.rateLimitRetriesExhausted !== undefined
+        ((isFailoverError(err) && err.rateLimitRetriesExhausted !== undefined) ||
+          failoverFacts.rateLimitResetAt !== undefined)
           ? failureSummary.text
           : providerRequestError.userMessage,
     });

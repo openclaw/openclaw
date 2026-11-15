@@ -104,10 +104,9 @@ async function runColdMutation(
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
     async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
-      const execution =
-        plan.kind !== "cold-restore" && supportsOpenClawAgentDatabaseExecution(plan.databaseOptions)
-          ? captureOpenClawAgentDatabaseExecution(plan.databaseOptions)
-          : undefined;
+      const execution = supportsOpenClawAgentDatabaseExecution(plan.databaseOptions)
+        ? captureOpenClawAgentDatabaseExecution(plan.databaseOptions)
+        : undefined;
       let retained: ReturnType<typeof retainOpenClawAgentDatabaseReadOnly> | undefined;
       try {
         const assertOpeningCurrent = () => {
@@ -239,12 +238,12 @@ async function runColdMutation(
         } else if (
           completed.result.restored &&
           completed.result.sessionKey !== undefined &&
-          retained?.found &&
-          retained.claim.isCurrent()
+          (executionClaim || (retained?.found && retained.claim.isCurrent()))
         ) {
           assertAllowed();
+          // Receipt publications update facts only; display readers also need the committed notification.
           sessionChanges.emit({
-            storePath: retained.database.path,
+            storePath: retained?.found ? retained.database.path : plan.databaseOptions.path,
             sessionKey: completed.result.sessionKey,
             scope: "transcript",
             facts: { kind: "unchanged" },

@@ -23,7 +23,7 @@ import {
 } from "../../sessions/session-row-changes.js";
 import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { WorktreeRemovalLockError } from "./removal-errors.js";
-import { IDLE_GC_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
 import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export function createManagedWorktreeOwnerPolicy(

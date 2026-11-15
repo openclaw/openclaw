@@ -336,8 +336,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const providerContexts: AgentMessage[][] = [];
     const afterTurn = vi.fn(async (_params: { messages: AgentMessage[] }) => {});
 
-    hoisted.sessionManagerOpenMock.mockReturnValue(sessionManager);
-
     await runAttempt({
       contextEngine: {
         ...createContextEngineBootstrapAndAssemble(),
@@ -346,6 +344,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
       sessionMessages,
       attemptOverrides: {
+        sessionManager,
         provider: "anthropic",
         modelId: "claude-sonnet-4-6",
         model: {

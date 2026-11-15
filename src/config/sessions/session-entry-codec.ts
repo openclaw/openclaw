@@ -9,96 +9,21 @@ import type {
 } from "../../agents/sessions/session-manager-types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
-const readableContentSchema = z.union([z.string(), z.array(z.object({ type: z.string() }))]);
-const readableMessageSchema = z.discriminatedUnion("role", [
-  z.object({ role: z.literal("user"), content: readableContentSchema }),
-  z.object({ role: z.literal("assistant"), content: readableContentSchema }),
-  z.object({
-    role: z.literal("toolResult"),
-    toolCallId: z.string(),
-    toolName: z.string(),
-    isError: z.boolean(),
-    content: z.array(z.unknown()),
-  }),
-  z.object({
-    role: z.literal("custom"),
-    customType: z.string(),
-    content: readableContentSchema,
-  }),
-  z.object({
-    role: z.literal("bashExecution"),
-    command: z.string(),
-    output: z.string(),
-  }),
+const sessionEntryTypes = new Set([
+  "message",
+  "thinking_level_change",
+  "model_change",
+  "compaction",
+  "reset",
+  "branch_summary",
+  "custom",
+  "custom_message",
+  "label",
+  "session_info",
 ]);
-const indexedSessionEntryBaseShape = {
-  id: z.string().min(1),
-  parentId: z.union([z.string(), z.null()]).optional(),
-  timestamp: z.string().optional(),
-};
-const indexedSessionEntrySchema = z.discriminatedUnion("type", [
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("message"),
-    message: readableMessageSchema,
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("thinking_level_change"),
-    thinkingLevel: z.string().min(1),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("model_change"),
-    provider: z.string().min(1),
-    modelId: z.string().min(1),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("compaction"),
-    summary: z.string(),
-    firstKeptEntryId: z.string().min(1),
-    tokensBefore: z.custom<number>((value) => typeof value === "number"),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("reset"),
-    reason: z.coerce.string().pipe(z.enum(["new", "reset", "idle", "daily", "cron-stale"])),
-    firstKeptEntryId: z.string().optional(),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("branch_summary"),
-    fromId: z.string(),
-    summary: z.string(),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("custom"),
-    customType: z.string().min(1),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("custom_message"),
-    customType: z.string().min(1),
-    content: readableContentSchema,
-    display: z.boolean(),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("label"),
-    targetId: z.string().min(1),
-    label: z.string().optional(),
-  }),
-  z.object({
-    ...indexedSessionEntryBaseShape,
-    type: z.literal("session_info"),
-    name: z.string().optional(),
-  }),
-]);
-const sessionEntryTypeSchema = z.enum(
-  indexedSessionEntrySchema.options.flatMap((entry) => [...entry.shape.type.values]),
-);
+const resetReasonSchema = z.coerce
+  .string()
+  .pipe(z.enum(["new", "reset", "idle", "daily", "cron-stale"]));
 const parentLinkedOpaqueEntrySchema = z.object({
   type: z
     .unknown()
@@ -147,28 +72,112 @@ export function isReadableSessionMessage(
   message: unknown,
 ): message is Extract<
   SessionMessageEntry["message"],
-  { role: z.infer<typeof readableMessageSchema>["role"] }
+  { role: "user" | "assistant" | "toolResult" | "custom" | "bashExecution" }
 > {
-  return readableMessageSchema.safeParse(message).success;
+  if (!isRecord(message)) {
+    return false;
+  }
+  switch (message.role) {
+    case "user":
+    case "assistant":
+      return isReadableContent(message.content);
+    case "custom":
+      return typeof message.customType === "string" && isReadableContent(message.content);
+    case "toolResult":
+      return (
+        typeof message.toolCallId === "string" &&
+        typeof message.toolName === "string" &&
+        typeof message.isError === "boolean" &&
+        Array.isArray(message.content)
+      );
+    case "bashExecution":
+      return typeof message.command === "string" && typeof message.output === "string";
+    default:
+      return false;
+  }
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
-  return indexedSessionEntrySchema.safeParse(entry).success;
+  // Stored/imported rows can be opaque even under a current header. Classify without parsed copies.
+  if (
+    !isRecord(entry) ||
+    !isNonemptyString(entry.id) ||
+    (entry.parentId !== undefined &&
+      entry.parentId !== null &&
+      typeof entry.parentId !== "string") ||
+    (entry.timestamp !== undefined && typeof entry.timestamp !== "string")
+  ) {
+    return false;
+  }
+  switch (entry.type) {
+    case "message":
+      return isReadableSessionMessage(entry.message);
+    case "thinking_level_change":
+      return isNonemptyString(entry.thinkingLevel);
+    case "model_change":
+      return isNonemptyString(entry.provider) && isNonemptyString(entry.modelId);
+    case "compaction":
+      return (
+        typeof entry.summary === "string" &&
+        isNonemptyString(entry.firstKeptEntryId) &&
+        typeof entry.tokensBefore === "number"
+      );
+    case "reset":
+      return (
+        (entry.firstKeptEntryId === undefined || typeof entry.firstKeptEntryId === "string") &&
+        resetReasonSchema.safeParse(entry.reason).success
+      );
+    case "branch_summary":
+      return typeof entry.fromId === "string" && typeof entry.summary === "string";
+    case "custom":
+      return isNonemptyString(entry.customType);
+    case "custom_message":
+      return (
+        isNonemptyString(entry.customType) &&
+        isReadableContent(entry.content) &&
+        typeof entry.display === "boolean"
+      );
+    case "label":
+      return (
+        isNonemptyString(entry.targetId) &&
+        (entry.label === undefined || typeof entry.label === "string")
+      );
+    case "session_info":
+      return entry.name === undefined || typeof entry.name === "string";
+    default:
+      return false;
+  }
+}
+
+function isNonemptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function isReadableContent(value: unknown): boolean {
-  return readableContentSchema.safeParse(value).success;
+  if (typeof value === "string") {
+    return true;
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  for (const block of value) {
+    if (!isRecord(block) || typeof block.type !== "string") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
   const message = isRecord(value) && value.type === "message" ? value.message : undefined;
   return (
     isRecord(value) &&
-    sessionEntryTypeSchema.safeParse(value.type).success &&
+    typeof value.type === "string" &&
+    sessionEntryTypes.has(value.type) &&
     (value.type !== "message" ||
       (isRecord(message) && message.role === "hookMessage"
         ? isReadableContent(message.content)
-        : readableMessageSchema.safeParse(message).success))
+        : isReadableSessionMessage(message)))
   );
 }
 

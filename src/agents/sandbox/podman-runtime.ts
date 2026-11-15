@@ -380,12 +380,12 @@ export function resolvePodmanSandboxCreatePolicy(params: {
   cfg: SandboxDockerConfig;
   extraCreateArgs: string[];
 } {
-  const cfg =
+  let cfg =
     params.dockerTmpfsSource === "default"
       ? {
           ...params.cfg,
           // The shared default includes bare /run, but Podman mounts its init there.
-          // Read-only roots get Podman's native /run tmpfs below; writable roots use /run directly.
+          // Validate operator mounts before adding the owner-managed /run mount below.
           tmpfs: params.cfg.tmpfs.filter((entry) => entry !== "/run"),
         }
       : params.cfg;
@@ -416,6 +416,23 @@ export function resolvePodmanSandboxCreatePolicy(params: {
   const extraCreateArgs = ["--http-proxy=false"];
   if (params.cfg.readOnlyRoot) {
     extraCreateArgs.push("--read-only-tmpfs=true");
+    // Make Podman's implicit writable mounts explicit so allocation caps their size.
+    // The engine preserves its nested init bind inside this owner-managed /run tmpfs.
+    const mounted = new Set(
+      [
+        cfg.workdir,
+        ...cfg.tmpfs.map((entry) => entry.split(":", 1)[0]!),
+        ...(cfg.binds ?? []).map((entry) => splitSandboxBindSpec(entry)?.container ?? ""),
+        ...params.readOnlyWorkspaceSkillMounts.map((mount) => mount.containerPath),
+      ].map((target) => path.posix.normalize(target)),
+    );
+    cfg = {
+      ...cfg,
+      tmpfs: [
+        ...cfg.tmpfs,
+        ...["/tmp", "/var/tmp", "/run"].filter((target) => !mounted.has(target)),
+      ],
+    };
   }
   if (params.runtimeInfo.rootless) {
     if (params.cfg.user?.trim()) {

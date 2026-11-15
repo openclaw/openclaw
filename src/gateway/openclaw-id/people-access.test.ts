@@ -247,6 +247,7 @@ describe("OpenClaw ID people access", () => {
       context: {
         openclawIdService: service,
         getRuntimeConfig: () => ({ gateway: { openclawId: { enabled: true } } }),
+        logGateway: { info: () => {}, warn: () => {} },
       },
     } as unknown as GatewayRequestHandlerOptions);
     expect(response).toMatchObject({ ok: false, error: { details: { code: "not_owner" } } });

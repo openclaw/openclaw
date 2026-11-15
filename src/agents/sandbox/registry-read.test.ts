@@ -326,6 +326,23 @@ describe("registry race safety", () => {
     await expectEntry("container-a", { ...entry, lastUsedAtMs: 2 });
   });
 
+  it.each([undefined, "ready"] as const)(
+    "drops idle-stop facts on admission without changing legacy provisioning state (%s)",
+    async (runtimeState) => {
+      const entry = containerEntry({ runtimeState, workspaceDir: "/original/workspace" });
+      await updateRegistry({ ...entry, idleStoppedAtLastUsedMs: entry.lastUsedAtMs });
+      forbidHostSql();
+      const stored = await readRegistryEntry(entry.containerName);
+      expect(stored?.idleStoppedAtLastUsedMs).toBe(entry.lastUsedAtMs);
+      expect(stored?.runtimeState).toBe(runtimeState);
+      await updateRegistry({ ...entry, lastUsedAtMs: 2 });
+      const resumed = await readRegistryEntry(entry.containerName);
+      expect(resumed?.idleStoppedAtLastUsedMs).toBeUndefined();
+      expect(resumed?.runtimeState).toBe(runtimeState);
+      expect(resumed?.workspaceDir).toBe(entry.workspaceDir);
+    },
+  );
+
   it("settles runtime registry writes in the worker and retains pending completion rules", async () => {
     const entry = containerEntry({
       backendId: "docker",

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
 import { resolveEffectiveCompactionMode } from "../agents/agent-settings.js";
+import { loadPublishedGatewayReplyDispatchRuntime } from "../agents/prepared-model-runtime.js";
 import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -65,7 +66,12 @@ it("preserves computed defaults from cold startup through a live config reload",
     const nextSourceConfig: OpenClawConfig = { ...sourceConfig, logging: { level: "warn" } };
     await state.writeConfig(nextSourceConfig);
     await expect.poll(() => getRuntimeConfig().logging?.level, { timeout: 30_000 }).toBe("warn");
+    await expect.poll(() => kernel.gatewayRequestContext.isConfigReloadSettled()).toBe(true);
     const reloadedConfig = getRuntimeConfig();
+    expect.soft(kernel.gatewayRequestContext.getCommittedRuntimeConfig?.()).toBe(reloadedConfig);
+    expect
+      .soft((await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }))?.config)
+      .toBe(reloadedConfig);
     expect(reloadedConfig).not.toBe(initialConfig);
     expect(reloadedConfig.plugins?.entries?.anthropic?.enabled).toBe(true);
     expect(resolveEffectiveCompactionMode(reloadedConfig)).toBe("safeguard");

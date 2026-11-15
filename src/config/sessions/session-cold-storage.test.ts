@@ -48,6 +48,7 @@ import {
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -71,6 +72,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { findTranscriptEvent } from "./session-transcript-match.js";
@@ -514,6 +516,13 @@ describe("cold transcript storage workers", () => {
       closeOpenClawAgentDatabasesForTest();
       revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await expectCounts(runSessionColdStorageMaintenance({ config: fixture.config }), 2);
+      expect(() =>
+        readTranscriptMessageByEventId(
+          openOpenClawAgentDatabase(fixture.options),
+          { ...fixture.scope, sessionId: historicalId },
+          "history-user",
+        ),
+      ).toThrow(SessionTranscriptColdError);
       await retireOwner(fixture);
       await restoreSessionColdTranscript(fixture.scope);
       await retireOwner(fixture);
@@ -534,10 +543,9 @@ describe("cold transcript storage workers", () => {
           outcome: "resolved",
         })),
       );
-      expect(archiveDiagnostics).toHaveLength(3);
-      for (const diagnostics of archiveDiagnostics) {
-        expect(workers.get(diagnostics.workerThreadId!)?.threadId).toBe(-1);
-      }
+      expect(archiveDiagnostics.map((item) => workers.get(item.workerThreadId!)?.threadId)).toEqual(
+        [-1, -1, -1],
+      );
     } finally {
       process.off("worker", observeWorker);
       vi.restoreAllMocks();

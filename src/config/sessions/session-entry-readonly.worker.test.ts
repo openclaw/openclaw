@@ -41,7 +41,7 @@ import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
-import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
+import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
@@ -169,13 +169,13 @@ it("resolves runtime targets and refuses replacement by a newer schema", () =>
       key = "agent:main:fallback",
       keyFormat?: "agent-qualified",
     ) =>
-      readSessionEntryWorkerRequest({
+      readSessionRuntimeTargetWorkerRequest({
         kind: "session-runtime-target",
         database: databaseTarget(database),
         scope: { agentId, env, sessionId: selectedId, sessionKey: key, storePath: database.path },
         keyFormat,
       });
-    expect(await read()).toMatchObject({
+    expect(read()).toMatchObject({
       kind: "session-runtime-target",
       target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
       source: { agentId: database.agentId, path: database.path },
@@ -187,9 +187,7 @@ it("resolves runtime targets and refuses replacement by a newer schema", () =>
       lifecycleRevision: "helper-lifecycle",
       updatedAt: 1,
     });
-    expect(
-      await read("helper", "missing-window", "runtime-fallback", "agent-qualified"),
-    ).toMatchObject({
+    expect(read("helper", "missing-window", "runtime-fallback", "agent-qualified")).toMatchObject({
       target: {
         agentId: "helper",
         sessionId: "missing-window",
@@ -210,7 +208,7 @@ it("resolves runtime targets and refuses replacement by a newer schema", () =>
       peer.close();
     }
     renameSync(replacement, database.path);
-    await expect(read()).rejects.toThrow("newer schema version");
+    expect(() => read()).toThrow("newer schema version");
   }));
 
 it("reads session projections in the worker and observes the next sibling commit", () =>

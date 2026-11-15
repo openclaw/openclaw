@@ -143,10 +143,7 @@ it.each([
 
 it("rejects invalid environment-only profile names", () => {
   expect(() =>
-    resolveDefaultAgentWorkspaceDir({
-      OPENCLAW_PROFILE: "../escape",
-      HOME: "/home/peter",
-    }),
+    resolveDefaultAgentWorkspaceDir({ OPENCLAW_PROFILE: "../escape", HOME: "/home/peter" }),
   ).toThrow('Invalid profile name: "../escape"');
 });
 
@@ -274,17 +271,31 @@ it("treats git-backed workspaces as existing even when template files are missin
   await expectCompletedWithoutBootstrap(tempDir);
 });
 
-it("keeps bootstrap status read-only when stale completion evidence exists", async () => {
-  await ensureWorkspace();
-  await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
-  await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
-  await fs.access(workspacePath(BOOTSTRAP));
-  expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
-  await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
-  await ensureWorkspace();
-  await expectCompletedWithoutBootstrap(tempDir);
-  await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
-});
+it.each(["current", "6.1", "7.1", "8.2", "9.2", "9.3", "9.4", "9.6"])(
+  "keeps %s stock bootstrap pending across restart until profiles are edited",
+  async (version) => {
+    await ensureWorkspace();
+    if (version === "current") {
+      const bootstrap = await readWorkspaceFile(BOOTSTRAP);
+      expect(createHash("sha256").update(bootstrap).digest("hex")).toBe(
+        "0bcb8c9187e32c87bc31dc3e2fa83c4569bfd13267c0bf9766a635dac3df33a3",
+      );
+    } else {
+      const fixture = new URL(`../../test/fixtures/bootstrap/2026.${version}.md`, import.meta.url);
+      await writeWorkspaceFile(BOOTSTRAP, await fs.readFile(fixture, "utf8"));
+    }
+    closeOpenClawStateDatabaseForTest();
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+    await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+    await fs.access(workspacePath(BOOTSTRAP));
+    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+    await ensureWorkspace();
+    await expectCompletedWithoutBootstrap(tempDir);
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  },
+);
 
 it("does not read setup state for an absent bootstrap file and refreshes after a setup wait", async () => {
   const actual = workspaceState.readWorkspaceStateSnapshot;
@@ -315,6 +326,28 @@ it("propagates a transient profile read after the retry budget is exhausted", as
     return await originalReadFile(filePath, options);
   });
   await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EAGAIN" });
+});
+
+it("keeps manually preseeded custom onboarding pending without a Template receipt", async () => {
+  const bootstrap = "Ask which competitors to monitor before starting research.\n";
+  await writeWorkspaceFile(BOOTSTRAP, bootstrap);
+  await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Competitor Watch\n");
+  await writeWorkspaceFile(USER, "Research public product releases.\n");
+  expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(false);
+
+  for (let restart = 0; restart < 2; restart++) {
+    closeOpenClawStateDatabaseForTest();
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+    expect(await readWorkspaceFile(BOOTSTRAP)).toBe(bootstrap);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
+    expect(snapshot.setup.setupCompletedAt).toBeUndefined();
+    expect(snapshot.attestation?.generatedHashes.get(BOOTSTRAP)).toBeUndefined();
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+  }
+
+  await fs.unlink(workspacePath(BOOTSTRAP));
+  await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: false });
+  await expectCompletedWithoutBootstrap(tempDir);
 });
 
 it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async () => {
@@ -364,21 +397,19 @@ it.each([
   async (content, _kind, hash) => {
     await ensureWorkspace();
     await fs.rm(workspacePath(BOOTSTRAP));
-    const customInstructions = "custom instructions\n";
     if (content === "customized") {
-      await fs.writeFile(workspacePath(AGENTS), customInstructions);
+      await writeWorkspaceFile(AGENTS, "custom instructions\n");
     }
     const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
-    if (hash === undefined) {
-      generatedHashes.delete(AGENTS);
-    } else {
+    generatedHashes.delete(AGENTS);
+    if (hash) {
       generatedHashes.set(AGENTS, hash);
     }
     await attest(generatedHashes);
     if (content === "customized") {
       await expect(ensureWorkspace()).resolves.toMatchObject({ dir: tempDir });
-      await expect(fs.readFile(workspacePath(AGENTS), "utf8")).resolves.toBe(customInstructions);
+      expect(await readWorkspaceFile(AGENTS)).toBe("custom instructions\n");
     } else {
       await expectWorkspaceVanished(ensureWorkspace());
     }
@@ -387,12 +418,9 @@ it.each([
 
 it("creates only the directory for runtime-managed-implicit provisioning (#92015)", async () => {
   const targetDir = testState!.path("implicit-parent/implicit-acp-workspace");
-  const result = await ensureAgentWorkspace({
-    dir: targetDir,
-    ensureBootstrapFiles: true,
-    provisioning: "runtime-managed-implicit",
-  });
-  expect(result).toMatchObject({ dir: targetDir, bootstrapPending: false });
+  await expect(
+    ensureWorkspace(true, { dir: targetDir, provisioning: "runtime-managed-implicit" }),
+  ).resolves.toMatchObject({ dir: targetDir, bootstrapPending: false });
   await fs.access(targetDir);
   for (const name of [AGENTS, BOOTSTRAP, ".git"]) {
     await expectPathMissing(path.join(targetDir, name));
@@ -556,18 +584,21 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
       await fs.chmod(tempDir, 0o700);
     });
 
-    it.each([0o300, 0o000])(
-      "retains optional bootstrap entries when root mode is %s",
-      async (mode) => {
-        const names = [AGENTS, MEMORY, USER] as const;
-        for (const name of names) {
+    it.each([
+      [0o300, [AGENTS, MEMORY, USER]],
+      [0o000, [AGENTS, MEMORY, USER]],
+      [0o300, [AGENTS]],
+    ] as const)(
+      "retains present optional bootstrap entries when root mode is %s: %j",
+      async (mode, present) => {
+        for (const name of present) {
           await fs.writeFile(path.join(tempDir, name), `content:${name}`);
         }
         await fs.chmod(tempDir, mode);
         await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
-        const files = await loadWorkspaceBootstrapFiles(tempDir, names);
+        const files = await loadWorkspaceBootstrapFiles(tempDir, [AGENTS, MEMORY, USER]);
         expect(files.toSorted((a, b) => a.name.localeCompare(b.name))).toMatchObject(
-          [...names].toSorted().map((name) => ({
+          [...present].toSorted().map((name) => ({
             name,
             missing: false,
             content: mode === 0o300 ? `content:${name}` : expect.stringContaining("[UNREADABLE:"),
@@ -575,14 +606,6 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
         );
       },
     );
-
-    it("omits absent optional bootstrap files when the root cannot be listed", async () => {
-      await fs.writeFile(path.join(tempDir, AGENTS), "instructions");
-      await fs.chmod(tempDir, 0o300);
-      await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
-      const files = await loadWorkspaceBootstrapFiles(tempDir, [AGENTS, MEMORY, USER]);
-      expect(files).toMatchObject([{ name: AGENTS, content: "instructions" }]);
-    });
 
     it.each(["skip-bootstrap", "onboarding", "surviving skills"] as const)(
       "rejects unlistable %s setup without changing content or state",

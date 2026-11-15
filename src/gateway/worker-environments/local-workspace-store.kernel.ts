@@ -2,7 +2,6 @@ import { assertWorktreePersistentExecutionCurrentInDatabase } from "../../agents
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
@@ -12,6 +11,7 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
+import { localWorkspaceFingerprintPatch } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceMutation,
@@ -183,14 +183,7 @@ export function mutateLocalWorkspaceProjection(
               baseline_ref: mutation.manifest.resultingRoot,
               baseline_json: null,
               tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot!),
-              ...(mutation.manifest.fingerprints
-                ? {
-                    [`${mutation.manifest.fingerprints.target}_fingerprints`]: Buffer.from(
-                      mutation.manifest.fingerprints.blob,
-                      "base64",
-                    ),
-                  }
-                : {}),
+              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
             }
           : {}),
         ...(mutation.patch.source_paths_digest ? { source_paths_json: "[]" } : {}),
@@ -264,9 +257,7 @@ export const localWorkspaceReadOperations = {
   }),
   "localWorkspace.sweepCandidates": (input: { epoch: number }, db: EngineConnection) => ({
     type: "localWorkspace.sweepCandidates" as const,
-    candidates: runSqliteReadSnapshotSync(db, () =>
-      readLocalWorkspaceSweepCandidates(db, input.epoch),
-    ),
+    candidates: readLocalWorkspaceSweepCandidates(db, input.epoch),
   }),
   "localWorkspace.reviewBase": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.reviewBase" as const,

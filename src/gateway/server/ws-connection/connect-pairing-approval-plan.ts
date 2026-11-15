@@ -6,19 +6,23 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
-import type { getPairedDevice } from "../../../infra/device-pairing.js";
+import {
+  listApprovedPairedDeviceRoles,
+  type getPairedDevice,
+} from "../../../infra/device-pairing.js";
 import {
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
-import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing-auto-approve.js";
 import {
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "../../openclaw-id/tunnel-principal.js";
 import {
+  resolvePairedAccessScopes,
   isControlUiOwnerBootstrapProfile,
   isControlUiOperatorBootstrapProfile,
   isMobileNodeBootstrapConnect,
@@ -75,6 +79,8 @@ export type PairingApprovalPlan = {
   operatorApprovalKind: "trusted-proxy" | "remote-ingress" | null;
   trustedProxyUser: string | undefined;
   isSameKeyScopeUpgrade: boolean;
+  /** OpenClaw ID re-issue of an approved role's revoked token, within its approved scopes. */
+  restoresApprovedAccess: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
   bootstrapPairingRoles: string[] | undefined;
@@ -113,6 +119,10 @@ export function resolveLocalPairingApproval(
 ): PairingApprovalPlan["localApproval"] {
   const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
   const { role, isControlUi, isWebchat, isNativeAppUi, authMethod, pairingLocality } = state;
+  // Tunnel addresses identify peers, not networks or same-host trust.
+  if (state.authResult.openclawId) {
+    return null;
+  }
   // Adding a first node role is not a token replacement. Keep real node-token
   // repairs, scope upgrades, and browser requests on their existing approval path.
   const addingLocalNodeRole =
@@ -195,8 +205,19 @@ export async function resolvePairingApprovalPlan(
             trustedProxyAutoApproveConfig?.enabled === true
           ? "trusted-proxy"
           : null;
-  const autoApproveOperatorScopes =
-    ((reason === "not-paired" && !existingPairedDevice) || isSameKeyScopeUpgrade) &&
+  // OpenClaw ID sign-out revokes the browser's tokens but keeps its device approved
+  // (OCF-495), so its next connect asks for an approved role without an active token.
+  // Only the OpenClaw ID lane re-issues it: that lane would pair a fresh key for this
+  // principal anyway. Scopes beyond the approved row stay an owner decision below.
+  const isSameKeyApprovedRoleReissue =
+    openclawIdPairing &&
+    reason === "role-upgrade" &&
+    existingPairedDevice?.publicKey === params.devicePublicKey &&
+    listApprovedPairedDeviceRoles(existingPairedDevice).includes(role);
+  const laneOperatorScopes =
+    ((reason === "not-paired" && !existingPairedDevice) ||
+      isSameKeyScopeUpgrade ||
+      isSameKeyApprovedRoleReissue) &&
     role === "operator" &&
     operatorApprovalKind !== null
       ? params.connectionScopeCap(
@@ -211,6 +232,16 @@ export async function resolvePairingApprovalPlan(
                 }),
         )
       : null;
+  const restoresApprovedAccess =
+    isSameKeyApprovedRoleReissue &&
+    laneOperatorScopes !== null &&
+    roleScopesAllow({
+      role,
+      requestedScopes: laneOperatorScopes,
+      allowedScopes: resolvePairedAccessScopes(existingPairedDevice),
+    });
+  const autoApproveOperatorScopes =
+    isSameKeyApprovedRoleReissue && !restoresApprovedAccess ? null : laneOperatorScopes;
   const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
     role,
     scopes,
@@ -295,6 +326,7 @@ export async function resolvePairingApprovalPlan(
     operatorApprovalKind,
     trustedProxyUser,
     isSameKeyScopeUpgrade,
+    restoresApprovedAccess,
     allowSetupCodeHandoffBootstrapPairing,
     bootstrapApprovalProfile: setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile,
     bootstrapPairingRoles,

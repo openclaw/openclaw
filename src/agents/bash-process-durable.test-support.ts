@@ -45,7 +45,7 @@ import {
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { durableProcessUnitName } from "./bash-process-systemd.js";
+import { systemdDurableSupervisor } from "./bash-process-systemd.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
@@ -244,7 +244,7 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     const store = createDurableProcessStore();
     const [record] = await store.list();
     assert.equal(record?.id, id);
-    assert.equal(record?.unitName, durableProcessUnitName(id));
+    assert.equal(record?.unitName, systemdDurableSupervisor.unitName(id));
     assert.doesNotMatch(JSON.stringify(record), /synthetic-/);
     assert.equal(getActiveBackgroundExecSessionCount(), 0);
     const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));

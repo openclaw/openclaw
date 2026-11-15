@@ -126,13 +126,16 @@ export function AgentChannels(
         read={params.readState().channelsRead}
         retainedError={params.readState().channelsError}
       >
-        {(_pending, error) =>
-          error ? <InlineAlert tone="danger">{error}</InlineAlert> : undefined
+        {(pending, error) =>
+          error ? (
+            <InlineAlert tone="danger">{error}</InlineAlert>
+          ) : !params.readState().channelsSnapshot ? (
+            <InlineAlert tone="info">
+              {t(pending ? "common.loading" : "agents.channels.loadHint")}
+            </InlineAlert>
+          ) : undefined
         }
       </ChannelReadBoundary>
-      {!params.readState().channelsSnapshot ? (
-        <InlineAlert tone="info">{t("agents.channels.loadHint")}</InlineAlert>
-      ) : undefined}
       <SettingsSection
         title={t("agents.channels.title")}
         description={t("agents.channels.subtitle")}
@@ -154,7 +157,11 @@ export function AgentChannels(
         <For
           each={entries()}
           keyed={(entry) => entry.id}
-          fallback={<SettingsEmpty message={t("agents.channels.empty")} />}
+          fallback={
+            <Show when={params.readState().channelsSnapshot !== null}>
+              <SettingsEmpty message={t("agents.channels.empty")} />
+            </Show>
+          }
         >
           {(entry) => {
             const summary = createMemo(() => summarizeChannelAccounts(entry().accounts));

@@ -66,8 +66,8 @@ additive change. v1-draft accepts only `ed25519`.
 - There is no certificate chain. A statement signed by an owner device is checked against
   the claw's **current owner devices** (its allowlist), which only the Gateway holds.
 - `sig` is unpadded base64url. Unknown envelope or body fields are rejected (an envelope
-  that still carries a `chain` member is malformed); a new signed field needs a new envelope
-  version.
+  that still carries a `chain` member is malformed); after release, a new signed field needs a new envelope
+  version (the unshipped draft is revised in place).
 - `v` selects the schema and the signing domain. A well-formed `v` this build does not
   implement is refused as `unsupported_version`, not `malformed` (versioning.md).
 - Timestamps are unix **seconds** (integers).
@@ -82,7 +82,7 @@ additive change. v1-draft accepts only `ed25519`.
 | MembershipChange   | claw_id, seq, target (by op), issued_at                                                                        | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
 | Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                           | R or any current owner device            | none                                                           |
 | MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], protocols, issued_at | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
-| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                      | the invitee's own D_I (self-signed)      | n/a                                                            |
+| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, label, proof, requested_at                               | the invitee's own D_I (self-signed)      | n/a                                                            |
 | RootReset          | claw_id, new_root_pub, binding_seq, issued_at                                                                  | K_gw of the binding being replaced       | n/a (owner reset on the machine, enrollment.md)                |
 
 `root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. There is no
@@ -92,26 +92,35 @@ so that statements signed before epochs were removed still verify.
 
 Capabilities: `approve_device`, `bind`, `invite`, `manage_members`. R holds all of them.
 (`bind` stays a certificate capability, but bindings are signed by R alone: clients that pin
-only fp(R) must be able to verify them.) Member roles: `operator`, `viewer` (open question:
-final role set; invites grant at most `operator`).
+only fp(R) must be able to verify them.)
+
+Member roles are opaque names (`MemberRole`), validated by the exported `isMemberRole`:
+1–64 characters, lowercase ASCII letters, digits, `-` and `_`, starting with a letter
+(`^[a-z][a-z0-9_-]{0,63}$`). Names are not trimmed or normalized. This is deliberately stricter
+than the Gateway's `GatewayOperatorRoleNameSchema` (any trimmed 1–128 character string),
+because protocol names are signed, mirrored by Discovery and displayed in UIs. The protocol
+defines neither a role set nor an ordering or privilege ceiling; the Gateway defines their
+meaning. An invite names one exact role: approval with a different role is `target_mismatch`,
+even if a Gateway considers it less privileged.
 
 MembershipChange targets:
 
-| op                 | target fields                                                                     |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `add`              | account_id, role, peer_keys (>= 1), invite_id (null, or the invite this approves) |
-| `remove`           | account_id                                                                        |
-| `set_role`         | account_id, role                                                                  |
-| `revoke_device`    | peer_key (one member browser)                                                     |
-| `add_owner_device` | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
-| `deny_invite`      | invite_id (declines a pending redemption; the invite is consumed)                 |
+| op                  | target fields                                                                     |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `add`               | account_id, role, peer_keys (>= 1), invite_id (null, or the invite this approves) |
+| `add_member_device` | account_id, peer_key, device_pub, label (inherits role)                           |
+| `remove`            | account_id                                                                        |
+| `set_role`          | account_id, role                                                                  |
+| `revoke_device`     | peer_key (one member browser)                                                     |
+| `add_owner_device`  | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
+| `deny_invite`       | invite_id (declines a pending redemption; the invite is consumed)                 |
 
 `seq` must equal the Gateway's current membership seq + 1 (compare-and-set). This stops a
 captured change from being replayed later; a concurrent writer gets a conflict and retries.
 
 ## Verification
 
-`verifyOwnerStatement(statement, anchor, { now, owners })`, where anchor = {R public key}
+`verifyOwnerStatement(statement, anchor, { now, owners, members })`, where anchor = {R public key}
 and `owners(devicePub)` returns the capabilities of a device the claw currently lists as an
 active owner device (undefined otherwise):
 
@@ -121,6 +130,13 @@ active owner device (undefined otherwise):
 4. `owners(signer)` is undefined (no lookup, a stranger, or a removed device) -> `not_an_owner`.
 5. The signer holds the capability the type needs -> else `missing_capability`; an
    OwnerDeviceCert grants no caps the signer lacks -> else `caps_escalation`.
+
+When the signer is not an owner, `members(devicePub)` may resolve a currently listed member
+peer to `{ account_id, peer_key }`. Only `MembershipChange` operations `add_member_device`
+and `revoke_device` then verify, producing authority
+`member_device { account_id, device_pub, peer_key }`. The authority checks the target belongs
+to that same account and refuses self-revocation. Every other statement and operation is
+still owner/R-only; member changes never pass the mailbox gate. See enrollment.md, Member devices.
 
 Only the Gateway can run steps 4 and 5. Clients and Discovery verify R's signatures only.
 
@@ -139,7 +155,7 @@ for the caps below.
 
 ## The allowlist model
 
-Each claw's Gateway keeps an **allowlist**: the owner devices and members it has added, and
+Each claw's Gateway keeps an **allowlist**: the owner devices, members and nodes it has added, and
 nothing else. There are no certificate chains and no list of revoked keys.
 
 - **Approval.** A new owner device needs a certificate signed by R (the recovery kit) or by a
@@ -158,7 +174,7 @@ nothing else. There are no certificate chains and no list of revoked keys.
   `owner_device`) deletes it **and every device it approved**, directly or through devices it
   approved, computed from `approved_by` at removal time. A `peer_key` Revocation removes that
   member browser, or the owner device holding it (with its approvals). `revoke_device` removes
-  one member browser; `remove` removes a member. The Gateway disconnects the removed keys and
+  one member device and its transitive member-device approvals; `remove` removes a member. The Gateway disconnects the removed keys and
   invalidates their device tokens. Nothing is remembered: a later Revocation of a key the
   claw no longer lists changes nothing.
 - **A revocation covers what its signer saw.** A Revocation names its `claw_id` and the
@@ -261,14 +277,30 @@ opens, the client runs `assessFreshness({ snapshot }, { binding, stored, now, po
 Discovery's snapshot (`getSnapshot`, untrusted):
 
 1. Verify the snapshot under the binding's K_gw (`verifyMembershipSnapshot`).
-2. A verified snapshot (served now or stored earlier) names a higher binding_seq than the binding
-   served -> `stale_binding`. This is how a replaced server key is retired: the new binding's
-   higher binding_seq, not a revocation list.
-3. The binding is fresh when a verified snapshot names exactly its binding_seq, was issued at most
+2. A verified snapshot names a higher binding_seq than the binding it verified under ->
+   `snapshot_ahead`, and nothing of it is stored: only R-signed bindings raise the binding_seq
+   high-water. A re-bind always replaces K_gw, so an honest K_gw never names a binding beyond
+   its own; a stolen one must not be able to retire every binding a client can still verify.
+3. A binding below the highest binding_seq this client verified -> `stale_binding`. This is
+   how a replaced server key is retired: the new binding's higher binding_seq, not a
+   revocation list. A replayed old binding the client never saw replaced is still refused by
+   rule 4 (its snapshots age out, and a newer one by the same K_gw is a replay).
+4. The binding is fresh when a verified snapshot names exactly its binding_seq, was issued at most
    `SNAPSHOT_MAX_AGE_SECONDS` (3 h) ago and at most `SNAPSHOT_CLOCK_SKEW_SECONDS` (300 s) ahead,
    and is not older by (seq, issued_at) than the newest snapshot stored for this origin.
-4. Not fresh: `enforce` refuses with `freshness_unavailable` (no socket, no credential); `report`
-   dials and records the gap. Rule 2 applies under both policies.
+5. Not fresh: `enforce` refuses with `freshness_unavailable` (no socket, no credential); `report`
+   dials and records the gap. Rules 2 and 3 apply under both policies.
+
+Retained state keeps two independent high-water facts: the newest `(seq, issued_at)` among
+verified snapshots signed by one K_gw (with that `k_gw`), and the highest binding_seq of an
+R-signed binding verified with one. Keep both even when refusing a refresh; a later signed
+snapshot with a newer membership order must not erase earlier evidence that a server binding
+was retired. When the pin's K_gw changes (a re-bind), the snapshot order restarts with the
+first snapshot verified under the newer binding; the binding_seq high-water carries over. A
+marker stored before these rules has no `k_gw` and is loaded through `clampFreshnessState`:
+its binding_seq is capped at the pin's and its `(seq, issued_at)` is dropped, since it cannot
+be attributed to a key. Markers with `k_gw` are kept as stored. This local marker is not a signed snapshot and never supplies
+membership or protocol authorization.
 
 A snapshot from the future is never stored. The Gateway re-signs at least every
 `SNAPSHOT_REPUBLISH_SECONDS` (1 h), so an honest claw's snapshot is always well inside the 3 h
@@ -282,8 +314,9 @@ K_gw. Closing it needs evidence of the current binding that does not depend on t
 keys, which v1 does not have. If the attacker can also choose what the client reads from
 Discovery, the old K_gw can sign a RootReset to a root of the attacker's choosing, so a browser
 whose pin stored that K_gw gets `owner_reset` and is asked to set itself up again. That browser
-opens no connection and releases no credential. A K_gw holder can also deny service to an origin for good by signing an inflated
-binding_seq; K_gw can already refuse service.
+opens no connection and releases no credential. A K_gw holder can refuse service while it is
+current, but can no longer retire bindings for good: an inflated binding_seq in a snapshot is
+`snapshot_ahead` and is never stored.
 
 ## Test vectors
 
@@ -327,3 +360,39 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
   (process-model.md).
 - New statement type `RootReset`, signed by K_gw: owner reset on the machine replaces the
   spec's root rotation (enrollment.md, "Owner reset").
+
+## Node-only statements and membership
+
+All of these are additions to the unshipped **v1-draft**, not new version markers.
+Unknown signed fields remain rejected. See [enrollment.md](enrollment.md#headless-node-enrollment)
+for the proof and join-link bytes and [discovery.md](discovery.md#accountless-node-authentication)
+for request authentication.
+
+| Type             | Body                                                           | Signer / authority                                                |
+| ---------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `NodeInviteCap`  | claw_id, invite_id, label, created_at, expires_at, secret_hash | R or current owner device with `invite`; direct registration only |
+| `NodeRedemption` | claw_id, invite_id, peer_key, description, proof, requested_at | the named W, represented as ed25519: in signer; pending only      |
+
+`MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
+`remove_node { peer_key }`; both require R or a current owner with `manage_members`.
+`deny_invite` and peer-key revocations cover nodes too. `add_owner_device` takes an optional
+`node { peer_key, label, description }`: an app approved as an owner device brings its node in
+the same decision (see [enrollment.md](enrollment.md#owner-device-node)). The member is optional
+(absent, not null), so changes without it are byte-for-byte unchanged. `MembershipSnapshotBody` requires
+`node_peer_keys: IrohEndpointKey[]` (empty when none), separate from `owner_peer_keys` and
+`members`. Existing snapshots must be re-signed by K_gw when consumers update this draft;
+never insert a field into an already signed envelope.
+
+Node W is an Ed25519 iroh endpoint key, held only by the node. It grants neither member
+nor owner authority. `verifyNodeRedemptionSignature` checks that the signature is by exactly
+that W. Nodes are not in `ownerLookup`; signing a membership change with W never authorizes it.
+A claw admits at most `MAX_NODES` (256), so node snapshots fit the existing 256-entry list
+bound (about 19 KiB additional JSON at capacity). Every node records its listing seq;
+replaying an old revocation cannot remove a node approved anew at a later seq.
+
+The deterministic fixture also includes NodeInviteCap, NodeRedemption, add/remove operations,
+a snapshot with node keys, wrong-signer cases, and `node_invite` proof-key/HMAC/link/code vectors.
+`NodeRedemption.description` is the strict bounded `NodeDescription` described in enrollment.md,
+signed by W and retained with pending and approved nodes. Its reported commands/caps confer
+no authority without explicit owner approval. Node invites default to ten minutes and are
+bounded to one hour; member-invite limits are unchanged.

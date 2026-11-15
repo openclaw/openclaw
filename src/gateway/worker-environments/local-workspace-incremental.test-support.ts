@@ -310,7 +310,7 @@ export async function proveSharedSandboxCheckpoints(
       });
     }),
   );
-  for (const phase of ["waiting", "captured", "revoked"] as const) {
+  for (const phase of ["waiting", "captured", "revoked", "known mutation"] as const) {
     const entered = createDeferred();
     const released = createDeferred();
     const pause = async () => {
@@ -336,7 +336,7 @@ export async function proveSharedSandboxCheckpoints(
       if (phase === "captured") {
         await writeText(second.workspaceDir, "late.txt", "write after capture\n");
       }
-      later = second.checkpoint();
+      later = second.checkpoint(phase === "known mutation" ? { knownMutation: true } : undefined);
       joinedAuthorityRevoked = phase === "revoked";
     } finally {
       released.resolve();
@@ -349,7 +349,7 @@ export async function proveSharedSandboxCheckpoints(
         ? { status: "rejected", reason: new Error("Joined checkpoint authority revoked") }
         : { status: "fulfilled", value: undefined },
     );
-    expect.soft(scans).toBe(phase === "captured" ? 2 : 1);
+    expect.soft(scans).toBe(phase === "captured" || phase === "known mutation" ? 2 : 1);
     await expectText(owner.worktree.path, "source.txt", "shared checkpoint\n");
     if (phase === "captured") {
       await expectText(owner.worktree.path, "late.txt", "write after capture\n");
@@ -485,6 +485,32 @@ export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
   const { service } = await prepareLocalWorkspaceArchiveFixture(owner);
   const projection = await prepare(owner);
   const snapshot = await requireGit(owner.worktree.repoRoot, ["rev-parse", "HEAD"]);
+  const mergeHead = await requireGit(owner.worktree.path, [
+    "rev-parse",
+    "--git-path",
+    "MERGE_HEAD",
+  ]);
+  const mergePath = path.resolve(owner.worktree.path, mergeHead);
+  await fs.writeFile(mergePath, `${snapshot}\n`);
+  await expect(service.remove({ id: owner.worktree.id, reason: "idle-gc" })).rejects.toThrow(
+    "Workspace integration is pending",
+  );
+  expect(
+    await requireGit(owner.worktree.repoRoot, [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/openclaw/snapshots/",
+    ]),
+  ).toBe("");
+  expect(
+    (await service.listRegistryRecords()).find((record) => record.id === owner.worktree.id)
+      ?.snapshotRef,
+  ).toBeUndefined();
+  expect(await fs.readFile(mergePath, "utf8")).toBe(`${snapshot}\n`);
+  expect(await fs.readFile(path.join(projection, "source.txt"), "utf8")).toBe(
+    await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8"),
+  );
+  await fs.unlink(mergePath);
   const before = await readLocalWorkspaceProjection(owner.worktree.id);
   const source = path.join(projection, "source.txt");
   const original = await fs.readFile(source);
@@ -501,7 +527,9 @@ export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
     }
     try {
       await expect(
-        withLocalWorkspaceProjection(owner, (state) => state.prepareArchive(snapshot)),
+        withLocalWorkspaceProjection(owner, async (state) =>
+          (await state.prepareArchive())(snapshot),
+        ),
       ).rejects.toThrow(
         change === "symlink"
           ? "Local sandbox workspace directory changed"

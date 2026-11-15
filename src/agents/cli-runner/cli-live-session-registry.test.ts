@@ -615,8 +615,10 @@ describe("generic plugin-owned live session registry", () => {
       expect(fails ? rejected : completed).toHaveBeenCalledOnce();
       if (fails) {
         expect(rejected).toHaveBeenCalledWith(failure);
-        await expect(restartCliLiveSession(successor.context)).rejects.toBe(failure);
-        expect(() => successor.register()).toThrow("cleanup has not settled");
+        // The joined turn saw the failure; a later turn can start a replacement.
+        await restartCliLiveSession(successor.context);
+        successor.register();
+        expect(successor.capability.current()).toBe(successor.session);
       } else {
         successor.register();
         await closeCliLiveSession(original.context, "restart");

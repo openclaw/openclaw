@@ -4,7 +4,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
 import { readSessionIdentitySnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type {
   SessionMessageCutCandidate,

@@ -25,7 +25,7 @@ What Discovery **can** do, by design: withhold, delay, drop, replay or reorder m
 snapshots; list claws and devices; assert user identity (account id, email, location hint) -
 always shown as "reported by OpenClaw ID"; refuse relay admission (availability only).
 
-What it **cannot** do: add a member, an owner device or an invite; approve a redemption
+What it **cannot** do: add a member, an owner device, a node or an invite; approve a redemption
 (approvals go **directly** to the Gateway over the tunnel or loopback, never through the
 mailbox); change which K_srv a pinned client dials; replace a claw's root (that needs a
 RootReset signed by the claw's K_gw); keep a removed member connected (removal takes effect at
@@ -60,7 +60,8 @@ ready message.
 | registerClaw            | `POST /v1/claws`                                      | gateway (key = binding.k_gw)              | `{ code, descriptor }` -> `{ claw_id, owner_account_id }`                                          |
 | getRegistration         | `GET /v1/claws/{claw_id}/registration`                | gateway (current registered K_gw only)    | -> `{ claw_id, owner_account_id, descriptor }`; no account-session fallback                        |
 | listClaws               | `GET /v1/claws`                                       | user                                      | -> `{ claws: [{ claw_id, hostname, name, relationship, role, online, descriptor_published_at }] }` |
-| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway                                   | `{ descriptor }` -> 204; `stale_binding` if binding_seq decreases                                  |
+| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway (stored K_gw, or see Re-bind)     | `{ descriptor, snapshot?, code? }` -> 204; `stale_binding` if binding_seq decreases                |
+| getPublishedDescriptor  | `POST /v1/claws/{claw_id}/published-descriptor`       | gateway (any key) + owner-account code    | `{ code }` -> `{ descriptor }`; code not spent (Re-bind)                                           |
 | getDescriptor           | `GET /v1/claws/{claw_id}/descriptor`                  | user                                      | -> `{ descriptor }`                                                                                |
 | publishSnapshot         | `PUT /v1/claws/{claw_id}/snapshot`                    | gateway                                   | `{ snapshot }` -> 204; `stale_snapshot` unless newer by (seq, issued_at)                           |
 | getSnapshot             | `GET /v1/claws/{claw_id}/snapshot`                    | user                                      | -> `{ snapshot }`                                                                                  |
@@ -182,7 +183,7 @@ the Gateway's current seq in decimal (`parseSeqConflictRef`). Discovery delivers
 device of the claw's owner account, in the control lane. Every other event goes to `owners`.
 
 The Gateway accepts only `GATEWAY_MAILBOX_KINDS` (`invite_redemption`, `root_statement`,
-`revocation`) from the mailbox. **A device-signed MembershipChange that arrives through the
+`node_redemption`, `revocation`) from the mailbox. **A device-signed MembershipChange that arrives through the
 mailbox is refused**, so an approval can never be forged or replayed by Discovery.
 
 Limits: payload <= 64 KiB, TTL 7 days, long-poll `wait` <= 30 s, rate limits per claw, per
@@ -234,6 +235,13 @@ match `code` only.
 | `rate_limited`       | 429  | per claw / account / address limit                                          |
 | `unavailable`        | 503  | temporary failure                                                           |
 
+A descriptor publish refused with `stale_binding`, or with `conflict` for a different binding at
+the same binding_seq, carries `binding`: the ServerBinding Discovery publishes. Only a caller
+whose binding verified under the claw's root and who signs with its K_gw gets this far. The
+Gateway verifies it under the root: naming other keys, this machine is `binding_superseded`
+(restored from an older backup, or someone with the kit moved the claw); not verifying, it is
+an integrity error.
+
 ## Open questions
 
 - Should `getDescriptor` be readable without a session (invite links before sign-in)? v1:
@@ -242,3 +250,56 @@ match `code` only.
   `owner_peer_keys` (or `owner_devices` and their caps for a certificate reader) and its own
   device bindings; withholding it only delays enrollment.
 - Claw retirement (spike threat-model backlog 4) is not specified yet.
+
+## Accountless node authentication
+
+`DiscoveryAuth: "node"` is an `OpenClaw-Signature` by W, with **no bearer token** and no
+account/device binding. Use `signDiscoveryRequest` unchanged: `keyid=ed25519:<W raw hex>`.
+`verifyDiscoveryRequest` authenticates possession; it does not itself authorize any route.
+A node key never gains user, device, Gateway, owner or member permissions.
+
+| Name                | Method and path                           | Request / response                                      | Authorization                                              |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------- |
+| `sendNodeMail`      | `POST /v1/claws/{claw_id}/mailbox/node`   | `SendNodeMailRequest` -> `SendMailResponse`             | W possession, even before admission                        |
+| `getNodeDescriptor` | `GET /v1/claws/{claw_id}/node/descriptor` | -> `GetNodeDescriptorResponse { descriptor, snapshot }` | W in this claw's verified current-binding `node_peer_keys` |
+
+`sendNodeMail` accepts only `{ to: "gateway", payload: { kind: "node_redemption",
+redemption: <NodeRedemption> } }`. Reject unknown fields and all other kinds/recipients.
+The request W, redemption signer and `redemption.body.peer_key` must be the same raw key;
+the URL claw ID must equal `redemption.body.claw_id`. Verify the statement signature and
+strict schema. Discovery never receives the invite secret/proof key and cannot validate the
+HMAC; only the Gateway can. Mail delivery does not add a node. Deduplicate a repeated
+redemption within its mailbox lifetime; never duplicate a pending request on HTTP retry.
+Rate-limit by claw, W **and source address** (new W generation must not bypass the limit),
+with the existing 64 KiB payload / seven-day TTL bounds and `rate_limited` / `retry_after`.
+The stored `ReportedNodeSender` has null account/email/display name and `device_fp = fp(W)`;
+it is display-only, not an owner-device identity. `node_redemption` is in
+`GATEWAY_MAILBOX_KINDS`. Node authentication cannot read/ack mail, bind devices, list claws,
+publish descriptors/snapshots, send root statements or send owner approvals.
+
+For `getNodeDescriptor`, Discovery verifies the snapshot against the currently stored binding's
+K_gw, requires equal claw ID and `binding_seq`, and finds W in `node_peer_keys`. No usable
+snapshot, a pending/removed W or a different claw -> `forbidden`; never fall back to user
+or member auth. Return that descriptor and snapshot together, so a headless client can apply
+the existing freshness contract without a user-only `getSnapshot` request. Rate-limit polling
+by claw, W and source address, with backoff. A stale mirror may delay admission or removal;
+the Gateway's live authority always decides tunnel admission and node principal privileges.
+
+`POST /iroh/admit` also admits `node_peer_keys` from verified current-binding snapshots.
+Pending requests/invites alone never authorize relay admission. This remains an abuse filter,
+not a membership authority; a removed node cannot keep a tunnel alive using a stale snapshot.
+
+## Member device self-mail
+
+`MailboxRecipient` includes `"self"`: the sender's own account's devices at this claw.
+A user sender must have a bound device and be the owner or a listed member; unrelated
+accounts receive the same uniform 404 as other hidden claws. Discovery stores this mail for
+the sender's account. A device reader receives it only while still bound to that same
+account, never for another account. Existing mailbox rate limits apply. The Gateway cannot
+send to `"self"`, including notices.
+
+Member SAS sends `start` to `"self"`, with the existing accept/key/sealed/abort messages
+replied to the same-account device fingerprint. Payloads, commitments and codes are unchanged.
+The approving member submits its signed `add_member_device` directly over the tunnel before
+sending `sealed`; the mailbox never accepts member-signed authority changes.
+`member_device_added` is an owner notice with the added peer key's fingerprint as `ref`.

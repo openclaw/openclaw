@@ -1,10 +1,47 @@
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
 
+// The beta.3 owner accepted these observed failures on 2026-11-14 at 13:30 UTC.
+// CI aggregate causes use workflow job keys, not displayed shard names.
+const BETA3_CI_FAILURES = new Map([
+  ["checks-ui (3/3)", "checks-ui"],
+  ["android-screenshots", "android-screenshots"],
+  ["checks-node-agentic-agents-core-runtime", "checks-node-core-test-nondist-shard"],
+  ["checks-node-agentic-control-plane-runtime-state", "checks-node-core-test-nondist-shard"],
+]);
+const BETA3_DOCKER_JOB = "Run Docker release-path validation / Docker E2E (package/update OpenAI)";
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
-export const RELEASE_VALIDATION_WAIVERS = [
+const RELEASE_VALIDATION_WAIVERS = [
+  ...[...BETA3_CI_FAILURES.keys(), BETA3_DOCKER_JOB].map((jobName) => ({
+    targetVersion: "2026.11.5-beta.3",
+    childRole: jobName === BETA3_DOCKER_JOB ? "releaseChecksCandidate" : "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney explicitly accepted the remaining beta.3 failures on " +
+      "2026-11-14 at 13:30 UTC and requested beta-profile qualification at 13:31 UTC. " +
+      "Observed in FRV 43594812558/1: UI reply navigation, Android Overview startup, " +
+      "Google Decision deadline, Gateway RPC timeouts, and Docker Codex followthrough " +
+      "without a configured message channel. This grant matches only this version, " +
+      "child role and named failed job; it accepts that job's failures, not a test pass. " +
+      "Retain raw evidence. Missing, cancelled, other jobs, package identity, " +
+      "artifact integrity and publication authorization remain blocking.",
+  })),
+  {
+    targetVersion: "2026.11.5-beta.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.5-beta.3 " +
+      "performance waiver on 2026-11-13 at 20:19 UTC, including CPU, latency " +
+      "and RSS, superseding the prior RSS-only scope. This matches only the " +
+      "exact release version, productPerformance role and failed Kova job. " +
+      "Retain raw failures and reports; there is no not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crash, " +
+      "correctness, isolation, data-integrity and install/update gates remain blocking.",
+  },
   {
     targetVersion: "2026.9.37",
     childRole: "productPerformance",
@@ -33,6 +70,35 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "the operator additionally authorized a new candidate qualification " +
       "with performance explicitly waived-not-run. The old receipt supports " +
       "that exception only; it does not measure or qualify the new candidate.",
+  },
+  {
+    targetVersion: "2026.11.4",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.4 performance " +
+      "waiver on 2026-11-13 at 13:06 UTC, superseding the prior run-specific grant. " +
+      "Like 2026.11.2 and 2026.11.3, this matches the exact version, child role, " +
+      "and failed Kova job across all runs, attempts, and candidates for this release; " +
+      "it does not classify individual performance metrics within that job. " +
+      "Retain raw failures and reports. There is no not-run exemption. Other failed " +
+      "jobs, missing or cancelled evidence, and crash, correctness, isolation, " +
+      "data-integrity, and install/update gates remain blocking.",
+  },
+  {
+    targetVersion: "2026.11.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.3 Kova waiver on " +
+      "2026-11-10 at 03:34 UTC after reviewing FRV 42733555990/1, child " +
+      "42734139245/1 on prior C fb9ce54d: RSS 1809.8-1819.6 MB > 1800 MB, " +
+      "peak gateway CPU 433.7% > 340%, and process-tree CPU 467.4% > 360%. " +
+      "Like 2026.11.2, this matches the exact version, child role, and failed " +
+      "Kova job; it does not classify individual metrics within that job. " +
+      "Retain raw failures. The prior run does not qualify new C 40223c5cc262; " +
+      "there is no not-run exemption. Other failed jobs, missing or cancelled " +
+      "evidence, and all other normal release gates remain blocking.",
   },
   {
     targetVersion: "2026.11.2",
@@ -142,6 +208,28 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (waiver.targetVersion === "2026.11.5-beta.3") {
+    if (waiver.childRole === "normalCi" && BETA3_CI_FAILURES.has(waiver.jobName)) {
+      return [
+        {
+          jobName: "openclaw/ci-gate",
+          stepName: "Verify selected CI lanes",
+          causes: [
+            `${BETA3_CI_FAILURES.get(waiver.jobName)} finished with failure (selected=true)`,
+          ],
+        },
+      ];
+    }
+    if (waiver.childRole === "releaseChecksCandidate" && waiver.jobName === BETA3_DOCKER_JOB) {
+      return [
+        {
+          jobName: "Verify release checks",
+          stepName: "Verify release check results",
+          causes: ["docker_e2e_release_checks ended with failure"],
+        },
+      ];
+    }
+  }
   if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
     return [];
   }

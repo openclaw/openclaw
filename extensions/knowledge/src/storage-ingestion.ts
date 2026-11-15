@@ -202,9 +202,6 @@ export class StorageIngestion extends StorageLifecycle {
       ) {
         throw new Error("Source hash must match retained evidence on a batch record.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during batch validation.");
-      }
       return {
         ...parts[0]!,
         artifacts,

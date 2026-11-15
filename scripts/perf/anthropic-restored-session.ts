@@ -13,7 +13,7 @@ import { normalizeMessagesForLlmBoundary } from "../../src/agents/embedded-agent
 import { createToolResultPromptProjectionState } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
-import { cloneSessionModelContextEntries } from "../../src/agents/sessions/session-manager-codec.js";
+import { projectSessionModelContextEntries } from "../../src/agents/sessions/session-manager-codec.js";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import { SettingsManager } from "../../src/agents/sessions/settings-manager.js";
 import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
@@ -103,11 +103,11 @@ async function fixture() {
       await sessionManager.appendMessageAsync(message);
     }
   }
-  // Use hydration's writable model-view owner, not hand-frozen transport payloads.
-  const restored = cloneSessionModelContextEntries(sessionManager.getEntries()).flatMap((entry) =>
-    entry.type === "message" ? [entry.message] : [],
+  // Use hydration's immutable model-view owner.
+  const restored = projectSessionModelContextEntries(sessionManager.getEntries()).flatMap(
+    (entry) => (entry.type === "message" ? [entry.message] : []),
   );
-  assert(restored.every((message) => !Object.isFrozen(message)));
+  assert(restored.every((message) => Object.isFrozen(message)));
   const agent = { state: { messages: restored } };
   const input = {
     attempt: {

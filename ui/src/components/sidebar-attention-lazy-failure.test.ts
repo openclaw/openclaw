@@ -39,6 +39,7 @@ afterEach(() => {
 
 async function mountAttention() {
   const sources = {
+    config: { current: { openclawIdEnabled: false }, subscribe: () => () => undefined },
     gateway: {
       snapshot: { phase: "connected", client: null, hello: null },
       connection: { gatewayUrl: "" },

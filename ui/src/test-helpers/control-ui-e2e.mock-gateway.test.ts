@@ -22,6 +22,18 @@ import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
 
+it("emits integer challenge timestamps from a fractional virtual clock", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  vi.spyOn(gatewayPage.window.Date, "now").mockReturnValue(1_800_000_000_000.5);
+  const { frames } = gatewayPage.connect();
+  await flushMockTimers();
+  expect(frames.find((frame) => frame.event === "connect.challenge")).toMatchObject({
+    payload: { ts: 1_800_000_000_000 },
+  });
+});
+
 it("retains only bounded row counts from successful delivered session lists", async ({
   gatewayPage,
 }) => {

@@ -14,7 +14,10 @@ import {
   pageRunner,
   settingsPageOptions,
 } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI settings loading skeletons mocked Gateway E2E",
@@ -39,6 +42,38 @@ const withPage = (run: (page: import("playwright").Page) => Promise<void>) =>
   runPage(({ page }) => run(page));
 
 suite.define(() => {
+  it.each([
+    ["approvals", "Recent exec, plugin, and system-agent approvals."],
+    [
+      "labs",
+      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
+    ],
+  ])("renders the %s subtitle before the lazy sidebar", async (id, subtitle) => {
+    await suite.withPage(
+      { viewport: { width: 820, height: 1000 }, locale: "en-US" },
+      async ({ page }) => {
+        const sidebar = await holdModuleResponse(
+          page,
+          new RegExp("/src/components/settings-sidebar-shell[.]tsx"),
+        );
+        await installMockGateway(page);
+        try {
+          await page.goto(`${suite.server.baseUrl}settings/${id}`);
+          await sidebar.request;
+          const header = page.locator(`openclaw-${id}-page .content-header`);
+          await header.locator(".page-title").waitFor();
+          await header.locator(".page-subtitle").waitFor();
+          expect(await header.locator(".page-subtitle").textContent()).toBe(
+            `${subtitle} Learn more`,
+          );
+          expect(sidebar.requests()).toBe(1);
+        } finally {
+          sidebar.release();
+        }
+      },
+    );
+  });
+
   it("renders the Models initial load as a skeleton", async () => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
@@ -146,7 +181,13 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "tools.catalog",
+          "tools.effective",
+        ],
         heldMethods: ["tools.catalog", "tools.effective"],
         operatorScopes: ["operator.read"],
         methodResponses: {
@@ -195,7 +236,6 @@ suite.define(() => {
       await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list");
       await page.locator(".custodian__change-card").waitFor();
-
       const requestCount = (await gateway.getRequests("openclaw.changes.list")).length;
       await gateway.deferNext("openclaw.changes.list");
       await historyToggle.click();

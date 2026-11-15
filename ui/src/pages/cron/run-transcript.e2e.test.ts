@@ -68,7 +68,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
       const heldHistory = await holdModuleResponse(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/lib/chat/message-visibility.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/pages/cron/run-transcript.runtime.ts"),
       );
       const held = await holdModuleResponse(
         page,
@@ -112,7 +112,7 @@ suite.define(() => {
 
   it.each([
     ["feed", "ui/src/pages/chat/components/chat-transcript-feed-view.tsx"],
-    ["history processing", "ui/src/lib/chat/message-visibility.ts"],
+    ["history processing", "ui/src/pages/cron/run-transcript.runtime.ts"],
   ])("recovers a failed %s import through the guarded document reload", async (_name, module) => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
       const transcriptModule = controlUiE2eBuiltModuleRequest(module);

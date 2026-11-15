@@ -1,8 +1,9 @@
 ---
-summary: "Where personal GitHub connections, personal model accounts, and Apple companion journals live"
+summary: "Where personal GitHub connections, personal model accounts, Apple companion journals, and native chat drafts live"
 read_when:
   - "Checking where per-person credentials and selections are stored"
   - "Understanding Apple companion delivery journals and their migration behaviour"
+  - "Changing how the iOS or macOS chat composer keeps unsent drafts"
 title: "Per-person and companion storage"
 ---
 
@@ -106,3 +107,97 @@ client state.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
 the schema, migration, ownership, retention and validation boundaries.
+
+## Native chat composer drafts
+
+The iOS and macOS chat composer keeps each session's unsent text and
+attachments in the same `client-state.sqlite`, so a draft survives app restart,
+termination and crash. The additive GRDB migration
+`client-state-composer-drafts-v11` creates two STRICT tables:
+
+- `composer_drafts`: one row per `(gateway_id, draft_key)` with `text`, the
+  composer `revision` at the last save, and `updated_at`.
+- `composer_draft_attachments`: `(gateway_id, draft_key, position)` rows with
+  `type`, `mime_type`, `file_name`, the `payload` bytes and an optional
+  `duration_seconds`, deleted with their draft.
+
+The draft key is the agent-qualified session key. A draft is not read or
+written until the agent, and for `main`/`global` the Gateway routing contract,
+is known; text typed earlier is appended to the stored draft when it loads, and
+until then it stays in memory, including across session switches.
+Text saves wait for a short typing pause and never rewrite attachment blobs;
+iOS saves immediately when the app moves to the background and macOS before it
+quits. Attachments are written as they are added or removed. If a save fails,
+the text stays in memory, including across session switches, and the next save
+retries it; an attachment that could not be saved keeps the chat from switching
+until it is saved, sent or removed. Sending clears the draft:
+a queued send clears it in the same transaction that queues the message, and
+a live send clears it immediately. Two windows editing one session's draft
+keep the last write.
+
+A draft holds at most 40 MB of attachments, the same limit as one queued
+message. Drafts on one Gateway share 50 MB: adding an attachment over that
+budget first removes the attachments, never the text, of the least recently
+updated other drafts. Drafts have no timed expiry. A draft whose key becomes
+unreachable, for example after its agent is removed, stays until Gateway
+Forget.
+
+Forget deletes the Gateway's drafts in its existing irreversible removal
+transaction. The `composer_drafts_forget` trigger deletes them when an older
+app build runs Forget, since that build does not know these tables. Older
+builds otherwise ignore the tables. The Share extension and the Watch do not
+use composer drafts.
+
+## Apple OpenClaw ID node enrollment
+
+The shared Apple node adapter owns an app-private database at
+`URL.applicationSupportDirectory/OpenClaw/node-enrollment.sqlite`. On macOS this
+is the app's Application Support directory (normally
+`~/Library/Application Support/OpenClaw/node-enrollment.sqlite`); on iOS it is
+inside the app's sandbox. Tests supply an isolated URL. This file uses
+`OpenClawNativeStateSQLite`, not the TypeScript-owned Gateway database or the
+separate client-credential format: node enrollment has its own app lifecycle and
+contains no client/operator credentials.
+
+The named initialization `apple-node-enrollments-v1` creates two STRICT tables
+and sets `PRAGMA user_version = 1` atomically, only in an empty version-zero
+database. The schema is unshipped and edited in place; there is no upgrade path
+from earlier development schemas. Pre-release local stores must be recreated and
+the node re-enrolled. An unrecognized database, a different version, or an
+incompatible schema is refused unchanged.
+The shared `openclaw_id_node_targets` table has these columns:
+
+- `hostname TEXT NOT NULL PRIMARY KEY`
+- `claw_id TEXT NOT NULL`, `root_fingerprint TEXT NOT NULL`
+- `binding_sequence INTEGER NOT NULL`
+- `snapshot_sequence INTEGER NOT NULL`, `snapshot_issued_at INTEGER NOT NULL`
+- `snapshot_binding_sequence INTEGER NOT NULL`, nullable `snapshot_gateway_key TEXT`
+
+The `openclaw_id_node_enrollments` table contains non-null `TEXT` columns:
+`hostname`, `enrollment_id`, `discovery_origin`, `relay_url`, `server_key`,
+`peer_key`, and `evidence_json`. Its primary key is `(hostname, enrollment_id)`.
+Restart reads use the adapter's enrollment identity, so another enrollment on the
+same host cannot replace the identity selected by the app.
+
+Binding pin, snapshot binding retirement, and newest membership `(sequence,
+issued_at)` are independent retained facts. Verified nonfuture observations merge
+inside an immediate transaction even when the refresh refuses a connection.
+A verified root-signed binding advances the pin even when its snapshot is invalid
+or future-dated; those refused snapshots do not advance snapshot state.
+Target commits validate against the current row, not a prior read. Cancellation,
+revoked attempt authority, and persistence failure never yield a dial target.
+`synchronous = FULL` retains the SQLite power-loss durability contract. There is
+no timed pruning of trust pins or high-water marks.
+
+`enrollment_id` selects a dedicated `ai.openclaw.node-enrollment` Keychain item.
+The node key W is generated separately per enrollment identity, including on iOS;
+it is never the phone's client/operator key. It stays in a non-synchronizing,
+`AfterFirstUnlockThisDeviceOnly` Keychain item, never in SQLite or config.
+
+Reopen restores refresh inputs, not dialing authority. With the retained W,
+`OpenClawIDNodeEnrollmentClient.refresh` sends a signed descriptor GET without a
+new invite or redemption POST. The shared verifier checks fresh signed descriptor
+and membership evidence against the retained pins/high-water marks and persists
+stronger evidence before returning a target. Saved evidence and routes cannot
+bypass that verification. These are library capabilities; app/controller wiring,
+device runtime, and the user-facing enrollment flow remain separate work.
