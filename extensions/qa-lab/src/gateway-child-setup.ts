@@ -20,7 +20,6 @@ import {
   runQaGatewayCliCommand,
   type QaGatewayChildCommand,
 } from "./gateway-child-command.js";
-import { initializeQaGatewayChildState } from "./gateway-child-initializer.js";
 import type { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChildLogCollector } from "./gateway-child-process.js";
 import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
@@ -72,8 +71,6 @@ export type QaGatewayChildParams = {
   repoRoot: string;
   command?: QaGatewayChildCommand;
   useRepoCli?: boolean;
-  /** Fresh current-repository fixture; released-package upgrade tests keep repair. */
-  initializeCurrentRuntimeState?: boolean;
   providerBaseUrl?: string;
   mockSessionObserverUrl?: string;
   transport?: Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
@@ -173,6 +170,19 @@ export async function prepareQaGatewayChild(
     params.command ??
     (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
   const usesPackagedCandidate = gatewayCommand?.usePackagedPlugins === true;
+  const runtimeEntry = (
+    gatewayCommand?.processBoundary?.runtimeArgsPrefix ?? gatewayCommand?.argsPrefix
+  )?.at(-1);
+  const runtimeEntryPath = runtimeEntry
+    ? path.resolve(gatewayCommand?.cwd ?? runtimeCwd, runtimeEntry)
+    : undefined;
+  const usesCurrentRuntime = [
+    "openclaw.mjs",
+    "scripts/run-node.mjs",
+    "src/entry.ts",
+    "dist/index.mjs",
+    "dist/index.js",
+  ].some((relativePath) => runtimeEntryPath === path.join(params.repoRoot, relativePath));
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -196,11 +206,11 @@ export async function prepareQaGatewayChild(
     repoRoot: params.repoRoot,
   });
   await Promise.all([
-    fs.mkdir(stateDir, { recursive: true }),
-    fs.mkdir(homeDir, { recursive: true }),
-    fs.mkdir(xdgConfigHome, { recursive: true }),
-    fs.mkdir(xdgDataHome, { recursive: true }),
-    fs.mkdir(xdgCacheHome, { recursive: true }),
+    fs.mkdir(stateDir, { recursive: true, mode: 0o700 }),
+    fs.mkdir(homeDir, { recursive: true, mode: 0o700 }),
+    fs.mkdir(xdgConfigHome, { recursive: true, mode: 0o700 }),
+    fs.mkdir(xdgDataHome, { recursive: true, mode: 0o700 }),
+    fs.mkdir(xdgCacheHome, { recursive: true, mode: 0o700 }),
   ]);
   const providerMode = params.providerMode ?? DEFAULT_QA_PROVIDER_MODE;
   const codexModelCatalogPath = path.join(tempRoot, "codex-model-catalog.json");
@@ -565,17 +575,9 @@ export async function prepareQaGatewayChild(
       await closeQaRuntimeStores(tempRoot);
       lifetime.assertOpen();
 
-      if (params.initializeCurrentRuntimeState) {
-        const bootstrapEnv = createQaPackagedBootstrapEnv(env);
-        await runQaPackagedBootstrap("QA state initialization failed", () =>
-          initializeQaGatewayChildState({
-            repoRoot: params.repoRoot,
-            tempRoot,
-            env: bootstrapEnv,
-            lifetime,
-          }),
-        );
-      } else if (usesPackagedCandidate && gatewayCommand) {
+      // Current fresh fixtures use ordinary startup admission. Released packages
+      // retain their explicit upgrade/repair path; never auto-accept plugins at startup.
+      if (usesPackagedCandidate && gatewayCommand && !usesCurrentRuntime) {
         const command = {
           lifetime,
           executablePath: gatewayCommand.executablePath,
