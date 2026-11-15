@@ -395,6 +395,9 @@ export function prepareTranscriptContextSnapshot(
   seed?: SessionContextSeedRequest,
 ): TranscriptContextSnapshot {
   const db = getSessionKysely(database.db);
+  // Full-fidelity SQLite readers do not consume admission sizes. Bounded readers
+  // still carry those costs with their cached navigation; PostgreSQL keeps its fused projection.
+  const precomputeModelBytes = limits !== undefined || isPostgresSqlConnection(database.db);
   // Compressed rows were validated before encoding; inspect raw identity only.
   const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
   const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
@@ -452,8 +455,14 @@ export function prepareTranscriptContextSnapshot(
             .select([
               "seq",
               transcriptEventModelNavigationSql(database.db).as("navigation_json"),
-              transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
-              transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
+              (precomputeModelBytes
+                ? transcriptEventModelBytesSql(database.db, sql.lit(0))
+                : sql.lit(0)
+              ).as("model_bytes"),
+              (precomputeModelBytes
+                ? transcriptEventModelBytesSql(database.db, sql.lit(1))
+                : sql.lit(0)
+              ).as("retained_bytes"),
             ])
             .orderBy("seq", "asc");
       for (const row of iterateSqliteQuerySync(database.db, query)) {
@@ -596,9 +605,23 @@ export function prepareTranscriptContextSnapshot(
       for (const request of requests) {
         if (exceptional(request) && request.toolResultOmission) {
           sizes.set(request.entry, Buffer.byteLength(projectExceptional(request), "utf8"));
-        } else if (!request.toolResultOmission) {
+        } else if (precomputeModelBytes && !request.toolResultOmission) {
           const row = navigation.get(request.entry.seq)!;
           sizes.set(request.entry, request.omitCheckpoint ? row.withoutCheckpointBytes : row.bytes);
+        }
+      }
+      // Unbounded readers normally need no sizes. Preserve explicit size requests
+      // by selecting their original accounting expression only for the requested rows.
+      for (const batch of chunkItems(
+        requests.filter((request) => !precomputeModelBytes && !request.toolResultOmission),
+        MODEL_CONTEXT_PAYLOAD_BATCH_SIZE,
+      )) {
+        const { bySeq, omitCheckpoint } = modelContextBatchSql(batch);
+        const query = base
+          .select(["seq", transcriptEventModelBytesSql(database.db, omitCheckpoint).as("bytes")])
+          .where("seq", "in", [...bySeq.keys()]);
+        for (const row of iterateSqliteQuerySync(database.db, query)) {
+          sizes.set(bySeq.get(row.seq)!, row.bytes);
         }
       }
       for (const batch of chunkItems(

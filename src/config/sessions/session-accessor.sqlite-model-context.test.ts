@@ -3,6 +3,9 @@ import { expect, it, vi } from "vitest";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -12,12 +15,17 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
-import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
+import {
+  prepareTranscriptContextSnapshot,
+  readSessionTranscriptModelContext,
+} from "./session-accessor.sqlite-model-context.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import {
+  resolveSqliteTranscriptReadScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 
 async function seedScope(state: { statePath(name: string): string }, sessionId: string) {
   const scope = {
@@ -29,6 +37,39 @@ async function seedScope(state: { statePath(name: string): string }, sessionId: 
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return scope;
 }
+
+it("does not size unbounded snapshots until model byte accounting is requested", () =>
+  withOpenClawTestState({ label: "unbounded-context-sizing" }, async (state) => {
+    const scope = await seedScope(state, "unbounded-sizing");
+    const manager = await SessionManager.openAsync(scope);
+    await manager.appendMessageAsync({ role: "user", content: "First question", timestamp: 1 });
+    await manager.appendMessageAsync({ role: "user", content: "Second question", timestamp: 2 });
+    const stored = loadTranscriptEventsSync(scope).filter(
+      (entry) => isIndexedSessionEntry(entry) && entry.type === "message",
+    );
+    const resolved = resolveSqliteTranscriptReadScope(scope);
+    const read = withOpenClawAgentDatabaseReadOnly((database) => {
+      const { db } = database;
+      assert(!isPostgresSqlConnection(db));
+      let sizedRows = 0;
+      db.function("octet_length", (value) => {
+        sizedRows++;
+        return Buffer.byteLength(String(value));
+      });
+      return runSqliteReadSnapshotSync(db, () => {
+        const snapshot = prepareTranscriptContextSnapshot(database, resolved);
+        expect(sizedRows).toBe(0);
+        const entries = snapshot.entries.filter((entry) => entry.type === "message");
+        expect(entries.map((entry) => snapshot.readEntry(entry))).toEqual(stored);
+        const requests = entries.map((entry) => ({ entry, omitCheckpoint: false }));
+        expect([...snapshot.readModelEntrySizes(requests).values()]).toEqual(
+          stored.map((entry) => Buffer.byteLength(JSON.stringify(entry))),
+        );
+        expect(sizedRows).toBe(entries.length);
+      });
+    }, toDatabaseOptions(resolved));
+    expect(read.found).toBe(true);
+  }));
 
 it("retains accepted background artifacts across bounded placement and compaction without rewriting legacy history", () =>
   withOpenClawTestState({ label: "background-result-placement" }, async (state) => {
