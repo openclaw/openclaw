@@ -144,9 +144,13 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => props.host,
   );
   // Route changes retire the cron owner's transcript reads and retarget Gateway job queries.
+  // While the next route loads its search is unknown, not empty, so nothing acts on it.
   createEffect(
-    () => props.routeSearch ?? "",
+    () => props.routeSearch,
     (search) => {
+      if (search === undefined) {
+        return;
+      }
       const route = resolveCronRouteData(search);
       // Returning to Automations in this tab reopens the automation left open.
       const opened = sectionLocation(context.gateway, "automations");
@@ -183,7 +187,7 @@ function CronPage(props: { routeSearch?: string }) {
 export function renderSolid(props: SolidRouteProps) {
   return (
     <Loading>
-      <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />
+      <CronPage routeSearch={typeof props.data === "string" ? props.data : undefined} />
     </Loading>
   );
 }
