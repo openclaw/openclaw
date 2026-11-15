@@ -17,51 +17,56 @@ import { createAgentEventTestHarness } from "./server-chat.agent-events.test-har
 
 afterEach(() => vi.useRealTimers());
 
-it("preserves opaque provider codes through deferred terminal chat publication", async () => {
-  const code = "subscription_sharing_workplace_individual_usage_limit_exceeded";
-  vi.useFakeTimers();
-  const assistant = makeAssistantMessageFixture({
-    ...projectProviderError({ status: 429, code, message: "Usage limit reached" }),
-    content: [],
-  });
-  const ctx = createContext(assistant);
-  ctx.params.terminalLifecyclePhase = "finishing";
-  const runId = ctx.params.runId;
-  const sessionKey = "agent:main:main";
-  const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
-  onTestFinished(() => h.handler.dispose());
-  h.register(runId, sessionKey, runId);
-  const deliveries: Promise<void>[] = [];
-  const terminal = createAgentLifecycleTerminalBackstop({
-    runId,
-    sessionKey,
-    getLifecycleGeneration: () => "test-generation",
-    resolveTerminationFields: () => ({}),
-    onTerminalEvent: (event) => {
-      deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data)));
-    },
-  });
-  ctx.params.onAgentEvent = (event) => terminal.note(event);
-  await handleAgentEnd(ctx);
-  expect(h.chat()).toHaveLength(0);
-  terminal.emit("error", terminal.getDeferredError());
-  await Promise.all(deliveries);
+it.each(["en", "de"] as const)(
+  "preserves opaque provider codes through deferred %s terminal publication",
+  async (locale) => {
+    const code = "subscription_sharing_workplace_individual_usage_limit_exceeded";
+    vi.useFakeTimers();
+    const assistant = makeAssistantMessageFixture({
+      ...projectProviderError({ status: 429, code, message: "Usage limit reached" }),
+      content: [],
+    });
+    const ctx = createContext(assistant);
+    ctx.params.messageLocale = locale;
+    ctx.params.terminalLifecyclePhase = "finishing";
+    const runId = ctx.params.runId;
+    const sessionKey = "agent:main:main";
+    const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
+    onTestFinished(() => h.handler.dispose());
+    h.register(runId, sessionKey, runId);
+    const deliveries: Promise<void>[] = [];
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId,
+      sessionKey,
+      getLifecycleGeneration: () => "test-generation",
+      resolveTerminationFields: () => ({}),
+      onTerminalEvent: (event) => {
+        deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data)));
+      },
+    });
+    ctx.params.onAgentEvent = (event) => terminal.note(event);
+    await handleAgentEnd(ctx);
+    expect(h.chat()).toHaveLength(0);
+    terminal.emit("error", terminal.getDeferredError());
+    await Promise.all(deliveries);
 
-  const terminals = h.chat().filter(([, event]) => event.state !== "delta");
-  expect(terminals).toHaveLength(1);
-  const payload = terminals[0]?.[1];
-  expect(Value.Check(ChatEventSchema, payload)).toBe(true);
-  expect(payload).toMatchObject({
-    state: "error",
-    errorDetail: {
-      provider: "openai",
-      providerErrorCode: code,
-      httpStatus: 429,
-      failoverReason: "rate_limit",
-    },
-  });
-  expect(payload?.errorMessage).not.toContain(code);
-});
+    const terminals = h.chat().filter(([, event]) => event.state !== "delta");
+    expect(terminals).toHaveLength(1);
+    const payload = terminals[0]?.[1];
+    expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+    expect(payload).toMatchObject({
+      state: "error",
+      errorKind: "rate_limit",
+      errorDetail: {
+        provider: "openai",
+        providerErrorCode: code,
+        httpStatus: 429,
+        failoverReason: "rate_limit",
+      },
+    });
+    expect(payload?.errorMessage).not.toContain(code);
+  },
+);
 
 it("preserves exhausted context-budget guidance in live chat, Details, history, and channel replies", async () => {
   vi.useFakeTimers();
@@ -104,9 +109,13 @@ it("preserves exhausted context-budget guidance in live chat, Details, history, 
   ).toMatchObject([{ text: expected, isError: true }]);
 });
 
-it.each([false, true])(
-  "publishes native provider failures without treating them as cancellation (aborted=%s)",
-  async (aborted) => {
+it.each([
+  { aborted: false, messageLocale: undefined },
+  { aborted: true, messageLocale: undefined },
+  { aborted: false, messageLocale: "de" as const },
+])(
+  "publishes native provider failures with their locale (aborted=$aborted, locale=$messageLocale)",
+  async ({ aborted, messageLocale }) => {
     vi.useFakeTimers();
     const runId = "run-native-provider-error";
     const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
@@ -115,7 +124,7 @@ it.each([false, true])(
     let seq = 0;
     const deliveries: Promise<void>[] = [];
     const lifecycle = createAgentHarnessAttemptLifecycle({
-      attempt: { provider: "openai", modelId: "gpt-5.6-luna" },
+      attempt: { provider: "openai", modelId: "gpt-5.6-luna", messageLocale },
       backend: "codex-app-server",
       startedAtMs: Date.now(),
       state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
@@ -146,7 +155,10 @@ it.each([false, true])(
       expect(payload.errorDetail).toBeUndefined();
     } else {
       expect(payload).toMatchObject({
-        errorMessage: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+        errorMessage:
+          messageLocale === "de"
+            ? "⚠️ Das gewählte Modell ist ausgelastet. Wähle ein anderes Modell oder versuche es später erneut."
+            : "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
         errorKind: "rate_limit",
         errorDetail: {
           provider: "openai",

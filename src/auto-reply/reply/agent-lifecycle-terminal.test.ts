@@ -124,6 +124,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       error: "old capacity error",
       stopReason: "error",
       errorObservation: { httpStatus: 503 },
+      errorKind: "rate_limit",
       timeoutPhase: "provider",
       providerStarted: true,
       aborted: true,
@@ -168,10 +169,12 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     const error = new Error("wrapped OAuth refresh failure", { cause: oauthError });
     const terminal = createTerminal();
 
+    finishing(terminal, { error: "old capacity error", errorKind: "rate_limit" });
     terminal.emit("error", error);
 
     const event = emitted();
     expect(event.data.error).toBe(`⚠️ ${summary}`);
+    expect(event.data.errorKind).toBeUndefined();
     expect(event.data.errorObservation).toEqual({
       provider: "openai",
       failoverReason: "refresh_token_reused",

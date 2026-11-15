@@ -48,6 +48,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "livenessState",
   "replayInvalid",
   "errorObservation",
+  "errorKind",
   "suppressErrorNotice",
   "assistantTranscriptIdempotencyKey",
 ] as const;
@@ -77,7 +78,12 @@ export function resolveDeferredLifecycleTerminal(
     ? // The precheck's overflow observation no longer describes this failure.
       {
         error: recoveryError,
-        metadata: { ...metadata, errorNotice: recoveryError, errorObservation: undefined },
+        metadata: {
+          ...metadata,
+          errorNotice: recoveryError,
+          errorObservation: undefined,
+          errorKind: undefined,
+        },
       }
     : { error: deferredError, metadata };
 }
@@ -149,12 +155,15 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (terminalPhase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
-      data.error =
+      const replacementError =
         renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
         renderAgentHarnessPreflightUserMessage(terminalValue) ??
         renderFailoverCodeUserCopy(getFailoverErrorCode(terminalValue)) ??
-        (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
-        formatErrorMessage(terminalValue);
+        (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined);
+      data.error = replacementError ?? formatErrorMessage(terminalValue);
+      if (replacementError !== undefined) {
+        delete data.errorKind;
+      }
       if (oauthFailure?.summary) {
         data.errorObservation = {
           ...(oauthFailure.provider ? { provider: oauthFailure.provider } : {}),
@@ -190,6 +199,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
       // one terminal outcome, rather than reporting a user-requested Stop.
       data.phase = "error";
       data.error = workspaceFailure.message;
+      delete data.errorKind;
       delete data.aborted;
       delete data.stopReason;
       delete data.timeoutPhase;

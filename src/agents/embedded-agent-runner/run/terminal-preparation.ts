@@ -293,13 +293,14 @@ export function prepareEmbeddedRunTerminal(input: {
     payloads.some((payload) => getReplyPayloadMetadata(payload)?.toolErrorWarning)
   ) {
     const message = formatErrorMessage(promptError);
-    const failure = resolveReplyFailoverFacts(promptError, message, runParams.config);
+    const locale = runParams.messageLocale ?? runParams.config?.messages?.locale;
+    const failure = resolveReplyFailoverFacts(promptError, message, runParams.config, locale);
     const copy =
       failure.requestFailureText ??
       (failure.reason === "rate_limit" || failure.reason === "overloaded"
-        ? renderRateLimitOrOverloadedCopy({ reason: failure.reason, raw: message })
+        ? renderRateLimitOrOverloadedCopy({ reason: failure.reason, raw: message, locale })
         : (failure.providerRequestError?.userMessage ??
-          renderAssistantRequestFailureCopy(failure)));
+          renderAssistantRequestFailureCopy(failure, locale)));
     if (copy) {
       const failurePayload = {
         text: sanitizeUserFacingText(copy, { errorContext: true }),

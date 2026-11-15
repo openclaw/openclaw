@@ -27,9 +27,44 @@ it.each([
   { output: "delegated" },
   { output: "visible" },
   { output: "silent" },
+  {
+    output: "native",
+    providerFailure: "HTTP 503: provider unavailable",
+    messageLocale: "en" as const,
+    configLocale: "de" as const,
+    expectedProviderNotice: "The model provider returned a temporary internal error",
+  },
+  {
+    output: "native",
+    providerFailure: "HTTP 503: provider unavailable",
+    messageLocale: "de" as const,
+    configLocale: "en" as const,
+    expectedProviderNotice: "Beim Modellanbieter ist vor der Antwort",
+  },
+  {
+    output: "native",
+    providerFailure: "overloaded",
+    messageLocale: "de" as const,
+    configLocale: "en" as const,
+    expectedProviderNotice: "Der KI-Dienst ist vorübergehend überlastet",
+  },
+  {
+    output: "native",
+    providerFailure: "request timed out",
+    messageLocale: "de" as const,
+    configLocale: "en" as const,
+    expectedProviderNotice: "Die Anfrage hat zu lange gedauert",
+  },
 ])(
-  "delivers the terminal denied-exec outcome (output=$output, denialFirst=$denialFirst)",
-  async ({ output, denialFirst = true, providerFailure }) => {
+  "delivers the terminal denied-exec outcome (output=$output, denialFirst=$denialFirst, failure=$providerFailure, locale=$messageLocale)",
+  async ({
+    output,
+    denialFirst = true,
+    providerFailure,
+    messageLocale,
+    configLocale,
+    expectedProviderNotice,
+  }) => {
     const commentary = output === "commentary" ? "I will check the command and file." : undefined;
     const toolCalls = toolAssistant(["denied", "bash"], ["sibling", "read"]);
     if (commentary) {
@@ -85,6 +120,10 @@ it.each([
         currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       },
     });
+    input.runParams.messageLocale = messageLocale;
+    if (configLocale) {
+      input.runParams.config = { ...input.runParams.config, messages: { locale: configLocale } };
+    }
     input.prepared = await prepareAttempt({
       ...input,
       currentAttemptCompletedAssistant: assistant,
@@ -112,7 +151,13 @@ it.each([
         expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
       }
     } else {
-      const expected = [providerFailure && `⚠️ ${providerFailure}`, warningText].filter(Boolean);
+      const expected = [
+        providerFailure &&
+          (expectedProviderNotice
+            ? expect.stringContaining(expectedProviderNotice)
+            : `⚠️ ${providerFailure}`),
+        warningText,
+      ].filter(Boolean);
       expect(payloads).toMatchObject(expected.map((text) => ({ text, isError: true })));
       if (output === "delegated") {
         expect(resolved.result.meta.error).toBeUndefined();

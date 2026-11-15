@@ -7,7 +7,9 @@ import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { parseApiErrorInfo } from "../shared/assistant-error-format.js";
 import { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
+import { isTimeoutError } from "./failover/error.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
@@ -20,6 +22,18 @@ const OBSERVATION_EXTRA_REDACT_PATTERNS = [
   String.raw`"(?:api[-_]?key|api_key)"\s*:\s*"([^"]+)"`,
   String.raw`(?:\bCookie\b\s*[:=]\s*[^;=\s]+=|;\s*[^;=\s]+=)([^;\s\r\n]+)`,
 ];
+
+/** Publish categories before localization; older producers retain the Gateway text fallback. */
+export function projectAgentErrorKind(error: unknown, reason: FailoverReason | null | undefined) {
+  if (reason === "rate_limit" || reason === "overloaded") {
+    return "rate_limit";
+  }
+  if (reason === "context_overflow") {
+    return "context_length";
+  }
+  // The transient failover bucket also contains 5xx failures, which are not timeouts.
+  return isTimeoutError(error) ? "timeout" : undefined;
+}
 
 function truncateForObservation(text: string | undefined, maxChars: number): string | undefined {
   const trimmed = text?.trim();
