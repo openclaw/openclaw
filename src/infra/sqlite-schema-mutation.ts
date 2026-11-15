@@ -55,14 +55,14 @@ function changesSchema(sql: string): boolean {
 
 function createsOnlyTemporaryObject(sql: string): boolean {
   let remaining = normalizeSqlWhitespace(sql);
-  const kind = /^\s*CREATE\s+(?:TEMP|TEMPORARY)\s+(TABLE|TRIGGER)\b/iu
+  const kind = /^\s*CREATE\s+(?:TEMP|TEMPORARY)\s+(TABLE|TRIGGER|VIEW)\b/iu
     .exec(remaining)?.[1]
     ?.toUpperCase();
   if (!kind) {
     return false;
   }
   let end = findSqlCharacter(remaining, ";");
-  if (kind === "TABLE") {
+  if (kind !== "TRIGGER") {
     return end < 0 || remaining.slice(end + 1).trim() === "";
   }
   // Trigger steps end with semicolons; CASE END stays within its statement.

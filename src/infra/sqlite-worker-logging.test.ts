@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
 import { defaultRuntime } from "../runtime.js";
@@ -48,8 +49,14 @@ it("persists worker diagnostics through backend close without contaminating JSON
     await broker.close();
   }
   expect(JSON.parse(stdout.join(""))).toEqual({ value: "ready" });
+  // The host relays worker stderr later; each line carries the time the worker wrote it.
   for (const phase of ["open", "execute", "close"]) {
-    expect(stderr.join("")).toContain(`worker fixture ${phase}`);
+    expect(stripAnsi(stderr.join(""))).toMatch(
+      new RegExp(
+        `^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\S* \\[state/sqlite\\] worker fixture ${phase}$`,
+        "m",
+      ),
+    );
   }
   const records = (await fs.readFile(path.join(root, "worker.log"), "utf8"))
     .trim()

@@ -3,7 +3,7 @@ import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
-import { routeLogsToStderr } from "../logging/console.js";
+import { routeLogsToStderr, setConsoleTimestampPrefix } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import {
@@ -70,6 +70,8 @@ const port = parentPort;
 serveWorkerMemorySamples(port);
 // Results use the host port; diagnostics must preserve the caller's structured stdout.
 routeLogsToStderr();
+// The host relays worker stderr on its own event loop; stamp lines when the worker writes them.
+setConsoleTimestampPrefix(true);
 type PreparedPostgresBridge = ReturnType<
   typeof import("./database-engine/bridge-prestart.js").prepareAdmittedPostgresBridge
 >;

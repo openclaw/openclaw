@@ -307,6 +307,8 @@ it("separates preparation, SQL, host wait and a failed COMMIT", () => {
   expectSettledEntries(db, []);
   warning("hold", {
     operation: "state.lease.renew",
+    // The hold starts after BEGIN (200 ms preparation + 100 ms BEGIN on the fake clock).
+    startedAt: new Date(300).toISOString(),
     elapsedMs: 1_250,
     phases: {
       prepareMs: 200,
