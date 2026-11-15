@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { nativeAuth, terminalSession } from "./workspace-terminal.test-support.ts";
@@ -28,12 +26,7 @@ suite.define(() => {
         });
         await page.goto(new URL("/terminal", suite.server.baseUrl).toString());
         await gateway.waitForRequest("connect");
-        const artifactDir = createControlUiE2eArtifactDir("terminal-cold-entry-audit");
         const content = page.locator("openclaw-terminal-page");
-        const frame = await takeControlUiScreenshotFrame(page, content, [content], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(artifactDir, "pending.png"), frame.png);
         expect(
           await page
             .getByText("The terminal is unavailable.", { exact: true })
