@@ -12,12 +12,17 @@ import {
   asOptionalRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  parseCrabboxMachineType,
+  resolveCrabboxMachineType,
+} from "./crabbox-worker-machine-types.js";
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const PROFILE_KEYS = new Set([
   "azureSandboxDiskId",
   "binary",
   "class",
+  "type",
   "desktop",
   "idleTimeout",
   "provider",
@@ -49,6 +54,7 @@ type CrabboxProfile = {
   azureSandboxDiskId?: string;
   binary?: string;
   class?: string;
+  type?: string;
   desktop?: boolean;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
@@ -98,6 +104,7 @@ export type CrabboxMachineShape = Readonly<{
   os: CrabboxOperatingSystem;
   cpu?: number;
   memoryGb?: number;
+  label?: string;
 }>;
 
 export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
@@ -166,6 +173,7 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
 
   const provider = nonEmptyString(profile.provider)?.toLowerCase();
   const machineClass = nonEmptyString(profile.class);
+  const machineType = parseCrabboxMachineType(profile, provider);
   const target = parseCrabboxOperatingSystem(profile.target);
   if (!provider) {
     throw new WorkerProviderError("Crabbox profile provider must be a non-empty string");
@@ -221,6 +229,7 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     ...(azureSandboxDiskId ? { azureSandboxDiskId } : {}),
     binary,
     class: machineClass,
+    ...(machineType ? { type: machineType } : {}),
     desktop,
     heartbeatIntervalMs: heartbeatIntervalMs(idleTimeoutMs),
     heartbeatTimeoutMs: Math.min(
@@ -305,7 +314,7 @@ export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupS
 // must share the same policy during provisioning and teardown.
 export function resolveCrabboxWarmImageProfile(
   profile: CrabboxProfile,
-  machineClass = profile.class,
+  machineClass = profile.type ?? profile.class,
   target = profile.target,
 ) {
   if (target === "windows/wsl2" && profile.desktop) {
@@ -313,9 +322,12 @@ export function resolveCrabboxWarmImageProfile(
       "Crabbox WSL2 does not support desktops; select native Windows for a desktop viewer",
     );
   }
+  const machineType =
+    profile.provider === "azure-sandbox" ? resolveCrabboxMachineType(machineClass) : undefined;
   return {
     ...profile,
-    class: machineClass,
+    type: machineType,
+    class: machineType ?? machineClass,
     target,
     warmImage: target === "linux" && (profile.warmImage ?? machineClass !== undefined),
   };
@@ -340,6 +352,7 @@ export function resolveCrabboxWarmImageProfileKey(
         desktop: profile.desktop ?? false,
         // Exact class is intentionally conservative; cross-class reuse comes later.
         machineClass: profile.class,
+        ...(profile.type ? { machineType: profile.type } : {}),
         ...(projectKey ? { projectKey } : {}),
       }),
     )
@@ -354,7 +367,7 @@ export function resolveCrabboxPreparationTarget(
   const parsed = parseCrabboxProfile(profile);
   const effective = resolveCrabboxWarmImageProfile(
     parsed,
-    machineClass ?? parsed.class,
+    machineClass ?? parsed.type ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
   return supportsResolvedCrabboxProjectPreparation(effective) &&
@@ -376,7 +389,7 @@ export function supportsCrabboxProjectPreparation(
   const parsed = parseCrabboxProfile(profile);
   const resolved = resolveCrabboxWarmImageProfile(
     parsed,
-    machineClass ?? parsed.class,
+    machineClass ?? parsed.type ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
   return supportsResolvedCrabboxProjectPreparation(resolved);
@@ -432,7 +445,7 @@ export function resolveCrabboxProvisionProfile(
   }
   const resolved = resolveCrabboxWarmImageProfile(
     configured,
-    requestedClass ?? configured.class,
+    requestedClass ?? configured.type ?? configured.class,
     requestedOsValue === undefined
       ? configured.target
       : parseCrabboxOperatingSystem(requestedOsValue),
@@ -490,7 +503,7 @@ export function listCrabboxMachineOptions(
       options.push({
         id: shape.class,
         os,
-        label: shape.class.replace(/^./u, (initial) => initial.toUpperCase()),
+        label: shape.label ?? shape.class.replace(/^./u, (initial) => initial.toUpperCase()),
         ...(shape.cpu !== undefined ? { cpu: shape.cpu } : {}),
         ...(shape.memoryGb !== undefined ? { memoryGb: shape.memoryGb } : {}),
         ...(shape.class === configuredClass ? { default: true } : {}),
@@ -524,7 +537,7 @@ export function buildCrabboxAllocationArgs(
     "--network",
     "public",
     "--tailscale=false",
-    ...(profile.class ? ["--class", profile.class] : []),
+    ...(profile.type ? ["--type", profile.type] : profile.class ? ["--class", profile.class] : []),
     ...(profile.target === "linux" ? ["--target", "linux"] : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
     ...(profile.target === "windows/normal"

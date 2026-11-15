@@ -21,6 +21,7 @@ import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.t
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import {
   joinWorkerTunnelStops,
@@ -630,6 +631,15 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   return {
+    resolveExecMemoryBoundary: (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record?.leaseId || record.sharedHost !== false) {
+        return undefined;
+      }
+      return options
+        .resolveProvider(record.providerId)
+        ?.resolveExecMemoryBoundary?.(requireWorkerProfile(record.profileSnapshot.settings));
+    },
     bindPreparedWorkspace,
     get: (environmentId: string) => {
       const record = store.get(environmentId);

@@ -129,6 +129,8 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  /** Admitted outer Sandbox limit, consumed only by the deployed worker. */
+  workerMemoryBoundary?: "sandbox";
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   initiateSpawn?: SpawnInitiation;

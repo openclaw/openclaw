@@ -2,11 +2,30 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getHostExecMemoryBudget } from "./child-memory.js";
+import type { SpawnInput } from "./supervisor/types.js";
+
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 const cgroupMount = "/sys/fs/cgroup";
 const controllers = ["cpu", "io", "memory"];
 
 export type ProcessExecutionIntent = "agent-tool" | "gateway-internal";
+
+/** A sealed provider Sandbox owns its worker tools; Gateway commands keep the host budget. */
+export function usesAgentExecHostMemoryBudget(
+  input: Pick<SpawnInput, "executionIntent" | "cleanupOwnership" | "workerMemoryBoundary">,
+): boolean {
+  return (
+    process.platform === "linux" &&
+    input.executionIntent === "agent-tool" &&
+    input.cleanupOwnership !== "external" &&
+    !(
+      typeof WORKER_DEPLOY_BUILD === "boolean" &&
+      WORKER_DEPLOY_BUILD &&
+      input.workerMemoryBoundary === "sandbox"
+    )
+  );
+}
 
 /** Startup prepares the shared fallback before publishing an active aggregate policy. */
 export function prepareAgentExecCgroupScope(directory: string, scopeKey?: string): string {

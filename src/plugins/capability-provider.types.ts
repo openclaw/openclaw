@@ -354,6 +354,8 @@ export type WorkerProvider = {
    * Omission, invalid values, and exceptions retain generic provider presentation.
    */
   resolveDisplayId?: (profile: WorkerProfile) => string | undefined;
+  /** Provider-attested outer memory boundary; omission retains the Gateway host safeguard. */
+  resolveExecMemoryBoundary?: (profile: WorkerProfile) => "sandbox" | undefined;
   /** Safe to request virtual desktop resizing; the RFB server still negotiates support. */
   allowsDesktopResize?: boolean;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */

@@ -36,6 +36,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
   /** Host-prepared routing hint; remote workers have no Gateway session database. */
   preparedSubagentExecution?: boolean;
+  /** Internal provider-attested worker fact; not an exec argument or environment override. */
+  workerMemoryBoundary?: "sandbox";
   autoReviewer?: ExecAutoReviewer;
   createApprovalTransport?: (toolCallId: string, signal?: AbortSignal) => ExecApprovalTransport;
   /** Reads current attempt context only when a command needs review. */
