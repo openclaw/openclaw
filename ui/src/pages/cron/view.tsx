@@ -1,4 +1,6 @@
 import { lazy, Loading, Errored, onSettled } from "solid-js";
+import { Icon } from "../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -76,8 +78,28 @@ export function CronView(props: CronProps) {
   };
   return (
     <>
-      {mode() === "overview" ? (
+      {mode() === "overview" && !props.sidebarListsJobs ? (
         <ListView {...props} focus={focus} onRemove={remove} />
+      ) : mode() === "overview" ? (
+        // The sidebar lists every automation; the page waits for one to open.
+        <div class="cron-overview-empty">
+          <PanelEmptyState
+            icon={<Icon name="automations" />}
+            heading={props.jobs.length > 0 ? t("tabs.cron") : t("cron.list.emptyTitle")}
+            description={t("cron.list.emptyHint")}
+            action={
+              (props.canCreate ?? props.canManage) ? (
+                <button
+                  type="button"
+                  class="btn primary btn--sm"
+                  onClick={() => props.onOpenCreate()}
+                >
+                  <Icon name="plus" /> {t("cron.list.newTask")}
+                </button>
+              ) : undefined
+            }
+          />
+        </div>
       ) : (
         <Errored
           fallback={(error, reset) => (

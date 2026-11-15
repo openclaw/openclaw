@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
+import { mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+import { openedCronJob, setAutomationsSidebarShown } from "../lib/cron/automations-navigation.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { formatCompactMs } from "../lib/format.ts";
@@ -12,6 +14,7 @@ import { formatCronSchedule } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { Icon } from "./solid/icon.tsx";
 
@@ -56,10 +59,22 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     }).catch(() => null);
     return result?.jobs ?? [];
   });
+  // The mobile drawer and a collapsed or peeking sidebar do not stand beside the page.
+  const mobileNav = createMediaQuery(
+    mobileNavLayoutMediaQuery(),
+    globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false,
+  );
+  createEffect(
+    () => !props.host.navigationCollapsed && !mobileNav(),
+    (shown) => {
+      setAutomationsSidebarShown(shown);
+    },
+  );
+  onSettled(() => () => setAutomationsSidebarShown(false));
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // The sidebar learns the route, not its query, so it keeps the job it last opened.
   const [selected, setSelected] = createSignal(
-    new URLSearchParams(window.location.search).get("job"),
+    new URLSearchParams(window.location.search).get("job") ?? openedCronJob(app.gateway),
   );
   const cronPath = () => pathForRoute("cron", props.host.basePath);
   const Row = (row: { job: CronCompactJob }) => {
