@@ -35,10 +35,6 @@ import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.
 import { mockRegistryRequesterWakeMutation } from "./subagent-registry-lifecycle-completion.test-support.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
-  registerSubagentResultRefreshCases,
-  updateSubagentRunFixture as updateFixtureRun,
-} from "./subagent-registry-result-refresh.test-support.js";
-import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
@@ -62,6 +58,7 @@ import { registerSubagentRegistrationPersistenceTests } from "./subagent-registr
 import {
   makeCompletedCollectorRun,
   makeSuspendedDeliveryRun,
+  updateSubagentRunFixture as updateFixtureRun,
 } from "./subagent-registry.run-fixtures.test-support.js";
 import { resetSubagentRegistrySessionMocks } from "./subagent-registry.session-mocks.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -465,8 +462,6 @@ describe("subagent registry seam flow", () => {
       swarmWaitOwnerSessionKeys: [parentSessionKey, "agent:main:main"],
     });
   });
-
-  registerSubagentResultRefreshCases({ getRegistry: () => mod, getLifecycleHandler, mocks });
 
   registerQueuedCollectorLaunchSettlementTest({ getRegistry: () => mod, mocks });
 
