@@ -24,6 +24,15 @@ main.content:where(.content--activity-page) .content-header {
   flex: 0 0 auto;
 }
 
+/* Activity reads in the standard wide page column, like Automations and Usage. */
+main.content:where(.content--activity-page) .content-header,
+main.content:where(.content--activity-page) .settings-workspace__body {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
 .activity-current-work {
   display: flex;
   flex: 1 1 auto;
