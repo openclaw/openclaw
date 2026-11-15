@@ -95,7 +95,7 @@ describe("accepted results through registered message actions", () => {
 
   it.each([
     { mode: "plugin", messageId: "accepted-1" },
-    { mode: "core", messageId: "unknown" },
+    { mode: "core", messageId: "accepted-1" },
   ] as const)(
     "retains an accepted $mode send ($messageId) when its caller closes before annotation",
     async ({ mode, messageId }) => {
@@ -128,7 +128,7 @@ describe("accepted results through registered message actions", () => {
                     channel,
                     messageId,
                     receipt: createMessageReceiptFromOutboundResults({
-                      results: messageId === "unknown" ? [] : [{ channel, messageId }],
+                      results: [{ channel, messageId }],
                       kind: "text",
                     }),
                   };
@@ -162,6 +162,52 @@ describe("accepted results through registered message actions", () => {
       }
     },
   );
+
+  it("reports a placeholder-only core send as an unidentified attempt after caller closure", async () => {
+    const callerAuthority = createCallerAuthority();
+    const submitted: string[] = [];
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    const plugin = registerPlugin({
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async (ctx) => {
+          ctx.assertDirectAdapterHandoff?.();
+          await ctx.onPlatformSendDispatch?.();
+          submitted.push("unknown");
+          callerAuthority.close();
+          // The bundled Matrix adapter answers `messageId: "unknown"` when it collected no
+          // event id, and its receipt carries no platform ids or parts.
+          return {
+            channel,
+            messageId: "unknown",
+            receipt: createMessageReceiptFromOutboundResults({ results: [], kind: "text" }),
+          };
+        },
+      },
+    });
+
+    const result = await runAuthorizedAction({
+      action: "send",
+      params: { channel: plugin.id, target: "room-1", message: "accepted reply" },
+      assertDirectAdapterHandoff: callerAuthority.assertCurrent,
+      onPlatformSendDispatch,
+      skipQueue: true,
+    });
+
+    // The attempt is retained for its closed caller, but the placeholder never becomes an
+    // identified result: no confirmed send and no platform id for confirmed-message bookkeeping.
+    expect(result).toMatchObject({ kind: "send", handledBy: "core", dryRun: false });
+    expect(submitted).toEqual(["unknown"]);
+    if (result.kind !== "send") {
+      throw new Error("Expected send result");
+    }
+    expect(result.sendResult).toMatchObject({
+      deliveryStatus: "suppressed",
+      suppressionReason: "adapter_returned_no_identity",
+      sentBeforeError: true,
+    });
+    expect(result.sendResult?.result).toBeUndefined();
+  });
 
   it.each(["accepted", "uncertain failure"] as const)(
     "retains a source-authorized broadcast %s after caller closure",
