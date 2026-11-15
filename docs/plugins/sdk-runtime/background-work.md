@@ -572,7 +572,14 @@ remote/provider-hosted settings projection require a separate owner contract.
 ## Native harness completion delivery
 
 Bundled harnesses use `openclaw/plugin-sdk/agent-harness-completion` to route
-native child results through the existing requester completion-delivery owner.
+native child results through the existing private parent-input owner. The parent
+can consume the result even when its saved channel destination is unavailable;
+this handoff does not resolve that external destination or send a visible final.
+The parent remains responsible for any external reply through its permitted
+messaging tools. A successful processing receipt proves parent consumption,
+not external delivery. Retries reuse that receipt and reject a changed result
+under the same completion identity. Incognito parents use their current session
+actor through the same path.
 `deliverAgentHarnessCompletion` requires a host-issued `AgentHarnessCompletionScope`
 and a live `isSourceSessionAdmissionAllowed` callback. Keep the callback bound
 to the exact native assignment and its current parent. Requester identity and
