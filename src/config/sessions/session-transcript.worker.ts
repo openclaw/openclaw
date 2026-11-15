@@ -317,10 +317,7 @@ serveOwnedWorkerTasks(
         const cold = await import("./session-cold-storage-read.worker.js");
         const options = { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) };
         return request.kind === "cold-metadata"
-          ? {
-              kind: request.kind,
-              archive: cold.readSessionColdMetadataInWorker(options, request.sessionId),
-            }
+          ? cold.readSessionColdMetadataInWorker(options, request.sessionId, request.readCustody)
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
       if (request.kind === "session-target-prepare" || request.kind === "session-store-target") {
@@ -654,6 +651,7 @@ serveOwnedWorkerTasks(
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,
+            request.readCustody,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

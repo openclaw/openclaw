@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
@@ -34,9 +35,9 @@ const native: WorktreeGitPolicy = {
 };
 type GitConfigOptions = Pick<
   NonNullable<Parameters<typeof runGit>[2]>,
-  "baseEnv" | "env" | "signal" | "beforeRun"
+  "baseEnv" | "env" | "signal" | "beforeRun" | "stateOwnerPath"
 >;
-type Guard = Pick<GitConfigOptions, "signal" | "beforeRun" | "env">;
+type Guard = Pick<GitConfigOptions, "signal" | "beforeRun" | "env" | "stateOwnerPath">;
 const sharedDirectories = ["objects", "refs", "logs", "worktrees", "reftable"] as const;
 const sharedFiles = ["packed-refs", "shallow", "info/exclude"] as const;
 
@@ -128,12 +129,13 @@ export async function withWorktreeGitConfig<T>(
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-config-"));
   let active = true;
   const pending = new Set<Promise<unknown>>();
-  const assertActive = () => {
-    check();
+  const assertActive = composeSessionSourceAssertion([guard.beforeRun], (assertSource) => {
+    guard.signal?.throwIfAborted();
+    assertSource();
     if (!active) {
       throw new Error("Git configuration scope closed");
     }
-  };
+  });
   const prepareMetadata = async (target: string) => {
     for (const name of sharedDirectories) {
       assertActive();
@@ -180,10 +182,8 @@ export async function withWorktreeGitConfig<T>(
       const guarded = {
         ...options,
         refMutationDirectory: common,
-        beforeRun: () => {
-          assertActive();
-          options.beforeRun?.();
-        },
+        stateOwnerPath: options.stateOwnerPath ?? guard.stateOwnerPath,
+        beforeRun: composeSessionSourceAssertion([assertActive, options.beforeRun]),
       };
       if (usesCanonicalMetadata(args)) {
         return guarded;
