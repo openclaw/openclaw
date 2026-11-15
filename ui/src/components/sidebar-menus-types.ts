@@ -48,6 +48,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionDataOwner;
   readonly sessionOrganizer: SessionOrganizer;
+  readonly navigationCatalog: import("./sidebar-navigation-catalog.ts").SidebarNavigationCatalog;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   readonly sessionOwnerFilterActive: boolean;
