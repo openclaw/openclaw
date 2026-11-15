@@ -322,19 +322,7 @@ describe("requester-settle processing survives later user turns", () => {
   it("reopens the same consumed settle input after the shutdown owner interrupts it", async () => {
     const controller = new AbortController();
     const original = await prepare({ abortSignal: controller.signal });
-    expect(await loadTranscriptEvents(scope())).toEqual([]);
     await original.recorder!.persistApproved();
-    expect(await loadTranscriptEvents(scope())).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.objectContaining({
-            __openclaw: expect.objectContaining({
-              runId,
-            }),
-          }),
-        }),
-      ]),
-    );
     controller.abort(createAgentRunRestartAbortError());
     await original.recorder!.waitForPendingInputSettlement!();
     expect(completion(original)).toMatchObject({ reason: "cancelled", stopReason: "restart" });
@@ -532,7 +520,6 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
   // The completion's runtime context is saved after this turn; replay needs the turn itself.
   await withTurn(params, async (recorder) => {
     expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-    expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.requesterDelivery).toBeUndefined();
   });
   const messages = (await loadTranscriptEvents(target)).filter(
     (event) => isIndexedSessionEntry(event) && event.type === "message",

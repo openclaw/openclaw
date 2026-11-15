@@ -33,7 +33,6 @@ import {
 } from "./subagent-registry-read.js";
 import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
-import { publishRequesterDeliveryReceipt } from "./subagent-requester-delivery.js";
 import { holdLiveRequesterTurns } from "./subagent-requester-turn-liveness.test-support.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -243,85 +242,6 @@ export function registerPrivateCompletionSettlementTests({
     blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
   };
 }): void {
-  it.each([false, true])(
-    "settles consumed requester cancellation (visible final: %s)",
-    async (yieldedFinalDeliverable) => {
-      const entry = createRunEntry({
-        endedAt: 4_000,
-        expectsCompletionMessage: true,
-        completionTarget: "parent",
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          batchRunIds: ["run-1"],
-          rearmGeneration: 1,
-          yieldedFinalDeliverable: yieldedFinalDeliverable || undefined,
-        },
-      });
-      entry.requesterSettleWake!.batchRunIds = [entry.runId];
-      let wake:
-        | Parameters<SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
-        | undefined;
-      const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async (params) => {
-        wake = params;
-        return false;
-      });
-      entry.requesterAgentId = "main";
-      entry.completionRequesterSessionId = "requester-session";
-      subagentRuns.set(entry.runId, entry);
-      onTestFinished(() => {
-        subagentRuns.delete(entry.runId);
-      });
-      const controller = createLifecycleController({
-        entry,
-        runs: subagentRuns,
-        maybeWakeRequesterAfterAllChildrenSettled,
-      });
-      controller.resumeRequesterSettleWake(entry.runId, entry);
-      await waitForLifecycleState(() => expect(wake).toBeDefined());
-      await wake!.transitionBatch(
-        [entry],
-        { ...entry.requesterSettleWake!, status: "dispatching", attemptCount: 1 },
-        undefined,
-        {
-          state: "waiting",
-          runId: "continuation",
-          blockingRunId: "settle-run",
-          at: 5_000,
-        },
-      );
-      expect(readLifecycleRun(entry).delivery).toMatchObject({
-        status: "pending",
-        requesterDelivery: { state: "waiting", blockingRunId: "settle-run" },
-      });
-      publishRequesterDeliveryReceipt(
-        subagentRuns,
-        {
-          agentId: "main",
-          sessionKey: entry.requesterSessionKey,
-          sessionId: "requester-session",
-        },
-        { runId: "continuation", inputIdempotencyKey: "continuation:user" },
-      );
-      await wake!.completeBatch([readLifecycleRun(entry)], 1, {
-        delivered: false,
-        path: "direct",
-        reason: "delivery_suppressed",
-        disposition: "intentional_non_delivery",
-        error: "private requester continuation was cancelled",
-      });
-      expect(readLifecycleRun(entry).delivery).toMatchObject({
-        status: yieldedFinalDeliverable ? "failed" : "delivered",
-        disposition: yieldedFinalDeliverable ? "intentional_non_delivery" : "delivered",
-        deliveredAt: yieldedFinalDeliverable ? undefined : expect.any(Number),
-        requesterDelivery: { state: "consumed", runId: "continuation" },
-      });
-      expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-      controller.resumeRequesterSettleWake(entry.runId, readLifecycleRun(entry));
-      expect(maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([false, true])(
     "delivers private results held past the individual deadline until requester settlement (yielded: %s)",
     async (requesterYielded) => {

@@ -131,7 +131,11 @@ it("keeps a persisted trigger waiting until its result carrier commits, includin
 
 it("projects a result-bearing input while retaining raw waiting state", async () => {
   await appendTranscriptMessage(scope(), {
-    message: { ...source, __openclaw: { requesterDelivery: { runId, inputIdempotencyKey } } },
+    message: {
+      ...source,
+      provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+      __openclaw: { runId },
+    },
   });
   expect(read().delivery?.requesterDelivery).toMatchObject({ state: "consumed", runId });
   expect(
@@ -157,6 +161,7 @@ it.each(["missing", "unreadable"] as const)(
 
 it.for([
   { kind: "requesterBatch", visibleFinal: false },
+  { kind: "requesterBatch", visibleFinal: true },
   { kind: "block", visibleFinal: false },
   { kind: "block", visibleFinal: true },
 ] as const)(
