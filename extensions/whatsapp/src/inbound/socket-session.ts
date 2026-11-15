@@ -335,7 +335,9 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             // A presence failure must never delay or retry an accepted message.
             void currentSocketOperations(currentSock)
               .sendPresenceUpdate("paused", jid)
-              .catch((error) => options.logVerbose(`Presence update failed: ${String(error)}`));
+              .catch((error: unknown) =>
+                options.logVerbose(`Presence update failed: ${String(error)}`),
+              );
           }
           return result;
         } catch (error) {
