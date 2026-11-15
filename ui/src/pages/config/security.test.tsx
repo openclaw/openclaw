@@ -50,6 +50,18 @@ function renderSecurity(
 }
 
 describe("Security", () => {
+  it("describes all reviewer outcomes for the resolved Auto command policy", () => {
+    const security = extractQuickSettingsSecurity(
+      { tools: { exec: { mode: "auto" } } },
+      { execApprovalDefaults: { security: "full", ask: "off" } },
+    );
+    const row = expectRowByTitle(renderSecurity(security).container, "Command permissions");
+    expect(row.querySelector(".settings-row__control")?.textContent).toBe("Auto");
+    expect(row.querySelector(".settings-row__desc")?.textContent).toBe(
+      "A reviewer may allow or deny commands outside the allowlist, or ask for your approval.",
+    );
+  });
+
   it("locks settings while config is busy but keeps every way out", () => {
     const { container } = renderSecurity({}, { configBusy: true });
     expect(expectRowByTitle(container, "Browser tools").querySelector("input")?.disabled).toBe(

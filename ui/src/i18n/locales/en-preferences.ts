@@ -104,7 +104,7 @@ const enPreferences = {
         deny: "Agents can’t run commands.",
         allowlist: "Agents run allowlisted commands only.",
         ask: "Agents ask before commands the allowlist doesn’t cover.",
-        auto: "A reviewer checks commands the allowlist doesn't cover, then asks.",
+        auto: "A reviewer may allow or deny commands outside the allowlist, or ask for your approval.",
         full: "Agents run commands without asking.",
       },
       browserEnabled: "Browser tools",
