@@ -243,7 +243,9 @@ cp "$fixture_downloads/$name" "$output"
         for (const line of timings) {
           expect(line).toMatch(/^bun-stage phase=[a-z]+ seconds=\d+\.\d{3}$/);
         }
-        const phases = timings.map((line) => line.split(" ")[1].slice("phase=".length));
+        const phases = timings.map((line) =>
+          line.slice("bun-stage phase=".length, line.indexOf(" seconds=")),
+        );
         expect(phases.includes("download")).toBe(downloads);
         expect(phases.filter((phase) => phase !== "download")).toEqual([
           "metadata",
