@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
-import { frames, prepareChat } from "./control-ui-interaction-navigation.ts";
+import { frames, navigation, prepareChat } from "./control-ui-interaction-navigation.ts";
 
 const pane = ".chat-pane-cache__pane--active";
 const composer = `${pane} .agent-chat__composer-combobox textarea`;
@@ -202,6 +202,7 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
     online: true,
   }));
   return [
+    ...createComposerReferenceQualificationScenarios(),
     {
       ...base,
       id: "chat-actions-slash",
@@ -614,4 +615,341 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
       }),
     ),
   ];
+}
+
+/** Matched native/mention/skill workloads use the real composer and raw-value port.
+ * Seeded recipient clipboard metadata is synthetic; measured typing is trusted input. */
+function createComposerReferenceQualificationScenarios(): readonly EngineScenario[] {
+  const people = Array.from({ length: 10 }, (_, index) => ({
+    profileId: "00000003-1111-4111-8111-" + String(index).padStart(12, "0"),
+    displayName: "Casey " + String(index).padStart(2, "0"),
+    online: true,
+  }));
+  const cases = [
+    { name: "scan-count", mode: "mixed", bytes: 65536, action: "type", catalog: 200 },
+    { name: "switch-retention", mode: "mixed", bytes: 256, action: "switch", catalog: 200 },
+    { name: "person-short", mode: "person", bytes: 256, action: "type", catalog: 200 },
+    { name: "skill-short", mode: "skill", bytes: 256, action: "type", catalog: 200 },
+    { name: "mixed-short", mode: "mixed", bytes: 256, action: "type", catalog: 200 },
+    { name: "repeated-skills", mode: "skill", bytes: 65536, action: "type", catalog: 200 },
+    { name: "native-short", mode: "native", bytes: 256, action: "type", catalog: 200 },
+    { name: "native-long", mode: "native", bytes: 65536, action: "type", catalog: 200 },
+    { name: "person-long", mode: "person", bytes: 65536, action: "type", catalog: 200 },
+    { name: "skill-long", mode: "skill", bytes: 65536, action: "type", catalog: 200 },
+    { name: "mixed-long", mode: "mixed", bytes: 65536, action: "type", catalog: 200 },
+    { name: "mixed-catalog-2000", mode: "mixed", bytes: 65536, action: "type", catalog: 2000 },
+    { name: "native-paste", mode: "native", bytes: 256, action: "paste", catalog: 200 },
+    { name: "mixed-paste", mode: "mixed", bytes: 256, action: "paste", catalog: 200 },
+    {
+      name: "activate-person",
+      mode: "native",
+      bytes: 256,
+      action: "activate-person",
+      catalog: 200,
+    },
+    { name: "activate-skill", mode: "native", bytes: 256, action: "activate-skill", catalog: 200 },
+    { name: "cycles", mode: "mixed", bytes: 256, action: "cycles", catalog: 200 },
+  ] as const;
+  return (["chat", "new"] as const).flatMap((surface) =>
+    cases
+      .filter((workload) => surface === "chat" || workload.action !== "switch")
+      .map((workload): EngineScenario => {
+        const commands = Array.from({ length: workload.catalog }, (_, index) => ({
+          name: "skill_" + String(index).padStart(4, "0"),
+          skillDisplayName: "Synthetic Skill " + index,
+          description: "Synthetic skill instructions",
+          source: "skill",
+          scope: "both",
+          acceptsArgs: true,
+          skillReferenceable: true,
+          skillModelVisible: true,
+        }));
+        const root = surface === "chat" ? pane : ".new-session-page__composer";
+        const raw = root + " textarea";
+        const input = (page: Page) => page.locator(root).getByRole("textbox");
+        const seeded = new WeakMap<
+          Page,
+          { draft: string; persons: number; skills: number; styles: number; nodes: number }
+        >();
+        return {
+          id: "composer-qualification-" + surface + "-" + workload.name,
+          route: surface === "chat" ? route : "/new",
+          explicitOnly: true,
+          memory: workload.action === "switch",
+          diagnostic:
+            workload.name === "scan-count"
+              ? "Call-through skill-reference regexp census; timing is not acceptance evidence."
+              : undefined,
+          viewports: workload.action === "switch" ? ["desktop"] : undefined,
+          expected:
+            "Preserve exact draft, atomic references, layout and resource ownership across " +
+            workload.name +
+            ". Compare native and rich outcomes separately.",
+          fixtureOverrides: () => ({
+            presenceUsers: [
+              {
+                self: true,
+                id: "viewer",
+                name: "Viewer",
+                identity: { type: "profile", id: "viewer" },
+              },
+            ],
+            methodResponses: {
+              "commands.list": { commands },
+              "users.mentionable": { users: people, truncated: false },
+            },
+          }),
+          prepare: async (page) => {
+            if (surface === "chat") {
+              await prepareChat(page);
+            }
+            await input(page).waitFor({ state: "visible" });
+            const usesSkills =
+              workload.mode === "skill" ||
+              workload.mode === "mixed" ||
+              workload.action === "activate-skill";
+            if (usesSkills) {
+              await input(page).fill("$");
+              await page
+                .getByRole("listbox", { name: "Skill references" })
+                .getByRole("option")
+                .last()
+                .waitFor();
+            }
+            const prefix =
+              "Synthetic draft line for composer qualification.\n"
+                .repeat(1400)
+                .slice(0, workload.bytes) + "\n";
+            await input(page).fill(prefix);
+            if (workload.mode === "person" || workload.mode === "mixed") {
+              const text = people.map((person) => "@" + person.displayName).join(" ") + " ";
+              let offset = 0;
+              const mentions = people.map((person) => {
+                const start = offset;
+                offset += person.displayName.length + 2;
+                return { profileId: person.profileId, start, end: offset - 1 };
+              });
+              await input(page).evaluate(
+                (element, transfer) => {
+                  const clipboardData = new DataTransfer();
+                  clipboardData.setData("text/plain", transfer.text);
+                  clipboardData.setData(
+                    "application/x-openclaw-mentions",
+                    JSON.stringify(transfer.mentions),
+                  );
+                  element.dispatchEvent(
+                    new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }),
+                  );
+                },
+                { text, mentions },
+              );
+              await page
+                .locator(root + " .chat-composer-mention")
+                .nth(9)
+                .waitFor();
+            }
+            if (workload.mode === "skill" || workload.mode === "mixed") {
+              await input(page).focus();
+              await page.keyboard.press("ControlOrMeta+End");
+              await page.keyboard.insertText(
+                (workload.name === "repeated-skills"
+                  ? Array.from(
+                      { length: 200 },
+                      (_, index) => commands[commands.length - 8 + (index % 8)]!,
+                    )
+                  : commands.slice(-8)
+                )
+                  .map((command) => "$" + command.name)
+                  .join(" ") + " ",
+              );
+            }
+            if (workload.action === "activate-person") {
+              await input(page).pressSequentially("@Casey");
+              await page
+                .getByRole("listbox", { name: "Mention a person" })
+                .getByRole("option")
+                .first()
+                .waitFor();
+            } else if (workload.action === "activate-skill") {
+              await input(page).pressSequentially("$skill_0199");
+              await page
+                .getByRole("listbox", { name: "Skill references" })
+                .getByRole("option")
+                .first()
+                .waitFor();
+            } else {
+              await input(page).focus();
+              await page.keyboard.press("ControlOrMeta+End");
+            }
+            await page.waitForLoadState("networkidle");
+            await frames(page);
+            if (workload.name === "scan-count") {
+              await page.evaluate(() => {
+                // eslint-disable-next-line @typescript-eslint/unbound-method -- The diagnostic invokes the original with its original receiver.
+                const matchAll = String.prototype.matchAll;
+                Reflect.set(window, "composerSkillScanCount", 0);
+                // eslint-disable-next-line no-extend-native -- Call-through census in a disposable diagnostic document; excluded from timing acceptance.
+                String.prototype.matchAll = function (pattern) {
+                  if (
+                    this.length > 65536 &&
+                    this.startsWith("Synthetic draft line") &&
+                    pattern.source === String.raw`\$([-a-zA-Z0-9_:]+)`
+                  ) {
+                    Reflect.set(
+                      window,
+                      "composerSkillScanCount",
+                      Reflect.get(window, "composerSkillScanCount") + 1,
+                    );
+                  }
+                  return matchAll.call(this, pattern);
+                };
+              });
+            }
+            seeded.set(page, {
+              draft: await page.locator(raw).inputValue(),
+              persons: JSON.parse(
+                (await page.locator(raw).getAttribute("data-composer-mentions")) ?? "[]",
+              ).length,
+              skills: await page.locator(root + " .chat-composer-skill").count(),
+              styles: await page.evaluate(() =>
+                Array.from(document.styleSheets).reduce(
+                  (sum, sheet) => sum + sheet.cssRules.length,
+                  0,
+                ),
+              ),
+              nodes: await page.locator(root + " *").count(),
+            });
+          },
+          run: async (page, _gateway, checkpoint) => {
+            const start = seeded.get(page)!;
+            let expected = start.draft;
+            if (workload.action === "type") {
+              const text = " typing-1234";
+              await input(page).pressSequentially(text);
+              expected += text;
+            } else if (workload.action === "paste") {
+              const text = "Synthetic pasted line.\n".repeat(13000).slice(0, 262144);
+              await input(page).evaluate((element, value) => {
+                const clipboardData = new DataTransfer();
+                clipboardData.setData("text/plain", value);
+                const native = element.dispatchEvent(
+                  new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }),
+                );
+                if (native && element instanceof HTMLTextAreaElement) {
+                  const event = { bubbles: true, inputType: "insertFromPaste", data: value };
+                  element.dispatchEvent(
+                    new InputEvent("beforeinput", { ...event, cancelable: true }),
+                  );
+                  element.setRangeText(value, element.selectionStart, element.selectionEnd, "end");
+                  element.dispatchEvent(new InputEvent("input", event));
+                }
+              }, text);
+              expected += text;
+            } else if (
+              workload.action === "activate-person" ||
+              workload.action === "activate-skill"
+            ) {
+              const person = workload.action === "activate-person";
+              await page
+                .getByRole("listbox", { name: person ? "Mention a person" : "Skill references" })
+                .getByRole("option")
+                .first()
+                .click();
+              expected = start.draft.replace(
+                person ? /@Casey$/u : /\$skill_0199$/u,
+                person ? "@Casey 00 " : "$skill_0199 ",
+              );
+              // Includes lazy fetch settlement equally in both variants; wall time is
+              // action-to-network-settled time, never claimed as input latency.
+              await page.waitForLoadState("networkidle");
+            } else if (workload.action === "switch") {
+              await navigation(page, "sessions");
+              for (let cycle = 0; cycle < 21; cycle++) {
+                for (const target of ["b", "a"]) {
+                  await page
+                    .locator(
+                      `.sidebar-recent-session[data-session-key="agent:main:interaction-${target}"] .sidebar-recent-session__link`,
+                    )
+                    .click();
+                  await page
+                    .locator(pane)
+                    .getByText(`Transcript ${target === "a" ? 0 : 1} message 399.`, {
+                      exact: false,
+                    })
+                    .waitFor();
+                  await frames(page);
+                }
+                if (cycle === 0 || cycle === 10 || cycle === 20) {
+                  await checkpoint?.(`retained-${cycle}`);
+                }
+              }
+            } else {
+              for (let cycle = 0; cycle < 20; cycle++) {
+                await input(page).pressSequentially("x");
+                await input(page).press("Backspace");
+              }
+            }
+            await frames(page);
+            if ((await page.locator(raw).inputValue()) !== expected) {
+              throw new Error("Composer qualification lost exact draft text");
+            }
+            // Large paste scrolls the seed chips out of CodeMirror's viewport.
+            // Recipient metadata, not rendered-widget count, owns their survival.
+            const persons = JSON.parse(
+              (await page.locator(raw).getAttribute("data-composer-mentions")) ?? "[]",
+            ).length;
+            const skills = await page.locator(root + " .chat-composer-skill").count();
+            if (persons !== start.persons + Number(workload.action === "activate-person")) {
+              throw new Error("Composer qualification lost recipient chips");
+            }
+            if (
+              workload.action !== "activate-skill" &&
+              workload.action !== "paste" &&
+              skills !== start.skills
+            ) {
+              throw new Error("Composer qualification lost skill chips");
+            }
+            const geometry = await page.locator(root).evaluate((element) => {
+              const field = element.querySelector(".agent-chat__input") ?? element;
+              return {
+                width: field.getBoundingClientRect().width,
+                scrollWidth: field.scrollWidth,
+                editors: element.querySelectorAll(".cm-editor").length,
+                nodes: element.querySelectorAll("*").length,
+              };
+            });
+            const styles = await page.evaluate(() =>
+              Array.from(document.styleSheets).reduce(
+                (sum, sheet) => sum + sheet.cssRules.length,
+                0,
+              ),
+            );
+            if (workload.action === "cycles" && styles !== start.styles) {
+              throw new Error("Repeated editing retained new stylesheet rules");
+            }
+            return {
+              draftChars: expected.length,
+              persons,
+              skills,
+              editorCount: geometry.editors,
+              domNodes: geometry.nodes,
+              styleRules: styles,
+              styleRuleDelta: styles - start.styles,
+              domNodeDelta: geometry.nodes - start.nodes,
+              composerWidth: geometry.width,
+              composerScrollWidth: geometry.scrollWidth,
+              catalogSkills: commands.length,
+              initialSkillChips: start.skills,
+              skillRegexScans:
+                workload.name === "scan-count"
+                  ? await page.evaluate(() => Reflect.get(window, "composerSkillScanCount"))
+                  : 0,
+              syntheticPaste: workload.action === "paste",
+              typedCharacters: workload.action === "type" ? 12 : 0,
+              cycles: workload.action === "cycles" ? 20 : 0,
+            };
+          },
+        };
+      }),
+  );
 }
