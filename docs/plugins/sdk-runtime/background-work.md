@@ -239,10 +239,12 @@ occurrence, the same as a live command from that sender. The same
 UI, including one reached through a remote-ingress plugin, browser copilot, or
 TUI) signed in as a person: like its live commands, the occurrence is checked
 against the `""` list, else the `*` list, with the person's profile id. A
-Gateway requester without a per-person sender (a shared-token owner), one
-matched by its client id (a CLI, or a plugin's own Gateway requests), one whose
-command was routed with an external origin, or a schedule accepted before this
-recheck existed keeps its original admission. Demoting that person,
+command routed with an external origin (for example a TUI command delivered into
+a channel session) is checked against that channel's list, else the `*` list,
+as its live command is. A Gateway requester without a per-person sender (a
+shared-token owner), one matched by its client id (a CLI, or a plugin's own
+Gateway requests), or a schedule accepted before this recheck existed keeps its
+original admission. Demoting that person,
 removing their role, or unlinking the identity revokes the requester's retained
 work as it does for a Gateway operator: a child still waiting for a Swarm slot
 fails at once with a visible error, and work that missed the change refuses at
