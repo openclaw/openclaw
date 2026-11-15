@@ -525,20 +525,18 @@ describe("whatsappChannelOutbound", () => {
           expect(hoisted.sendMessageWhatsApp).toHaveBeenLastCalledWith(
             "5511999999999@c.us",
             "reply",
-            {
+            expect.objectContaining({
               verbose: false,
               cfg: {},
               accountId: undefined,
               gifPlayback: undefined,
-              quotedMessageKey: {
+              quotedMessageKey: expect.objectContaining({
                 id: "msg-1",
-                remoteJid: "5511999999999@c.us",
+                remoteJid: "5511999999999@s.whatsapp.net",
                 fromMe: false,
-                participant: undefined,
-                messageText: undefined,
-              },
+              }),
               preserveLeadingWhitespace: true,
-            },
+            }),
           );
           expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
         },

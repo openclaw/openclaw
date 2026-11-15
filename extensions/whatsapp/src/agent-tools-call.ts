@@ -76,9 +76,7 @@ export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
         const senderId = requesterSenderId.trim();
         const classified = classifyWhatsAppJid(senderId);
         if (classified.kind !== "pn" && classified.kind !== "lid") {
-          return senderId.includes("@")
-            ? null
-            : normalizeE164(senderId.replace(/^whatsapp:/i, ""));
+          return senderId.includes("@") ? null : normalizeE164(senderId.replace(/^whatsapp:/i, ""));
         }
 
         const account = resolveWhatsAppAccount({ cfg, accountId });

@@ -1,5 +1,6 @@
 import type { AnyMessageContent, BaileysEventMap, GroupMetadata, WASocket } from "baileys";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { classifyWhatsAppJid } from "../whatsapp-jid.js";
 import {
   readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
@@ -12,7 +13,6 @@ import {
   resolveWhatsAppOutboundMentions,
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
-import { classifyWhatsAppJid } from "../whatsapp-jid.js";
 
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;

@@ -103,6 +103,44 @@ async function expectOutboundDmSkipsPairing(params: {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
+  it.each([false, true])(
+    "delivers observed alternate PN identities without lookup (group: %s)",
+    async (group) => {
+      mockLoadConfig.mockReturnValue(
+        createInboxConfig({
+          dmPolicy: "allowlist",
+          allowFrom: ["+15551230000"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+      );
+      const { onMessage, listener, sock } = await openInboxMonitor();
+      const lid = "812345678901234:2@hosted.lid";
+      const pn = "15551230000:3@hosted";
+      sock.signalRepository.lidMapping.getPNForLID.mockResolvedValue(null);
+      try {
+        sock.ev.emit(
+          "messages.upsert",
+          buildNotifyMessageUpsert({
+            id: "observed-alternate-pn",
+            remoteJid: group ? "120363401234567890@g.us" : lid,
+            ...(group ? { participant: lid, participantAlt: pn } : { remoteJidAlt: pn }),
+            text: "hello",
+            timestamp: nowSeconds(),
+          }),
+        );
+        await waitForMessageCalls(onMessage, 1);
+        await waitForInboundWorkDrained();
+        expectInbound(onMessage, { platform: { senderE164: "+15551230000" } });
+        expect(sock.signalRepository.lidMapping.getPNForLID).not.toHaveBeenCalled();
+        expect(sock.signalRepository.lidMapping.getLIDForPN).not.toHaveBeenCalled();
+        expect(sock.readMessages).toHaveBeenCalled();
+      } finally {
+        await listener.close();
+      }
+    },
+  );
+
   it.each([
     { policy: { dmPolicy: "disabled" }, group: false, reason: "dm_policy_disabled" },
     {

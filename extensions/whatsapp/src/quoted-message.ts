@@ -9,8 +9,8 @@ import {
   formatMediaPlaceholderText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import {
   areSameWhatsAppJid,
   canonicalizeWhatsAppDirectJids,
@@ -104,6 +104,7 @@ export function cacheInboundMessageMeta(
   }
   const cache = getCache();
   const remoteJids = canonicalizeWhatsAppDirectJids(meta.remoteJids ?? []);
+  pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
   cache.set(makeCacheKey(accountId, canonicalRemoteJid, messageId), {
     ...meta,
     remoteJid: canonicalRemoteJid,
@@ -112,7 +113,6 @@ export function cacheInboundMessageMeta(
     remoteJids: remoteJids.length > 0 ? remoteJids : undefined,
     ts: Date.now(),
   });
-  pruneMapToMaxSize(cache, MAX_ENTRIES);
 }
 
 export function lookupInboundMessageMeta(

@@ -82,11 +82,7 @@ export function classifyWhatsAppJid(value: string | null | undefined): WhatsAppJ
     }
     const decodedServer = decoded.server === "c.us" ? "s.whatsapp.net" : decoded.server;
     const domainServer = getServerFromDomainType(decodedServer, decoded.domainType);
-    if (
-      decoded.domainType !== parsed.domainType ||
-      decoded.device !== parsed.device ||
-      domainServer !== parsed.server
-    ) {
+    if (decoded.device !== parsed.device || domainServer !== parsed.server) {
       return UNSUPPORTED_JID;
     }
     canonicalInput = jidEncode(parsed.user, parsed.server);

@@ -42,7 +42,6 @@ type WhatsAppDirectJidSyntax = {
   user: string;
   server: WhatsAppDirectJidSyntaxServer;
   input: string;
-  domainType: WhatsAppJidDomainType;
   device?: number;
 };
 
@@ -100,7 +99,6 @@ function parseDirectJidSyntax(
     user,
     server,
     input: `${localPart}@${inputServer}`,
-    domainType,
     device,
   };
 }

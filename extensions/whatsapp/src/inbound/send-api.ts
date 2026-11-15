@@ -1,8 +1,4 @@
-import type { MiscMessageGenerationOptions } from "baileys";
-import { readWhatsAppLidToPnMappings } from "../lid-mapping-files.js";
-import { classifyWhatsAppJid, encodeWhatsAppJid } from "../whatsapp-jid.js";
-import type { WhatsAppOutboundMessageIdentity } from "./outbound-message-cache.js";
-import type { AnyMessageContent, WAMessage } from "baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize-target.js";
@@ -13,6 +9,10 @@ import {
   addWhatsAppOutboundMentionsToContent,
   type WhatsAppOutboundMentionResolution,
 } from "./outbound-mentions.js";
+import {
+  prepareWhatsAppOutboundIdentity,
+  type WhatsAppOutboundMessageIdentity,
+} from "./outbound-message-cache.js";
 import {
   combineWhatsAppSendResults,
   mergeWhatsAppAcceptedSendError,
@@ -44,37 +44,6 @@ type WhatsAppOutboundRoute = {
   identity?: WhatsAppOutboundMessageIdentity;
 };
 
-function prepareOutboundIdentity(params: {
-  requestedJid: string;
-  routedJid: string;
-  authDir?: string;
-}): WhatsAppOutboundMessageIdentity | undefined {
-  const requested = classifyWhatsAppJid(params.requestedJid);
-  if (requested.kind !== "pn" && requested.kind !== "lid") {
-    return undefined;
-  }
-
-  let remoteE164 = requested.kind === "pn" ? `+${requested.user}` : undefined;
-  const remoteJids = new Set([params.requestedJid, params.routedJid]);
-  if (requested.kind === "lid" && params.authDir) {
-    const mappings = readWhatsAppLidToPnMappings({
-      lid: requested.user,
-      mappingDirs: [params.authDir],
-    });
-    const mappedE164 = mappings.length === 1 ? mappings[0] : undefined;
-    if (mappedE164) {
-      remoteE164 = mappedE164;
-      remoteJids.add(
-        encodeWhatsAppJid(
-          mappedE164.slice(1),
-          requested.server === "hosted.lid" ? "hosted" : "s.whatsapp.net",
-        ),
-      );
-    }
-  }
-  return { remoteE164, remoteJids: [...remoteJids] };
-}
-
 export function createWebSendApi(params: {
   sock: WhatsAppSocketOperationAdapter;
   defaultAccountId: string;
@@ -95,7 +64,7 @@ export function createWebSendApi(params: {
       : requestedJid;
     return {
       jid,
-      identity: prepareOutboundIdentity({
+      identity: prepareWhatsAppOutboundIdentity({
         requestedJid,
         routedJid: jid,
         authDir: params.authDir,
@@ -149,7 +118,6 @@ export function createWebSendApi(params: {
     kind: WhatsAppSendKind,
   ): Promise<WhatsAppSendResult> => {
     const route = resolveOutboundRoute(to);
-    const jid = route.jid;
     return await runAcceptedSend(kind, params.defaultAccountId, async (capture) => {
       capture(await sendForRoute(route, content), kind);
     });
@@ -165,7 +133,7 @@ export function createWebSendApi(params: {
     ): Promise<WhatsAppSendResult> => {
       let mediaType = mediaTypeInput;
       const route = resolveOutboundRoute(to);
-    const jid = route.jid;
+      const jid = route.jid;
       let payload: AnyMessageContent;
       if (mediaBuffer) {
         mediaType ??= "application/octet-stream";
@@ -312,7 +280,7 @@ export function createWebSendApi(params: {
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const route = resolveOutboundRoute(to);
-    const jid = route.jid;
+      const jid = route.jid;
       if (isWhatsAppNewsletterJid(jid)) {
         return;
       }

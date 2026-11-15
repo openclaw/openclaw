@@ -27,12 +27,10 @@ export function normalizeWhatsAppAllowFromEntry(entry: string): string | null {
   return normalized.length > 1 ? normalized.slice(1) : null;
 }
 
-function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
+export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
   return uniqueStrings(
     normalizeStringEntries(allowFrom)
       .map(normalizeWhatsAppAllowFromEntry)
       .filter((entry): entry is string => entry !== null),
   );
 }
-
-export const normalizeWhatsAppAllowFromEntries = formatWhatsAppConfigAllowFromEntries;

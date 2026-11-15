@@ -1,12 +1,45 @@
 // Whatsapp plugin module records metadata for accepted native sends.
 import type { proto, WAMessage } from "baileys";
+import { readWhatsAppLidToPnMappings } from "../lid-mapping-files.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
+import { classifyWhatsAppJid, encodeWhatsAppJid } from "../whatsapp-jid.js";
 import { rememberRecentOutboundMessage } from "./dedupe.js";
 import { extractText } from "./extract.js";
 export type WhatsAppOutboundMessageIdentity = {
   remoteE164?: string;
   remoteJids?: string[];
 };
+
+export function prepareWhatsAppOutboundIdentity(params: {
+  requestedJid: string;
+  routedJid: string;
+  authDir?: string;
+}): WhatsAppOutboundMessageIdentity | undefined {
+  const requested = classifyWhatsAppJid(params.requestedJid);
+  if (requested.kind !== "pn" && requested.kind !== "lid") {
+    return undefined;
+  }
+
+  let remoteE164 = requested.kind === "pn" ? `+${requested.user}` : undefined;
+  const remoteJids = new Set([params.requestedJid, params.routedJid]);
+  if (requested.kind === "lid" && params.authDir) {
+    const mappings = readWhatsAppLidToPnMappings({
+      lid: requested.user,
+      mappingDirs: [params.authDir],
+    });
+    const mappedE164 = mappings.length === 1 ? mappings[0] : undefined;
+    if (mappedE164) {
+      remoteE164 = mappedE164;
+      remoteJids.add(
+        encodeWhatsAppJid(
+          mappedE164.slice(1),
+          requested.server === "hosted.lid" ? "hosted" : "s.whatsapp.net",
+        ),
+      );
+    }
+  }
+  return { remoteE164, remoteJids: [...remoteJids] };
+}
 
 export function createWhatsAppOutboundMessageRecorder(params: {
   accountId: string;

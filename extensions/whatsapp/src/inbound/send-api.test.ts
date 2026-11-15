@@ -219,9 +219,12 @@ describe("createWebSendApi", () => {
       .mockResolvedValueOnce({ key: { id: "voice-text-1" } });
     const res = await voice();
     expectSend({ audio: MEDIA, ptt: true, mimetype: "audio/ogg" });
-    expect(sendMessage.mock.calls[1]?.slice(0, 2)).toEqual([DM_JID, {
-      text: "voice text",
-    }]);
+    expect(sendMessage.mock.calls[1]?.slice(0, 2)).toEqual([
+      DM_JID,
+      {
+        text: "voice text",
+      },
+    ]);
     expectAccepted(res, "media", "voice-1");
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
       "voice-1",
@@ -332,7 +335,10 @@ describe("createWebSendApi", () => {
 
     it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
       await api.sendMessage("+33123456789", "hello");
-      expect(sendMessage.mock.calls[0]?.slice(0, 2)).toEqual(["33123456789@s.whatsapp.net", { text: "hello" }]);
+      expect(sendMessage.mock.calls[0]?.slice(0, 2)).toEqual([
+        "33123456789@s.whatsapp.net",
+        { text: "hello" },
+      ]);
     });
 
     it("resolves PN to LID for sendReaction", async () => {

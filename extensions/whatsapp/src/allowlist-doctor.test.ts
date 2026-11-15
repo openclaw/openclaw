@@ -76,7 +76,22 @@ describe("whatsapp allowlist LID upgrade", () => {
       >;
       expect(accounts.work?.allowFrom).toEqual(["447700900123"]);
       expect(accounts.work?.groupAllowFrom).toEqual(["447700900123"]);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toBeUndefined();
+    });
+  });
+
+  it("retains a reassigned LID with a warning instead of migrating stale authority", async () => {
+    await withTempDir("openclaw-whatsapp-doctor-reassigned-", async (authDir) => {
+      await writeLidMapping(authDir, "777", "15551230000");
+      await fs.writeFile(path.join(authDir, "lid-mapping-15551230000.json"), '"888"');
+      const cfg = whatsappConfig({ authDir, allowFrom: ["777@lid"] });
+      const result = normalizeCompatibilityConfig({ cfg });
+
+      expect(result.config).toBe(cfg);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining("no verified LID→PN mapping was found"),
+      ]);
     });
   });
 
@@ -113,7 +128,7 @@ describe("whatsapp allowlist LID upgrade", () => {
           Record<string, unknown>
         >;
         expect(migratedAccounts.default?.[key]).toEqual(["15550000456"]);
-        expect(migrated.warnings).toEqual([]);
+        expect(migrated.warnings).toBeUndefined();
       });
     },
   );
@@ -139,7 +154,7 @@ describe("whatsapp allowlist LID upgrade", () => {
         { allowFrom?: string[] }
       >;
       expect(accounts.default?.allowFrom).toEqual(["15550000654"]);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toBeUndefined();
     });
   });
 
@@ -236,7 +251,7 @@ describe("whatsapp allowlist LID upgrade", () => {
 
         const whatsapp = result.config.channels?.whatsapp as Record<string, unknown> | undefined;
         expect(whatsapp?.[key]).toEqual(["15550000654"]);
-        expect(result.warnings).toEqual([]);
+        expect(result.warnings).toBeUndefined();
       });
     },
   );

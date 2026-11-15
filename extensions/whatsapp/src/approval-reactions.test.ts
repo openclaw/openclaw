@@ -1,4 +1,5 @@
 // Whatsapp tests cover approval reactions plugin behavior.
+import { cleanMessage } from "baileys";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   maybeResolveWhatsAppApprovalReaction,
@@ -270,7 +271,7 @@ describe("WhatsApp approval reactions", () => {
       participantAlt: "15551230000:2@s.whatsapp.net",
     },
   ])("authorizes a $name reaction from its observed alternate PN", async (testCase) => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: testCase.remoteJid,
       messageId: "approval-message",
@@ -299,6 +300,35 @@ describe("WhatsApp approval reactions", () => {
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
+  });
+
+  it("finds a hosted approval after Baileys normalizes the reaction chat", async () => {
+    const hostedJid = "812345678901234@hosted.lid";
+    await registerWhatsAppApprovalReactionTarget({
+      accountId: "default",
+      remoteJid: hostedJid,
+      messageId: "approval-message",
+      approvalId: "exec-hosted",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once"],
+    });
+    const msg = buildReactionMessage({
+      remoteJid: hostedJid,
+      remoteJidAlt: "15551230000@s.whatsapp.net",
+    });
+    cleanMessage(msg, "15550000000@s.whatsapp.net", "800000000000000@lid");
+    expect(
+      await maybeResolveWhatsAppApprovalReaction({
+        cfg: approvalConfig(["+15551230000"]),
+        accountId: "default",
+        msg,
+        resolveInboundJid: resolveJidToE164,
+        resolveReactionTargetJids: resolveEquivalentWhatsAppDirectChatJids,
+      }),
+    ).toBe(true);
+    expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "exec-hosted", senderId: "+15551230000" }),
+    );
   });
 
   it("consumes a losing reaction binding and reports the canonical first answer", async () => {

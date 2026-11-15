@@ -169,5 +169,4 @@ describe("WhatsApp admission and command authorization", () => {
     });
     await checkBoth(false, {}, group);
   });
-
 });

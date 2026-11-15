@@ -31,19 +31,6 @@ function readMappingFile(
   return value === undefined ? null : normalize(String(value).trim());
 }
 
-function* readMappingCandidates(
-  mappingFilename: string,
-  mappingDirs: readonly string[],
-  normalize: (candidate: string) => string | null,
-): Generator<string> {
-  for (const dir of new Set(mappingDirs.map((candidate) => resolveUserPath(candidate)))) {
-    const mapping = readMappingFile(path.join(dir, mappingFilename), normalize);
-    if (mapping) {
-      yield mapping;
-    }
-  }
-}
-
 const normalizePhone = (candidate: string) =>
   /^\+?\d+$/.test(candidate) ? normalizeE164(candidate) : null;
 const normalizeLid = (candidate: string) => (/^\d+$/.test(candidate) ? candidate : null);
@@ -52,15 +39,26 @@ export function readWhatsAppLidToPnMappings(params: {
   lid: string;
   mappingDirs: readonly string[];
 }): string[] {
-  return [
-    ...new Set(
-      readMappingCandidates(
-        `lid-mapping-${params.lid}_reverse.json`,
-        params.mappingDirs,
-        normalizePhone,
-      ),
-    ),
-  ];
+  const phones = new Set<string>();
+  for (const dir of new Set(params.mappingDirs.map((candidate) => resolveUserPath(candidate)))) {
+    const phone = readMappingFile(
+      path.join(dir, `lid-mapping-${params.lid}_reverse.json`),
+      normalizePhone,
+    );
+    if (!phone) {
+      continue;
+    }
+    const currentLid = readMappingFile(
+      path.join(dir, `lid-mapping-${phone.slice(1)}.json`),
+      normalizeLid,
+    );
+    // Baileys can leave the old reverse entry when it replaces a PN's LID.
+    if (currentLid && currentLid !== params.lid) {
+      continue;
+    }
+    phones.add(phone);
+  }
+  return [...phones];
 }
 
 export function readWhatsAppLidToPnMapping(params: {
@@ -68,11 +66,10 @@ export function readWhatsAppLidToPnMapping(params: {
   options?: WhatsAppLidMappingFileOptions;
 }): string | null {
   return (
-    readMappingCandidates(
-      `lid-mapping-${params.lid}_reverse.json`,
-      resolveLidMappingDirs(params.options),
-      normalizePhone,
-    ).next().value ?? null
+    readWhatsAppLidToPnMappings({
+      lid: params.lid,
+      mappingDirs: resolveLidMappingDirs(params.options),
+    })[0] ?? null
   );
 }
 
@@ -80,11 +77,21 @@ export function readWhatsAppPnToLidMapping(params: {
   phoneDigits: string;
   options?: WhatsAppLidMappingFileOptions;
 }): string | null {
-  return (
-    readMappingCandidates(
-      `lid-mapping-${params.phoneDigits}.json`,
-      resolveLidMappingDirs(params.options),
+  for (const dir of resolveLidMappingDirs(params.options)) {
+    const lid = readMappingFile(
+      path.join(dir, `lid-mapping-${params.phoneDigits}.json`),
       normalizeLid,
-    ).next().value ?? null
-  );
+    );
+    if (!lid) {
+      continue;
+    }
+    const currentPhone = readMappingFile(
+      path.join(dir, `lid-mapping-${lid}_reverse.json`),
+      normalizePhone,
+    );
+    if (!currentPhone || currentPhone === `+${params.phoneDigits}`) {
+      return lid;
+    }
+  }
+  return null;
 }

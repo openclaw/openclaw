@@ -11,7 +11,6 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-
 import type { WhatsAppOutboundMessageIdentity } from "./inbound/outbound-message-cache.js";
 
 export type WhatsAppSocketTimingOptions = {
@@ -20,7 +19,7 @@ export type WhatsAppSocketTimingOptions = {
   defaultQueryTimeoutMs?: number;
 };
 
-type WhatsAppSocketOperationAdapter = {
+export type WhatsAppSocketOperationAdapter = {
   sendMessage: (
     jid: string,
     content: AnyMessageContent,

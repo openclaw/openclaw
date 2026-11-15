@@ -42,16 +42,6 @@ export async function webAuthExistsAt(authDir: string): Promise<boolean> {
   }
 }
 
-function resolveWebAuthState(params: {
-  linked: boolean;
-  barrierResult: CredsQueueWaitResult;
-}): WhatsAppWebAuthState {
-  if (params.barrierResult === "timed_out") {
-    return "unstable";
-  }
-  return params.linked ? "linked" : "not-linked";
-}
-
 export async function readWebAuthStateDetails(
   authDir: string,
   context: string,
@@ -62,7 +52,7 @@ export async function readWebAuthStateDetails(
   return {
     authDir: resolvedAuthDir,
     linked,
-    state: resolveWebAuthState({ linked, barrierResult }),
+    state: barrierResult === "timed_out" ? "unstable" : linked ? "linked" : "not-linked",
   };
 }
 

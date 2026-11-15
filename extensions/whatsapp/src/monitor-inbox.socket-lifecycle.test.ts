@@ -499,7 +499,11 @@ describe("web monitor inbox socket lifecycle", () => {
 
     await listener.sendMessage("+1555", "hello");
 
-    expect(sock.sendMessage).toHaveBeenCalledWith("987654@lid", { text: "hello" });
+    expect(sock.sendMessage).toHaveBeenCalledWith(
+      "987654@lid",
+      { text: "hello" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(
       lookupInboundMessageMetaForTarget(DEFAULT_ACCOUNT_ID, "1555@s.whatsapp.net", "lid-routed"),
     ).toMatchObject({

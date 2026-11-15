@@ -18,7 +18,6 @@ import {
   sleepWithAbort,
   type ReconnectPolicy,
 } from "../reconnect.js";
-import { classifyWhatsAppDirectJid } from "../whatsapp-jid.js";
 import { formatError, getStatusCode } from "../session.js";
 import {
   createWhatsAppSocketOperationTimeoutAdapter,
@@ -34,6 +33,7 @@ import {
   toWhatsappJid,
   toWhatsappJidWithLid,
 } from "../targets-runtime.js";
+import { classifyWhatsAppDirectJid } from "../whatsapp-jid.js";
 import {
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,

@@ -13,7 +13,8 @@ const { downloadMediaMessage, saveMediaStream } = vi.hoisted(() => ({
   saveMediaStream: vi.fn(),
 }));
 
-vi.mock("baileys", () => ({
+vi.mock("baileys", async () => ({
+  ...(await vi.importActual<typeof import("baileys")>("baileys")),
   DisconnectReason: { loggedOut: 401 },
   extractMessageContent: (msg: MockMessageInput) => mockExtractMessageContent(msg),
   getContentType: (msg: MockMessageInput) => mockGetContentType(msg),

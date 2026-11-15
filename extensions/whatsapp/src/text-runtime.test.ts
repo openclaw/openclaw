@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
+  isSelfChatMode,
   jidToE164,
   markdownToWhatsApp,
   markdownToWhatsAppChunks,
@@ -138,14 +139,12 @@ describe("WhatsApp text runtime", () => {
     }
   });
   it.each([
-    ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
-    ["777:2@hosted.lid", "777@hosted.lid"],
-  ])(
+    ["15551230000:0@s.whatsapp.net", ["15551230000@s.whatsapp.net", "15551230000@hosted"]],
+    ["777:2@hosted.lid", ["777@hosted.lid", "777@lid"]],
+  ] as const)(
     "resolveEquivalentWhatsAppDirectChatJids canonicalizes the direct-chat candidate for %s",
-    async (observedJid, bareJid) => {
-      await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
-        bareJid,
-      ]);
+    async (observedJid, aliases) => {
+      await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual(aliases);
     },
   );
 
@@ -154,10 +153,24 @@ describe("WhatsApp text runtime", () => {
 
     await expect(
       resolveEquivalentWhatsAppDirectChatJids("15551230000@hosted", { authDir }),
-    ).resolves.toEqual(["15551230000@hosted", "777@hosted.lid"]);
+    ).resolves.toEqual([
+      "15551230000@hosted",
+      "15551230000@s.whatsapp.net",
+      "777@hosted.lid",
+      "777@lid",
+    ]);
     await expect(
       resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", { authDir }),
-    ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    ).resolves.toEqual([
+      "777@hosted.lid",
+      "777@lid",
+      "15551230000@hosted",
+      "15551230000@s.whatsapp.net",
+    ]);
+  });
+  it("does not route a PN through a LID whose reverse mapping belongs to another PN", () => {
+    const authDir = tempDir({ "15551230000": "777", "777_reverse": "15551239999" });
+    expect(toWhatsappJidWithLid("+15551230000", { authDir })).toBe("15551230000@s.whatsapp.net");
   });
   it("accepts PN self-chat forms without equating same-digit LIDs", () => {
     expect(isSelfChatMode("+15551230000", ["15551230000:3@c.us"])).toBe(true);
@@ -181,8 +194,12 @@ describe("WhatsApp text runtime", () => {
         knownE164: "+15551230000",
         lidLookup: { getPNForLID },
       }),
-    ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    ).resolves.toEqual([
+      "777@hosted.lid",
+      "777@lid",
+      "15551230000@hosted",
+      "15551230000@s.whatsapp.net",
+    ]);
     expect(getPNForLID).not.toHaveBeenCalled();
   });
-
 });

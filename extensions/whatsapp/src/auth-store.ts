@@ -29,16 +29,13 @@ import {
   resolveWebCredsPath,
   statWebCredsFileSync,
 } from "./creds-files.js";
-import {
-  writeWebCredsRawAtomically,
-} from "./creds-persistence.js";
+import { writeWebCredsRawAtomically } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { WebChannel } from "./targets-runtime.js";
 export { hasWebCredsSync, readCredsJsonRaw, resolveWebCredsBackupPath, resolveWebCredsPath };
 
 export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
 
-const authStoreLogger = getChildLogger({ module: "web-auth-store" });
 const emptyWebSelfId = () => ({ e164: null, jid: null, lid: null }) as const;
 export { formatWhatsAppWebAuthStatusState, type WhatsAppWebAuthState } from "./auth-state.js";
 

@@ -315,7 +315,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
           primaryJid: msg.key?.remoteJid,
           alternateJid: msg.key?.remoteJidAlt,
         });
-  if (!reactionKey || !messageId || remoteJids.length === 0 || !actor) {
+  if (!reactionKey || !messageId || remoteJids.length === 0) {
     return false;
   }
   const { accountId, resolveReactionTargetJids, logVerboseMessage } = params;
@@ -349,7 +349,9 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     return false;
   }
 
-  const actorId = actor.e164 ?? (await params.resolveInboundJid(actor.transportJid));
+  const actorId = actor
+    ? (actor.e164 ?? (await params.resolveInboundJid(actor.transportJid)))
+    : null;
   if (!actorId) {
     params.logVerboseMessage?.(
       `whatsapp: approval reaction ignored for ${target.approvalId}; missing actor identity`,

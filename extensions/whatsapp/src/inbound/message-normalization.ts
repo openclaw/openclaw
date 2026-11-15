@@ -5,13 +5,13 @@ import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-ru
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logWhatsAppVerbose, whatsappInboundLog } from "../auto-reply/loggers.js";
+import { prepareWhatsAppDirectInboundActor, prepareWhatsAppInboundActor } from "../identity.js";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { classifyWhatsAppJid } from "../whatsapp-jid.js";
 import { buildWhatsAppInboundAdmission } from "./admission.js";
 import { isRecentOutboundMessage } from "./dedupe.js";
 import { hasInboundUserContent } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
-import { classifyWhatsAppJid } from "../whatsapp-jid.js";
-import { prepareWhatsAppDirectInboundActor, prepareWhatsAppInboundActor } from "../identity.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
@@ -89,7 +89,8 @@ export function createWhatsAppInboundMessageNormalizer(options: {
           fromMe: Boolean(msg.key?.fromMe),
           self: socketSession.self,
         });
-    const from = groupJid ?? directActor?.e164 ?? await socketSession.resolveInboundJid(remoteJid);
+    const from =
+      groupJid ?? directActor?.e164 ?? (await socketSession.resolveInboundJid(remoteJid));
     if (!from) {
       if (remoteJid.endsWith("@lid") || remoteJid.endsWith("@hosted.lid")) {
         // Missing LID mappings must retry instead of completing the durable claim.
@@ -104,7 +105,8 @@ export function createWhatsAppInboundMessageNormalizer(options: {
         })
       : null;
     const senderE164 = group
-      ? participant?.e164 ?? (participantJid ? await socketSession.resolveInboundJid(participantJid) : null)
+      ? (participant?.e164 ??
+        (participantJid ? await socketSession.resolveInboundJid(participantJid) : null))
       : from;
 
     let groupSubject: string | undefined;
