@@ -14,7 +14,6 @@ import {
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
-import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
@@ -40,6 +39,11 @@ import {
   sameFileStatFingerprint,
   type SqliteFileContent,
 } from "./sqlite-snapshot-file.js";
+import {
+  assertRegularSourceFile,
+  assertTargetAbsent,
+  assertSynchronousCallbackResult,
+} from "./sqlite-snapshot-preconditions.js";
 import { removePublicationStagingDirectory } from "./sqlite-snapshot-publication-cleanup.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -76,25 +80,6 @@ export class SqliteReplacementOutcomeUnknownError extends Error {
       { cause },
     );
     this.name = "SqliteReplacementOutcomeUnknownError";
-  }
-}
-
-async function assertRegularSourceFile(
-  sourcePath: string,
-  requireNonEmptySource: boolean,
-): Promise<void> {
-  const stat = await fs.lstat(sourcePath);
-  if (!stat.isFile()) {
-    throw new Error(`SQLite snapshot source must be a regular file: ${sourcePath}`);
-  }
-  if (requireNonEmptySource && stat.size === 0) {
-    throw new Error(`SQLite snapshot source must not be empty: ${sourcePath}`);
-  }
-}
-
-async function assertTargetAbsent(targetPath: string): Promise<void> {
-  if (await pathEntryExists(targetPath)) {
-    throw new Error(`SQLite snapshot target already exists: ${targetPath}`);
   }
 }
 
@@ -184,17 +169,6 @@ export async function createStoppedSqliteSnapshot(options: {
   return { path: options.targetPath, userVersion, ...content };
 }
 
-function assertSynchronousCallbackResult(result: unknown, label: string): void {
-  if (
-    result &&
-    (typeof result === "object" || typeof result === "function") &&
-    typeof (result as { then?: unknown }).then === "function"
-  ) {
-    void Promise.resolve(result).catch(() => undefined);
-    throw new Error(`${label} must be synchronous.`);
-  }
-}
-
 /**
  * Publish the exact bytes of one already-verified SQLite file through a pinned
  * source identity. Targets are exclusive unless replacement is explicitly requested.
@@ -258,6 +232,7 @@ export async function prepareVerifiedSqliteFile(options: PublishVerifiedSqliteFi
 async function publishSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
   consumeOwnedSource: boolean | "prepared",
+  deferral?: { deferredIdentity?: BigIntStats },
 ): Promise<void | SqliteReplacementReceipt> {
   const replacement = options.replaceExisting;
   if (replacement) {
@@ -295,6 +270,7 @@ async function publishSqliteFile(
   let publishedIdentity: FileIdentityStat | undefined;
   let publishedStat: Stats | BigIntStats | undefined;
   let replacementAttempt: SqliteReplacementReceipt | undefined;
+  let publishedByHardlink = false;
   try {
     stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
@@ -417,6 +393,7 @@ async function publishSqliteFile(
               ? "link-required"
               : "link-or-copy",
         });
+        publishedByHardlink = publication.method === "hardlink";
         publishedIdentity = publication.exactIdentity;
         publishedStat = publication.identity;
         // Keep the successful receipt before our durability policy can reject it;
@@ -457,12 +434,14 @@ async function publishSqliteFile(
     const expectedIdentity = await target.stat({ bigint: true });
     publishedIdentity = expectedIdentity;
     publishedStat = expectedIdentity;
-    const publishedContent = await hashOpenPublishedFile(
-      target,
-      options.targetPath,
-      expectedIdentity,
-    );
-    assertExpectedContent(publishedContent, expectedContent, options.targetPath);
+    // Only an opted-in hard-link-only chain can hand its comparison to the consumer.
+    const hardlinkOnly = transferredOwnedImage && publishedByHardlink && !replacement;
+    const deferContentCheck = deferral !== undefined && hardlinkOnly && !options.afterPublish;
+    let publishedContent = expectedContent;
+    if (!deferContentCheck) {
+      publishedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
+      assertExpectedContent(publishedContent, expectedContent, options.targetPath);
+    }
     // Retiring an open hard-link alias can leave an NFS .nfs file in staging.
     await target.close();
     target = undefined;
@@ -500,6 +479,9 @@ async function publishSqliteFile(
     }
     fsSync.closeSync(targetPinFileDescriptor);
     targetPinFileDescriptor = undefined;
+    if (deferral && deferContentCheck) {
+      deferral.deferredIdentity = expectedIdentity;
+    }
     if (replacementAttempt) {
       return { ...replacementAttempt, identity: expectedIdentity };
     }
@@ -741,6 +723,8 @@ async function verifyAndPublishSqliteSnapshot(
       options.onStage?.("hash", "start", publishedBytes);
       const expectedContent = await hashPublishedFile(outputPath, stagedIdentity);
       options.onStage?.("hash", "done", publishedBytes);
+      const deferral: { deferredIdentity?: BigIntStats } | undefined =
+        options.deferPublishedContentCheck ? {} : undefined;
       await publishSqliteFile(
         {
           sourceIdentity: stagedIdentity,
@@ -765,8 +749,11 @@ async function verifyAndPublishSqliteSnapshot(
           },
         },
         true,
+        deferral,
       );
-      return { path: options.targetPath, userVersion, ...expectedContent };
+      const receipt = { path: options.targetPath, userVersion, ...expectedContent };
+      const identity = deferral?.deferredIdentity;
+      return identity ? { ...receipt, deferredContentCheck: { identity } } : receipt;
     } finally {
       if (snapshot.isOpen) {
         snapshot.close();
