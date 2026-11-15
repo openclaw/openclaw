@@ -31,7 +31,11 @@ import * as fixtures from "./agent-loop.test-support.js";
 import { streamAgentResponse } from "./agent-stream-response.js";
 import { Agent } from "./agent.js";
 import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
-import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
+import {
+  distinctRecordOutputs,
+  irregularLineMixture,
+  variedRows,
+} from "./repetition-guard.test-fixtures.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, AgentToolCall, StreamFn } from "./types.js";
 
@@ -732,7 +736,7 @@ describe("repetition stop at the stream owner", () => {
       }
       for (const [contentIndex, block] of (terminalOnly ? [] : content).entries()) {
         const snapshot = { contentIndex, partial: message };
-        if (block.type === "text" && mode === "incremental text") {
+        if (block.type === "text" && mode.startsWith("incremental")) {
           for (let offset = 0; offset < block.text.length; offset += 1024) {
             events.push(textDelta(contentIndex, block.text.slice(offset, offset + 1024)));
           }
@@ -761,17 +765,22 @@ describe("repetition stop at the stream owner", () => {
   it.each([
     "text",
     "incremental text",
+    "incremental irregular mixture",
     "thinking",
     "terminal",
     "replaced terminal",
     "replaced stream",
   ])("quarantines a repetitive %s block before persistence and replay", async (kind) => {
+    const mixture = kind === "incremental irregular mixture";
+    const repeated = mixture ? irregularLineMixture(6000) : loop;
     const prefix: AssistantMessage["content"] = kind.startsWith("replaced")
       ? []
       : [{ type: "text", text: "Earlier answer stays intact." }];
     const content: AssistantMessage["content"] = [
       ...prefix,
-      kind === "thinking" ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
+      kind === "thinking"
+        ? { type: "thinking", thinking: repeated }
+        : { type: "text", text: repeated },
     ];
     const response = await runResponse(content, true, kind);
     const expected: AssistantMessage["content"] = [...prefix, { type: "text", text: marker }];
@@ -788,7 +797,9 @@ describe("repetition stop at the stream owner", () => {
       undefined,
       fixtures.createTurnSequenceStream([[{ type: "text", text: "Recovered." }]], replay),
     );
-    expect(JSON.stringify(replay)).not.toContain("Please provide more input.");
+    expect(JSON.stringify(replay)).not.toContain(
+      mixture ? "Let me do it now." : "Please provide more input.",
+    );
     expect(JSON.stringify(replay)).toContain(marker);
   });
 

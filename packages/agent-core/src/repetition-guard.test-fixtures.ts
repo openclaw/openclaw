@@ -173,3 +173,77 @@ export const distinctRecordOutputs = [
     ).join("\n")}`,
   },
 ];
+
+const repeatedFieldIndexes = Array.from({ length: 8 }, (_, index) => index);
+const repeatedFieldRecords = repeatedFieldIndexes.flatMap((region) =>
+  repeatedFieldIndexes.flatMap((tier) =>
+    repeatedFieldIndexes.map((status) => ({
+      region: `region-${region}`,
+      tier: `tier-${tier}`,
+      status: `status-${status}`,
+    })),
+  ),
+);
+
+export const combinatorialRecordOutputs = [
+  {
+    name: "HTML table with 512 repeated-field records",
+    text: `<table>\n${repeatedFieldRecords
+      .map(({ region, tier, status }) =>
+        [
+          "  <tr>",
+          `    <td>${region}</td>`,
+          `    <td>${tier}</td>`,
+          `    <td>${status}</td>`,
+          "  </tr>",
+        ].join("\n"),
+      )
+      .join("\n")}\n</table>`,
+  },
+  {
+    name: "pretty JSON with 512 repeated-field records",
+    text: JSON.stringify(repeatedFieldRecords, null, 2),
+  },
+  {
+    name: "pretty JSON arrays with 512 repeated-field records",
+    text: JSON.stringify(
+      repeatedFieldRecords.map(({ region, tier, status }) => [region, tier, status]),
+      null,
+      2,
+    ),
+  },
+];
+
+/** Deterministic irregular mixture mirroring the #182834 runaway reply: many
+ * distinct short lines cycle in varying order, so no single line, window, or
+ * exact period covers half the tail. */
+export function irregularLineMixture(
+  lineCount: number,
+  lines = [
+    "Let me do it now.",
+    "Let me write the response.",
+    "Let me write it now.",
+    "Let me try again.",
+    "I will do it now.",
+    "Writing it now.",
+    "Let me continue.",
+    "Trying again now.",
+    "Let me get started.",
+    "Working on it now.",
+  ],
+): string {
+  // xorshift keeps every line cycling frequently (the field loop repeated each
+  // of its 23 lines 200-400 times), while the order stays irregular.
+  let state = 42;
+  const out: string[] = [];
+  for (let index = 0; index < lineCount; index++) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    const line = lines[Math.abs(state) % lines.length];
+    if (line) {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
