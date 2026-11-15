@@ -28,6 +28,7 @@ import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
+  readClawHubCatalogExcerpt,
   readClawHubCatalogPreview,
   type ClawHubTemplateCatalogPreview,
 } from "./clawhub-preview-content.js";
@@ -506,7 +507,7 @@ async function readClawHubTemplateContents(
           : await Promise.all([
               Promise.all(
                 instructions.map(async (instruction) => {
-                  const preview = await readClawHubCatalogPreview({
+                  const preview = await readClawHubCatalogExcerpt({
                     params,
                     requested: { kind: "instruction", name: instruction.name },
                     instructions,
