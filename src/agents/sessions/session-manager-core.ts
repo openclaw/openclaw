@@ -9,7 +9,7 @@ import {
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
 import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptTargetBinding,
@@ -178,7 +178,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       manager: this,
       retarget:
         !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget),
-      lane: preserveCwd ? targetDiscoveryLane : undefined,
+      lane: preserveCwd ? sessionStoreLane : undefined,
     });
     if (cohort && !hydration.readCohort) {
       return false;

@@ -73,6 +73,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
   // The Windows benchmark launches this observer with Node --import by exact path.
   "scripts/lib/session-source-observer-preload.mjs!",
+  "scripts/lib/usage-rollup-write-observer.cjs!",
+  "scripts/lib/agent-planner-statistics-observer.cjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -94,6 +96,8 @@ const repositoryScriptEntries = [
   "scripts/perf/state-private-store-modes-measure.mjs!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   "scripts/perf/sandbox-projection-fetch-measure.ts!",
+  // ws-compression-measure.ts forks the receiving peers by exact path.
+  "scripts/perf/ws-compression-peers.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -207,6 +211,7 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Opt-in append benchmark CLI documented in its source header.
   "scripts/perf/transcript-append-normalization-measure.ts!",
+  "scripts/perf/transcript-plan-stats.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
@@ -1347,6 +1352,7 @@ const config = {
           "scripts/control-ui-parity/vitest.config.ts",
           "scripts/control-ui-retention/vitest.config.ts",
           "test/vitest.codex-worker-authority.config.ts",
+          "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
         ],
       },
       project: [
@@ -1614,6 +1620,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",

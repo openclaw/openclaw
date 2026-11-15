@@ -283,6 +283,7 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.readClawHubSearch() &&
             entries().length === 0 &&
             !props.loading &&
+            (!props.error || props.state.skillsReport) &&
             props.state.connected && (
               <SettingsGroup>
                 <SettingsEmpty

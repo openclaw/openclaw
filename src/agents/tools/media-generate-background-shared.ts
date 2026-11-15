@@ -36,6 +36,7 @@ import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
@@ -63,6 +64,7 @@ import {
   getGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import {
+  hasMediaGenerationCustodyObligation,
   retainBlockedMediaCompletion,
   wakeMediaGenerationTaskCompletion,
   type MediaGenerationCompletionWakeOutcome,
@@ -114,6 +116,7 @@ type CreateMediaGenerationTaskRunParams = {
   inputProvenance?: InputProvenance;
   prompt: string;
   providerId?: string;
+  deliveryMode?: "review";
   assertCurrent?: () => void;
 };
 
@@ -300,6 +303,12 @@ async function createMediaGenerationTaskRun(
             lifecycleRevision: entry.lifecycleRevision ?? null,
           }
         : undefined;
+    if (params.deliveryMode === "review" && entry?.incognito) {
+      throw new Error("Review-before-delivery requires a durable chat session");
+    }
+    const deliveryQueueContext = requesterTranscript
+      ? captureOpenClawStateWorkerContext()
+      : undefined;
     const task = createMediaGenerationOperation({
       taskId: runId,
       status: "running",
@@ -307,6 +316,9 @@ async function createMediaGenerationTaskRun(
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
+      requesterSessionId: requesterTranscript?.sessionId,
+      requesterStorePath: requesterTranscript?.storePath,
+      requesterLifecycleRevision: requesterTranscript?.lifecycleRevision,
       runId,
       task: params.prompt,
       progressSummary: params.queuedProgressSummary,
@@ -320,6 +332,9 @@ async function createMediaGenerationTaskRun(
       requesterAgentId: params.requesterAgentId,
       requesterOrigin,
       detach,
+      deliveryMode: params.deliveryMode,
+      deliveryQueueContext,
+      acceptedOperation: task,
       requesterTranscript,
       // Snapshot only the work that owns the requester now: the originating turn
       // may still own terminal persistence when the media is ready, but later
@@ -462,7 +477,10 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       return;
     }
 
-    if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
+    if (
+      !isMediaGenerationOperationCurrent(params.handle.runId) &&
+      !hasMediaGenerationCustodyObligation(params.handle)
+    ) {
       clearMediaGenerationTaskRunContext(params.handle);
       return;
     }

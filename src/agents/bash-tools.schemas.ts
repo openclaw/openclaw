@@ -37,7 +37,8 @@ export const execSchema = Type.Object({
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before returning an ordinary-command handle; default 10000.",
+      description:
+        "Milliseconds before returning an ordinary-command handle; default 10000, max 120000.",
     }),
   ),
   awaitResults: Type.Optional(
@@ -49,7 +50,7 @@ export const execSchema = Type.Object({
   background: Type.Optional(
     Type.Boolean({
       description:
-        "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
+        "Start an independent service now. It keeps running after this call, the turn, request Stop and a one-shot CLI exit; session reset, new or delete stops it; stop it earlier with process kill. Use yieldMs for ordinary work. No built-in timeout; timeoutSeconds or a configured default applies.",
     }),
   ),
   durable: Type.Optional(

@@ -117,7 +117,26 @@ describe("backupCreateCommand verification", () => {
     );
 
     expect(result.verified).toBe(true);
-    expect(verifyBackupArchiveMock).toHaveBeenCalledExactlyOnceWith("/tmp/openclaw-backup.tar.gz");
+    expect(verifyBackupArchiveMock).toHaveBeenCalledExactlyOnceWith(
+      "/tmp/openclaw-backup.tar.gz",
+      [],
+      expect.any(Function),
+    );
+  });
+
+  it("keeps progress on stderr for JSON backups without exposing source paths", async () => {
+    createBackupArchiveMock.mockImplementation(async (options) => {
+      options.onProgress({ stage: "sqlite-source-integrity", phase: "start", bytes: 4096 });
+      return makeBackupResult({ verified: true });
+    });
+    const runtime = createTestRuntime();
+    await backupCreateCommand(runtime, { json: true });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Backup progress: stage=sqlite-source-integrity phase=start bytes=4096",
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(writeRuntimeJsonMock).toHaveBeenCalledOnce();
   });
 
   it("does not claim completion when both backup and outcome recording fail", async () => {

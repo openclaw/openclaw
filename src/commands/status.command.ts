@@ -96,14 +96,7 @@ export async function statusCommand(
     runtime.log("");
   }
 
-  const {
-    securityAudit,
-    usage,
-    health,
-    lastHeartbeat,
-    gatewayService: daemon,
-    nodeService: nodeDaemon,
-  } = await resolveStatusRuntimeSnapshot({
+  const snapshot = await resolveStatusRuntimeSnapshot({
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
     ...probeBudget,
@@ -117,7 +110,20 @@ export async function statusCommand(
     resolveSecurityAudit: withStatusProgress("Running security audit…", resolveStatusSecurityAudit),
     resolveUsage: withStatusProgress("Fetching usage snapshot…", resolveStatusUsageSummary),
     resolveHealth: withStatusProgress("Checking gateway health…", resolveStatusGatewayHealth),
-  });
+  }).catch((error: unknown) =>
+    reportStatusScanFailureUnlessInterrupted(error, runtime, opts.timeoutMs),
+  );
+  if (!snapshot) {
+    return;
+  }
+  const {
+    securityAudit,
+    usage,
+    health,
+    lastHeartbeat,
+    gatewayService: daemon,
+    nodeService: nodeDaemon,
+  } = snapshot;
 
   // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
   if (health && "error" in health) {
