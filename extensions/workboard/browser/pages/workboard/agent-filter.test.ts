@@ -14,6 +14,21 @@ const agentsList: AgentsListResult = {
 };
 
 describe("workboard agent options", () => {
+  it.each([
+    { roster: null, label: "writer" },
+    { roster: agentsList, label: "writer (not configured)" },
+    {
+      roster: { ...agentsList, agents: [...agentsList.agents, { id: "writer", name: "Writer" }] },
+      label: "Writer",
+    },
+  ])("retains the current assignment as $label", ({ roster, label }) => {
+    const options = buildAssignableAgentPickerOptions(roster, "writer", "main");
+    expect(options.find((option) => option.value === "writer")).toMatchObject({
+      label,
+      agent: { id: "writer" },
+    });
+    expect(options[0]).toMatchObject({ value: "", badge: "Default", agent: { id: "main" } });
+  });
   it("excludes system agents from assignment but retains diagnostic filtering", () => {
     expect(buildAssignableAgentPickerOptions(agentsList, "").map((option) => option.value)).toEqual(
       ["", "main", "research"],

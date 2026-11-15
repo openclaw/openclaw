@@ -32,7 +32,7 @@ const FIRST = "Docs site dependencies";
 const SECOND = "CLI dependencies";
 const THIRD = "CI action pins";
 
-type Scenario = "one-waiting" | "three-waiting" | "resumed";
+type Scenario = "one-waiting" | "three-waiting" | "resumed" | "background-job";
 
 const parentKey = "agent:main:dependency-updates";
 const runId = "parent-run";
@@ -40,7 +40,13 @@ const runId = "parent-run";
 type ChildFacts = Partial<
   Pick<
     GatewaySessionRow,
-    "status" | "hasActiveRun" | "activeRunIds" | "endedAt" | "agentStatus" | "subagentRunState"
+    | "status"
+    | "hasActiveRun"
+    | "activeRunIds"
+    | "endedAt"
+    | "agentStatus"
+    | "subagentRunState"
+    | "backgroundProcessCount"
   >
 >;
 
@@ -76,12 +82,29 @@ function scenarioData(scenario: Scenario, now: number) {
       expiresAt: now + 1_800_000,
     },
   };
+  // Yielded on sessions_yield while its own background exec keeps running.
+  const backgroundJob: ChildFacts = {
+    ...done,
+    endedAt: yieldedAt + 10_000,
+    subagentRunState: "paused",
+    backgroundProcessCount: 1,
+  };
   const children = [
-    child(1, FIRST, resumed ? { ...done, endedAt: now - 2_000 } : running, now),
+    child(
+      1,
+      FIRST,
+      resumed
+        ? { ...done, endedAt: now - 2_000 }
+        : scenario === "background-job"
+          ? backgroundJob
+          : running,
+      now,
+    ),
     child(2, SECOND, { ...done, endedAt: now - 200_000, ...(!resumed && needsInput) }, now),
     child(3, THIRD, { ...done, endedAt: now - 350_000, subagentRunState: "paused" }, now),
-  ].slice(0, scenario === "one-waiting" ? 1 : 3);
-  const acknowledgment = scenario === "one-waiting" ? SHORT_ACK : LONG_ACK;
+  ].slice(0, scenario === "one-waiting" || scenario === "background-job" ? 1 : 3);
+  const acknowledgment =
+    scenario === "one-waiting" || scenario === "background-job" ? SHORT_ACK : LONG_ACK;
   const parent = {
     key: parentKey,
     sessionId: "dependency-updates",
@@ -215,6 +238,20 @@ suite.define(() => {
         "/chat/main/subagent/dependency-update-1",
       );
       expect(await thread.textContent()).not.toContain(PRIVATE);
+    });
+  });
+
+  it("labels a yielded child with a running background job as working, not paused", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { pane, thread, prompt } = await openScenario(page, "background-job");
+      const ack = thread.getByText(SHORT_ACK, { exact: true });
+      const wait = thread.locator(".chat-subagent-wait");
+      await ack.waitFor();
+      await wait.waitFor();
+      await capture(page, "background-job", pane, [prompt, ack, wait]);
+      await expect
+        .poll(async () => squash(await wait.textContent()))
+        .toBe(`Waiting on ${FIRST} · Running in background · 10m`);
     });
   });
 

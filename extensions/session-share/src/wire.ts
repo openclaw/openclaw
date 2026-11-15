@@ -190,7 +190,7 @@ export function parseSessionShareTranscriptPage(
 ): SessionShareTranscriptPage {
   const value = unwrapPayload(raw);
   if (!isTranscriptPage(value) || value.threadId !== threadId) {
-    throw new Error("Invalid OpenClaw transcript page from paired node");
+    throw new Error("Invalid OpenClaw chat history page from paired node");
   }
   return value;
 }

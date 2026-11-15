@@ -649,6 +649,13 @@ size, mode, and content must match the inventory. A mismatch discards that runti
 as a rollback source and logs the path and failed check; the update continues
 without using the unverified tree. Writes through the same inode remain best effort.
 
+When the filesystem refuses a hard link, the updater warns once with the number
+of affected files and the first error code, and the `updater-runtime-retention`
+diagnostics carry the same `linkFallback` count and code. `EXDEV` means the
+updater temporary directory and the installation are on different filesystems
+or subvolumes, which an explicit `TMPDIR` can cause. `copied` counts every file
+published without a hard link; it does not separate clones from byte copies.
+
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.
 The updater joins those workers before returning. It records completed runtime
@@ -1153,6 +1160,15 @@ install link and leaves the external checkout untouched. If activation fails,
 restoring that link and its launchers does not verify the mutable checkout's
 runtime. Recovery stays unverified and does not authorize an automatic restart;
 inspect the checkout and recovery report before restarting it.
+
+A directory cannot replace a link in one step, so the package path is briefly
+empty during that replacement. If the updater is killed at that moment, the link
+remains beside it as `.openclaw.package-backup-<pid>-<time>` and the `openclaw`
+launcher no longer resolves. Run the same update again from the checkout, with
+the same `--channel`. The updater puts the link back when it names the checkout
+running the update, then continues. `--dry-run` reports the link it would
+restore and moves nothing. To return to the dev install without updating, move
+that entry back to the package name.
 
 For a profile without a runtime database, an older npm target initializes its
 compatible state before the updater records history. The selected release's

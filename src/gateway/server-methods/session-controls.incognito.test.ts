@@ -66,7 +66,7 @@ const { cfg, prepareRegistry, ingress } = vi.hoisted(() => ({
   prepareRegistry: vi.fn(async () => false),
 }));
 // mock-isolation: Node ingress and model I/O are synthetic; wake admission and actor storage stay real.
-vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress: ingress }));
+vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: ingress }));
 // mock-isolation: Keep model I/O synthetic while the real dispatcher owns wake admission and settlement.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 vi.mock("../../config/io.js", async (original) => ({

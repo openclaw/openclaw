@@ -22,7 +22,6 @@ import {
 import { updateRegistry } from "../agents/sandbox/registry.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
-import * as workspaceMounts from "../agents/sandbox/workspace-mounts.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
@@ -32,6 +31,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as skillsRuntime from "../skills/runtime/refresh.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import {
   createPublicationRepositories,
@@ -52,9 +52,9 @@ export const mocks = githubPublicationTestMocks();
 
 export function observeManagedLayoutCaptures() {
   let layoutChanged = false;
-  const ensureMounts = workspaceMounts.ensureReadOnlyWorkspaceSkillMountSources;
+  const ensureMounts = skillsRuntime.prepareSandboxMountSources;
   const mounts = vi
-    .spyOn(workspaceMounts, "ensureReadOnlyWorkspaceSkillMountSources")
+    .spyOn(skillsRuntime, "prepareSandboxMountSources")
     .mockImplementation(async (...args) => (layoutChanged = await ensureMounts(...args)));
   const observations: string[] = [];
   const withStore = workspaceStore.withLocalWorkspaceStore;

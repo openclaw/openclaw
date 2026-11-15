@@ -74,6 +74,7 @@ export function interactionNavigationPolicy(
   return withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
 }
 

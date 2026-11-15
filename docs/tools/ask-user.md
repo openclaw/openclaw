@@ -91,13 +91,22 @@ without it entering the chat, the transcript, or the model's context.
 ## Required manual steps
 
 Use `requiredAction` instead of `questions` when the task is blocked on a
-specific, supported step only the human can perform—for example, completing a
-browser challenge or a manual device step in an already selected surface.
+specific, observed external step only the human can perform while the current
+run waits—for example, completing a browser challenge or a manual device step
+in an already selected surface.
 The existing question panel shows the reason, instructions, and an optional
 **Open link** action while the original agent turn waits.
 Code mode includes this handoff guidance when the built-in `ask_user` tool is
 available, even when full tool descriptions are deferred. The agent should use
-the handoff instead of ending the task with manual sign-in instructions.
+the handoff for these external steps instead of ending the task with manual
+sign-in instructions.
+
+Do not invent an approval or manual prerequisite for work the user has already
+authorized. An inactive [Goal](/tools/goal) stops automatic pursuit, not the
+current user-requested turn: executable work can continue within its actual
+permissions without Goal Resume. Do not wait in `ask_user` for Goal Resume or
+any native session control that requires an idle session. If such a control is
+genuinely needed, explain it and finish the current turn so the user can use it.
 
 Opening the link does not answer the question. **Ready to recheck** returns
 `status: "ready_to_verify"`: the agent must re-observe the original target through

@@ -211,6 +211,8 @@ describe("channels setup access", () => {
         channelMeta: [{ id: "slack", label: "Slack", detailLabel: "Slack Bot" }],
       },
     );
+    const onStartSetup = vi.fn();
+    props.onStartSetup = onStartSetup;
     const container = renderHub(props);
 
     const availableLabels = texts(container, ".channels-item__detail .settings-row__title");
@@ -223,6 +225,16 @@ describe("channels setup access", () => {
       "imessage",
       "nostr",
     ]);
+    const setupButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".channels-item > .settings-row__control > button",
+      ),
+    ];
+    expect(setupButtons.map((button) => button.getAttribute("aria-label"))).toEqual(
+      availableLabels.map((label) => `Set up ${label}`),
+    );
+    setupButtons.forEach((button) => button.click());
+    expect(onStartSetup.mock.calls.map(([channelId]) => channelId)).toEqual(availableLabels);
   });
 
   it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
@@ -605,7 +617,7 @@ describe("channel detail", () => {
     const detail = container.querySelector(".channels-detail")!;
 
     expect(detail.querySelector(heading)).not.toBeNull();
-    expect(text(detail, ".channels-detail__status .settings-status")).toBe("Not configured");
+    expect(detail.querySelector(".channels-detail__status .settings-status")).toBeNull();
     expect(detail.querySelector(probeButton)).not.toBeNull();
     expect(texts(detail, ".channels-detail__footer button")).toEqual(["Run setup"]);
     expect(detail.textContent).not.toContain("n/a");
@@ -644,6 +656,24 @@ describe("channel detail", () => {
     );
     expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
   });
+
+  it.each([false, true])(
+    "withholds channel health until a snapshot exists (retrying: %s)",
+    (loading) => {
+      const props = createProps(null);
+      props.channels.channelsLoading = loading;
+      props.channels.channelsError = "Status read failed";
+      const container = document.createElement("div");
+      renderChannelView(
+        renderChannelDetail,
+        { channelId: "telegram", label: "Telegram", props, onClose: () => {}, onSetup: () => {} },
+        container,
+      );
+      expect(container.querySelector(".channels-detail__status .settings-status")).toBeNull();
+      expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
+      expect(container.querySelector<HTMLButtonElement>(probeButton)?.disabled).toBe(loading);
+    },
+  );
 
   it("uses the list row's words for every state", () => {
     const state = (status: Record<string, unknown> | null) =>

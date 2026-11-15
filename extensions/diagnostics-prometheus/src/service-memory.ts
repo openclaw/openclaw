@@ -207,15 +207,17 @@ export function recordMemorySample(
   }
   for (const worker of memory.workerTaskMetrics ?? []) {
     const labels = { worker_class: worker.workerClass, script: worker.script };
-    store.counterValue(
-      "openclaw_worker_tasks_completed_total",
-      "Observed terminal task replies from pool workers, including handled failures.",
-      labels,
-      worker.tasksCompleted,
-    );
+    if (worker.tasksCompleted !== undefined) {
+      store.counterValue(
+        "openclaw_worker_tasks_completed_total",
+        "Observed terminal task replies from pool workers, including handled failures.",
+        labels,
+        worker.tasksCompleted,
+      );
+    }
     store.gauge(
       "openclaw_worker_heap_used_high_water_bytes",
-      "Largest observed pool worker heap usage, retained across worker retirement.",
+      "Largest observed worker heap usage, retained across worker retirement.",
       labels,
       worker.heapUsedHighWaterBytes,
     );
@@ -223,19 +225,19 @@ export function recordMemorySample(
       const gcLabels = { ...labels, kind: gc.kind };
       store.counterValue(
         "openclaw_worker_gc_duration_seconds_total",
-        "Observed pool worker garbage collection duration, retained across worker retirement.",
+        "Observed worker garbage collection duration, retained across worker retirement.",
         gcLabels,
         gc.durationMs / 1000,
       );
       store.counterValue(
         "openclaw_worker_gc_collections_total",
-        "Observed pool worker garbage collections, retained across worker retirement.",
+        "Observed worker garbage collections, retained across worker retirement.",
         gcLabels,
         gc.count,
       );
       store.counterValue(
         "openclaw_worker_gc_reclaimed_bytes_total",
-        "Sum of positive heap usage decreases across observed pool worker garbage collections.",
+        "Sum of positive heap usage decreases across observed worker garbage collections.",
         gcLabels,
         gc.reclaimedBytes,
       );

@@ -1,10 +1,10 @@
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 
 export function installReportFixtureTransport(fixture: string, failureMessage: string) {
   globalThis.fetch = async () => {
     throw new Error(failureMessage);
   };
-  return registerHooks({
+  return nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       return specifier === "openclaw/plugin-sdk/ssrf-runtime"
         ? {

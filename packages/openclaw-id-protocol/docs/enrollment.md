@@ -78,8 +78,8 @@ Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machin
 the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
 Owner device certificates have **no expiry unless the person approving the device enters
-one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's
-allowlist.
+one** (`expires_at: null`). A device stops being an owner when its certificate expires or
+it is removed from the claw's allowlist.
 
 `ownerDeviceCertBody` is the certificate builder approvers use: `expires_at` defaults to
 null, and an explicit expiry must be after the issue time. Approval UIs (SAS approval, owner
@@ -112,6 +112,7 @@ Not modeled here (Gateway work): pending-redemption expiry after 7 days, and per
 2. Link: `https://<host>/join#i=<invite_id>.<base64url secret>&r=<fp(R) hex>`. The fragment
    never reaches a server.
 3. The invitee signs in, makes D_I and W_I, and mails a self-signed `InviteRedemption` with
+   required display `label` and
    `proof = HMAC-SHA-256(proof key, "openclaw/invite-proof/v1\0" || JCS({ account_id,
    claw_id, device_pub, invite_id, peer_key }))`.
 4. The Gateway verifies (`verifyInviteRedemption`): self-signature, invite match, expiry,
@@ -188,6 +189,36 @@ Manual verification on an existing claw:
    afterward. Confirm that its remote connection ends. Do not revoke the original device,
    reset the profile, or paste a recovery kit to make this test pass.
 
+## Member devices
+
+An approved invite redemption records its signed `device_pub` and required `label` in
+`MemberRecord.devices[peer_key]`, with `approved_by: { kind: "invite", invite_id }`.
+The pending invite keeps both fields until approval. Labels are untrusted display text,
+bounded to 256 UTF-16 code units like owner labels. A peer without this metadata still
+connects but cannot sign; remove and re-invite it. There is no claim or migration path.
+
+Members approve their own additional devices without an owner step or an invite. Reuse the
+owner SAS commitment, transcript, six-digit code and all five mailbox steps unchanged:
+N sends `start` to `"self"`; E is an admitted device of the same account. After the user
+confirms the code, E signs `add_member_device { account_id, peer_key, device_pub, label }`
+with its D and submits it over the tunnel **before** sending `sealed`. The sealed handoff
+carries the same pinning contents as owner SAS. There is no member recovery kit: losing
+every device requires a fresh invite from the owner, and no owner setting disables approval.
+
+The device inherits its member's current role. R and owners with `manage_members` may also
+add one. Unknown accounts, full device lists, peer keys listed anywhere and signing keys
+already used by an owner or member device are refused. A member cannot add to another account.
+A successful add publishes the snapshot and sends owners `member_device_added` with the
+new peer key's fingerprint. SnapshotMember is unchanged; device metadata stays at the Gateway.
+
+Members may sign only `add_member_device` and `revoke_device`, directly over the tunnel,
+never through the mailbox. They may revoke another device of their own account, not the
+signing device. Removing a member peer key by any signer also removes every device of that
+member whose `approved_by: { kind: "member_device", device_fp }` chain leads to it,
+transitively, disconnecting and invalidating tokens for all removed peers. Invite and owner
+approvals (`{ kind: "owner", by: "root" | fp(D) }`) are independent roots of that member tree.
+`remove` and `set_role` keep their owner-only behavior.
+
 ## Kit enrollment (spec 6.2)
 
 N decodes the kit (`decodeKit`), derives R (`deriveRootSigner`), checks fp(R), verifies the
@@ -217,10 +248,12 @@ direction, including an owner D or R with the same raw bytes as node W.
    Registration enforces `MAX_NODE_INVITE_LIFETIME_SECONDS` (3600 seconds / 1 hour) from
    creation and from registration, without a clock-skew extension. Expired caps are refused.
 2. `buildNodeJoinLink` encodes `NodeJoinLink` as
-   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>`.
-   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. All five
-   fields must occur exactly once; unknown fields, query, path, credentials and malformed
-   secrets/pins are refused. The relay must be HTTPS (HTTP only on localhost testbeds),
+   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>[&d=<Discovery origin>]`.
+   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. The five
+   required fields must occur exactly once and the optional `d` at most once; unknown fields,
+   query, path, credentials and malformed secrets/pins/origins are refused. `d` must be an
+   HTTPS origin (HTTP only on localhost testbeds) without credentials, path, query or fragment.
+   The relay must be HTTPS (HTTP only on localhost testbeds),
    without credentials, query or fragment. The link has no long-lived key. Treat the whole
    fragment as a secret: never put it in logs, analytics or an HTTP request target.
 3. The node generates W locally, computes `computeNodeRedemptionProof(proofKey, parts)`:
@@ -274,13 +307,13 @@ The code is for human comparison, not a credential, signature or automatic-appro
 
 ### Discovery bootstrap routing
 
-The join link deliberately does not identify a Discovery API origin. A claw hostname and
-an iroh relay URL may both differ from Discovery; clients **must not infer** the API origin
-from either. Joining therefore takes two inputs: the link and a deployment-selected Discovery
-base URL. The headless command contract is
-`openclaw node join <link> --discovery-url <https-origin>`.
-An explicit flag wins over the node's saved deployment configuration; a distribution may
-supply a documented deployment default only when neither exists. This protocol defines no
+A claw hostname and an iroh relay URL may both differ from Discovery; clients **must not
+infer** the API origin from either. The creating Gateway therefore states its configured
+Discovery origin explicitly in the link's optional `d` field, so one link is enough. The
+headless command contract is `openclaw node join <link> [--discovery-url <https-origin>]`.
+An explicit flag wins over the link's `d`, which wins over the node's saved deployment
+configuration; a distribution may supply a documented deployment default only when none
+exists. CLIs that predate `d` refuse a link carrying it as malformed. This protocol defines no
 universal production origin. With no configured origin, fail before generating W or sending
 mail and request `--discovery-url`. The Control UI's copyable join command must include its
 configured Discovery origin, especially for staging and independently hosted deployments.
@@ -317,6 +350,13 @@ a node-invite node. Its node is an implementation detail bound to that same appr
 - **Removing the device removes its node:** a Revocation of the device (directly or through the
   device that approved it) and an inactivity drop of the device remove the bound node with the
   usual node-removal events. A node from an invite is never bound to its approver.
+- **An explicit expiry covers both keys:** when the device certificate expires, its human and
+  bound node keys lose admission together. The Gateway closes their sessions, retires ID-derived
+  node pairings and omits the node from snapshots and active listings. Independently approved
+  descendant devices and invite-enrolled nodes keep their own lifetimes. Renew before expiry
+  to retain the node's existing pairing; after expiry cleanup, certificate renewal alone does
+  not restore the consumed automatic pairing. Pair the node explicitly again, or remove its
+  listing and enroll it again.
 
 ### Node authority and lifecycle
 

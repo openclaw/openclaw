@@ -7,6 +7,7 @@ import {
   isIndexedSessionEntry,
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -37,6 +38,7 @@ export {
 /** Hydrated entries own envelopes; writable SDK exposure detaches their shared payloads once. */
 export function prepareSessionManagerEntries(entries: readonly unknown[]) {
   const partitioned = partitionSessionFileEntries(entries);
+  const ownerSealed = isOwnedTranscriptPayload(entries);
   const pendingWritableTranscriptEntries = new Set<object>();
   const ownEnvelope = <T>(
     entry: T,
@@ -46,7 +48,8 @@ export function prepareSessionManagerEntries(entries: readonly unknown[]) {
       return entry;
     }
     const container: object = Array.isArray(entry) ? entry.slice() : {};
-    const envelope = Object.assign(container, freezeJsonSnapshot(entry));
+    // Hydration's sealed root outlives the generic freezer's rotating memo.
+    const envelope = Object.assign(container, ownerSealed ? entry : freezeJsonSnapshot(entry));
     pendingWritableTranscriptEntries.add(envelope);
     return envelope;
   };
