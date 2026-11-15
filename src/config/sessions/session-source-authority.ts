@@ -169,6 +169,11 @@ const sessionSourceScopes = new AsyncLocalStorage<
 >();
 
 const synchronousSources = new WeakSet<SessionSourceAssertion>();
+// Compositions own their dispatch; nesting must not enter the same guard twice.
+const composedSources = new WeakMap<
+  SessionSourceAssertion,
+  { run: () => void; forward: boolean }
+>();
 let validatedSources: Map<SessionSourceAssertion, object> | undefined;
 
 /** Host-owned immutable bindings only; opaque callbacks must never acquire this contract. */
@@ -188,7 +193,12 @@ export function withSessionSourceValidation<T>(run: () => T): T {
   }
 }
 
-function assertSessionSource(assertion: SessionSourceAssertion, run = assertion): void {
+function assertSessionSource(assertion: SessionSourceAssertion): void {
+  const composed = composedSources.get(assertion);
+  const run = composed?.run ?? assertion;
+  if (composed?.forward && validatedSources) {
+    return run();
+  }
   if (!synchronousSources.has(assertion)) {
     const previous = validatedSources;
     previous?.clear();
@@ -374,10 +384,12 @@ export function createDynamicSessionSourceAssertion(
   });
 }
 
+const forwardSessionSources = (assertSources: () => void) => assertSources();
+
 /** Preserve each owner's error/lifetime wrapper while preparing its storage-dependent sources. */
 export function composeSessionSourceAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
-  check: (assertSources: () => void) => void = (assertSources) => assertSources(),
+  check: (assertSources: () => void) => void = forwardSessionSources,
   options?: {
     preparedCheck?: (assertSources: () => void) => void;
     hasOpaqueCheck?: boolean;
@@ -520,32 +532,25 @@ export function composeSessionSourceAssertion(
       throw failure;
     }
   };
+  const run = () => {
+    const scoped = sessionSourceScopes.getStore()?.get(assertion);
+    return scoped ? scoped.assertCurrent() : check(assertSources);
+  };
   const assertion: PreparedSessionSourceAssertion & {
     prepareSessionSourceEffect: () => Promise<PreparedSessionSourceEffect>;
-  } = Object.assign(
-    () =>
-      assertSessionSource(assertion, () => {
-        const scoped = sessionSourceScopes.getStore()?.get(assertion);
-        return scoped ? scoped.assertCurrent() : check(assertSources);
-      }),
-    {
-      onSessionCompactionCommitted: (
-        transition: SessionAdmissionTransition,
-        entry: SessionEntry,
-      ) => {
-        for (const source of new Set(sources)) {
-          source?.onSessionCompactionCommitted?.(transition, entry);
-        }
-      },
-      prepareSessionSource: () => prepare(),
-      prepareSessionSourceScope: () => prepare(true),
-      prepareSessionSourceEffect: prepareEffect,
+  } = Object.assign(() => assertSessionSource(assertion), {
+    onSessionCompactionCommitted: (transition: SessionAdmissionTransition, entry: SessionEntry) => {
+      for (const source of new Set(sources)) {
+        source?.onSessionCompactionCommitted?.(transition, entry);
+      }
     },
-  );
-  if (
-    options?.synchronousCheck &&
-    sources.every((source) => !source || synchronousSources.has(source))
-  ) {
+    prepareSessionSource: () => prepare(),
+    prepareSessionSourceScope: () => prepare(true),
+    prepareSessionSourceEffect: prepareEffect,
+  });
+  const synchronous = sources.every((source) => !source || synchronousSources.has(source));
+  composedSources.set(assertion, { run, forward: check === forwardSessionSources && synchronous });
+  if ((options?.synchronousCheck || check === forwardSessionSources) && synchronous) {
     bindSynchronousSessionSource(assertion);
   }
   if (sources.some((source) => source?.retain)) {
