@@ -64,17 +64,19 @@ suite.define(() => {
           await gateway.waitForRequest("update.run");
           const busy = modal.getByRole("button", { name: "Updating…", exact: true });
           await expect.poll(() => busy.isDisabled()).toBe(true);
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            modal.locator(".oc-dialog"),
-            [busy, modal.locator(".oc-dialog__header")],
-            { animations: "disabled", elements: [modal.locator(".oc-dialog")] },
-          );
-          await writeFile(path.join(suite.artifactDir, entry + "-pending.png"), frame.png);
-          await writeFile(
-            path.join(suite.artifactDir, entry + "-pending-dialog.png"),
-            frame.elements[0]!.png,
-          );
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              modal.locator(".oc-dialog"),
+              [busy, modal.locator(".oc-dialog__header")],
+              { animations: "disabled", elements: [modal.locator(".oc-dialog")] },
+            );
+            await writeFile(path.join(suite.artifactDir, entry + "-pending.png"), frame.png);
+            await writeFile(
+              path.join(suite.artifactDir, entry + "-pending-dialog.png"),
+              frame.elements[0]!.png,
+            );
+          }
           expect.soft(await modal.textContent()).toContain(waiting);
           expect.soft(await modal.textContent()).not.toContain("Installing the update");
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
