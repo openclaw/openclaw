@@ -225,7 +225,6 @@ export async function settleSessionEventTurn(params: {
       runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
       conversation: {
         sessionKey: params.sessionKey,
-        sessionId: binding.sessionId,
         lifecycleRevision: binding.lifecycleRevision,
       },
       payloads,

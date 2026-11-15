@@ -719,6 +719,7 @@ it("keeps durable delivery generations live only through same-generation writes"
       sessionKey,
       sessionId: entry.sessionId,
       lifecycleRevision: null,
+      exactTranscript: true as const,
     };
     const other = openOpenClawAgentDatabase({
       agentId: "main",

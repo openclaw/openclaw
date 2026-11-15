@@ -126,6 +126,7 @@ it.each([
   "current tool deny",
   "role revoked",
   "role revoked during merge",
+  "session edited",
   "session replaced",
   "queued owner payload edit",
   "queued manager rename",
@@ -375,15 +376,13 @@ it.each([
     setRuntimeConfigSnapshot(config);
   } else if (scenario === "role revoked") {
     await setCanonicalUserProfileRole(profile.id, "blocked");
-  } else if (scenario === "session replaced") {
-    replaceSessionEntrySync(
-      { sessionKey: SESSION },
-      {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement",
-      },
-    );
+  } else if (scenario === "session edited" || scenario === "session replaced") {
+    // Publish the replacement through the owner before admitting the next occurrence.
+    await accessor.replaceSessionEntry(target, {
+      ...entry,
+      sessionId: "replacement-session",
+      ...(scenario === "session replaced" ? { lifecycleRevision: "replacement" } : {}),
+    });
   }
 
   // Publication creation/storage and actual GitHub credentials are outside this regression.
@@ -714,7 +713,7 @@ it.each([
       expect(entered).toBe(2);
       return;
     }
-    if (scenario === "role revoked" || scenario === "session replaced") {
+    if (scenario === "role revoked") {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
       expect(state.lastError).toMatch(
@@ -736,7 +735,14 @@ it.each([
         scenario === "role revoked during merge" ? "error" : "ok",
       );
       expect(entered).toBe(1);
-      if (scenario === "operator" || scenario === "paused force run" || ownerEdit || recurring) {
+      if (
+        scenario === "operator" ||
+        scenario === "paused force run" ||
+        scenario === "session edited" ||
+        scenario === "session replaced" ||
+        ownerEdit ||
+        recurring
+      ) {
         expect(rejected).toBeUndefined();
         expect(results).toMatchObject([
           {
@@ -769,6 +775,8 @@ it.each([
     if (
       scenario !== "operator" &&
       scenario !== "paused force run" &&
+      scenario !== "session edited" &&
+      scenario !== "session replaced" &&
       !ownerEdit &&
       !recurring &&
       scenario !== "role revoked during merge"

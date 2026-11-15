@@ -110,6 +110,7 @@ async function leaseSessionGeneration(params: {
       sessionKey: params.sessionKey,
       storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
       sessionId: params.entry?.sessionId ?? null,
+      exactTranscript: true,
       lifecycleRevision: params.entry?.lifecycleRevision ?? null,
     });
   } catch (error) {

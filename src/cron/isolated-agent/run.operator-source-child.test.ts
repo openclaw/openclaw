@@ -310,8 +310,12 @@ it.each([
       expect(entered).toBe(1);
       expect(operatorAdmitted).toBe(scenario !== "no operator source");
       if (scenario === "parent reset") {
-        // A reset parent runs unbound: nothing carries into the new incarnation.
-        expect(memoryParent).toBeUndefined();
+        expect(memoryParent).toMatchObject({
+          sessionKey: SESSION,
+          sessionId: "reset-session",
+          lifecycleRevision: "reset",
+          senderIsOwner: true,
+        });
       } else if (scenario === "valid") {
         expect(memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
         // An owner run is an internal turn: it carries no sender bit.

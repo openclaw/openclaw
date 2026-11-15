@@ -253,13 +253,14 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       inferenceCaptured: Boolean(input.job.inferenceBinding?.runtime),
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
-    const completionSource = input.job.sourceConversation ?? sourceEntry;
-    const sourceSessionGeneration = completionSource
-      ? {
-          sessionId: completionSource.sessionId,
-          lifecycleRevision: completionSource.lifecycleRevision,
-        }
-      : undefined;
+    // An automation reaches its creating conversation by key: delivery follows edits, branch
+    // switches and resets to the current transcript. Its stored generation is ignored.
+    const sourceSessionGeneration = input.job.sourceConversation
+      ? { sessionId: input.job.sourceConversation.sessionId, lifecycleRevision: undefined }
+      : sourceEntry && {
+          sessionId: sourceEntry.sessionId,
+          lifecycleRevision: sourceEntry.lifecycleRevision,
+        };
     const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
     if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
       throw new Error(

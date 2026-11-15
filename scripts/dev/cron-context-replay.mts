@@ -29,7 +29,7 @@ import {
 import {
   assembleScheduledAdmissionFacts,
   parentRowFactsFromEntry,
-  scheduledParentLinkOf,
+  scheduledParentKeyOf,
 } from "../../src/cron/execution-context-admission.js";
 import {
   compareScheduledDecisions,
@@ -268,7 +268,9 @@ export function anonymizeParentRow(
   if (!row || row.missing) {
     return row;
   }
-  const link = scheduledParentLinkOf(job);
+  const link = job.operatorSource
+    ? decodeGatewayOperatorRecoverySource(job.operatorSource.source)
+    : job.sourceConversation;
   const worktreePath = "/work/parent/worktree";
   return {
     sessionId: row.sessionId === link?.sessionId ? "parent-session" : "replaced-session",
@@ -498,7 +500,7 @@ async function main() {
         continue;
       }
       const runSessionKey = runSessionKeyFor(job, agentId);
-      const parentKey = scheduledParentLinkOf(job)?.sessionKey;
+      const parentKey = scheduledParentKeyOf(job);
       let parentRow;
       if (parentKey) {
         const node = agentDbs

@@ -267,13 +267,9 @@ export async function runPluginCommandScheduledTurn(params: {
     try {
       assertSource();
       const entry = currentSession.entry;
-      if (
-        !entry ||
-        entry.archivedAt ||
-        entry.sessionId !== schedule.parent.sessionId ||
-        entry.lifecycleRevision !== schedule.parent.lifecycleRevision
-      ) {
-        throw new Error("Scheduled plugin command parent was deleted, reset or archived.");
+      // The parent is linked by key: its edits and resets keep the schedule.
+      if (!entry || entry.archivedAt) {
+        throw new Error("Scheduled plugin command parent was deleted or archived.");
       }
       const assertParent = composeSessionSourceAssertion(
         [currentSession.source],

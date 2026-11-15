@@ -4,7 +4,6 @@ import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
-import { hasExplicitCronDeliveryTarget } from "../cron/delivery-target-validation.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { normalizeDirectCronDeliveryPayloads } from "../cron/isolated-agent/delivery-payload-normalization.js";
 import {
@@ -25,7 +24,6 @@ import type {
 } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { getChildLogger } from "../logging.js";
-import { toAgentStoreSessionKey } from "../routing/session-key.js";
 
 export function pickDefined<T extends Record<string, unknown>>(
   obj: T,
@@ -113,7 +111,9 @@ export async function finalizeCronCompletionAnnouncement(params: {
     if (!resolved.ok && requiresExternalCronDelivery(plan, resolved)) {
       throw resolved.error;
     }
-    const conversation = resolved.ok ? undefined : params.job.sourceConversation;
+    // Automations reach their creating conversation by key, through edits and resets.
+    const source = params.job.sourceConversation;
+    const conversation = resolved.ok || !source ? undefined : { sessionKey: source.sessionKey };
     if ((conversation || resolved.ok) && params.runStartedAtMs === undefined) {
       throw new Error("cron result is missing its occurrence start time");
     }
@@ -128,17 +128,6 @@ export async function finalizeCronCompletionAnnouncement(params: {
         jobId: params.job.id,
         target: resolved,
         transcriptRoute: resolved.sessionRoute,
-        transcriptExpectedGeneration:
-          params.job.sourceConversation &&
-          !hasExplicitCronDeliveryTarget(plan) &&
-          resolved.sessionRoute?.sessionKey ===
-            toAgentStoreSessionKey({
-              agentId,
-              requestKey: params.job.sourceConversation.sessionKey,
-              mainKey: cfg.session?.mainKey,
-            })
-            ? params.job.sourceConversation
-            : undefined,
         onTranscriptDiagnostic: (message) => {
           diagnostics = mergeCronRunDiagnostics(
             diagnostics,

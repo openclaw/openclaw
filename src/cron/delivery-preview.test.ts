@@ -359,8 +359,10 @@ it("does not rebind implicit delivery when the public session key changes", () =
     expect(await preview()).toEqual(externalPreview("other-recipient"));
   }));
 
+// The creating conversation is linked by key: an edit (new session id) or reset (new revision)
+// keeps the automation's implicit route on that conversation.
 it.each(["replacement-session", "source-session"])(
-  "rejects a replacement conversation's external route with sessionId=%s",
+  "follows the creating conversation's current route after it changes to sessionId=%s",
   (sessionId) =>
     withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {
       const sessionKey = job.sessionKey!;
@@ -373,6 +375,6 @@ it.each(["replacement-session", "source-session"])(
           lifecycleRevision: "replacement-generation",
         }),
       });
-      expect(await preview()).toMatchObject(blockedPreview("original session generation"));
+      expect(await preview()).toEqual(externalPreview("replacement-recipient"));
     }),
 );

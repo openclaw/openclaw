@@ -644,6 +644,7 @@ function enqueueSessionEventAttempt(
                   storePath,
                   sessionKey,
                   sessionId: preparedBinding.sessionId,
+                  exactTranscript: true,
                   lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
                 });
               }

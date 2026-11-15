@@ -121,7 +121,6 @@ export async function dispatchCronDelivery(
       runStartedAt: params.runStartedAt,
       conversation: {
         sessionKey,
-        sessionId: params.sessionId,
         lifecycleRevision: params.lifecycleRevision,
       },
       payloads,
@@ -134,12 +133,13 @@ export async function dispatchCronDelivery(
     diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
     return undefined;
   };
-  const failTarget = (error: string) => {
+  const failTarget = async (error: string) => {
     const detail = params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? error +
         "; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target"
       : error;
     record("not-delivered", detail);
+    await logCronDeliveryWarn(`[cron:${params.job.id}] delivery failed: ${detail}`);
     return finish({ kind: "error", error: detail, errorKind: "delivery-target" });
   };
   const finishInterrupted = () => {

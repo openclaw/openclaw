@@ -335,6 +335,7 @@ export async function prepareSessionEventTargetForHost(
         storePath: target.storePath,
         sessionKey: target.sessionKey,
         sessionId: target.sessionId || null,
+        exactTranscript: true,
         lifecycleRevision: target.lifecycleRevision ?? null,
         env,
       });

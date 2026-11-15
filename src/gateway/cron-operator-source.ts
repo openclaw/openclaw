@@ -33,10 +33,8 @@ export async function restoreCronOperatorSource(params: {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
     const fence = params.deliveryAttemptFence;
-    // An in-session run executes in the captured conversation and must match its
-    // incarnation. A child runs in its own session; occurrence admission owns the
-    // parent's lifecycle, so a reset parent still rechecks device and grant here.
-    const inSession = params.job.sessionTarget === `session:${source.sessionKey}`;
+    // Stored automation authority follows the conversation key. The restored live run
+    // below still binds its actual transcript and is revoked by identity mutations.
     let admitted = false;
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -60,10 +58,6 @@ export async function restoreCronOperatorSource(params: {
         current.owner?.sessionKey !== source.sessionKey ||
         !isCronOperatorSourceParent(current, source.sessionKey) ||
         params.agentId !== source.agentId ||
-        (inSession &&
-          (params.sessionKey !== source.sessionKey ||
-            params.entry.sessionId !== source.sessionId ||
-            params.entry.lifecycleRevision !== source.lifecycleRevision)) ||
         !isDeepStrictEqual(current.operatorSource, captured)
       ) {
         throw new Error(
