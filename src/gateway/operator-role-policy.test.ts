@@ -33,7 +33,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   openclawIdTunnelRolePolicy,
@@ -191,9 +191,27 @@ describe("operator role policy", () => {
       roles.assignments.byGithubLogin = {};
       publishOperatorRoleConfigChange({});
       expectRole(person.id, cfg, guestRole);
-      roles.assignments.byGithubLogin = { "release-operator": "maintainer" };
+      let enumerations = 0;
+      roles.assignments.byGithubLogin = new Proxy(
+        {
+          ...Object.fromEntries(
+            Array.from({ length: 2_000 }, (_value, i) => [`person-${i}`, "guest"]),
+          ),
+          "release-operator": "maintainer",
+        },
+        {
+          ownKeys(target) {
+            enumerations += 1;
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
       publishOperatorRoleConfigChange({});
       expectRole(person.id, cfg, roles.definitions.maintainer);
+      roles.assignments.byGithubLogin["release-operator"] = "guest";
+      expectRole(person.id, cfg, guestRole);
+      roles.assignments.byGithubLogin["release-operator"] = "maintainer";
+      expect(enumerations).toBe(0);
       const access = resolveGatewayOperatorAccessAuthority(person.id, cfg);
       expect(access?.gatewayAccessGrant).toBeNull();
       expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);

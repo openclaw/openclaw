@@ -47,13 +47,34 @@ it("selects the target session profile for internal command deliveries only", ()
       disableTools: false,
       bootstrapPromptWarningSignaturesSeen: [],
     });
-  expect(run().bootstrapUserProfileId).toBeUndefined();
+  // An unqualified turn in a session people talk to keeps the personal file out of the request.
+  expect(run()).toMatchObject({
+    bootstrapUserProfileId: undefined,
+    sessionUserProfileId: undefined,
+  });
+  // A spawned session's turns all start inside the Gateway: its hidden task (no provenance) keys
+  // the prompt series on the same selection as its later sessions_send turns.
+  params.sessionEntry = { ...params.sessionEntry!, spawnedBy: "agent:main:parent" };
+  expect(run()).toMatchObject({
+    bootstrapUserProfileId: undefined,
+    sessionUserProfileId: "selected-human",
+  });
+  params.sessionEntry = { ...params.sessionEntry, spawnedBy: undefined };
   for (const sourceTool of ["subagent_settle", "subagent_announce", "sessions_send"]) {
     params.opts.inputProvenance = { kind: "inter_session", sourceTool };
-    expect(run().bootstrapUserProfileId).toBe("selected-human");
+    expect(run()).toMatchObject({
+      bootstrapUserProfileId: "selected-human",
+      sessionUserProfileId: "selected-human",
+    });
   }
   params.opts.inputProvenance = { kind: "internal_system", sourceTool: "goal_continue" };
   expect(run().bootstrapUserProfileId).toBe("selected-human");
+  params.sessionKey = "agent:main:cron:nightly";
+  expect(run()).toMatchObject({
+    bootstrapUserProfileId: undefined,
+    sessionUserProfileId: undefined,
+  });
+  params.sessionKey = "agent:main:conversation";
   params.sessionEntry = {
     sessionId: "delegated-session",
     updatedAt: 1,
@@ -65,5 +86,8 @@ it("selects the target session profile for internal command deliveries only", ()
   };
   expect(run().bootstrapUserProfileId).toBe("delegating-human");
   params.sessionEntry = { sessionId: "separate-internal-session", updatedAt: 1 };
-  expect(run().bootstrapUserProfileId).toBeUndefined();
+  expect(run()).toMatchObject({
+    bootstrapUserProfileId: undefined,
+    sessionUserProfileId: undefined,
+  });
 });

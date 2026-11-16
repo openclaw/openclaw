@@ -6,6 +6,7 @@ import {
   openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStoreV2,
 } from "../../state/openclaw-agent-worker-store.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   TranscriptActiveFactsBackfillOperations,
   TranscriptActiveFactsBackfillSession,
@@ -15,9 +16,13 @@ import type {
 // inflate one charge to seconds; 20x of that would park the pass for minutes.
 const MAX_YIELD_MS = 30_000;
 
-function yieldAfter(executionMs: number): number {
-  return Math.min(MAX_YIELD_MS, Math.max(250, 20 * executionMs));
+function yieldAfter(executionMs: number, minimumMs = 250): number {
+  return Math.min(MAX_YIELD_MS, Math.max(minimumMs, 20 * executionMs));
 }
+
+// Covered-window probes take no writer reservation, so a restart can skip finished
+// sessions quickly; reply-pickup charges still stretch this under main-thread load.
+const PROBE_MIN_YIELD_MS = 25;
 
 export type SessionTranscriptFactsBackfill = {
   runBatch(): Promise<{ complete: boolean; delayMs: number }>;
@@ -28,12 +33,16 @@ export type SessionTranscriptFactsBackfill = {
 export function createSessionTranscriptFactsBackfill(params: {
   database: OpenClawAgentDatabaseOptions;
   assertCurrent: () => void;
+  readCustody?: readonly SessionStoreReadCustody[];
   signal: AbortSignal;
   log: { info: (message: string) => void; warn: (message: string) => void };
 }): SessionTranscriptFactsBackfill {
   let sessions: TranscriptActiveFactsBackfillSession[] | undefined;
   let sessionIndex = 0;
   let afterPosition = -1;
+  // Probe at each session start and after an all-covered write batch.
+  let probeNext = true;
+  let sessionsSkipped = 0;
   let rowsFilled = 0;
   let rowsSkipped = 0;
   let bytesRead = 0;
@@ -65,6 +74,32 @@ export function createSessionTranscriptFactsBackfill(params: {
       params.log.warn(`Transcript facts backfill cleanup failed: ${String(error)}`),
     );
   });
+  const report = (complete: boolean) => {
+    const now = Date.now();
+    if (!sessions || (!complete && now - lastReport < 60_000)) {
+      return;
+    }
+    const current = sessions[sessionIndex];
+    params.log.info(
+      `session: transcript facts backfill ${complete ? "pass complete" : "progress"}: ` +
+        `${rowsFilled} rows filled, ${rowsSkipped} rows skipped, ` +
+        `${sessionIndex}/${sessions.length} sessions completed ` +
+        `(${sessionsSkipped} already covered)` +
+        (current
+          ? ` (current at position ${afterPosition} of ${current.activeEventCount} active events)`
+          : "") +
+        `, ${bytesRead} payload bytes, ${pauses} lock-contention pauses; ` +
+        `since last report: ${intervalBatches} batches, ` +
+        `${intervalBatchMs.toFixed(1)} ms maximum batch, ` +
+        `${intervalMaxWriteMs.toFixed(1)} ms maximum and ` +
+        `${intervalWriteMs.toFixed(0)} ms total admitted execution`,
+    );
+    lastReport = now;
+    intervalBatches = 0;
+    intervalBatchMs = 0;
+    intervalWriteMs = 0;
+    intervalMaxWriteMs = 0;
+  };
   const runBatch = async () => {
     if (closed) {
       return { complete: true, delayMs: 250 };
@@ -79,6 +114,7 @@ export function createSessionTranscriptFactsBackfill(params: {
             runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
           ),
           input: undefined,
+          readCustody: params.readCustody,
           priority: "background",
           observeWriteExecution: (elapsedMs) => {
             writeExecutionMs = elapsedMs;
@@ -118,6 +154,34 @@ export function createSessionTranscriptFactsBackfill(params: {
         await close();
         return { complete: true, delayMs: 250 };
       }
+      if (probeNext) {
+        const probe = await store.execute(
+          { type: "probe", input: { sessionId: session.sessionId, afterPosition } },
+          assertCurrent,
+          { signal: params.signal },
+        );
+        afterPosition = probe.afterPosition;
+        if (!probe.uncovered) {
+          if (probe.done) {
+            sessionIndex++;
+            sessionsSkipped++;
+            afterPosition = -1;
+          }
+          const complete = sessionIndex === sessions.length;
+          if (complete) {
+            report(true);
+            sessions = [];
+            await close();
+          } else {
+            report(false);
+          }
+          return {
+            complete,
+            delayMs: yieldAfter(Math.max(probe.elapsedMs, writeExecutionMs), PROBE_MIN_YIELD_MS),
+          };
+        }
+        probeNext = false;
+      }
       const batch = await store.execute(
         { type: "batch", input: { sessionId: session.sessionId, afterPosition } },
         assertCurrent,
@@ -139,30 +203,13 @@ export function createSessionTranscriptFactsBackfill(params: {
       if (batch.done || batch.unavailable) {
         sessionIndex++;
         afterPosition = -1;
+        probeNext = true;
+      } else if (!batch.busy && batch.rowsFilled + batch.rowsSkipped === 0) {
+        // A fully covered write window: hand the rest of the stretch back to the probe.
+        probeNext = true;
       }
       const complete = sessionIndex === sessions.length;
-      const now = Date.now();
-      if (complete || now - lastReport >= 60_000) {
-        const current = sessions[sessionIndex];
-        params.log.info(
-          `session: transcript facts backfill ${complete ? "pass complete" : "progress"}: ` +
-            `${rowsFilled} rows filled, ${rowsSkipped} rows skipped, ` +
-            `${sessionIndex}/${sessions.length} sessions completed` +
-            (current
-              ? ` (current at position ${afterPosition} of ${current.activeEventCount} active events)`
-              : "") +
-            `, ${bytesRead} payload bytes, ${pauses} lock-contention pauses; ` +
-            `since last report: ${intervalBatches} batches, ` +
-            `${intervalBatchMs.toFixed(1)} ms maximum batch, ` +
-            `${intervalMaxWriteMs.toFixed(1)} ms maximum and ` +
-            `${intervalWriteMs.toFixed(0)} ms total admitted execution`,
-        );
-        lastReport = now;
-        intervalBatches = 0;
-        intervalBatchMs = 0;
-        intervalWriteMs = 0;
-        intervalMaxWriteMs = 0;
-      }
+      report(complete);
       if (complete) {
         sessions = [];
         await close();

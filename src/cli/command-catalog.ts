@@ -150,6 +150,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never" },
   })),
   {
+    commandPath: ["agents", "render-blobster"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["configure"],
     policy: { configGuard: "skip", stateStoreGuard: "run", loadPlugins: "never" },
   },

@@ -182,7 +182,7 @@ describe("Model setup refresh continuity", () => {
           await page.updateComplete;
           expect(trigger.textContent).toContain("Cached fixture model");
           expectSelection();
-          expect(status()).not.toBeNull();
+          expect(status()).toBeNull();
           await selectManualProvider(page, "fixture-key");
           expect(callsFor(request, "models.list")).toHaveLength(1);
         }
@@ -196,7 +196,7 @@ describe("Model setup refresh continuity", () => {
           expect(callsFor(request, "models.list")).toHaveLength(2);
           expect(alert()).toBeNull();
           if (!warm) {
-            expect(status()?.textContent).toContain("Loading installed agents");
+            expect(status()).toBeNull();
           }
         });
         retry.resolve({ models: warm ? [{ ...model, name: "Refreshed fixture model" }] : [] });
@@ -272,13 +272,13 @@ describe("Model setup refresh continuity", () => {
       button('[role="alert"] button').click();
       await page.updateComplete;
       expect(discoveries).toBe(2);
-      expect(status()).not.toBeNull();
+      expect(status()).toBeNull();
       expect(button("button.primary").disabled).toBe(false);
       await selectManualProvider(page, "fixture-key");
       expect(page.querySelector<HTMLInputElement>(manualInput)?.disabled).toBe(false);
       retry.resolve({ models: catalog.models });
-      await waitForFast(() => expect(status()).toBeNull());
-      expect(alert()).toBeNull();
+      await waitForFast(() => expect(alert()).toBeNull());
+      expect(status()).toBeNull();
       expect(trigger().textContent).toContain("Fixture model");
       button("button.primary").click();
       await waitForFast(() => expect(alert()?.textContent).toContain(saveError));

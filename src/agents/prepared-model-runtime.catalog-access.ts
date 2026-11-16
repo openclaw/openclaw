@@ -37,6 +37,7 @@ import {
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
 import {
+  createCatalogInventoryPublisher,
   listChangedPreparedCatalogProviders,
   preparedProviderCatalogCredentials,
   preparedProviderCatalogSource,
@@ -112,6 +113,7 @@ export async function createFullModelCatalogAccess(
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
   const project = (...args: Parameters<typeof projectInventory>) =>
     attempt.withRefreshStatus(projectInventory(...args));
+  const publishInventory = createCatalogInventoryPublisher(params.inventoryOwner);
   const {
     retainedInventory,
     providerSources,
@@ -250,7 +252,7 @@ export async function createFullModelCatalogAccess(
       ...next,
       catalog: retainPreparedModelCatalogPublication(next.catalog, previous.catalog),
     };
-    params.inventoryOwner.catalogInventory = published.inventory;
+    publishInventory(published.inventory);
     return { previous, current: published, staticCatalog };
   };
   const acquireProviderCatalog = async (

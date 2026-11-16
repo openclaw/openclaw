@@ -24,7 +24,11 @@ import {
   applyTemplateAddForGateway,
   TemplateGatewayPlanBlockedError,
 } from "./gateway-add-apply.js";
-import { buildGatewayTemplateAddPlan, projectGatewayTemplateAddPlan } from "./gateway-add-plan.js";
+import {
+  buildGatewayTemplateAddPlan,
+  planTemplateAddForGateway,
+  projectGatewayTemplateAddPlan,
+} from "./gateway-add-plan.js";
 import { readTemplateManifestFile } from "./reader.js";
 
 const { resolveSource } = vi.hoisted(() => ({ resolveSource: vi.fn() }));
@@ -51,6 +55,7 @@ it.each([
   "admitted-source-retry",
   "admitted-runtime-retry",
   "admitted-config-retry",
+  "admitted-reviewed-chat-retry",
 ] as const)(
   "prepares empty ordinary Template chat before runtime publication: %s",
   async (outcome) => {
@@ -252,7 +257,10 @@ it.each([
           if (outcome === "revoked") {
             current = false;
           }
-          if (outcome === "admitted-runtime-retry" && !runtimeFailed) {
+          if (
+            (outcome === "admitted-runtime-retry" || outcome === "admitted-reviewed-chat-retry") &&
+            !runtimeFailed
+          ) {
             runtimeFailed = true;
             return "applied-restart-required";
           }
@@ -261,6 +269,70 @@ it.each([
         onAgentReady,
       };
       let result = await applyTemplateAddForGateway(applyInput);
+      if (outcome === "admitted-reviewed-chat-retry") {
+        // The reviewed path writes this real pending entry before runtime admission
+        // fails. Its persisted shape has no creation-mode discriminator.
+        expect(result).toMatchObject({
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+        });
+        const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })!;
+        const checkpoint = structuredClone(retained.templateInitialization);
+        expect(checkpoint?.configured?.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(checkpoint).not.toHaveProperty("mode");
+        const before = structuredClone(config.agents!.entries!["fixture-first"]!);
+        const files = await fs.readdir(before.workspace!);
+        const profile = path.join(before.workspace!, "SOUL.md");
+        const original = await fs.stat(profile);
+        const onAgentCreated = vi.fn();
+        result = await applyTemplateAddForGateway({
+          ...applyInput,
+          mode: "chat",
+          planIntegrity: undefined,
+          onAgentCreated,
+        });
+        expect(result).toMatchObject({
+          agentId: "fixture-first",
+          sessionKey,
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+          readiness: { ready: false },
+          error: {
+            message: expect.stringContaining(
+              "The configured Template plan, source, workspace or agent changed",
+            ),
+          },
+        });
+        const refused = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })!;
+        expect(refused.sessionId).toBe(retained.sessionId);
+        expect(refused.initializationPending).toBe(true);
+        expect(refused.templateInitialization).toEqual(checkpoint);
+        expect((await readConfigFileSnapshot()).config.agents!.entries!["fixture-first"]).toEqual(
+          before,
+        );
+        expect(await fs.readdir(before.workspace!)).toEqual(files);
+        expect(onAgentCreated).not.toHaveBeenCalled();
+        expect(onAgentReady).not.toHaveBeenCalled();
+        // Refusing the mode switch must not consume or rewrite reviewed consent.
+        result = await applyTemplateAddForGateway(applyInput);
+        expect(result).toMatchObject({ status: "complete", sessionKey });
+        expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })).toMatchObject({
+          sessionId: retained.sessionId,
+        });
+        expect(
+          loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.initializationPending,
+        ).toBeUndefined();
+        const after = await fs.stat(profile);
+        expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
+          ino: original.ino,
+          mtimeMs: original.mtimeMs,
+        });
+        expect(onAgentReady).toHaveBeenCalledOnce();
+        expect(prepareAgentChat).toHaveBeenCalledTimes(3);
+        return;
+      }
       if (
         outcome === "admitted-source-retry" ||
         outcome === "admitted-runtime-retry" ||
@@ -280,6 +352,18 @@ it.each([
           await expect(fs.stat(profile)).rejects.toMatchObject({ code: "ENOENT" });
         }
         const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
+        // A rerun from a new client has only the kept agent's ID and the catalog coordinate.
+        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {} };
+        expect(
+          await planTemplateAddForGateway({ ...rerun, source: applyInput.source }),
+        ).toMatchObject({ blockers: [], planIntegrity: review!.planIntegrity });
+        const newerVersion = await planTemplateAddForGateway({
+          ...rerun,
+          source: { ...applyInput.source, version: "1.0.1" },
+        });
+        expect(newerVersion.blockers).toContainEqual(
+          expect.objectContaining({ code: "agent_id_collision" }),
+        );
         result = await applyTemplateAddForGateway(applyInput);
         if (before) {
           const after = await fs.stat(profile);

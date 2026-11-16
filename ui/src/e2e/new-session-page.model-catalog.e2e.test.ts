@@ -7,6 +7,7 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollText,
@@ -20,7 +21,7 @@ const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 
 
 suite.define(() => {
   it.each([320, 400, 560])(
-    "keeps mobile model loading steady at %s px under CPU throttling",
+    "keeps background model reads steady at %s px under CPU throttling",
     async (width) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
@@ -31,14 +32,19 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}new`);
           await gateway.waitForRequest("models.list");
           const trigger = page.locator('[data-chat-model-select="true"]');
-          await pollAttribute(trigger, "aria-busy").toBe("true");
+          await pollAttribute(trigger, "aria-busy").not.toBe("true");
+          expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
           await page.evaluate(() => document.fonts.ready);
           const controls = page.locator(
             ".new-session-page__composer .agent-chat__composer-controls",
           );
           const before = await controls.boundingBox();
+          const chevron = trigger.locator(".chat-controls__inline-select-chevron");
+          const chevronBefore = await chevron.boundingBox();
+          const triggerPath = await trigger.evaluate((node) => `summary#${CSS.escape(node.id)}`);
           const shifts = await observeLayoutShifts(page);
           await gateway.resolveDeferred("models.list");
+          await pollText(trigger).toContain("gpt-5.5");
           await pollAttribute(trigger, "aria-busy").toBe("false");
           await page.evaluate(
             () =>
@@ -47,8 +53,22 @@ suite.define(() => {
               }),
           );
           expect(await controls.boundingBox()).toEqual(before);
+          expect(await chevron.boundingBox()).toEqual(chevronBefore);
           const result = await shifts.evaluate((probe) => probe.read());
-          expect(result.value, JSON.stringify(result, null, 2)).toBe(0);
+          // The chip now hugs its name instead of reserving an empty label track.
+          // Only its leading edge may resize; the chevron, row and other UI stay put.
+          for (const entry of result.entries.filter((shift) => !shift.hadRecentInput)) {
+            expect(entry.sources.length).toBeGreaterThan(0);
+            for (const source of entry.sources) {
+              expect(source.node).toBe(triggerPath);
+              expect(source.currentRect.y).toBe(source.previousRect.y);
+              expect(source.currentRect.height).toBe(source.previousRect.height);
+              expect(source.currentRect.x + source.currentRect.width).toBeCloseTo(
+                source.previousRect.x + source.previousRect.width,
+                3,
+              );
+            }
+          }
           await shifts.evaluate((probe) => probe.stop());
           await shifts.dispose();
           await cpu.detach();
@@ -122,7 +142,7 @@ suite.define(() => {
       },
     );
   });
-  it("accepts a draft while keeping the default hidden until model metadata arrives", async () => {
+  it("accepts a draft without a model loader while metadata arrives", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.6-luna",
@@ -134,10 +154,12 @@ suite.define(() => {
       const modelTrigger = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
-      await pollAttribute(modelTrigger, "aria-busy").toBe("true");
-      expect(await modelTrigger.getAttribute("aria-label")).toContain("Loading models…");
+      await gateway.waitForRequest("models.list");
+      await captureUiProof(suite, page, "model-catalog-pending.png");
+      await pollAttribute(modelTrigger, "aria-busy").not.toBe("true");
+      expect(await modelTrigger.getAttribute("aria-label")).not.toContain("Loading models…");
       expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
-      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(1);
+      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
       await page
         .locator(".new-session-page__message")
         .fill("Start without waiting for the catalog");
@@ -158,6 +180,7 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
       await gateway.resolveDeferred("models.list");
       await pollText(modelTrigger).toContain("GPT-5.6 Luna");
+      await captureUiProof(suite, page, "model-catalog-ready.png");
       expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
       const effortPicker = page.locator(
         ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",

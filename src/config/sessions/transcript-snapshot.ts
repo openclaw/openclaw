@@ -36,6 +36,7 @@ export function freezeTranscriptSnapshot<T extends SessionTranscriptReadSnapshot
       retainOwnedTranscriptPayload(event.message);
     }
   }
+  retainOwnedTranscriptPayload(snapshot.events);
   retainOwnedTranscriptPayload(snapshot);
   return Object.freeze(snapshot);
 }

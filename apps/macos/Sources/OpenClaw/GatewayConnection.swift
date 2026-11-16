@@ -257,7 +257,13 @@ actor GatewayConnection: Observable {
     /// that epoch prevents delayed pushes from entering a replacement socket.
     private(set) var socketGenerationState = GatewaySocketGenerationState()
 
-    private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
+    private struct Subscriber {
+        let continuation: AsyncStream<PushDelivery>.Continuation
+        let matches: @Sendable (EventFrame) -> Bool
+        var droppedCount = 0
+    }
+
+    private var subscribers: [UUID: Subscriber] = [:]
     #if DEBUG
     private var subscriberWaitersForTesting: [CheckedContinuation<Void, Never>] = []
     #endif
@@ -1210,15 +1216,17 @@ extension GatewayConnection {
         }
     }
 
+    @discardableResult
     func _test_handlePush(
         _ push: GatewayPush,
         routeGeneration: UInt64? = nil,
-        socketGeneration: UInt64)
+        socketGeneration: UInt64) -> [Int]
     {
         self.handle(
             push: push,
             routeGeneration: routeGeneration ?? self.routeGeneration,
             socketGeneration: socketGeneration)
+        return self.subscribers.values.map(\.droppedCount).sorted()
     }
 
     func _test_handleDisconnect(
@@ -1390,15 +1398,19 @@ extension GatewayConnection {
         return self.cachedGatewayVersion()
     }
 
-    func subscribe(bufferingNewest: Int = 100) -> AsyncStream<PushDelivery> {
+    func subscribe(
+        bufferingNewest: Int = 100,
+        matching: @escaping @Sendable (EventFrame) -> Bool = { _ in true }) -> AsyncStream<PushDelivery>
+    {
         let id = UUID()
         let snapshot = self.lastSnapshot
         let connection = self
         return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
+            let subscriber = Subscriber(continuation: continuation, matches: matching)
+            self.subscribers[id] = subscriber
             if let snapshot, let delivery = self.makePushDelivery(.snapshot(snapshot)) {
-                continuation.yield(delivery)
+                self.yield(delivery, to: id, subscriber: subscriber)
             }
-            self.subscribers[id] = continuation
             #if DEBUG
             let waiters = self.subscriberWaitersForTesting
             self.subscriberWaitersForTesting.removeAll()
@@ -1413,7 +1425,29 @@ extension GatewayConnection {
     }
 
     private func removeSubscriber(_ id: UUID) {
-        self.subscribers[id] = nil
+        guard let subscriber = self.subscribers.removeValue(forKey: id),
+              subscriber.droppedCount > 0 else { return }
+        // At most two content-free records per subscriber: first drop and lifetime total.
+        gatewayConnectionLogger.warning("push subscriber ended; dropped=\(subscriber.droppedCount, privacy: .public)")
+    }
+
+    private func yield(_ delivery: PushDelivery, to id: UUID, subscriber: Subscriber) {
+        switch subscriber.continuation.yield(delivery) {
+        case .dropped:
+            break
+        case .terminated:
+            self.removeSubscriber(id)
+            return
+        case .enqueued:
+            return
+        @unknown default:
+            return
+        }
+        // Only overflow mutates diagnostics; ordinary delivery does no logging work.
+        if subscriber.droppedCount < Int.max { self.subscribers[id]?.droppedCount += 1 }
+        if subscriber.droppedCount == 0 {
+            gatewayConnectionLogger.warning("push subscriber buffer overflow; further drops counted until termination")
+        }
     }
 
     func makePushDelivery(_ push: GatewayPush) -> PushDelivery? {
@@ -1463,8 +1497,8 @@ extension GatewayConnection {
             currentOwner: { [weak self] in
                 self?.publicationIsCurrent(lease, connected: false) == true
             })
-        for continuation in self.subscribers.values {
-            continuation.yield(delivery)
+        for (id, subscriber) in self.subscribers {
+            self.yield(delivery, to: id, subscriber: subscriber)
         }
     }
 
@@ -1488,8 +1522,11 @@ extension GatewayConnection {
             }
         }
         guard let delivery = self.makePushDelivery(push) else { return }
-        for (_, continuation) in self.subscribers {
-            continuation.yield(delivery)
+        for (id, subscriber) in self.subscribers {
+            // Filter only server events, before buffering. Snapshots, sequence gaps,
+            // and route/disconnect publications retain their delivery contracts.
+            if case let .event(event) = push, !subscriber.matches(event) { continue }
+            self.yield(delivery, to: id, subscriber: subscriber)
         }
         if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {

@@ -377,7 +377,9 @@ parameters. Choosing **All boards** returns to `/workboard`.
 
 A board can store an `automationJobId` reference to the automation job that
 owns its AI-categorization prompt, model, schedule, and run history. The board
-page shows an **Automation** link when that reference is present. Matching
+page shows an **Automation** link when that reference is present. The board
+header and card details show **Disabled** when the linked automation is disabled,
+not a suspended run. Opening the link does not enable or run it. Matching
 session events nudge the attached automation through the active Workboard service's
 scheduler authority, including after the worker's tool authority closes, with events
 for the same board coalesced for 60 seconds. If an attempt ends while its run is
@@ -553,6 +555,10 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 3. Marks board-configured triage cards as orchestration candidates.
 4. Claims a small batch of ready cards and starts worker runs through the
    Gateway subagent runtime.
+
+The Control UI reports the counts from that pass. Marking a card for planning
+does not mean it has been specified or decomposed. If workers cannot start, the
+result shows the first start failure alongside the total failure count.
 
 Idle scans leave ready-card history unchanged. Existing dispatch counters and
 timestamps remain as historical values; new launches use the card's launch,

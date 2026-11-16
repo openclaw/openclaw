@@ -158,6 +158,7 @@ export class StorageIngestion extends StorageLifecycle {
             id: keys.get(item.key)!,
             data,
             snapshot,
+            occupied: (candidate) => parts.some((part) => part.record.path === candidate),
           }),
         );
       }
@@ -256,11 +257,12 @@ export class StorageIngestion extends StorageLifecycle {
       scope = scopeKey(access.scope),
       intent = digest(canonical({ operation: "remember", input }));
     const prior = this.store.withDatabase((db) => this.row(db, scope, requestId));
-    if (prior?.state === "accepted") {
-      // An accepted remember blocks its own catalog read. Validate the original
-      // caller input before resuming; subject resolution comes after publication.
+    if (prior) {
       this.checkReplay(prior, intent);
-      this.resume(access, requestId);
+      if (prior.state === "accepted") {
+        // An accepted remember blocks its own catalog read; resolve subjects after publication.
+        this.resume(access, requestId);
+      }
     }
     const { plan, fingerprint } = await this.run(access, async (vault) => {
       const data = await vault.scan(),

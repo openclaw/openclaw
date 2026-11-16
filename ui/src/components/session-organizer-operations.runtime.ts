@@ -7,6 +7,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
+import { sessionDeleteConfirmationMessage } from "../lib/sessions/session-delete-confirmation.ts";
 import { isSubagentSessionKey, resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
@@ -123,7 +124,7 @@ export async function deleteSessionsBatch(
     rows,
     {
       title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
-      message: t("sessionsView.deleteSessionsConfirm"),
+      message: sessionDeleteConfirmationMessage(rows),
       skipPreference: sessionDeleteSkipPreference(scope),
     },
     scope,
@@ -590,7 +591,7 @@ export async function deleteSession(
     [session],
     {
       title: t("sessionsView.deleteSessionTitle", { session: session.label }),
-      message: t("sessionsView.deleteSessionConfirm"),
+      message: sessionDeleteConfirmationMessage([session]),
       ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
     },
     scope,

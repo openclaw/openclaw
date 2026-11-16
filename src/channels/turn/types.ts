@@ -11,8 +11,10 @@ import type {
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
-import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { ReplyDispatchRuntimeInfo } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import type {
+  ReplyDispatchRuntimeInfo,
+  ReplyDispatcherWithTypingOptions,
+} from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type {
   FinalizedMsgContext,
   InboundSourceModality,

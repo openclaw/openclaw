@@ -57,7 +57,8 @@ it("keeps status text visible when the working glyph is hidden", () => {
   });
   expect(find(bubbleSelector)).toBeNull();
   expect(find(".chat-working-indicator__status > span")?.classList.contains("sr-only")).toBe(false);
-  expect(container.textContent).toContain("Working");
+  expect(find(".chat-working-indicator__status > span")?.textContent).toBe("Working");
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("off");
 });
 
 it.each<Options>([

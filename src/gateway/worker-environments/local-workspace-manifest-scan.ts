@@ -13,6 +13,7 @@ import {
   localWorkspaceDigestBytes,
   localWorkspaceDigestReference,
   prepareLocalWorkspaceTreePacks,
+  prepareLocalWorkspaceTreeUpdate,
 } from "./local-workspace-cas.js";
 import {
   readLocalWorkspaceSourcePaths,
@@ -37,12 +38,13 @@ import {
 import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceCheckpointReceipt,
-  LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestAction,
+  LocalWorkspaceManifestCheckpoint,
+  LocalWorkspaceManifestInput,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
 } from "./local-workspace-store.types.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -51,45 +53,6 @@ import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
 } from "./workspace-path-exclusions.js";
-
-export type LocalWorkspaceBaselineDocument = {
-  rawManifest: string;
-  manifestRef: string;
-  buildCacheInputs: string[];
-};
-
-export type LocalWorkspaceManifestAction =
-  | {
-      kind: "scan" | "probe";
-      target: "canonical" | "projection";
-      canonicalRoot: string;
-      capture?: LocalWorkspaceCapture;
-    }
-  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
-  | { kind: "materialize" }
-  | { kind: "convert" }
-  | { kind: "repair"; canonicalRoot: string }
-  | {
-      kind: "prepare";
-      manifest: LocalWorkspaceManifestMutation;
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    }
-  | (LocalWorkspaceBaselineDocument & {
-      kind: "replace";
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    });
-
-export type LocalWorkspaceManifestCheckpoint = Omit<
-  LocalWorkspaceManifestScan,
-  "observation" | "preparations"
->;
-
-export type LocalWorkspaceManifestInput = {
-  id: string;
-  revision: number;
-  action: LocalWorkspaceManifestAction;
-  knownTreeRoot?: string;
-};
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(
@@ -151,7 +114,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
     ["scan", "probe", "materialize", "archive"].includes(input.action.kind)
   ) {
-    return { row, records: undefined };
+    return { row, records: undefined, knownPacks: undefined };
   }
   let records: string[] = [];
   const replacing =
@@ -173,7 +136,15 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       records.push(node_json);
     }
   }
-  return { row, records };
+  // A replacement can reuse live packs without reading their record payloads.
+  const knownPacks =
+    row.tree_root_digest && input.action.kind === "replace"
+      ? readLocalWorkspaceTree(db, row.tree_root_digest, {
+          referencesOnly: true,
+          allowMissing: true,
+        })
+      : undefined;
+  return { row, records, ...(knownPacks ? { knownPacks } : {}) };
 }
 
 export async function executeLocalWorkspaceManifestRead(
@@ -401,7 +372,10 @@ export async function executeLocalWorkspaceManifestRead(
     // Keep the full tree between workers; the host publishes only the accepted root.
     return {
       kind: "replace",
-      update: prepareLocalWorkspaceUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
+      update: prepareLocalWorkspaceUpdate(
+        mutation,
+        prepareLocalWorkspaceTreePacks(records, undefined, new Set(snapshot.knownPacks)),
+      ),
     };
   }
   if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {
@@ -652,7 +626,12 @@ export async function executeLocalWorkspaceManifestRead(
           scanStartedAtMs,
         )
       : undefined;
-  const delta = updateLocalWorkspaceManifestTree(records, changes);
+  const preparations = prepareLocalWorkspaceTreeUpdate(
+    records,
+    changes,
+    inspected,
+    previousTreeRoot,
+  );
   const currentNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
     const current = records.get(entryPath);
@@ -713,13 +692,7 @@ export async function executeLocalWorkspaceManifestRead(
     treeRoot,
     previousTreeRoot,
     ...(fingerprints ? { fingerprints } : {}),
-    preparations:
-      treeRoot === previousTreeRoot
-        ? []
-        : prepareLocalWorkspaceTreePacks(
-            records,
-            replace ? undefined : [...delta.records.map(({ node }) => node.path), ...delta.removed],
-          ),
+    preparations,
     records: [],
     observation,
     removed: [],

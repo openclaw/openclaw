@@ -147,6 +147,13 @@ function classifyProjectGitFailure(
           "The repository was not found or is private. Check the URL, or configure gateway.controlUi.github.token (or the shared Gateway process environment) for private repositories.",
         );
   }
+  return projectGitDiagnosticFailure(result, operation);
+}
+
+function projectGitDiagnosticFailure(
+  result: SpawnResult,
+  operation: "clone" | "fetch" | "prepare refresh" | "read refs" | "seed refs" | "update refs",
+): ProjectCloneError {
   // Keep transport output in operator logs, not the shared session transcript.
   const diagnosticId = randomUUID();
   log.warn(`Git ${operation} failed (diagnostic ${diagnosticId})`, {
@@ -158,9 +165,21 @@ function classifyProjectGitFailure(
     stderr: result.stderr,
     stdout: result.stdout,
   });
+  if (operation === "clone" || operation === "fetch") {
+    return new ProjectCloneError(
+      "clone_failed",
+      `Git ${operation === "fetch" ? "refresh" : operation} failed. Ask the Gateway operator to check projects/clone logs. Diagnostic ID: ${diagnosticId}.`,
+    );
+  }
+  const phrase = {
+    "prepare refresh": "prepare the refresh",
+    "read refs": "read repository branches",
+    "seed refs": "prepare branches for refresh",
+    "update refs": "update repository branches",
+  }[operation];
   return new ProjectCloneError(
     "clone_failed",
-    `Git ${operation === "clone" ? "clone" : "refresh"} failed. Ask the Gateway operator to check projects/clone logs. Diagnostic ID: ${diagnosticId}.`,
+    `Git could not ${phrase}. Send again; if it fails, give the operator Diagnostic ID: ${diagnosticId}.`,
   );
 }
 
@@ -281,11 +300,7 @@ async function withProjectCheckoutTransport<T>(
       requireGitCommandOutput(
         "git prepare object transport",
         await runProjectCheckoutGit({ target }, options, args),
-        () =>
-          new ProjectCloneError(
-            "clone_failed",
-            "Git could not prepare a safe repository refresh. Retry the session.",
-          ),
+        (_command, failed) => projectGitDiagnosticFailure(failed, "prepare refresh"),
       ).trim(),
     (staging, objectDirectory) => run(staging, { ...options, objectDirectory }),
   );
@@ -380,10 +395,7 @@ export async function refreshProjectCheckout(
         },
       });
       if (seeded.code !== 0 || seeded.termination !== "exit") {
-        throw new ProjectCloneError(
-          "clone_failed",
-          "Git could not prepare the managed repository refs for refresh. Retry the session.",
-        );
+        throw projectGitDiagnosticFailure(seeded, "seed refs");
       }
     }
     // The isolated repository owns transport, but it borrows the managed object store.
@@ -425,10 +437,7 @@ export async function refreshProjectCheckout(
         },
       );
       if (updated.code !== 0 || updated.termination !== "exit") {
-        throw new ProjectCloneError(
-          "clone_failed",
-          "The managed repository changed while its branches were refreshed. Retry the session.",
-        );
+        throw projectGitDiagnosticFailure(updated, "update refs");
       }
     }
   });
@@ -515,7 +524,7 @@ async function readProjectRemoteRefs(
           "clone_failed",
           `The managed repository ref inventory exceeded the ${PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES / (1024 * 1024)} MiB refresh limit. Choose a base already available in the checkout or ask the Gateway administrator for help.`,
         )
-      : new ProjectCloneError("clone_failed", "Git could not read the managed repository refs."),
+      : projectGitDiagnosticFailure(failed, "read refs"),
   );
   const refs = new Map<string, string>();
   for (const line of stdout.trim().split("\n").filter(Boolean)) {

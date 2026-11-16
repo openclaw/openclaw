@@ -1,0 +1,2 @@
+# Source recheck allocation regression: forwarding composition preserves one synchronous validation scope even without an explicit consumer scope.
+3

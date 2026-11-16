@@ -162,6 +162,8 @@ export default config;`,
       );
     }
     const output = path.join(evidence, "result.json");
+    const entryHooks: string[] = [];
+    const entrySetup: string[] = [];
     if (options.finalIndexFailure) {
       const preload = path.join(root, "final-index-failure.mjs");
       write(
@@ -178,7 +180,7 @@ fs.writeFileSync = (file, data, ...args) => {
 };
 syncBuiltinESMExports();`,
       );
-      env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+      entryHooks.push(preload);
     }
     const ready = path.join(root, "ready");
     if (options.configOutput) {
@@ -425,22 +427,14 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         })),
       };
       const owner = pathToFileURL(path.join(repoRoot, "scripts/lib/extension-test-plan.mts")).href;
-      const fixture = pathToFileURL(path.join(root, "batch-plan.mjs")).href;
-      write(
-        path.join(root, "batch-plan.mjs"),
-        `export * from ${JSON.stringify(owner)};
-export function resolveExtensionBatchPlan() { return ${JSON.stringify(plan)}; }`,
-      );
-      const preload = path.join(root, "batch-plan-loader.mjs");
-      write(
-        preload,
-        `import { registerHooks } from "node:module";
-registerHooks({ resolve(specifier, context, nextResolve) {
-  const resolved = nextResolve(specifier, context);
-  return resolved.url === ${JSON.stringify(owner)} && context.parentURL !== ${JSON.stringify(fixture)} ? {...resolved, url: ${JSON.stringify(fixture)}} : resolved;
-}});`,
-      );
-      env.NODE_OPTIONS += ` --import=${pathToFileURL(preload).href}`;
+      entrySetup.push(`const planModule = await import(${JSON.stringify(owner)});
+mockNativeModuleExports(${JSON.stringify(owner)}, {
+  ...planModule,
+  resolveExtensionBatchPlan() {
+    fs.writeFileSync(${JSON.stringify(path.join(root, "batch-plan-used"))}, "used");
+    return ${JSON.stringify(plan)};
+  },
+});`);
     }
     if (options.entry === "batch-cli") {
       command = [
@@ -473,6 +467,56 @@ registerHooks({ resolve(specifier, context, nextResolve) {
         `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(repoRoot, "scripts/test-extension-batch-run.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:${JSON.stringify(args)}});`,
       );
       command = ["--import", path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"), entry];
+    }
+    if (options.finalIndexFailure) {
+      const sourceEntry = path.join(
+        repoRoot,
+        options.entry === "projects"
+          ? "scripts/test-projects.mts"
+          : options.entry === "batch-cli"
+            ? "scripts/test-extension-batch.mts"
+            : "scripts/run-vitest.mjs",
+      );
+      const entry = path.join(root, "report-entry.mjs");
+      const importHooks = entryHooks
+        .map((hook) => `await import(${JSON.stringify(pathToFileURL(hook).href)});`)
+        .join("\n");
+      if (!options.entry) {
+        const childEntry = path.join(root, "report-child-entry.mjs");
+        const childSource = path.join(repoRoot, "scripts/run-vitest-child.mts");
+        write(
+          childEntry,
+          `process.argv[1] = ${JSON.stringify(childSource)};
+${importHooks}
+await import(${JSON.stringify(pathToFileURL(childSource).href)});`,
+        );
+        const shimUrl = pathToFileURL(path.join(repoRoot, "scripts/lib/tsx-cli-shim.mjs")).href;
+        entrySetup.push(`const shim = await import(${JSON.stringify(shimUrl)});
+const runNodeCliShim = shim.runNodeCliShim;
+mockNativeModuleExports(${JSON.stringify(shimUrl)}, {
+  ...shim,
+  runNodeCliShim: (url, options) => {
+    fs.writeFileSync(${JSON.stringify(path.join(root, "shim-entry-used"))}, "used");
+    return runNodeCliShim(url, {
+      ...options, implementation: ${JSON.stringify(pathToFileURL(childEntry).href)},
+    });
+  },
+});`);
+      }
+      // Preserve the real CLI and its child ownership while installing fixture hooks at entry.
+      write(
+        entry,
+        `import fs from "node:fs";
+import { mockNativeModuleExports } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "test/helpers/native-module-mock.ts")).href)};
+process.argv[1] = ${JSON.stringify(sourceEntry)};
+${options.entry ? importHooks : ""}
+${entrySetup.join("\n")}
+await import(${JSON.stringify(pathToFileURL(sourceEntry).href)});`,
+      );
+      command = [
+        "--experimental-test-module-mocks",
+        ...command.map((argument) => (argument === sourceEntry ? entry : argument)),
+      ];
     }
     if (mode === "automatic") {
       // Only the fixture parent gets a qualified-host observation. Native selection,

@@ -48,6 +48,8 @@ export function memoryStore() {
   const profiles = new Map<string, Awaited<ReturnType<OpenClawIdMemberProfiles["read"]>>[string]>();
   return {
     profiles: {
+      inviteProfiles: async () => [],
+      link: async () => ({ ok: false, code: "profile_changed" }) as const,
       save: async (input: { accountId: string; name?: string | null; email?: string | null }) => {
         const previous = profiles.get(input.accountId);
         profiles.set(input.accountId, {
@@ -65,7 +67,8 @@ export function memoryStore() {
         ),
     },
     read: async () => record,
-    write: async (next: StoredClaw) => {
+    write: async (next: StoredClaw, assertCurrent?: () => void) => {
+      assertCurrent?.();
       // Match the durable store's strict JSON contract, including absent optional fields.
       serializePluginStoreJson({
         value: next,
@@ -84,7 +87,7 @@ export function memoryStore() {
 export async function linkedClaw(
   store: {
     read: () => Promise<StoredClaw | undefined>;
-    write: (record: StoredClaw) => Promise<void>;
+    write: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = memoryStore(),
   // Commits the link another way (through a service) instead of the authority directly.

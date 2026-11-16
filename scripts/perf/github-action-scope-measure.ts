@@ -9,7 +9,9 @@
  * action handler or publication coordinator. Observers do not change authority.
  * --lineage records baseline A/A at depth 1/4/16/64 through real principal and
  * admitted-run owners. --large-fixture <root> reflinks a completed synthetic
- * state/ database and workspace/ into the isolated test fixture (requires btrfs).
+ * database and workspace/ into the isolated test fixture (requires btrfs or APFS).
+ * --team-fixture imports the agent roster from team-shape-fixture.ts output.
+ * --compare-role-selection compares the role lookup owner within lineage calls.
  * This is boundary/owner evidence, not a running Gateway transport measurement.
  */
 import assert from "node:assert/strict";
@@ -29,7 +31,12 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean" },
     publication: { type: "boolean" },
     lineage: { type: "boolean" },
+    "working-source": { type: "boolean" },
+    "active-runs": { type: "boolean" },
+    depths: { type: "string", default: "1,4,16,64" },
     "large-fixture": { type: "string" },
+    "team-fixture": { type: "string" },
+    "compare-role-selection": { type: "boolean" },
     sessions: { type: "string", default: "2000" },
     runs: { type: "string", default: "20000" },
     roles: { type: "string", default: "2000" },
@@ -48,7 +55,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(capsule, "checkpoint-sourc
 const pairs = Number(values.pairs);
 assert(Number.isInteger(pairs) && pairs > 0, "--pairs must be a positive integer");
 const readSource = (relative: string) =>
-  values.lineage
+  values.lineage && !values["working-source"]
     ? execFileSync("git", ["show", `${manifest.revision}:${relative}`], {
         cwd: root,
         encoding: "utf8",
@@ -58,31 +65,39 @@ const readSource = (relative: string) =>
 const output = path.resolve(values.output);
 fs.mkdirSync(output);
 const key = 'globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]';
-const variants: [string, string, string][] = values.lineage
-  ? []
-  : [
-      ["src/gateway/github-publication-actions.ts", "performSessionGitHubAction", ""],
+const variants: [string, string, string][] = values["compare-role-selection"]
+  ? [
       [
-        "src/gateway/github-publication-action-target.ts",
-        "preparePublishingSession",
-        "\nexport function pullRequestState",
+        "src/gateway/operator-role-policy.ts",
+        "resolveOperatorRoleSelection",
+        "\n/** An enabled role boundary",
       ],
-      [
-        "src/gateway/github-publication-requester.ts",
-        "prepareRequesterPolicy",
-        "\nfunction prepareRequesterSource",
-      ],
-      [
-        "src/gateway/github-publication-inspect.ts",
-        "readOwnGitHubPullRequest",
-        "\nexport async function performSessionGitHubInspection",
-      ],
-      [
-        "src/agents/subagents/registry/subagent-registry-read.ts",
-        "listSubagentRunsForRequester",
-        "\nexport async function getLatestSubagentRunByChildSessionKey",
-      ],
-    ];
+    ]
+  : values.lineage
+    ? []
+    : [
+        ["src/gateway/github-publication-actions.ts", "performSessionGitHubAction", ""],
+        [
+          "src/gateway/github-publication-action-target.ts",
+          "preparePublishingSession",
+          "\nexport function pullRequestState",
+        ],
+        [
+          "src/gateway/github-publication-requester.ts",
+          "prepareRequesterPolicy",
+          "\nfunction prepareRequesterSource",
+        ],
+        [
+          "src/gateway/github-publication-inspect.ts",
+          "readOwnGitHubPullRequest",
+          "\nexport async function performSessionGitHubInspection",
+        ],
+        [
+          "src/agents/subagents/registry/subagent-registry-read.ts",
+          "listSubagentRunsForRequester",
+          "\nexport async function getLatestSubagentRunByChildSessionKey",
+        ],
+      ];
 const hashes: Record<string, { baseline: string; candidate: string }> = {};
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 function region(source: string, name: string, end: string) {
@@ -126,6 +141,22 @@ for (const [relative, name, end] of variants) {
 const query = "src/agents/subagents/registry/subagent-registry-queries.ts";
 fs.writeFileSync(path.join(capsule, query), readSource(query));
 const counters: [string, string, string][] = [
+  [
+    "src/gateway/session-sharing-routing.ts",
+    "  return (current: OpenClawConfig) => {",
+    "sharing.routing",
+  ],
+  ["src/gateway/session-sharing-routing.ts", "    if (!isDeepStrictEqual(", "sharing.deepEqual"],
+  [
+    "src/gateway/session-sharing-preparation.ts",
+    "    const readCurrent = (cfg: OpenClawConfig) => {",
+    "sharing.currency",
+  ],
+  [
+    "src/gateway/session-sharing-read.ts",
+    "  const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));",
+    "sharing.prepare",
+  ],
   [
     "src/plugins/plugin-instance.ts",
     "private enter<T>(token: object, run: () => T, held?: { registry?: PluginRegistry }): T {",
@@ -182,6 +213,7 @@ const counters: [string, string, string][] = [
     "sharing.filter",
   ],
   [query, "): LatestSubagentRunReadIndex<T> {", "runs.index"],
+  ["src/gateway/operator-role-policy.ts", "Object.keys(assignments)", "role.enumerations"],
 ];
 const rewritten = new Set(variants.map(([relative]) => relative).concat(query));
 for (const [relative] of counters) {
@@ -197,7 +229,16 @@ if (values.counts) {
     assert(source.includes(needle), `${relative}: ${counter}`);
     fs.writeFileSync(
       file,
-      source.replaceAll(needle, `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`),
+      source.replaceAll(
+        needle,
+        counter === "role.enumerations"
+          ? `(${key}?.count?.(${JSON.stringify(counter)}), ${needle})`
+          : counter === "sharing.deepEqual"
+            ? `${key}?.count?.(${JSON.stringify(counter)});\n${needle}`
+            : counter === "sharing.currency"
+              ? `${needle}\n${key}?.count?.(${JSON.stringify(counter)});\n${key}?.currency?.(readCurrent);`
+              : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
+      ),
     );
   }
 }
@@ -205,7 +246,13 @@ if (values.counts) {
 if (values["large-fixture"]) {
   assert(values.lineage, "--large-fixture requires --lineage");
   const fixture = path.resolve(values["large-fixture"]);
-  const db = path.join(fixture, "state/agents/main/agent/openclaw-agent.sqlite");
+  const db = [
+    "state/agents/main/agent/openclaw-agent.sqlite",
+    "agents/main/agent/openclaw-agent.sqlite",
+  ]
+    .map((relative) => path.join(fixture, relative))
+    .find((file) => fs.existsSync(file));
+  assert(db, "Expected synthetic agent database");
   assert(fs.statSync(db).size >= 35 * 1024 ** 3, "Expected completed synthetic fixture");
   const support = path.join(capsule, "src/gateway/github-publication.test-support.ts");
   const original = readSource("src/gateway/github-publication.test-support.ts");
@@ -219,7 +266,8 @@ if (values["large-fixture"]) {
         `
     await fs.mkdir(path.join(root, "agents/main/agent"), {recursive: true});
     (await import("../infra/sqlite-wal-filesystem.js")).prepareSqliteDatabaseDirectory(path.join(root, "agents/main/agent/openclaw-agent.sqlite"));
-    await fs.copyFile(${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite"), fs.constants.COPYFILE_FICLONE_FORCE);`,
+    if (process.platform === "darwin") (await import("node:child_process")).execFileSync("cp", ["-c", ${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite")]);
+    else await fs.copyFile(${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite"), fs.constants.COPYFILE_FICLONE_FORCE);`,
     ),
   );
 }
@@ -230,6 +278,7 @@ import { it, expect } from "vitest";
 import fs from "node:fs/promises";
 import { loadavg } from "node:os";
 import { Session } from "node:inspector/promises";
+import { createHook, executionAsyncId } from "node:async_hooks";
 import { startVisitorPublicationFixture, createRequesterPublicationFixture, capturePublicationGuest } from "./github-publication-requester.test-support.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -249,27 +298,30 @@ it("measures actions at the registered boundary with a large authority inventory
  const publication=process.env.LANE2450_PUBLICATION==="1";
  const lineage=process.env.LANE2458_LINEAGE==="1";
  const f = publication ? await createRequesterPublicationFixture(publicationCheckpoint,"local") : await createPublicationActionFixture();
- ${values["large-fixture"] ? `await fs.cp(${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture",{recursive:true,mode:fs.constants.COPYFILE_FICLONE_FORCE});` : ""}
+ ${values["large-fixture"] ? `if(process.platform==="darwin") (await import("node:child_process")).execFileSync("cp",["-cR",${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture"]); else await fs.cp(${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture",{recursive:true,mode:fs.constants.COPYFILE_FICLONE_FORCE});` : ""}
  await syncCanonicalGitHubIdentity({identity:{accountId:101,login:"contributor"},authenticationAlias:{kind:"email",email:"publication-guest@example.test"}});
  const sessions=Number(process.env.LANE2450_SESSIONS ?? 2000);
  const runs=Number(process.env.LANE2450_RUNS ?? 20000);
  const roles=Number(process.env.LANE2450_ROLES ?? 2000);
  for(let i=0;i<(lineage?0:sessions);i++) await upsertSessionEntryCore({agentId:"main",sessionKey:\`agent:main:fixture:\${i}\`},{sessionId:\`fixture-\${i}\`,updatedAt:1,createdActor:{type:"human",source:"profile",id:f.guestProfile}});
- for(let i=0;i<runs;i++) subagentRuns.set(\`fixture-\${i}\`,createSubagentRunRecord({runId:\`fixture-\${i}\`,childSessionKey:\`agent:main:subagent:fixture-\${i}\`,requesterSessionKey:\`agent:main:fixture:\${i%sessions}\`,completionRequesterSessionId:\`fixture-\${i%sessions}\`,requesterDisplayKey:"fixture",task:"fixture",cleanup:"keep",createdAt:i+1,endedAt:i+2}));
+ for(let i=0;i<runs;i++) subagentRuns.set(\`fixture-\${i}\`,createSubagentRunRecord({runId:\`fixture-\${i}\`,childSessionKey:\`agent:main:subagent:fixture-\${i}\`,requesterSessionKey:\`agent:main:fixture:\${i%sessions}\`,completionRequesterSessionId:\`fixture-\${i%sessions}\`,requesterDisplayKey:"fixture",task:"fixture",cleanup:"keep",createdAt:i+1,...(${Boolean(values["active-runs"])} ? {} : {endedAt:i+2})}));
  await using visitors = await startVisitorPublicationFixture(f);
  const current=currentGitHubPublicationConfig();
- const config={...current,agents:{...current.agents,defaults:{...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
+ const team=${values["team-fixture"] ? `JSON.parse(await fs.readFile(${JSON.stringify(path.join(path.resolve(values["team-fixture"]), "openclaw.json"))},"utf8"))` : "undefined"};
+ const config={...current,agents:{...current.agents,entries:{...team?.agents?.entries,...current.agents?.entries},defaults:{...team?.agents?.defaults,...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
  setRuntimeConfigSnapshot(config);
  prepareGatewayConnectOperatorAccess(f.guestSource.client);
  const rows=[];
  const cpuProfile=process.env.LANE2458_CPU_PROFILE==="1";
  const heap=process.env.LANE2450_ALLOC==="1" || cpuProfile ? new Session():undefined;heap?.connect();
  if(cpuProfile)await heap.post("Profiler.enable");
- const state = {arm:"baseline",count:undefined};
+ const state = {arm:"baseline",count:undefined,currency:undefined};
+ const censusHook=process.env.LANE2450_COUNTS==="1" ? createHook({before(){}}).enable():undefined;
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
- const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
+ const compare=${Boolean(values["compare-role-selection"])} || !lineage;
+ const pairs=[{kind:"warmup",arms:compare?["baseline","candidate"]:["baseline","baseline"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(compare ? Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})) : [])];
  let i=0;
- for(const depth of lineage ? [1,4,16,64] : [0]) {
+ for(const depth of lineage ? ${JSON.stringify(values.depths.split(",").map(Number))} : [0]) {
  const releases=[];
  let parent;
  let principal;
@@ -297,7 +349,11 @@ it("measures actions at the registered boundary with a large authority inventory
   i++;state.arm=arm;
   if(publication)await fs.writeFile(f.local!.cwd+"/artifact.txt",\`Publication fixture \${i}\\n\`);
   const counts={};
-  if(process.env.LANE2450_COUNTS==="1")state.count=(key)=>counts[key]=(counts[key]??0)+1;
+  const currencySteps=new Map();
+  if(process.env.LANE2450_COUNTS==="1"){
+   state.count=(key)=>counts[key]=(counts[key]??0)+1;
+   state.currency=(owner)=>{const id=executionAsyncId();let seen=currencySteps.get(id);if(!seen)currencySteps.set(id,seen=new Set());if(!seen.has(owner)){seen.add(owner);state.count("sharing.uniqueCurrencyPerAsyncStep");}};
+  }
   let maxSegment=0,last=performance.now();
   const synchronous=action==="assert" || action==="model";
   const timer=synchronous ? undefined : setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
@@ -307,6 +363,7 @@ it("measures actions at the registered boundary with a large authority inventory
   const iterations=synchronous ? Math.ceil(1024/depth) : 1;
   let result;
   for(let iteration=0;iteration<iterations;iteration++){
+  currencySteps.clear();
   const callStarted=performance.now();
   result=action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
   if(synchronous)maxSegment=Math.max(maxSegment,performance.now()-callStarted);
@@ -316,6 +373,7 @@ it("measures actions at the registered boundary with a large authority inventory
   let allocatedBytes;
   if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);}
   state.count=undefined;
+  state.currency=undefined;
   if(synchronous)expect(result).toBeUndefined();
   else if(publication)expect(result.status).toBe("published");
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
@@ -326,9 +384,9 @@ it("measures actions at the registered boundary with a large authority inventory
  if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".depth"+depth+".cpuprofile",JSON.stringify(profile));}
  } finally {for(const release of releases.toReversed())release();}
  }
- heap?.disconnect();subagentRuns.clear();
+ heap?.disconnect();censusHook?.disable();subagentRuns.clear();
  delete globalThis[Symbol.for("openclaw.benchmark.githubActionScope")];
- await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,rows},null,2));
+ await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,agents:Object.keys(config.agents.entries).length,rows},null,2));
 },600000);
 `;
 const testPath = "src/gateway/github-publication-actions.test.ts";
@@ -347,9 +405,13 @@ fs.writeFileSync(
       publication: Boolean(values.publication),
       lineage: Boolean(values.lineage),
       largeFixture: values["large-fixture"],
-      acceptance: values.lineage
-        ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
-        : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
+      teamFixture: values["team-fixture"],
+      compareRoleSelection: Boolean(values["compare-role-selection"]),
+      acceptance: values["compare-role-selection"]
+        ? "Warm registered-action CPU and allocation improve at least 20%; no latency or max-segment regression of 20%. A/A controls bound noise; five interleaved A/B pairs. Role assignment enumerations become zero on exact hits; authority assertions remain unchanged."
+        : values.lineage
+          ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
+          : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
     },
     null,
     2,

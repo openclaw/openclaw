@@ -202,8 +202,13 @@ owner SAS commitment, transcript, six-digit code and all five mailbox steps unch
 N sends `start` to `"self"`; E is an admitted device of the same account. After the user
 confirms the code, E signs `add_member_device { account_id, peer_key, device_pub, label }`
 with its D and submits it over the tunnel **before** sending `sealed`. The sealed handoff
-carries the same pinning contents as owner SAS. There is no member recovery kit: losing
-every device requires a fresh invite from the owner, and no owner setting disables approval.
+carries the same pinning contents as owner SAS. If no admitted member device is available, the new browser may ask an owner instead.
+Its SAS start includes `member_account_id`, which is covered by the commitment and transcript.
+The account is a claim, not authentication: the owner must compare the six digits with that
+person over a trusted channel. The owner signs the existing `add_member_device` only after
+that comparison; the Gateway refuses an account that is no longer a member at commit time.
+The resulting device is an independent owner-approved root of the member device tree.
+Ordinary member self-approval has no `member_account_id` and stays unchanged.
 
 The device inherits its member's current role. R and owners with `manage_members` may also
 add one. Unknown accounts, full device lists, peer keys listed anywhere and signing keys
@@ -248,10 +253,12 @@ direction, including an owner D or R with the same raw bytes as node W.
    Registration enforces `MAX_NODE_INVITE_LIFETIME_SECONDS` (3600 seconds / 1 hour) from
    creation and from registration, without a clock-skew extension. Expired caps are refused.
 2. `buildNodeJoinLink` encodes `NodeJoinLink` as
-   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>`.
-   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. All five
-   fields must occur exactly once; unknown fields, query, path, credentials and malformed
-   secrets/pins are refused. The relay must be HTTPS (HTTP only on localhost testbeds),
+   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>[&d=<Discovery origin>]`.
+   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. The five
+   required fields must occur exactly once and the optional `d` at most once; unknown fields,
+   query, path, credentials and malformed secrets/pins/origins are refused. `d` must be an
+   HTTPS origin (HTTP only on localhost testbeds) without credentials, path, query or fragment.
+   The relay must be HTTPS (HTTP only on localhost testbeds),
    without credentials, query or fragment. The link has no long-lived key. Treat the whole
    fragment as a secret: never put it in logs, analytics or an HTTP request target.
 3. The node generates W locally, computes `computeNodeRedemptionProof(proofKey, parts)`:
@@ -305,13 +312,13 @@ The code is for human comparison, not a credential, signature or automatic-appro
 
 ### Discovery bootstrap routing
 
-The join link deliberately does not identify a Discovery API origin. A claw hostname and
-an iroh relay URL may both differ from Discovery; clients **must not infer** the API origin
-from either. Joining therefore takes two inputs: the link and a deployment-selected Discovery
-base URL. The headless command contract is
-`openclaw node join <link> --discovery-url <https-origin>`.
-An explicit flag wins over the node's saved deployment configuration; a distribution may
-supply a documented deployment default only when neither exists. This protocol defines no
+A claw hostname and an iroh relay URL may both differ from Discovery; clients **must not
+infer** the API origin from either. The creating Gateway therefore states its configured
+Discovery origin explicitly in the link's optional `d` field, so one link is enough. The
+headless command contract is `openclaw node join <link> [--discovery-url <https-origin>]`.
+An explicit flag wins over the link's `d`, which wins over the node's saved deployment
+configuration; a distribution may supply a documented deployment default only when none
+exists. CLIs that predate `d` refuse a link carrying it as malformed. This protocol defines no
 universal production origin. With no configured origin, fail before generating W or sending
 mail and request `--discovery-url`. The Control UI's copyable join command must include its
 configured Discovery origin, especially for staging and independently hosted deployments.

@@ -108,8 +108,9 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
   it.each(fixtures.flatMap(({ owner }) => ["EPERM", "ESRCH"].map((code) => ({ owner, code }))))(
     "preserves failures and finishes safe $owner cleanup after $code",
     async ({ owner, code }) => {
-      const childProcess =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const childProcess = await vi.importActual<
+        typeof import("node:child_process") & { default: typeof import("node:child_process") }
+      >("node:child_process");
       const primary = new Error("fixture assertion failed");
       const denied = Object.assign(new Error("injected kill failure"), { code });
       const scratchError = new Error("scratch removal failed");
@@ -145,8 +146,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
           }
         },
       });
-      vi.doMock("node:child_process", () => ({
-        ...childProcess,
+      const overrides = {
         spawn: () => {
           if (owner === "setup") {
             child.stdin.once("data", () => {
@@ -163,6 +163,11 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
           });
           return child;
         },
+      };
+      vi.doMock("node:child_process", () => ({
+        ...childProcess,
+        ...overrides,
+        default: { ...childProcess.default, ...overrides },
       }));
       vi.doMock("../../scripts/profile-extension-memory.mts", () => ({
         runCase: async () => {
