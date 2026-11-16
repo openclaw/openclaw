@@ -132,7 +132,7 @@ describe("version resolution", () => {
     });
   });
 
-  it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
+  it("uses the signed source baseline for compatibility without changing service identity", () => {
     withEnv(
       {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
@@ -140,10 +140,19 @@ describe("version resolution", () => {
         npm_package_version: "2026.3.25-package",
       },
       () => {
-        expect(resolveCompatibilityHostVersion()).toBe(VERSION);
+        expect(resolveCompatibilityHostVersion()).toBe("2026.11.4");
+        expect(resolveRuntimeServiceVersion()).toBe("2026.3.25");
+        expect(VERSION).toBe("2026.10.33");
       },
     );
   });
+
+  it.each(["2026.10.32", "2026.10.34", "2026.11.5"])(
+    "does not infer baseline compatibility for an arbitrary version %s",
+    (version) => {
+      expect(resolveCompatibilityHostVersion({ OPENCLAW_VERSION: version })).toBe(version);
+    },
+  );
 
   it("keeps explicit env-object overrides for compatibility checks in tests", () => {
     expect(
