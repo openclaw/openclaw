@@ -277,7 +277,6 @@ it("selects broad target remainders on Bun", async () => {
     ...uiFunctionalFiles.map((file) => [file, "bun"] as const),
     ["src/config/sessions/session-accessor.pending-input-retention.test.ts", "node"],
     ["src/config/sessions/session-accessor.pending-inputs.test.ts", "bun"],
-    ["src/gateway/session-row-projection.accepted-facts.test.ts", "bun"],
     ["src/gateway/session-sharing-preparation.test.ts", "bun"],
   ] as const) {
     expect(selections({ targets: [target] }, "bun-all")).toEqual([{ runtime }]);

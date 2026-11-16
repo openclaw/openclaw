@@ -917,7 +917,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   ...[
-    "src/gateway/server-methods/chat-history-handler.cli-import.test.ts",
     "src/gateway/server-methods/chat-history-registry.test.ts",
     "src/gateway/server-methods/chat-startup-short-reference.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -986,13 +985,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/server-methods/sessions-describe-catalog.test.ts",
     "src/gateway/server-methods/sessions-list-archived.test.ts",
     "src/gateway/server-methods/sessions-mutations.perf.test.ts",
-    "src/gateway/server-methods/sessions-read-active.test.ts",
     "src/gateway/server-methods/sessions-read-async.test.ts",
     "src/gateway/server-methods/sessions-read-diagnostics.test.ts",
     "src/gateway/server-methods/sessions-read-visibility.test.ts",
     "src/gateway/server-methods/sessions-read.test.ts",
     "src/gateway/server-methods/sessions-row-projection.sqlite.test.ts",
-    "src/gateway/server-methods/sessions-sharing.identities.test.ts",
     "src/gateway/server-methods/sessions-sharing.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -1010,15 +1007,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/config/sessions/session-transcript.worker.ts",
       "src/state/openclaw-agent-execution.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-    ],
-  },
-  {
-    testFile: "src/gateway/server-methods/system-agent-approval.test.ts",
-    watchGlobs: [
-      "src/gateway/operator-approval-store.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state.worker.ts",
     ],
   },
   {
@@ -1112,7 +1100,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/gateway/talk/handlers/client-native-control.test.ts",
     "src/gateway/talk/handlers/native-consult-target.test.ts",
-    "src/gateway/talk/handlers/target.test.ts",
     "src/gateway/talk/handlers/voice.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -1669,7 +1656,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
     "src/config/sessions/session-accessor.sqlite-branches.test.ts",
     "src/gateway/session-message-events.test.ts",
-    "src/gateway/worker-environments/worker-turn-execution.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: ["src/config/sessions/session-transcript.worker.ts"],
@@ -1865,10 +1851,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/gateway/worker-environments/store.worker.ts",
       "src/gateway/worker-environments/store.kernel.ts",
     ],
-  },
-  {
-    testFile: "src/gateway/worker-environments/repository-workspace-startup.test.ts",
-    watchGlobs: ["src/node-host/node-worker-journal.worker.ts"],
   },
   {
     testFile: "src/infra/outbound/deliver.queue-integration.test.ts",
