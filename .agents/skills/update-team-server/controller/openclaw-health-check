@@ -1,14 +1,83 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/python3
+"""Observe the managed Gateway without bootstrapping an OpenClaw runtime."""
 
-[[ $# == 1 ]] || { echo "health-check: a pinned CLI path is required" >&2; exit 1; }
-if (( EUID == 0 )) || [[ "$(</proc/self/cgroup)" != "0::/system.slice/openclaw-hourly-health-check.service" ]]; then
-  echo "health-check: use the system health service and its runtime account" >&2
-  exit 1
-fi
-readonly OPENCLAW_CLI="$1"
+import json
+import math
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
 
-/usr/bin/curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18789/healthz
-/usr/bin/curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18789/readyz
-"${OPENCLAW_CLI}" gateway call health --params '{}' --json
-"${OPENCLAW_CLI}" update status --json
+
+def read_json(url):
+    # Loopback probes must not inherit proxy routing from a service environment.
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url, timeout=10) as response:
+        return json.load(response)
+
+
+def main():
+    if len(sys.argv) != 2 or os.geteuid() == 0 or Path("/proc/self/cgroup").read_text().strip() != \
+            "0::/system.slice/openclaw-hourly-health-check.service":
+        raise RuntimeError("use the system health service and its runtime account")
+    # The launcher pins this release and checks the private journal under its lock.
+    release = Path(sys.argv[1]).parent
+    verified_at = float(os.environ["OPENCLAW_MAINTENANCE_VERIFIED_AT_MS"]) / 1000
+    if not math.isfinite(verified_at) or verified_at <= 0:
+        raise RuntimeError("invalid deployment acceptance timestamp")
+    snapshot = subprocess.run(
+        ["/usr/bin/systemctl", "show", "openclaw-gateway.service", "--no-pager",
+         "--property=ActiveState,SubState,ExecStart,Environment"],
+        check=True, capture_output=True, text=True, timeout=10,
+    ).stdout
+    unit = dict(line.split("=", 1) for line in snapshot.splitlines() if "=" in line)
+    if unit.get("ActiveState") != "active" or unit.get("SubState") != "running":
+        raise RuntimeError("Gateway system unit is not active/running")
+    environment = dict(item.split("=", 1) for item in shlex.split(unit.get("Environment", "")) if "=" in item)
+    port_arg = re.search(r"--port(?:=|\s+)(\d+)(?=\s|;|$)", unit.get("ExecStart", ""))
+    port = int(port_arg[1] if port_arg else environment["OPENCLAW_GATEWAY_PORT"])
+    if not 0 < port < 65536:
+        raise RuntimeError("invalid Gateway service port")
+    for endpoint, field in (("healthz", "ok"), ("readyz", "ready")):
+        if read_json(f"http://127.0.0.1:{port}/{endpoint}").get(field) is not True:
+            raise RuntimeError(f"Gateway {endpoint} refused")
+    observations = {}
+    target = None
+    for name, selector, progressing in (
+        ("event_loop_seconds_5m", "openclaw_gateway_event_loop_observed_seconds_total", True),
+        ("sessions_running", 'openclaw_sessions_active{state="running"}', False),
+        ("sessions_queued", 'openclaw_sessions_active{state="queued"}', False),
+        ("heap_used_bytes", 'openclaw_memory_bytes{kind="heap_used"}', False),
+    ):
+        value_query = f"increase({selector}[5m])" if progressing else selector
+        query = f"({value_query}) and (timestamp({selector}) > time() - 120) and on(job,instance) (up == 1)"
+        reply = read_json("http://127.0.0.1:19090/api/v1/query?" + urllib.parse.urlencode({"query": query}))
+        if reply.get("status") != "success" or reply["data"]["resultType"] != "vector":
+            raise RuntimeError(f"Prometheus query failed: {name}")
+        rows = reply["data"]["result"]
+        if len(rows) != 1:
+            raise RuntimeError(f"missing or ambiguous fresh Gateway metric: {name}")
+        row = rows[0]
+        identity = (row["metric"]["job"], row["metric"]["instance"])
+        if target is not None and identity != target:
+            raise RuntimeError("Gateway metrics identify different scrape targets")
+        target = identity
+        value = float(row["value"][1])
+        if not math.isfinite(value) or value < 0 or (progressing and value == 0):
+            raise RuntimeError(f"invalid or stalled Gateway metric: {name}")
+        observations[name] = value
+    print(json.dumps({"ok": True, "release": release.name,
+                      "accepted_age_seconds": max(0, int(time.time() - verified_at)), **observations}))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"health-check: {error}; inspect the service", file=sys.stderr)
+        sys.exit(1)

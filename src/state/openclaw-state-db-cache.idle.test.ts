@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as schemaFacts from "../infra/sqlite-schema-facts.js";
@@ -92,6 +93,22 @@ it.each([
   { pin: "writer", ending: "release" },
   { pin: "writer", ending: "scope close" },
 ] as const)("keeps idle custody through $pin until $ending", async ({ pin, ending }) => {
+  const heartbeatStops: Promise<void>[] = [];
+  if (ending === "explicit close") {
+    const startHeartbeat = stateOwnerHeartbeat.startGatewayStateOwnerHeartbeat;
+    vi.spyOn(stateOwnerHeartbeat, "startGatewayStateOwnerHeartbeat").mockImplementation(
+      (...args) => {
+        const heartbeat = startHeartbeat(...args);
+        const stop = heartbeat.stop;
+        vi.spyOn(heartbeat, "stop").mockImplementation(() => {
+          const stopped = stop();
+          heartbeatStops.push(stopped);
+          return stopped;
+        });
+        return heartbeat;
+      },
+    );
+  }
   const { pathname, open } = fixture();
   const scope = createOpenClawDatabaseMaintenanceScope();
   const database = pin === "writer" ? scope.run(open) : open();
@@ -107,6 +124,8 @@ it.each([
       expect(vi.getTimerCount()).toBeGreaterThan(0);
       cache.closeOpenClawStateDatabaseByPath(pathname);
       expect(database.db.isOpen).toBe(false);
+      // Schema admission's released heartbeat still owns its asynchronous close deadline.
+      await Promise.all(heartbeatStops);
     } else {
       await database.walMaintenance.stop();
       if (pin === "writer") {

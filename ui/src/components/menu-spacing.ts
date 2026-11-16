@@ -1,5 +1,14 @@
 /** Classify custom row wrappers inside one menu, without document-wide :has() invalidation. */
 export function observeMenuSpacing(root: HTMLElement): () => void {
+  const isRow = (element: Element) =>
+    element.classList.contains("oc-menu-item") ||
+    element.classList.contains("oc-menu-item--submenu");
+  const containsBoundary = (node: Node): boolean =>
+    node instanceof Element &&
+    (isRow(node) ||
+      node.hasAttribute("data-menu-row-start") ||
+      node.hasAttribute("data-menu-row-end") ||
+      [...node.children].some(containsBoundary));
   let marked = new Set<Element>();
   const refresh = () => {
     const parents = new Set<Element>();
@@ -12,11 +21,7 @@ export function observeMenuSpacing(root: HTMLElement): () => void {
       ) {
         marked.add(element);
       }
-      if (
-        (element.classList.contains("oc-menu-item") ||
-          element.classList.contains("oc-menu-item--submenu")) &&
-        element.parentElement
-      ) {
+      if (isRow(element) && element.parentElement) {
         parents.add(element.parentElement);
       }
       pending.push(...element.children);
@@ -41,7 +46,21 @@ export function observeMenuSpacing(root: HTMLElement): () => void {
     }
     marked = parents;
   };
-  const observer = new MutationObserver(refresh);
+  const observer = new MutationObserver((records) => {
+    // Avatar and label updates cannot change the boundaries of their containing row.
+    if (
+      records.some(
+        ({ target, type, addedNodes, removedNodes }) =>
+          target instanceof Element &&
+          (marked.has(target) ||
+            (type === "attributes"
+              ? isRow(target) || Boolean(target.parentElement && marked.has(target.parentElement))
+              : [...addedNodes, ...removedNodes].some(containsBoundary))),
+      )
+    ) {
+      refresh();
+    }
+  });
   refresh();
   observer.observe(root, {
     childList: true,

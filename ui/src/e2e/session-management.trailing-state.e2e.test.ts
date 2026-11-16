@@ -7,7 +7,11 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   actionOpacity,
+  actionPointerEvents,
+  controlUiSessionPath,
   createSessionManagementE2eSuite,
+  installMockGateway,
+  sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -149,7 +153,54 @@ suite.define(() => {
       });
     }));
 
-  it("keeps fork provenance in the title above always-visible touch actions", () =>
+  it("keeps sidebar session controls reachable on touch pointers", async () => {
+    const context = await suite.browser.newContext({
+      ...createControlUiE2eContextOptions(),
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page
+        .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
+        .filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      const menu = row.getByRole("button", {
+        name: "Open session menu: Research notes",
+        exact: true,
+      });
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
+      await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
+      await menu.tap();
+      await page.getByRole("menuitem", { name: "Pin session", exact: true }).tap();
+      await menu.tap();
+      await page.getByRole("menuitem", { name: "Unpin session", exact: true }).waitFor();
+      await page.getByRole("menuitem", { name: "Archive session", exact: true }).tap();
+      await row.waitFor({ state: "hidden" });
+      await ui.closeArchiveUndoToast(page);
+      await gateway.waitForRequest("sessions.patch", {
+        match: { key: "agent:main:research", archived: true },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps fork provenance and navigation clear of touch actions", () =>
     suite.withPage(touchOptions, async ({ page }) => {
       await ui.installSessionRows(
         page,
@@ -171,22 +222,24 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:touch-forked"]');
       await ui.visible(row, 10_000);
       const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");
-      const pin = ui.button(row, "Pin session", false);
-      const menu = row.locator("[data-sidebar-session-archive]");
+      const menu = row.locator("[data-sidebar-session-menu]");
       await expect.poll(() => fork.isVisible()).toBe(true);
       await ui.expectCount(row.locator(".session-row-state"), 0);
 
-      const [nameBounds, forkBounds, pinBounds, menuBounds] = await Promise.all([
+      const [nameBounds, forkBounds, menuBounds] = await Promise.all([
         ui.bounds(row.locator(".sidebar-recent-session__name")),
         ui.bounds(fork),
-        ui.bounds(pin),
         ui.bounds(menu),
       ]);
 
       expect(Math.abs(ui.centerY(forkBounds) - ui.centerY(nameBounds))).toBeLessThanOrEqual(2);
-      expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
-      expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
-      expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+      expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(menuBounds), 1);
+      expect(ui.right(nameBounds)).toBeLessThanOrEqual(menuBounds.x + 1);
+      expect(nameBounds.width).toBeGreaterThan(0);
+      await row.locator(".sidebar-recent-session__link").tap();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:touch-forked"));
     }));
 
   it("keeps unread glyph badges visible while PR icons yield to hover actions", () =>

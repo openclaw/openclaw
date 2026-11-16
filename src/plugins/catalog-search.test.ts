@@ -42,18 +42,15 @@ describe("plugin catalog search", () => {
         searchResult("bundle-only", "bundle-plugin", 6),
       ]);
 
-    const results = await searchInstallablePluginPackages({ query: "calendar", limit: 2 });
+    const request = { query: "calendar", limit: 2, signal: new AbortController().signal };
+    const results = await searchInstallablePluginPackages(request);
 
-    expect(mocks.searchClawHubPackages).toHaveBeenNthCalledWith(1, {
-      query: "calendar",
-      family: "code-plugin",
-      limit: 2,
-    });
-    expect(mocks.searchClawHubPackages).toHaveBeenNthCalledWith(2, {
-      query: "calendar",
-      family: "bundle-plugin",
-      limit: 2,
-    });
+    expect(mocks.searchClawHubPackages.mock.calls).toEqual(
+      ["code-plugin", "bundle-plugin"].map((family) => [{ ...request, family }]),
+    );
+    expect(
+      mocks.searchClawHubPackages.mock.calls.every(([params]) => params.signal === request.signal),
+    ).toBe(true);
     expect(results.map((entry) => [entry.package.name, entry.score])).toEqual([
       ["shared", 9],
       ["code-only", 8],
@@ -66,15 +63,9 @@ describe("plugin catalog search", () => {
 
     await searchInstallablePluginPackages({ query: "calendar", limit: Number.NaN });
 
-    expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
-      query: "calendar",
-      family: "code-plugin",
-      limit: 20,
-    });
-    expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
-      query: "calendar",
-      family: "bundle-plugin",
-      limit: 20,
-    });
+    const normalized = { query: "calendar", limit: 20, signal: undefined };
+    expect(mocks.searchClawHubPackages.mock.calls).toEqual(
+      ["code-plugin", "bundle-plugin"].map((family) => [{ ...normalized, family }]),
+    );
   });
 });

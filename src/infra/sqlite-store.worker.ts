@@ -142,11 +142,17 @@ async function closeInActorContext(
   try {
     await runWithActorFacts(actor, () =>
       admission
-        ? withSqliteDatabaseAdmissionExchange((facts, location, create) => {
+        ? withSqliteDatabaseAdmissionExchange((facts, location, create, observedLocation) => {
             if (!active) {
               throw new SqliteWorkerError("SQLite close facts outlived native cleanup", "closed");
             }
-            return exchangeSqliteDatabaseAdmissions(admission.port, facts, location, create);
+            return exchangeSqliteDatabaseAdmissions(
+              admission.port,
+              facts,
+              location,
+              create,
+              observedLocation,
+            );
           }, close)
         : close(),
     );
@@ -455,7 +461,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         : undefined;
       let retained = false;
       try {
+        if (timing) {
+          timing.backendLoadStarted = performance.now();
+        }
         const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
+        if (timing) {
+          timing.backendLoadFinished = performance.now();
+        }
         loadedModules = true;
         const factoryName = request.existingIdentity
           ? "openExistingSqliteWorkerBackend"
@@ -472,10 +484,16 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           const input = deserialize(request.input);
           if (request.openAdmission) {
             try {
+              if (timing) {
+                timing.openGrantStarted = performance.now();
+              }
               requestSqliteWorkerOperationAdmission({
                 stage: "open",
                 facts: request.openAdmission === "input" ? input : undefined,
               });
+              if (timing) {
+                timing.openGrantFinished = performance.now();
+              }
             } catch (error) {
               openNotEntered = true;
               throw error;
@@ -485,6 +503,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             if (operationAdmission) {
               assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
             }
+            if (timing) {
+              timing.factoryStarted = performance.now();
+            }
             return factory(input, {
               databasePath: request.databasePath,
               ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
@@ -493,6 +514,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           };
           return bridge ? bridge.run(open) : open();
         });
+        if (timing) {
+          timing.factoryFinished = performance.now();
+        }
         if (
           !isRecord(backend) ||
           typeof backend.execute !== "function" ||

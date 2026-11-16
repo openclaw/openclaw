@@ -351,10 +351,11 @@ describe("runDaemonInstall integration", () => {
         "SERVICE_DEFINITION_UNKNOWN",
         "unsafe-permissions",
         "service directory",
+        ancestor,
         "group/world-writable",
         "chmod go-w",
       ],
-      ["private-path-canary", "MISSING_GATEWAY_TOKEN"],
+      ["MISSING_GATEWAY_TOKEN"],
     );
 
     await fs.chmod(ancestor, 0o700);

@@ -121,7 +121,7 @@ Plugin-supplied queues can implement optional `enqueueBatch(events)` with the sa
 atomic contract; queues exposing only `enqueue` retain individual admission.
 
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
-`onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
+`onCancelled`, `onAbandoned`, `onDropped`, and `abortSignal`. Use `onFailed` for delivery
 errors, `onCancelled` for explicit pre-adoption cancellation that must preserve
 retry accounting, and `onAbandoned` when a non-adopted turn should consume a
 retry attempt. Returning without an explicit handoff marks a terminal
@@ -129,6 +129,14 @@ no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
 keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.
+
+Forward and await `onDropped(reason)` for queue-cap policy drops. They are recorded
+terminal non-outcomes, without a failure notice or replay. A wrapper that spreads
+the lifecycle and overrides `onAbandoned` for cleanup must also wrap `onDropped`
+with that cleanup; invoking `onAbandoned` from `onDropped` would request a retry.
+Wrappers that omit `onDropped` retain the legacy abandonment/replay fallback.
+Only expose a wrapped `onDropped` when the underlying sources support terminal
+drop custody; its presence also suppresses ordinary queue-full notices.
 
 Use optional `drain.onDeadLetter(claim, { reason, message }, signal)` for a transport-owned
 failure reply or reaction. It runs only after this claim's failure write commits;

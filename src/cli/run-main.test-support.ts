@@ -230,15 +230,17 @@ vi.mock("./container-target.js", () => ({
   parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
 }));
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  return {
-    ...actual,
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
     existsSync: (target: Parameters<typeof actual.existsSync>[0]) =>
       typeof target === "string" && existsSyncOverride.value
         ? existsSyncOverride.value(target)
         : actual.existsSync(target),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 vi.mock("./dotenv.js", () => {

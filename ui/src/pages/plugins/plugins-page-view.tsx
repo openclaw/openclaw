@@ -103,7 +103,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
-    error: page().discovery.read().error ?? page().state.error,
   }));
   const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
   const actions = {
@@ -218,7 +217,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }));
 
   function CatalogInventory() {
-    // The route owns first-load readiness; retain accepted inventory during refresh.
+    // Observe the page owner's read while retaining accepted inventory during refresh.
     const catalogRead = createMemo(() => props.page.catalogRead());
     const loading = () => {
       latest(catalogRead);
@@ -363,6 +362,16 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
           <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+            <Show when={page().loading && !hasInventory()}>
+              <div class="muted" role="status">
+                {t("pluginsPage.loading")}
+              </div>
+            </Show>
+            <Show when={page().state.error}>
+              {(error) => (
+                <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />
+              )}
+            </Show>
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />

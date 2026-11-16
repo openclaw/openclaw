@@ -146,7 +146,13 @@ function HandoffWaitLine(props: {
               session={session()}
               links={props.links}
             />{" "}
-            <Show when={session().status === "attention" || session().status === "paused"}>
+            <Show
+              when={
+                session().status === "attention" ||
+                session().status === "paused" ||
+                session().status === "background"
+              }
+            >
               <span aria-hidden="true">·</span>{" "}
               <span
                 class={{ "chat-subagent-wait__attention": session().status === "attention" }}

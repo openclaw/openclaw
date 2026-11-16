@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import {
   resolveSqliteReadScope,
@@ -33,7 +34,7 @@ import {
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -192,14 +193,21 @@ async function withSessionManagerDatabaseWrite<T>(
   const options = toDatabaseOptions(resolveSqliteReadScope(identity));
   options.env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
   options.path = resolveOpenClawAgentSqlitePath(options);
-  const database = captureOpenClawAgentDatabaseExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (database) => ok(database),
+    (error: unknown) => err<never, unknown>(error),
+  );
   try {
     return await runSessionManagerWrite(manager, () =>
       runOpenClawAgentWriteAdmission(
         options,
-        () => {
+        async () => {
+          const acquired = await captured;
+          if (!acquired.ok) {
+            throw acquired.error;
+          }
           assertManager();
-          return write({ database, options, assertCurrent });
+          return write({ database: acquired.value, options, assertCurrent });
         },
         true,
         undefined,
@@ -208,7 +216,10 @@ async function withSessionManagerDatabaseWrite<T>(
       ),
     );
   } finally {
-    await database.release();
+    const acquired = await captured;
+    if (acquired.ok) {
+      await acquired.value.release();
+    }
   }
 }
 

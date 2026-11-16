@@ -355,6 +355,9 @@ export function createModelProviderProfileActions(options: {
               pending.keptSource
                 ? t("modelProviders.remove.kept", { source: pending.keptSource })
                 : "",
+              pending.defaultModels
+                ? t("modelProviders.remove.defaults", { models: pending.defaultModels })
+                : "",
             ]
               .filter(Boolean)
               .join(" ")

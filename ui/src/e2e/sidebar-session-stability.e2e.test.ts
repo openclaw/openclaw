@@ -82,9 +82,13 @@ suite.define(() => {
       });
       const childRow = sessionRow(childKey, "Background research", baseTime - 1, {
         spawnedBy: parentKey,
+        hasActiveRun: true,
+        status: "running",
+        startedAt: baseTime,
       });
       await withPage(
         async (page) => {
+          await page.clock.setFixedTime(baseTime + 9_000);
           if (textScale !== 100) {
             await seedStorage(page, {
               [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
@@ -168,6 +172,24 @@ suite.define(() => {
           expect(childGeometry.left).toBe(loadingGeometry.left);
           // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
           expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
+
+          const clock = child.locator("openclaw-elapsed-time");
+          await expectText(clock, "9s");
+          const clockGeometry = () =>
+            child.evaluate((element) => {
+              const range = document.createRange();
+              range.selectNodeContents(element.querySelector("openclaw-elapsed-time")!);
+              return {
+                x: range.getBoundingClientRect().x,
+                titleWidth: element
+                  .querySelector(".sidebar-recent-session__name")!
+                  .getBoundingClientRect().width,
+              };
+            });
+          const beforeTick = await clockGeometry();
+          await page.clock.setFixedTime(baseTime + 10_000);
+          await expectText(clock, "10s");
+          expect(await clockGeometry()).toEqual(beforeTick);
 
           await deferChildRefresh(page, gateway, parentKey, baseTime + 2);
           expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);

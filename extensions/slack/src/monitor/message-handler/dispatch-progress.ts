@@ -242,6 +242,9 @@ export function createSlackProgressRuntime(runtimeParams: {
         ...(narrationUpdate.delta ? { text: narrationUpdate.delta } : {}),
         ...(chunks?.length ? { chunks } : {}),
       };
+      if (narrationUpdate.delta) {
+        delivery.pendingTextIsProgress = true;
+      }
       const accepted = hadSession
         ? await nativeTransport.append(streamUpdate)
         : await nativeTransport.start(streamUpdate, retainedThreadTs);
@@ -461,12 +464,19 @@ export function createSlackProgressRuntime(runtimeParams: {
   });
   const commentaryProgressEnabled = progressDraft.commentaryProgressEnabled;
 
+  // Core fires onReasoningEnd and onAssistantMessageStart without awaiting
+  // them, so a draft boundary can land while the final reply is delivered; it
+  // waits for this, or it would stop the stream under the answer.
+  let nativeFinalDelivery: Promise<unknown> | undefined;
   const deliverNativeFinal = async (
     payload: ReplyPayload,
     kind: ReplyDispatchKind,
   ): Promise<LivePreviewDeliveryResult> => {
-    await cancelNativeUpdates();
-    return await withNativeStreamOrder(() => deliverNativeFinalNow(payload, kind));
+    const run = cancelNativeUpdates().then(() =>
+      withNativeStreamOrder(() => deliverNativeFinalNow(payload, kind)),
+    );
+    nativeFinalDelivery = run.catch(() => undefined);
+    return await run;
   };
 
   const deliverNativeFinalNow = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
@@ -595,6 +605,11 @@ export function createSlackProgressRuntime(runtimeParams: {
       return false;
     }
     if (!isProgressMode) {
+      // Each merge reprocesses the accumulated reasoning, so a long stream with
+      // no preview to show it would block the event loop for nothing.
+      if (!previewToolProgressEnabled) {
+        return false;
+      }
       const normalized = progressDraft
         .mergeReasoningProgress(payload.text, {
           snapshot: payload.isReasoningSnapshot === true,
@@ -625,6 +640,9 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (useNativeProgressStreaming) {
       if (!nativeUpdatesStopped && options?.force !== true) {
         return false;
+      }
+      if (options?.force !== true) {
+        await nativeFinalDelivery;
       }
       await cancelNativeUpdates();
     }

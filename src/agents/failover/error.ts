@@ -12,6 +12,7 @@ import type { FailoverReason } from "./signal.js";
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
+export const MODEL_CHAT_UNSUPPORTED_TEXT = "This model doesn't support chat; pick another model.";
 /** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
 export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
 /** The host refused another warm CLI process because its free memory is low. */
@@ -35,6 +36,7 @@ export type FallbackAttemptRecord = {
   code?: string;
   error?: string;
   rateLimitRetriesExhausted?: number;
+  rateLimitResetAt?: number;
 };
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
@@ -61,6 +63,8 @@ export class FailoverError extends Error {
   readonly timeout?: Pick<AgentRunTerminalOutcome, "timeoutPhase" | "providerStarted">;
   readonly attempts?: readonly FallbackAttemptRecord[];
   readonly soonestCooldownExpiry?: number | null;
+  /** Absolute provider reset, preserved when diagnostics become user-facing text. */
+  readonly rateLimitResetAt?: number;
 
   constructor(
     message: string,
@@ -86,6 +90,20 @@ export class FailoverError extends Error {
     this.timeout = params.timeout;
     this.attempts = params.attempts;
     this.soonestCooldownExpiry = params.soonestCooldownExpiry;
+    this.rateLimitResetAt = params.rateLimitResetAt;
+  }
+}
+
+export function assertModelSupportsChat(
+  chat: boolean | undefined,
+  ref: { provider: string; model: string },
+): void {
+  if (chat === false) {
+    throw new FailoverError(MODEL_CHAT_UNSUPPORTED_TEXT, {
+      reason: "format",
+      code: "model_chat_unsupported",
+      ...ref,
+    });
   }
 }
 

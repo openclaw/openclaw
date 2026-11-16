@@ -258,6 +258,17 @@ suite.define(() => {
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
       await polledAttribute(options.first(), "aria-selected").toBe("true");
+      await composer.evaluate((textarea: HTMLTextAreaElement) => {
+        // Native selection events queue behind the keydown that opens the next option.
+        textarea.addEventListener(
+          "keydown",
+          () => {
+            textarea.setSelectionRange(0, 0);
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+          },
+          { capture: true, once: true },
+        );
+      });
       await composer.press("ArrowDown");
       await polledAttribute(options.nth(1), "aria-selected").toBe("true");
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");

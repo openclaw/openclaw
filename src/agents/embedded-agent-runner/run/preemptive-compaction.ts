@@ -6,10 +6,10 @@ import {
 } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { calculateContextTokens, IMAGE_BLOCK_TOKENS } from "../../runtime/index.js";
 import {
+  SAFETY_MARGIN,
   createFreshLlmBoundaryTokenEstimator,
   estimateJsonPayloadTokenPressure,
   estimateMessageTokenPressure,
@@ -103,9 +103,7 @@ export function estimateToolSchemaTokenPressure(
 }
 
 function estimateTranscriptBoundaryTokenPressure(
-  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0] & {
-    llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
-  },
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
 ): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
@@ -177,6 +175,7 @@ function estimateTranscriptBoundaryTokenPressure(
 
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
+  llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
   systemPrompt?: string;
   prompt: string;
   replay?: CompactionReplayPressureContext;
@@ -221,6 +220,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  estimateRecoverableToolResultChars?: () => number;
   toolSchemaTokens?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
   replay?: CompactionReplayPressureContext;
@@ -316,6 +316,7 @@ export function resolveProjectedRequestPressure(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  estimateRecoverableToolResultChars?: () => number;
   replay?: CompactionReplayPressureContext;
 }) {
   const { context, previousRequest } = params;
@@ -337,7 +338,12 @@ function resolveCompactionPressureDecision(
   pressure: Pick<TranscriptBoundaryTokenPressure, "messages" | "estimatedPromptTokens"> & {
     source: string;
   },
-  params: { contextTokenBudget: number; reserveTokens: number; toolResultMaxChars?: number },
+  params: {
+    contextTokenBudget: number;
+    reserveTokens: number;
+    toolResultMaxChars?: number;
+    estimateRecoverableToolResultChars?: () => number;
+  },
 ): CompactionPressureDecision {
   const { estimatedPromptTokens } = pressure;
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
@@ -349,11 +355,12 @@ function resolveCompactionPressureDecision(
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultReducibleChars =
     overflowTokens > 0
-      ? estimateToolResultReductionPotential({
+      ? (params.estimateRecoverableToolResultChars?.() ??
+        estimateToolResultReductionPotential({
           messages: pressure.messages,
           contextWindowTokens: params.contextTokenBudget,
           maxCharsOverride: params.toolResultMaxChars,
-        }).maxReducibleChars
+        }).maxReducibleChars)
       : 0;
   const overflowChars = overflowTokens * CHARS_PER_TOKEN_ESTIMATE;
   const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * CHARS_PER_TOKEN_ESTIMATE;

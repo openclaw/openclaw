@@ -196,7 +196,7 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   ],
 ]);
 
-export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
+function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 

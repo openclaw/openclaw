@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { BatchInput } from "./ingestion-contract.js";
@@ -32,7 +33,12 @@ const RELINK_BASIS = {
 } as const;
 /** Multi-record ingestion: batches, remembered claims and subject relinking. */
 export class StorageIngestion extends StorageLifecycle {
-  async batch(input: BatchInput, access: VaultAccess, actor: string): Promise<Receipt> {
+  async batch(
+    input: BatchInput,
+    access: VaultAccess,
+    actor: string,
+    rememberIntent?: string,
+  ): Promise<Receipt> {
     if (!Check(BatchInput, input) || Buffer.byteLength(canonical(input)) > 1024 * 1024) {
       throw new Error(
         "Invalid batch input or batch exceeds 1 MiB. Use at most 25 records; retain originals with knowledge_attach.",
@@ -43,7 +49,7 @@ export class StorageIngestion extends StorageLifecycle {
       throw new Error("Writes disabled or connected vault changed; no batch accepted.");
     }
     const scope = scopeKey(access.scope),
-      intent = digest(canonical({ operation: "batch", input }));
+      intent = rememberIntent ?? digest(canonical({ operation: "batch", input }));
     await this.initialize(access);
     const prior = this.store.withDatabase((db) => this.row(db, scope, input.requestId));
     if (prior) {
@@ -196,9 +202,6 @@ export class StorageIngestion extends StorageLifecycle {
       ) {
         throw new Error("Source hash must match retained evidence on a batch record.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during batch validation.");
-      }
       return {
         ...parts[0]!,
         artifacts,
@@ -250,7 +253,15 @@ export class StorageIngestion extends StorageLifecycle {
     }
     await this.initialize(access);
     const requestId = input.requestId,
-      scope = scopeKey(access.scope);
+      scope = scopeKey(access.scope),
+      intent = digest(canonical({ operation: "remember", input }));
+    const prior = this.store.withDatabase((db) => this.row(db, scope, requestId));
+    if (prior?.state === "accepted") {
+      // An accepted remember blocks its own catalog read. Validate the original
+      // caller input before resuming; subject resolution comes after publication.
+      this.checkReplay(prior, intent);
+      this.resume(access, requestId);
+    }
     const { plan, fingerprint } = await this.run(access, async (vault) => {
       const data = await vault.scan(),
         withdrawn = this.store.withDatabase((db) =>
@@ -261,11 +272,15 @@ export class StorageIngestion extends StorageLifecycle {
         fingerprint: data.ontology?.fingerprint,
       };
     });
-    const prior = this.store.withDatabase((db) => this.row(db, scope, requestId));
     const inserts = plan.flatMap((p, n) => (p.duplicateOf || p.sameAs !== undefined ? [] : [n]));
     let receipt: Receipt | null = null;
     if (prior) {
       // A replay finds its own published claims as duplicates; keys map them back.
+      if (inserts.length) {
+        throw new Error(
+          "Request ID already belongs to a different payload. Use the original payload for retries.",
+        );
+      }
       receipt = this.resume(access, requestId);
       for (const item of receipt.items ?? []) {
         const n = Number(item.key.slice(1));
@@ -311,6 +326,7 @@ export class StorageIngestion extends StorageLifecycle {
         },
         access,
         actor,
+        intent,
       );
     }
     const inserted = new Map((receipt?.items ?? []).map((i) => [Number(i.key.slice(1)), i.id]));
@@ -429,11 +445,11 @@ export class StorageIngestion extends StorageLifecycle {
       shown[outcome] = (shown[outcome] ?? 0) + 1;
       examples.push({
         id: plan.record.id,
-        title: plan.record.title.slice(0, 200),
+        title: truncateUtf16Safe(plan.record.title, 200),
         outcome,
         ...(plan.tier ? { tier: plan.tier } : {}),
         ...(plan.subject
-          ? { subject: { id: plan.subject.id, title: plan.subject.title.slice(0, 200) } }
+          ? { subject: { id: plan.subject.id, title: truncateUtf16Safe(plan.subject.title, 200) } }
           : {}),
         ...(plan.reason ? { reason: plan.reason } : {}),
       });

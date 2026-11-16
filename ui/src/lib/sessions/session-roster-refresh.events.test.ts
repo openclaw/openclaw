@@ -402,8 +402,18 @@ describe("session roster event traffic", () => {
     "all",
     "sessions-page",
     "dashboard",
-  ])("bounds requests during a continuous %s stream for existing members", async (stream) => {
-    const row = session("main", 1, { sessionId: "tracked", hasActiveRun: true, hasBoard: true });
+    "other-owner",
+    "other-owner-partial",
+  ])("bounds requests during a continuous %s stream", async (stream) => {
+    const otherOwner = stream.startsWith("other-owner");
+    const managed =
+      ["filtered", "all", "sessions-page", "dashboard"].includes(stream) || otherOwner;
+    const row = session("main", 1, {
+      sessionId: "tracked",
+      hasActiveRun: true,
+      hasBoard: true,
+      owner: { actor: { type: "human", id: "other" } },
+    });
     let reads = 0;
     const gatewayHarness = fixture(async (method, params) => {
       expect(method).toBe("sessions.list");
@@ -414,11 +424,13 @@ describe("session roster event traffic", () => {
       if (reads > 1) {
         await delay(1_000);
       }
-      return sessionsResult([row], reads);
+      const ownerId = Reflect.get(params ?? {}, "ownerId");
+      return sessionsResult(ownerId && ownerId !== row.owner?.actor.id ? [] : [row], reads);
     });
     const { sessions, watch, listRows, settle } = gatewayHarness;
     const query = {
       agentId: "main",
+      ...(otherOwner ? { ownerId: " selected " } : {}),
       ...(stream === "filtered" ? { search: "tracked" } : {}),
       ...(stream === "all" ? { archivedFilter: "all" as const } : {}),
       ...(stream === "sessions-page"
@@ -426,15 +438,15 @@ describe("session roster event traffic", () => {
         : {}),
       ...(stream === "dashboard" ? { hasBoard: true, archivedFilter: "all" as const } : {}),
     };
-    if (["filtered", "all", "sessions-page", "dashboard"].includes(stream)) {
+    if (managed) {
       watch(query);
     }
     settle(() => advance(1_000));
-    if (["all", "sessions-page", "dashboard"].includes(stream)) {
+    if (managed && stream !== "filtered") {
       await sessions.refresh({ agentId: "main", force: true });
     }
     const initial = sessions.refreshList({ ...query, force: true });
-    if (["all", "sessions-page", "dashboard"].includes(stream)) {
+    if (managed && stream !== "filtered") {
       await advance(1_000);
     }
     await initial;
@@ -450,7 +462,7 @@ describe("session roster event traffic", () => {
           ...(stream === "invalidation"
             ? {}
             : {
-                ancestorSessions: [],
+                ...(stream === "other-owner-partial" ? {} : { ancestorSessions: [] }),
                 session: {
                   ...row,
                   updatedAt: index + 2,
@@ -464,13 +476,24 @@ describe("session roster event traffic", () => {
       );
       await advance(100);
     }
-    if (stream !== "invalidation" && stream !== "filtered") {
+    if (!["invalidation", "filtered", "other-owner-partial"].includes(stream)) {
       expect(reads - initialReads).toBe(0);
-      expect(listRows(query)?.[0]).toMatchObject({
+      expect(
+        stream === "other-owner" ? sessions.state.result?.sessions[0] : listRows(query)?.[0],
+      ).toMatchObject({
         totalTokens: 600,
         unread: false,
         lastReadAt: 600,
       });
+      if (stream === "other-owner") {
+        expect(listRows(query)).toEqual([]);
+        row.owner = { actor: { type: "human", id: "selected" } };
+        row.updatedAt = 602;
+        gatewayHarness.publishEvent("sessions.changed", snapshot(row));
+        await advance(6_000);
+        expect(listRows(query)?.[0]?.owner?.actor.id).toBe("selected");
+        expect(reads - initialReads).toBeGreaterThan(0);
+      }
     } else {
       expect(reads - initialReads).toBeGreaterThan(1);
       expect(reads - initialReads).toBeLessThanOrEqual(15);

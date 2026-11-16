@@ -7,7 +7,7 @@ import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
 import type { ModelProviderConfig } from "../../../../src/config/types.models.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
-import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/provider-types.js";
 import { createSolidPngBuffer } from "../../../helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 

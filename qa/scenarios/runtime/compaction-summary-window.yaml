@@ -1,0 +1,102 @@
+title: Manual compaction fits the foreground window with a larger summarizer
+
+scenario:
+  id: compaction-summary-window
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.compaction
+  objective: Verify manual Gateway compaction fits a configured large summary to the foreground context window rather than the separately routed summarizer window.
+  successCriteria:
+    - sessions.compact runs a real safeguard summary request against the synthetic 200k-context summarizer.
+    - The CJK-heavy generated summary is shortened before persistence so the reported replay tokens fit the 64k foreground budget.
+    - Exactly one compaction artifact is persisted.
+  gatewayConfigPatch:
+    models:
+      providers:
+        mock-openai:
+          models:
+            - id: gpt-5.6-luna
+              name: QA 64k foreground
+              api: openai-responses
+              reasoning: true
+              input: [text]
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+              contextWindow: 64000
+              maxTokens: 8192
+    agents:
+      defaults:
+        compaction:
+          mode: safeguard
+          model: anthropic/claude-sonnet-4-6
+          maxSummaryChars: 64000
+          keepRecentTokens: 64
+  docsRefs:
+    - docs/concepts/compaction.md
+  codeRefs:
+    - src/gateway/server-methods/sessions-compact.ts
+    - src/agents/embedded-agent-runner/compaction-session-execution.ts
+    - src/agents/sessions/agent-session-compaction.ts
+  execution:
+    kind: flow
+    summary: Seed a transcript, manually compact it through sessions.compact with a 200k summarizer and a 64k foreground budget, then inspect the persisted summary and replay token count.
+    config:
+      requiredProviderMode: mock-openai
+
+flow:
+  steps:
+    - name: fits a manual summary to the foreground window
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai' && env.runtimeId === 'openclaw' && Boolean(env.mock)"
+            message: summary window proof requires the mock-openai OpenClaw runtime
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: sessionId
+          value:
+            expr: "`qa-summary-window-${randomUUID()}`"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:summary-window:${randomUUID().slice(0, 8)}`"
+        - set: now
+          value:
+            expr: "Date.now()"
+        - call: seedQaSessionTranscript
+          args:
+            - ref: env
+            - sessionId:
+                ref: sessionId
+              sessionKey:
+                ref: sessionKey
+              updatedAt:
+                ref: now
+              label: QA manual summary window
+              messages:
+                expr: "[{ role: 'user', text: `QA-COMPACTION-SUMMARY-WINDOW ${'Old project research. '.repeat(5000)}`, timestamp: now - 4000 }, { role: 'assistant', text: 'The project research was completed.', timestamp: now - 3000 }, { role: 'user', text: 'Continue the project.', timestamp: now - 2000 }, { role: 'assistant', text: 'Ready to continue.', timestamp: now - 1000 }]"
+        - call: env.gateway.call
+          saveAs: compacted
+          args:
+            - sessions.compact
+            - key:
+                ref: sessionKey
+              agentId: qa
+            - timeoutMs: 120000
+        - assert:
+            expr: "compacted.ok === true && compacted.compacted === true && compacted.result.tokensAfter > 0 && compacted.result.tokensAfter <= 64000"
+            message:
+              expr: "`manual compaction did not fit the foreground window: ${JSON.stringify(compacted)}`"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - set: summary
+          value:
+            expr: "String(transcript.compactionSummaries.at(-1) ?? '')"
+        - assert:
+            expr: "transcript.compactionSummaries.length === 1 && summary.includes('保留项目决策') && summary.length < 40000"
+            message:
+              expr: "`expected a fitted persisted CJK summary: ${JSON.stringify({ count: transcript.compactionSummaries.length, length: summary.length })}`"

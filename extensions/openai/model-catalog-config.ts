@@ -1,3 +1,4 @@
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
@@ -69,11 +70,8 @@ export async function buildOpenAILiveProviderConfig(
   if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
-  const [{ buildLiveModelProviderConfig, LiveModelCatalogHttpError }, { isNonSecretApiKeyMarker }] =
-    await Promise.all([
-      import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
-      import("openclaw/plugin-sdk/provider-auth"),
-    ]);
+  const { buildLiveModelProviderConfig, LiveModelCatalogHttpError } =
+    await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const rejectionScope =
     params.apiKey && !params.discoveryApiKey && isNonSecretApiKeyMarker(params.apiKey)
       ? "catalog"

@@ -97,7 +97,7 @@ function commentEditor(page: Page) {
 }
 async function addComment(page: Page, comment: string, passage = selectedText) {
   await selectText(selectedSource(page, passage));
-  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to message").click();
+  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
   await commentEditor(page).getByRole("textbox").fill(comment);
   await commentEditor(page).getByRole("textbox").press("Enter");
 }
@@ -145,7 +145,7 @@ suite.define(() => {
             expect(await toolbar.count()).toBe(0);
             await selectText(text);
           }
-          await button(page, "Ask in side chat").click();
+          await button(toolbar, "Ask in side chat").click();
           await editor.waitFor({ state: "visible" });
           if (scenario === "normal") {
             expect(await sideComposer.count()).toBe(0);
@@ -242,7 +242,7 @@ suite.define(() => {
         const source = selectedSource(page);
         await source.waitFor({ state: "visible" });
         await selectText(source);
-        await button(page, "Add to message").tap();
+        await button(page, "Add to chat").tap();
         await comment.fill("Check the rollback steps. 🦞");
         await button(editor, "Save comment").tap();
         await pendingChip.tap();
@@ -263,7 +263,7 @@ suite.define(() => {
         await sentQuote.waitFor({ state: "visible" });
         await pollText(sent).toContain("Check the rollback steps. 🦞");
         await selectText(source);
-        await button(page, "Add to message").tap();
+        await button(page, "Add to chat").tap();
         await comment.fill("Remove only this pending comment.");
         await button(editor, "Save comment").tap();
         await button(pendingChip, "Remove all comments").tap();
@@ -295,7 +295,7 @@ suite.define(() => {
           page.getByRole("button", { name: `Edit comment ${number}`, exact: true });
         const open = async () => {
           await selectText(text);
-          await button(toolbar, "Add to message").click();
+          await button(toolbar, "Add to chat").click();
           await editor.waitFor({ state: "visible" });
         };
         const bounded = async (locator: Locator) => {
@@ -387,7 +387,7 @@ suite.define(() => {
       await page.mouse.wheel(0, -32);
       await waitForChatScrollIdle(page);
       await selectText(text.locator("strong"));
-      await button(page, "Add to message").click();
+      await button(page, "Add to chat").click();
       await submitComment(comment, "Keep this pin on its original passage.");
       const pin = button(page, "Edit comment 1");
       const aligned = async () => {
@@ -514,15 +514,38 @@ suite.define(() => {
       const paragraph = page.locator(".chat-bubble .chat-text p");
       await paragraph.waitFor({ state: "visible" });
       await selectText(paragraph);
-      await button(
-        page.getByRole("toolbar", { name: "Selection actions" }),
-        "Add to message",
-      ).click();
+      await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
       await button(commentEditor(page), "Save comment").click();
       await button(page, "Send message").click();
       const params = await sentMessage(gateway);
       expect(params.message).toBe("> A\n> B");
       expect(params.attachments ?? []).toHaveLength(0);
+    });
+  });
+
+  it("starts a new session from the launcher with the selected excerpt attached", async () => {
+    await withPage(async ({ page, composer, toolbar }) => {
+      const gateway = await openSelection(page);
+      await composer.fill(draft);
+      await selectText(selectedSource(page));
+      await toolbar.waitFor({ state: "visible" });
+      await button(toolbar, "Ask in new session").click();
+      const palette = page.locator("openclaw-command-palette");
+      const input = palette.locator(".cmd-palette__input");
+      await input.waitFor({ state: "visible" });
+      const chip = palette.locator(".chat-selection-annotations__chip");
+      await chip.click();
+      await button(palette, "Delete comment").waitFor({ state: "visible" });
+      // The launcher has no transcript anchor to reopen the editor against.
+      expect(await palette.getByRole("button", { name: "Edit comment 1" }).count()).toBe(0);
+      await input.fill("Summarize the risks.");
+      await input.press("ControlOrMeta+Enter");
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: `> ${selectedText}\n\nSummarize the risks.`,
+      });
+      expect(create.params).not.toHaveProperty("attachments");
+      expect(await composer.inputValue()).toBe(draft);
     });
   });
 });

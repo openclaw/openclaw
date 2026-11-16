@@ -111,7 +111,7 @@ suite.define(() => {
           await stop.waitFor();
           await statusText.waitFor({ state: "attached" });
           await page.getByText(message, { exact: true }).waitFor();
-          expect(await statusText.textContent()).toBe("Working…");
+          expect(await statusText.textContent()).toBe("Working");
           expect(await statusText.getAttribute("class")).toContain("sr-only");
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
@@ -120,7 +120,7 @@ suite.define(() => {
             phase: "preparing_context",
             seq: 1,
           });
-          await expect.poll(() => statusText.textContent()).toBe("Preparing reply…");
+          await expect.poll(() => statusText.textContent()).toBe("Preparing reply");
           await stop.click();
           expect((await gateway.waitForRequest("chat.abort")).params).toMatchObject({
             sessionKey,

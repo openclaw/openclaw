@@ -62,6 +62,7 @@ async function withRealSessions(config: OpenClawConfig, run: () => Promise<void>
 
 const expectedSystemRequester = {
   version: 2,
+  prepareDispatchCredential: expect.any(Function),
   signal: expect.any(AbortSignal),
   prepareSource: expect.any(Function),
   snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },

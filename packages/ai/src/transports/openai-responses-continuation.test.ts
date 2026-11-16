@@ -1,6 +1,7 @@
 import { hash } from "node:crypto";
+import * as util from "node:util";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   freezeJsonSnapshot,
   isDeeplyFrozenPlainData,
@@ -21,6 +22,8 @@ import {
   normalizeOpenAIResponsesFunctionCallId as normalizeCallId,
   splitOpenAIFunctionCallPairing,
 } from "./openai-responses-tool-call-id-shape.js";
+
+vi.mock("node:util", { spy: true });
 
 type Input = NonNullable<ResponsesContinuationRequest["input"]>;
 type Output = ResponsesContinuationState["lastResponseItems"];
@@ -362,13 +365,19 @@ describe("OpenAI Responses continuation", () => {
       expect(resolve(state, request).continuationStatus).toBe("continued");
       const keys = vi.spyOn(Object, "keys");
       try {
-        expect(resolve(state, request)).toMatchObject({
+        const continued = resolve(state, request);
+        const projections = keys.mock.calls.filter(
+          ([value]) =>
+            retained.some((item) => item === value) ||
+            (typeof value === "object" &&
+              value !== null &&
+              Reflect.get(value, "type") === "function_call_output"),
+        ).length;
+        expect(continued).toMatchObject({
           continuationStatus: "continued",
           request: { previous_response_id: "resp_cached", input: [toolOutput(rawId)] },
         });
-        expect(
-          keys.mock.calls.filter(([value]) => retained.some((item) => item === value)),
-        ).toHaveLength(0);
+        expect(projections).toBe(0);
       } finally {
         keys.mockRestore();
       }
@@ -387,7 +396,31 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
-  it("compares mutable continuation history without materializing property-entry arrays", () => {
+  it.each([false, true])("copies opaque replay accessors once (frozen=%s)", (frozen) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const content = vi.fn(() => [{ type: "input_text" as const, text: "answer" }]);
+      const item = {
+        type: "message" as const,
+        role: "assistant" as const,
+        get content() {
+          return content();
+        },
+      };
+      const state = continuationState([], [frozen ? Object.freeze(item) : item]);
+      const request = {
+        ...state.lastRequest,
+        input: [{ ...item }, secondUser],
+      };
+      content.mockClear();
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+      expect(content).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("compares mutable continuation history without generic comparison bookkeeping", () => {
     const previousMessage = userInput("message 0");
     const currentMessage = structuredClone(previousMessage);
     const input = [
@@ -401,9 +434,13 @@ describe("OpenAI Responses continuation", () => {
     };
     const current = [currentMessage, ...structuredClone(input.slice(1))];
     const request = { input: [...current, secondUser] };
+    const genericComparison = vi.mocked(util.isDeepStrictEqual).mockClear();
     const fromEntries = vi.spyOn(Object, "fromEntries");
     try {
-      expect(resolve(state, request)).toMatchObject({
+      const continued = resolve(state, request);
+      const comparisons = genericComparison.mock.calls.length;
+      expect(comparisons).toBe(0);
+      expect(continued).toMatchObject({
         continuationStatus: "continued",
         request: { previous_response_id: "resp_previous", input: [secondUser] },
       });
@@ -603,6 +640,9 @@ describe("OpenAI Responses continuation", () => {
       request: { ...current, previous_response_id: "resp_1", input: [secondUser] },
     });
     expect({ state, request }).toEqual(before);
+    assert(current.tools[0]);
+    current.tools[0].parameters.type = "string";
+    expect(resolve(state, request).request.tools).toHaveProperty("0.parameters.type", "string");
   });
 
   it.each([

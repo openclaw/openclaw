@@ -65,6 +65,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   resolveModelEntries,
   resolveScopeDecision,
@@ -76,7 +77,6 @@ import {
   runProviderEntry,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 export {
   createMediaAttachmentCache,

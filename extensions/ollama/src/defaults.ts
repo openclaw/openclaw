@@ -66,21 +66,24 @@ export function resolveOllamaCloudDefaultModel(modelId: string) {
   return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
 }
 
+/**
+ * Hosted Ollama output budget. Local models return undefined and take the shared
+ * context-sized default, which keeps prompt room inside the local num_ctx.
+ */
 export function resolveOllamaOutputBudget(params: {
   modelId: string;
   contextWindow?: number;
   remote?: boolean;
-}): number {
+}): number | undefined {
   return params.remote || isCloudModelRef(params.modelId)
     ? (resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens ??
         params.contextWindow ??
         OLLAMA_DEFAULT_CONTEXT_WINDOW)
-    : OLLAMA_DEFAULT_MAX_TOKENS;
+    : undefined;
 }
 
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 export const OLLAMA_LOCAL_CONTEXT_TOKENS = 32_768;
-export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 export const OLLAMA_DEFAULT_COST = {
   input: 0,
   output: 0,
