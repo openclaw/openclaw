@@ -319,6 +319,9 @@ export const AgentParamsSchema = closedObject({
   modelRun: Type.Optional(Type.Boolean()),
   promptMode: Type.Optional(stringLiteralUnion(["full", "minimal", "none"])),
   extraSystemPrompt: Type.Optional(Type.String()),
+  // Callers that open a fresh session per run share the provider prompt cache
+  // across runs with the same stable prefix; without it the key is per session.
+  promptCacheKey: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   bootstrapContextMode: Type.Optional(stringLiteralUnion(["full", "lightweight"])),
   bootstrapContextRunKind: Type.Optional(stringLiteralUnion(["default", "heartbeat", "cron"])),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),

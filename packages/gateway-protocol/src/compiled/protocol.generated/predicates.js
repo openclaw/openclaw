@@ -733,7 +733,7 @@ var External = [
     /(^sessionId$)/u,
     /(^sessionId$|^name$|^contentBase64$)/u,
     /(^path$|^size$|^uploadPathStyle$)/u,
-    /(^message$|^agentId$|^provider$|^model$|^to$|^replyTo$|^sessionId$|^sessionKey$|^createSessionIfMissing$|^expectedExistingSessionId$|^expectedExistingSessionLifecycleRevision$|^thinking$|^deliver$|^attachments$|^channel$|^replyChannel$|^accountId$|^replyAccountId$|^threadId$|^groupId$|^groupChannel$|^groupSpace$|^timeout$|^bestEffortDeliver$|^lane$|^cwd$|^cleanupBundleMcpOnRunEnd$|^modelRun$|^promptMode$|^extraSystemPrompt$|^bootstrapContextMode$|^bootstrapContextRunKind$|^acpTurnSource$|^internalRuntimeHandoffId$|^execApprovalFollowupExpectedSessionId$|^internalEvents$|^inputProvenance$|^suppressPromptPersistence$|^sessionEffects$|^sourceReplyDeliveryMode$|^disableMessageTool$|^swarmCollector$|^swarmOutputSchema$|^voiceWakeTrigger$|^idempotencyKey$|^label$)/u,
+    /(^message$|^agentId$|^provider$|^model$|^to$|^replyTo$|^sessionId$|^sessionKey$|^createSessionIfMissing$|^expectedExistingSessionId$|^expectedExistingSessionLifecycleRevision$|^thinking$|^deliver$|^attachments$|^channel$|^replyChannel$|^accountId$|^replyAccountId$|^threadId$|^groupId$|^groupChannel$|^groupSpace$|^timeout$|^bestEffortDeliver$|^lane$|^cwd$|^cleanupBundleMcpOnRunEnd$|^modelRun$|^promptMode$|^extraSystemPrompt$|^promptCacheKey$|^bootstrapContextMode$|^bootstrapContextRunKind$|^acpTurnSource$|^internalRuntimeHandoffId$|^execApprovalFollowupExpectedSessionId$|^internalEvents$|^inputProvenance$|^suppressPromptPersistence$|^sessionEffects$|^sourceReplyDeliveryMode$|^disableMessageTool$|^swarmCollector$|^swarmOutputSchema$|^voiceWakeTrigger$|^idempotencyKey$|^label$)/u,
     /(^type$|^source$|^childSessionKey$|^childSessionId$|^announceType$|^taskLabel$|^status$|^statusLabel$|^result$|^noVisibleResult$|^modelRouteChange$|^attachments$|^mediaUrls$|^statsLine$|^replyInstruction$)/u,
     /(^type$|^path$|^url$|^mediaUrl$|^filePath$|^mimeType$|^name$|^sizeBytes$|^durationMs$|^width$|^height$)/u,
     /(^kind$|^originSessionId$|^sourceSessionKey$|^sourceChannel$|^sourceTool$|^sourceRole$|^sourcePromptPrefix$|^jobId$|^runId$)/u,
@@ -4037,6 +4037,9 @@ var External = [
     (value.extraSystemPrompt === void 0 ||
       !("extraSystemPrompt" in value) ||
       check_276(value.extraSystemPrompt)) &&
+    (value.promptCacheKey === void 0 ||
+      !("promptCacheKey" in value) ||
+      check_331(value.promptCacheKey)) &&
     (value.bootstrapContextMode === void 0 ||
       !("bootstrapContextMode" in value) ||
       check_435(value.bootstrapContextMode)) &&

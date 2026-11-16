@@ -162,6 +162,8 @@ export type AgentCommandOpts = {
   extraSystemPrompt?: string;
   /** Internal conversation-producer annotation, not accepted from public ingress. */
   extraSystemPromptTurnContext?: { start: number; text: string };
+  /** Explicit provider prompt-cache key; overrides the per-session default. */
+  promptCacheKey?: string;
   /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
   silentReplyPromptMode?: SilentReplyPromptMode;
   bootstrapContextMode?: "full" | "lightweight";

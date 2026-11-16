@@ -67,3 +67,28 @@ it("selects the target session profile for internal command deliveries only", ()
   params.sessionEntry = { sessionId: "separate-internal-session", updatedAt: 1 };
   expect(run().bootstrapUserProfileId).toBeUndefined();
 });
+
+it("passes a caller's explicit prompt cache key to the run", () => {
+  const params = {
+    preparedRunAdmission: createTestPreparedRunAdmission("background-job"),
+    cfg: {},
+    sessionId: "fresh-session",
+    sessionKey: "agent:main:background-job",
+    sessionAgentId: "main",
+    sessionFile: "/synthetic/session.jsonl",
+    workspaceDir: "/synthetic/workspace",
+    timeoutMs: 1000,
+    runId: "background-job",
+    lifecycleGeneration: "fixture",
+    opts: { message: "Run the job" },
+    onAgentEvent: () => {},
+  } as unknown as AgentAttemptParams;
+  const run = () =>
+    buildCommonCommandRunParams(params, {
+      disableTools: false,
+      bootstrapPromptWarningSignaturesSeen: [],
+    });
+  expect(run().promptCacheKey).toBeUndefined();
+  params.opts.promptCacheKey = "background-review";
+  expect(run().promptCacheKey).toBe("background-review");
+});

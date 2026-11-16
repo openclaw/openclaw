@@ -164,6 +164,12 @@ explicit key. Operator, WebChat, private subagent completion, requester-settle,
 and recovery turns share this session-boundary identity. The current client and
 reply delivery route do not select a different cache key.
 
+Gateway `agent` callers that start a fresh session per run (background jobs, one
+transcript per job) can pass `promptCacheKey` (1-64 characters) so runs with the
+same stable prefix share the cache, the way isolated cron jobs do. Use one key per
+kind of run, not per run, and never put user content or secrets in it. Without the
+field the session-boundary key applies.
+
 ## Primary knobs
 
 ### Worker turns

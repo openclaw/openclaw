@@ -463,6 +463,7 @@ async function executeAgentRun(
                 modelRun: params.request.modelRun === true,
                 promptMode: params.request.promptMode,
                 extraSystemPrompt: params.request.extraSystemPrompt,
+                promptCacheKey: params.request.promptCacheKey,
                 bootstrapContextMode: params.request.bootstrapContextMode,
                 bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
                 toolsAllow: pluginSubagentToolsAllow,
