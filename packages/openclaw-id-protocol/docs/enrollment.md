@@ -239,7 +239,12 @@ is a member-browser ceremony. `device_pub: null` removes it; a fresh key replace
 already listed in another class or account is refused. The kit does not expire for inactivity.
 
 Browsers it admits inherit the member's current role and record
-`approved_by: { kind: "member_recovery_kit", device_fp }`. Replacing or deleting the kit
+`approved_by: { kind: "member_recovery_kit", device_fp }`. The verified kit takes effect
+immediately at the isolated `admitRecoveredMemberDevice` decision point. There is no owner
+approval gate. Each acceptance emits the existing `member_device_added` owner notice; the
+Gateway atomically retains an owner-only use record naming the member, browser and admission
+time. The owner Inbox displays that record even after browser/member removal. These display
+records are not published in snapshots and never grant authority. Replacing or deleting the kit
 invalidates its future approvals but keeps already admitted browsers. Remove those browsers
 through the existing device controls, whose member-device descendant cascade is unchanged.
 Removing the member deletes the whole MemberRecord, including its kit; re-invitation creates

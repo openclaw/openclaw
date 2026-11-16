@@ -18,6 +18,7 @@ import {
   refuse,
   type AuthorityState,
   type AuthorityResult,
+  type MemberDeviceApprover,
 } from "./state.js";
 
 export function deviceSigningKeyListed(
@@ -123,18 +124,45 @@ export async function addMemberDevice(
   ) {
     return refuse(state, "target_mismatch", "device signing key is already listed");
   }
-  const approved_by =
-    authority.kind === "member_recovery_kit"
-      ? { kind: "member_recovery_kit" as const, device_fp: await fingerprint(authority.device_pub) }
-      : authority.kind === "member_device"
-        ? { kind: "member_device" as const, device_fp: await fingerprint(authority.device_pub) }
-        : {
-            kind: "owner" as const,
-            by:
-              authority.kind === "root"
-                ? ("root" as const)
-                : await fingerprint(authority.device_pub),
-          };
+  if (authority.kind === "member_recovery_kit") {
+    return admitRecoveredMemberDevice(state, target, authority, now);
+  }
+  const approvedBy: MemberDeviceApprover =
+    authority.kind === "member_device"
+      ? { kind: "member_device", device_fp: await fingerprint(authority.device_pub) }
+      : {
+          kind: "owner",
+          by: authority.kind === "root" ? "root" : await fingerprint(authority.device_pub),
+        };
+  return admitVerifiedMemberDevice(state, target, approvedBy, now);
+}
+
+// The recovery admission decision: a verified kit currently takes effect immediately.
+// Owner notification and durable Gateway evidence accompany the ordinary admission effects.
+async function admitRecoveredMemberDevice(
+  state: AuthorityState,
+  target: Parameters<typeof addMemberDevice>[1],
+  authority: Extract<Authority, { kind: "member_recovery_kit" }>,
+  now: UnixSeconds,
+): Promise<AuthorityResult> {
+  return admitVerifiedMemberDevice(
+    state,
+    target,
+    {
+      kind: "member_recovery_kit",
+      device_fp: await fingerprint(authority.device_pub),
+    },
+    now,
+  );
+}
+
+async function admitVerifiedMemberDevice(
+  state: AuthorityState,
+  target: Parameters<typeof addMemberDevice>[1],
+  approved_by: MemberDeviceApprover,
+  now: UnixSeconds,
+): Promise<AuthorityResult> {
+  const member = state.members[target.account_id]!;
   return applied(
     {
       ...state,
@@ -162,6 +190,3 @@ export async function addMemberDevice(
     ],
   );
 }
-
-// Adds a member directly, or approves a pending redemption when `invite_id` is set.
-// The caps hold: at most MAX_MEMBERS members and MAX_MEMBER_PEER_KEYS browsers each.
