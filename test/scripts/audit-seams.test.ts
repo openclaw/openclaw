@@ -49,7 +49,7 @@ it("keeps subagent seam statuses conservative when nearby tests exist", () => {
       ["subagent-session-spawn"],
       [
         {
-          file: "src/agents/subagents/spawn/subagent-spawn.workspace.test.ts",
+          file: "src/agents/subagents/spawn/subagent-spawn.test.ts",
           matchQuality: "direct-import",
         },
       ],

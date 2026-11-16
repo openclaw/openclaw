@@ -394,7 +394,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       configs: ["test/vitest/vitest.infra.config.ts"],
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
-        "src/agents/subagents/registry/subagent-control.accounting.test.ts",
         "src/agents/tools/sessions-send-communication.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/state/dreaming-startup-admission.test.ts",

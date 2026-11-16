@@ -25,7 +25,6 @@ const coreIsolatedFiles = [
   "src/agents/model-auth.plugin-scope.test.ts",
   "src/agents/model-selection.plugin-runtime.test.ts",
   "src/agents/subagents/announce/subagent-announce.test.ts",
-  "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
