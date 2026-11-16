@@ -2367,6 +2367,32 @@ div.shell.shell--onboarding {
   padding-block: 6px;
 }
 
+/* A dashboard pins to the rail like every section row, so its row drops the session pin. On
+   touch it keeps only its menu, which still archives, so the title keeps its width. */
+.sidebar-dashboards [data-sidebar-session-pin] {
+  display: none;
+}
+
+/* Its actions center on the two-line row, level with the rail pin beside them. */
+.sidebar-dashboards .sidebar-recent-session > .sidebar-recent-session__aside {
+  inset: 50% 6px auto auto;
+}
+
+/* Hover and focus hand the row's edge to its actions, so a run's indicator steps aside. */
+.sidebar-dashboards .sidebar-zone-entry:is(:hover, :focus-within) .sidebar-session-indicator {
+  visibility: hidden;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-dashboards .sidebar-recent-session.session-row-host:has(.session-action--touch-menu) {
+    --session-row-actions-reserve: 44px;
+  }
+
+  .sidebar-dashboards [data-sidebar-session-archive] {
+    display: none;
+  }
+}
+
 .sidebar-dashboards .sidebar-zone-entry .sidebar-session-indicator {
   order: 1;
   width: 16px;
