@@ -34,15 +34,23 @@ export function resolveStoredMemoryDenial(
   return config.ownerOnly === false ? undefined : resolveSessionMemoryDenial(audience, agentId);
 }
 
-/** The tool result for a refused session: the reason and the next step that applies to it. */
+const ownerOnlyOptOut =
+  "An operator can set ownerOnly: false in the memory-lancedb config to use them in every session, which also shares them with group chats and channels.";
+
+function refusedSessionScope(audience: MemoryAudience): string {
+  if (audience?.kind === "conversation") {
+    return "They are used only in direct chats with the agent's owner, whom commands.ownerAllowFrom names.";
+  }
+  if (audience?.kind === "owner-private") {
+    return "They are used only in owner sessions of the agent they belong to.";
+  }
+  return "Sessions without a chat, such as tools.invoke calls, unlinked scheduled jobs and hook runs, have no owner-private audience.";
+}
+
+/** The tool result for a refused session: the reason, where stored memories are used, and the opt-out. */
 export function storedMemoriesUnavailableResult(audience: MemoryAudience, denial: string) {
-  const nextStep =
-    audience?.kind === "conversation"
-      ? "They are used only in the agent owner's direct chats. An operator can set ownerOnly: false in the memory-lancedb config to use them in every conversation."
-      : "If this is the owner's session, check that commands.ownerAllowFrom lists the owner (openclaw doctor prints the command). Sessions without a chat, such as unlinked scheduled jobs, never get them.";
-  return textResult(`Stored memories are not available in this session: ${denial}. ${nextStep}`, {
-    status: "blocked",
-    reason: "owner_private_memory",
-    denial,
-  });
+  return textResult(
+    `Stored memories are not available in this session: ${denial}. ${refusedSessionScope(audience)} ${ownerOnlyOptOut}`,
+    { status: "blocked", reason: "owner_private_memory", denial },
+  );
 }

@@ -64,8 +64,17 @@ const groupChat = {
   sessionId: "synthetic-session",
 };
 const noOwnerAudience = "this session has no owner-private memory audience";
-const allowed = { denial: undefined, embeds: 2, searches: 2, deletes: 1 };
-const refused = (denial: string) => ({ denial, embeds: 0, searches: 0, deletes: 0 });
+const allowed = { denial: undefined, embeds: 2, searches: 2, deletes: 1, namesOptOut: false };
+const refused = (denial: string) => ({
+  denial,
+  embeds: 0,
+  searches: 0,
+  deletes: 0,
+  namesOptOut: true,
+});
+// Every refusal names the opt-out that works for every session, never a repair that cannot.
+const namesOptOut = (result: { content?: unknown }) =>
+  JSON.stringify(result.content).includes("ownerOnly: false");
 const allowRecall = {
   fingerprint: "synthetic-memory-authority",
   allows: (toolName: string) => toolName === "memory_recall",
@@ -141,6 +150,7 @@ describe("stored memory access by session audience", () => {
       embeds: embed.mock.calls.length,
       searches: search.mock.calls.length,
       deletes: remove.mock.calls.length,
+      namesOptOut: namesOptOut(recall) && namesOptOut(forget),
     }).toEqual(row.expected);
   });
 
