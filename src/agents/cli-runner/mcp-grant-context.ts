@@ -234,6 +234,7 @@ export function buildCliMcpGrantContext(params: {
     gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     ...(params.run.pinnedWidgetAuthoring === true ? { pinnedWidgetAuthoring: true } : {}),
     currentChannelId,
+    nativeChannelId: params.run.chatId,
     currentThreadTs: normalizeOptionalString(params.run.currentThreadTs),
     currentMessageId:
       params.run.currentMessageId == null

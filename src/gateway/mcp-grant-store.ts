@@ -81,6 +81,8 @@ export type McpLoopbackRequestContext = {
   /** Host-selected pinned authoring capability; never sourced from MCP request headers. */
   pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
+  /** Raw conversation ID captured from the host run, separate from the delivery target. */
+  nativeChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
   currentConversationOrigin?: McpCurrentConversationOrigin;

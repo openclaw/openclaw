@@ -434,6 +434,7 @@ export async function resolveGatewayScopedTools(
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
+    nativeChannelId: params.nativeChannelId,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     replyToMode: params.replyToMode,
     onYield: params.onYield,
