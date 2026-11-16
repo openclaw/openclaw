@@ -748,6 +748,12 @@ describe("dependency guard script", () => {
       issuePath,
       commentMarker: "<!-- openclaw:dependency-graph-guard -->",
       approvalCommand: "/allow-dependencies-change",
+      membershipApi: {
+        request: async (requestPath: string) => {
+          expect(requestPath).toBe(`${securityMembership}/contributor`);
+          throw Object.assign(new Error("Not a SecOps member"), { status: 404 });
+        },
+      },
       api: {
         request: async (requestPath: string) =>
           requestPath.endsWith("/permission") ? { role_name: "read" } : autoscrubPullRequest,
