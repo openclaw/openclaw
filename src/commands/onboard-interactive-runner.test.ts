@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { runGuidedOnboardingHandoff } from "./onboard-interactive-runner.js";
 
@@ -15,8 +19,25 @@ vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli: vi.fn(async () => {}) }))
 // mock-isolation: Verify terminal restoration order without touching the test process TTY.
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState: vi.fn() }));
 
-beforeEach(() => vi.clearAllMocks());
-afterEach(() => vi.restoreAllMocks());
+let stateDir: string;
+beforeEach(async () => {
+  vi.clearAllMocks();
+  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hatch-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  await fs.rm(stateDir, { recursive: true, force: true });
+});
+const runtime = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: () => {
+    throw new Error("Unexpected exit");
+  },
+};
 afterAll(() => {
   vi.doUnmock("node:fs");
   vi.doUnmock("../agents/workspace.js");
@@ -38,13 +59,7 @@ it.each([
       ...(scenario.agentId ? { agentId: scenario.agentId } : {}),
     },
     {},
-    {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: () => {
-        throw new Error("Unexpected exit");
-      },
-    },
+    runtime,
     {},
   );
   expect(existsSync).toHaveBeenCalledWith("/fixture/approved-workspace/BOOTSTRAP.md");
@@ -60,4 +75,22 @@ it.each([
   expect(restoreTerminalState).toHaveBeenNthCalledWith(2, "post guided hatch tui", {
     resumeStdinIfPaused: false,
   });
+});
+
+it("connects a configured rerun's hatch to the running Gateway instead of --local", async () => {
+  // The real lock creates the state database, so this case needs the real filesystem check.
+  const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+  vi.mocked(existsSync).mockImplementation(actualFs.existsSync);
+  const gateway = await acquireGatewayLock({ allowInTests: true, role: "gateway", port: 18789 });
+  try {
+    await runGuidedOnboardingHandoff(
+      { workspace: "/fixture/approved-workspace", next: "hatch", local: true },
+      {},
+      runtime,
+      {},
+    );
+  } finally {
+    await gateway?.release();
+  }
+  expect(launchTuiCli).toHaveBeenCalledExactlyOnceWith({ deliver: false });
 });
