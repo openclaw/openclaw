@@ -3156,6 +3156,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/infra/state-migrations.profile-workspace.test.ts",
   "src/infra/state-migrations.receipts.test.ts",
   "src/infra/state-migrations.retained-deleted-agent.test.ts",
+  "src/infra/state-migrations.shared-auth-store.test.ts",
   "src/infra/state-migrations.test.ts",
   "src/infra/state-migrations.web-push.test.ts",
   "src/infra/state-migrations.workspace-setup-sandbox.test.ts",
