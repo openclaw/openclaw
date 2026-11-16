@@ -11,6 +11,7 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.inspection.js";
+import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
@@ -128,10 +129,12 @@ export async function captureUpdateDatabasesOnline(params: {
   }
   params.assertCurrent();
   const startedAt = Date.now();
+  // Raw captures stay where backups, exports and Doctor recognize them: the update-capture root,
+  // or the Git checkout's artifact directory that Git updates already use for their snapshots.
   const parent =
     execution.updateInstallKind === "git" && !execution.switchToGit
       ? path.join(execution.root, ".artifacts")
-      : path.join(resolveStateDir(env), "update-captures");
+      : resolveUpdateCaptureRoot(resolveStateDir(env));
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   const backupRoot = path.join(await fs.realpath(parent), `online-${runId}`);
   let online: OnlineUpdateDatabaseCapture | undefined;
@@ -189,21 +192,31 @@ export async function discardOnlineUpdateDatabaseCapture(
   },
 ): Promise<void> {
   const directory = `${online.backupRoot}.databases`;
-  try {
-    const { discardPostgresSchemaCaptures } = await import("../../snapshot/database-backup.js");
-    // A failed online capture has no backup record; its finished stores still hold server schemas.
-    const exports = online.backup
-      ? online.backup.databases.flatMap((entry) => entry.exportDirectory ?? [])
-      : (await listDirectoryTreeStrict(directory).catch(() => []))
-          .filter(
-            ({ relativePath, dirent }) =>
-              dirent.isDirectory() && relativePath.endsWith(".postgres"),
-          )
-          .map(({ relativePath }) => path.join(directory, relativePath));
-    await discardPostgresSchemaCaptures(online.config, exports);
-    await fs.rm(directory, { recursive: true, force: true });
-  } catch {
-    // Retained captures are visible under the run's capture directory for manual cleanup.
+  const { discardPostgresSchemaCaptures } = await import("../../snapshot/database-backup.js");
+  // A failed online capture has no backup record; its finished stores still hold server schemas.
+  // A store that failed mid-capture is still marked pending and dropped its own schema.
+  const entries = online.backup
+    ? online.backup.databases.flatMap((entry) => entry.exportDirectory ?? [])
+    : (await listDirectoryTreeStrict(directory).catch(() => []))
+        .filter(
+          ({ relativePath, dirent }) => dirent.isDirectory() && relativePath.endsWith(".postgres"),
+        )
+        .map(({ relativePath }) => path.join(directory, relativePath));
+  let retained = false;
+  for (const exportDirectory of entries) {
+    if (await fs.stat(path.join(exportDirectory, ".pending")).catch(() => undefined)) {
+      continue;
+    }
+    // Each store on its own: one unreadable manifest must not strand the others' schemas.
+    retained =
+      (await discardPostgresSchemaCaptures(online.config, [exportDirectory]).then(
+        () => false,
+        () => true,
+      )) || retained;
+  }
+  // A schema that could not be dropped keeps its manifest, under the capture root, for recovery.
+  if (!retained) {
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
   }
 }
 
