@@ -51,7 +51,9 @@ suite.define(() => {
       await source.click();
       const empty = page.locator('.new-session-page__project-popover [data-value="new-workspace"]');
       await expect.poll(() => empty.getAttribute("aria-pressed")).toBe("true");
-      await pollLocatorText(empty).toContain("Start in an empty folder for this session.");
+      await expect
+        .poll(() => empty.getAttribute("title"))
+        .toBe("Start in an empty folder for this session.");
       await empty.click();
 
       await page.locator(".new-session-page__message").fill(message);
