@@ -294,7 +294,11 @@ describe("self-woken continuation projection", () => {
       });
       const [first, ...rest] = frames(chain);
       expect(rest).toEqual([]);
-      expect(first!.parts.map((part) => partContinuation(part))).toContain("subagent");
+      expect(
+        first!.parts.map((part) =>
+          readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+        ),
+      ).toContain("subagent");
     }
   });
 });
