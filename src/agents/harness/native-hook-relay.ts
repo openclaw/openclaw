@@ -228,7 +228,6 @@ function registerNativeHookRelayInternal(
       ...(params.requester ? { requester: params.requester } : {}),
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
-      preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
       requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),

@@ -1017,6 +1017,7 @@ export function inspectDatabaseWorkerBoundaries(
         ts.isStringLiteral(expression.parent.argumentExpression))
     );
   };
+  const bindingMembers = new Map<ts.Node, Symbol>();
   const sourceReferences = sources.map(({ file, source }) => {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
@@ -1055,13 +1056,40 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
+    const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
+    for (const node of references) {
+      if (
+        ts.isIdentifier(node) &&
+        ts.isBindingElement(node.parent) &&
+        node.parent.name === node &&
+        !node.parent.propertyName &&
+        ts.isObjectBindingPattern(node.parent.parent)
+      ) {
+        receiverBindings.set(node, node.parent.parent);
+      }
+    }
+    // Members of one destructuring share a receiver type; query each pattern once.
+    const patterns = [...new Set(receiverBindings.values())];
+    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
+    const bindingTypes = new Map(
+      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
+    );
+    for (const [node, pattern] of receiverBindings) {
+      const member = bindingTypes.get(pattern)!.getProperty(node.text);
+      if (member) {
+        bindingMembers.set(node, member);
+      }
+    }
     return { file, source, references };
   });
   // Reference discovery is independent across files in this immutable snapshot.
+  // Resolved receiver members do not need the raw binding symbol.
   // Shorthand properties use their value-symbol query during caller classification.
   symbolsAt(
     sourceReferences.flatMap(({ references }) =>
-      references.filter((node) => !ts.isShorthandPropertyAssignment(node.parent)),
+      references.filter(
+        (node) => !bindingMembers.has(node) && !ts.isShorthandPropertyAssignment(node.parent),
+      ),
     ),
   );
   session.checkpoint?.("reference-prefetch");
@@ -1104,32 +1132,9 @@ export function inspectDatabaseWorkerBoundaries(
   symbolsAt(accessBatch);
   for (const { file, source, references } of sourceReferences) {
     const symbols = references.map((node) => compilerSymbols.get(node));
-    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
-    for (const node of references) {
-      if (
-        ts.isIdentifier(node) &&
-        ts.isBindingElement(node.parent) &&
-        node.parent.name === node &&
-        !node.parent.propertyName &&
-        ts.isObjectBindingPattern(node.parent.parent)
-      ) {
-        receiverBindings.set(node, node.parent.parent);
-      }
-    }
-    // Members of one destructuring share a receiver type; query each pattern once.
-    const patterns = [...new Set(receiverBindings.values())];
-    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
-    const bindingTypes = new Map(
-      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
-    );
     for (const [index, node] of references.entries()) {
-      const pattern = receiverBindings.get(node);
-      const bindingMember =
-        pattern && ts.isIdentifier(node)
-          ? bindingTypes.get(pattern)!.getProperty(node.text)
-          : undefined;
       let symbol = resolveSymbol(
-        bindingMember ??
+        bindingMembers.get(node) ??
           (ts.isShorthandPropertyAssignment(node.parent)
             ? checker.getShorthandAssignmentValueSymbol(node.parent)
             : symbols[index]),

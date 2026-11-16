@@ -46,6 +46,20 @@ export function cloneMapValues<T extends object>(source: ReadonlyMap<string, T>)
   return new Map([...source].map(([key, value]) => [key, { ...value }]));
 }
 
+export function storeModelHeaders(
+  target: Map<string, Record<string, string>>,
+  providerName: string,
+  modelId: string,
+  headers?: Record<string, string>,
+): void {
+  const key = JSON.stringify([providerName, modelId]);
+  if (!headers || Object.keys(headers).length === 0) {
+    target.delete(key);
+    return;
+  }
+  target.set(key, headers);
+}
+
 function mergeCompat(
   baseCompat: ProviderModelCatalog["compat"],
   overrideCompat: ProviderModelCatalog["compat"],

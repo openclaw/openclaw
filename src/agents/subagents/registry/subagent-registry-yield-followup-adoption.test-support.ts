@@ -2,6 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
+import { addSession } from "../../bash-process-registry.js";
+import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
+import { listYieldAwaitableExecs } from "../../bash-tools.exec-notify.js";
 import {
   createSessionEntry,
   mockGatewayMethods,
@@ -335,6 +339,53 @@ export function registerYieldFollowupAdoptionTests({
       expect(requireRun(followupId).execution.endedAt).toBe(444);
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
     });
+  });
+
+  it("moves the commands of the paused run to the follow-up that continues the task", async () => {
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": {
+        status: "ok",
+        startedAt: 111,
+        endedAt: 222,
+        stopReason: "end_turn",
+        livenessState: "paused",
+        yielded: true,
+      },
+    });
+    await registerPausedChild(requester, true);
+    await waitForFast(() =>
+      expect(requireRun(pausedId, requester).pauseReason).toBe("sessions_yield"),
+    );
+    // The paused run started this command and its yield awaited it. A different exit
+    // continues the task first, under a new run id.
+    const command = Object.assign(
+      createProcessSessionFixture({ id: "ci-waiter", backgrounded: true }),
+      {
+        sessionKey: childKey,
+        originRunId: pausedId,
+        exitWakeAfterYield: true as const,
+        resumesYieldedRun: true as const,
+        processActivity: {
+          deadlineAtMs: Date.now() + 60_000,
+          resultSettled: false,
+          lastOutputAtMs: Date.now(),
+        },
+      },
+    );
+    addSession(command);
+    try {
+      mockGatewayMethods(mocks.callGateway, {
+        "agent.wait": createDeferred<Record<string, unknown>>().promise,
+      });
+      expect(await getRegistry().adoptPausedSubagentRunForFollowUp({ ...followup })).toBe(true);
+
+      // The follow-up can yield on the command, and its exit names the run that the
+      // paused task row carries. Reply admission continues the task only for that run.
+      expect(listYieldAwaitableExecs(followupId)).toEqual([command]);
+      expect(command.originRunId).toBe(requireRun(followupId, requester).runId);
+    } finally {
+      resetProcessRegistryForTests();
+    }
   });
 
   it("hands the pause to a default follow-up admitted while the child was still yielding", async () => {

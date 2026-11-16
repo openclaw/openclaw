@@ -3600,6 +3600,7 @@ jobs:
           fetch-depth: 1
           path: .release-harness
           persist-credentials: false
+          sparse-checkout: scripts
 
       - name: Restore exact trusted workflow revision
         env:
@@ -3643,11 +3644,6 @@ jobs:
             throw new Error("trusted harness checkout did not resolve to the authenticated workflow SHA");
           }
           NODE
-
-      - name: Setup trusted release harness
-        uses: ./.release-harness/.github/actions/setup-release-harness
-        with:
-          node-version: ${{ env.NODE_VERSION }}
 
       - name: Create full release candidate evidence
         id: candidate_evidence
@@ -4439,7 +4435,7 @@ jobs:
         include:
           - suite_id: native-live-src-agents
             label: Native live agents
-            command: OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
+            command: OPENCLAW_LIVE_RETAINED_CHILD=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

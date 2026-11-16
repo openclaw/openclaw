@@ -13,10 +13,9 @@ const enSessionNavigation = {
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
       importToOpenClaw: "Import to OpenClaw",
-      importComplete: "Imported {count} transcript items.",
-      importUnchanged: "The imported transcript is up to date.",
-      importIncomplete:
-        "Imported {count} transcript items. Older history exceeded the import limit.",
+      importComplete: "Imported {count} chat items.",
+      importUnchanged: "The imported chat is up to date.",
+      importIncomplete: "Imported {count} chat items. Older history exceeded the import limit.",
       openImportedSession: "Open imported session",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",

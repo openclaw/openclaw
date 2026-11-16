@@ -1248,8 +1248,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle")
+              .filter((name) => name !== "stream" && name !== "idle" && name !== "background")
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+            // The stopped background command is reported as its own input, not as a resume.
+            ...(cases.includes("background")
+              ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
             { name: "stream", text: `HANDLED_${fresh(cycle)}` },
@@ -1286,14 +1290,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             const resumes = calls.filter((call) => call.resumeInput);
             if (name === "background") {
-              expect(resumes[0]?.current).toContain(
-                "Background exec processes were stopped; rerun them if still needed.",
-              );
+              // The process registry reports the stopped command; the resume input does not.
+              expect(
+                calls.some((call) =>
+                  call.current.includes("was stopped when the Gateway shut down"),
+                ),
+              ).toBe(true);
             }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(

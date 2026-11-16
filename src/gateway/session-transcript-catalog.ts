@@ -68,7 +68,7 @@ async function readCatalogHistoryPage(
   });
   if (page.omittedOversized) {
     throw new Error(
-      "A transcript entry is too large to share. Open the session on the source Gateway to inspect it.",
+      "A chat entry is too large to share. Open the session on the source Gateway to inspect it.",
     );
   }
   return page;
@@ -88,7 +88,7 @@ function decodeCursor(cursor: string | undefined): CatalogCursor | undefined {
     }
     return CursorSchema.parse(JSON.parse(decoded.toString("utf8")));
   } catch {
-    throw new Error("Invalid session transcript cursor; reload the session.");
+    throw new Error("Invalid chat history cursor; reload the session.");
   }
 }
 
@@ -177,7 +177,7 @@ export async function readSessionTranscriptCatalogPage(
 ): Promise<SessionTranscriptCatalogPage> {
   const cursor = decodeCursor(params.cursor);
   if (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > MAX_CATALOG_ITEMS) {
-    throw new Error(`Session transcript limit must be an integer from 1 to ${MAX_CATALOG_ITEMS}.`);
+    throw new Error(`Chat history limit must be an integer from 1 to ${MAX_CATALOG_ITEMS}.`);
   }
   const storePath = resolveSessionStorePathForScope(params);
   return withSessionEntryReadOnlyInWorker(
@@ -240,9 +240,7 @@ async function readCatalogPageFromEntry(
       cursor.anchor.seq > totalMessages ||
       cursor.before > totalMessages)
   ) {
-    throw new Error(
-      "Session transcript cursor no longer matches this session; reload the session.",
-    );
+    throw new Error("Chat history cursor no longer matches this session; reload the session.");
   }
   const tail = page.events.at(-1);
   const anchor = cursor?.anchor ?? (tail ? { seq: tail.seq, eventSeq: tail.eventSeq } : undefined);
@@ -254,9 +252,7 @@ async function readCatalogPageFromEntry(
       maxMessages: 1,
     });
     if (anchoredPage.events[0]?.eventSeq !== cursor.anchor.eventSeq) {
-      throw new Error(
-        "Session transcript cursor no longer matches this session; reload the session.",
-      );
+      throw new Error("Chat history cursor no longer matches this session; reload the session.");
     }
   }
   const limit = params.limit;
@@ -310,7 +306,7 @@ async function readCatalogPageFromEntry(
     for (const event of page.events.toReversed()) {
       const messageItems = bySequence.get(event.seq) ?? [];
       if (skip > messageItems.length) {
-        throw new Error("Invalid session transcript cursor; reload the session.");
+        throw new Error("Invalid chat history cursor; reload the session.");
       }
       const selected = messageItems.slice(skip, skip + limit - items.length);
       items.push(...selected);

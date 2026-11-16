@@ -371,6 +371,11 @@ describe("memory actor effect adapters", () => {
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
+      delivery.assertNativeTransactionCurrent();
+      const released = await prepareSessionGenerationFacts(facts);
+      released.release();
+      expect(released.assertNativeTransactionCurrent).toThrow("unavailable");
+      delivery.assertNativeTransactionCurrent();
       await runSessionMutation({
         scope: source.storePath,
         identities: [source.sessionKey, source.sessionId],
@@ -381,6 +386,7 @@ describe("memory actor effect adapters", () => {
       effect.assertCurrent();
       memorySessionActorOwners.closeSession(target, source.sessionKey);
       await upsert();
+      expect(() => delivery.assertNativeTransactionCurrent()).toThrow("unavailable");
       expect(() => delivery.assertCurrent()).toThrow("unavailable");
       expect(() => effect.assertCurrent()).toThrow("unavailable");
     } finally {

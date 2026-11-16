@@ -1,4 +1,3 @@
-import type { SummarizationConversationSource } from "../../packages/agent-core/src/harness/compaction/summarization-completion.js";
 import {
   CompactionError,
   SummaryOutputBudgetError,
@@ -20,9 +19,9 @@ import type {
   StreamFn,
   ThinkingLevel,
 } from "./runtime/index.js";
+import { generateSummary } from "./sessions/compaction/compaction.js";
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { generateSummary } from "./sessions/index.js";
 export { estimateMessagesTokens } from "./compaction-planning.js";
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
@@ -36,7 +35,7 @@ export type CompactionSummarizationInstructions = {
 };
 
 type CompactionSummaryParams = {
-  messages: AgentMessage[] | SummarizationConversationSource;
+  messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
   headers?: ModelRequestHeaders;
@@ -76,11 +75,7 @@ function buildCompactionSummarizationInstructions(
  */
 export async function summarizeCompactionHistory(params: CompactionSummaryParams): Promise<string> {
   // SECURITY: toolResult.details and runtime-context entries never reach the summarizer.
-  // Indexed sources are sanitized by their snapshot owner before serialization;
-  // they never transfer raw transcript payloads into this host-side request.
-  const messages = Array.isArray(params.messages)
-    ? sanitizeCompactionMessages(params.messages)
-    : params.messages;
+  const messages = sanitizeCompactionMessages(params.messages);
   if (messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }

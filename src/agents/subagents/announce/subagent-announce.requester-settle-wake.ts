@@ -9,6 +9,7 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   getFollowupForCohort,
@@ -25,6 +26,7 @@ import {
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { observeSubagentRequesterDelivery } from "../registry/subagent-requester-delivery.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
@@ -53,7 +55,10 @@ import {
 } from "./subagent-announce-output.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
-import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
+import {
+  createRequesterSettleReceiptAdmission,
+  recordRequesterReplacementNotice,
+} from "./subagent-announce.requester-settle-receipt.js";
 import {
   readSharedBatchState,
   createRequesterSettleBatchCompletion,
@@ -152,7 +157,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
     Boolean(entry?.requesterSettleWake) &&
     entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
-  let settledBatch: SubagentRunRecord[];
+  let settledBatch: readonly SubagentRunRecord[];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
   } else if (frozenBatchRunIds && frozen) {
@@ -202,7 +207,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
-  const currentCompletionRows = (rows: SubagentRunRecord[]) =>
+  const currentCompletionRows = (rows: readonly SubagentRunRecord[]) =>
     selectCurrentRequesterCompletionRows({
       rows,
       requesterSessionKey,
@@ -378,6 +383,23 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // `/new` keeps the session id but rotates the lifecycle revision, so compare the
     // whole incarnation; a deliverable continuation must not post old findings into a reset session.
     if (privateRows.some((entry) => !matchesSubagentRequesterSession(entry, requesterIdentity))) {
+      // Only a host-authored diagnostic crosses the reset; child findings stay private.
+      // Persist it before retiring the batch so a failed notice keeps the obligation retryable.
+      const notified = await recordRequesterReplacementNotice({
+        requester,
+        identity: requesterIdentity,
+        batchRunIds,
+        rearmGeneration: selectedState.rearmGeneration,
+        assertCommitAllowed: () => {
+          params.signal?.throwIfAborted();
+          if (!params.isSourceCurrent() || !isStoreCurrent() || !isBatchCurrent()) {
+            throw new Error("Subagent completion notice lost its source");
+          }
+        },
+      });
+      if (!notified) {
+        return false;
+      }
       await completeBatch(settledBatch, selectedState, {
         delivered: false,
         path: "none",
@@ -531,6 +553,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       }
       if (
         params.signal?.aborted ||
+        isAgentRunRestartAbortReason(controllerInput?.abortSignal.reason) ||
         isGatewayClosed() ||
         !isBatchCurrent() ||
         (await retireReplacedStore())
@@ -567,7 +590,23 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const attemptCount =
       state.status === "dispatching" ? state.attemptCount : Math.max(1, state.attemptCount + 1);
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
+    const waitForRequesterDelivery =
+      !pauseNotice && params.recordRequesterDelivery
+        ? observeSubagentRequesterDelivery(controllerInput, (fact) =>
+            params.recordRequesterDelivery!(settledBatch, fact, refreshBatch),
+          )
+        : undefined;
     try {
+      const requesterDelivery = pauseNotice
+        ? undefined
+        : {
+            state: "waiting" as const,
+            runId: directIdempotencyKey,
+            at: Date.now(),
+            blockingRunId: controllerInput.mailbox.claim?.inputs.find(
+              (source) => source !== controllerInput,
+            )?.protocolRunId,
+          };
       const dispatch = () => {
         const deliver = () =>
           deliverSubagentAnnouncement({
@@ -611,6 +650,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                   lastError: undefined,
                 },
                 refreshBatch,
+                requesterDelivery,
               );
               dispatchPrepared = true;
             },
@@ -627,18 +667,22 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           },
         );
       };
-      delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
-        followup
-          ? withFollowupSuccessor(
-              followup.successor(settledBatch, directIdempotencyKey, () => {
-                if (!isSourceSessionEffectsAllowed()) {
-                  throw new Error("Followup completion cohort changed.");
-                }
-              }),
-              dispatch,
-            )
-          : dispatch(),
-      );
+      try {
+        delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
+          followup
+            ? withFollowupSuccessor(
+                followup.successor(settledBatch, directIdempotencyKey, () => {
+                  if (!isSourceSessionEffectsAllowed()) {
+                    throw new Error("Followup completion cohort changed.");
+                  }
+                }),
+                dispatch,
+              )
+            : dispatch(),
+        );
+      } finally {
+        await waitForRequesterDelivery?.();
+      }
     } catch (error) {
       retireUnadoptedInput();
       if (!dispatchPrepared) {

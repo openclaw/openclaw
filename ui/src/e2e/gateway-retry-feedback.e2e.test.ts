@@ -37,7 +37,7 @@ suite.define(() => {
         const status = page.locator(".sidebar-shell__connection .gateway-status");
         const spinnerLocator = status.locator(".session-run-spinner");
         const labelLocator = status.locator(".gateway-status__label");
-        await status.getByText("Reconnecting…", { exact: true }).waitFor();
+        await status.getByText("Reconnecting", { exact: true }).waitFor();
 
         expect(await status.getByRole("button").count()).toBe(0);
         expect(await spinnerLocator.count()).toBe(1);

@@ -23,10 +23,10 @@ export const ISOLATED_RUNTIME_NODE_ARGS = [
   "--import",
   `data:text/javascript,${encodeURIComponent(`
     import fs from "node:fs";
-    import { registerHooks } from "node:module";
+    import nodeModule from "node:module";
     import path from "node:path";
     import { fileURLToPath, pathToFileURL } from "node:url";
-    registerHooks({
+    nodeModule.registerHooks({
       resolve(specifier, context, nextResolve) {
         const resolved = nextResolve(specifier, context);
         if (!resolved.url.startsWith("file:")) return resolved;

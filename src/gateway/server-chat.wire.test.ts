@@ -924,7 +924,9 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       text += delta;
       await emit(index * 2 + 1, "item", answerCandidate("answer", text, undefined, "test"));
       await emit(index * 2 + 2, "assistant", { text, delta });
-      vi.advanceTimersByTime(75);
+      if (terminal !== "dispatch" || index < chunks.length - 1) {
+        vi.advanceTimersByTime(75);
+      }
     }
     // The existing producer pacing still delivers updates to nodes, but a
     // socket with an unfinished write must not retain every historical prefix.

@@ -35,6 +35,7 @@ import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
   createTalkConfig,
   defineRealtimeConfigProjectionTests,
+  talkRealtimeConfigProjectionCases,
   type TalkConfigProjectionResponse,
 } from "./config-realtime.test-support.js";
 import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
@@ -279,6 +280,14 @@ vi.mock("../../../talk/client-voice-session-write.js", async (importOriginal) =>
   return {
     ...actual,
     ensureClientVoiceAgentSessionEntry: mocks.ensureClientVoiceAgentSessionEntry,
+  };
+});
+
+vi.mock("../../../talk/client-voice-session-source.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../talk/client-voice-session-source.js")>();
+  return {
+    ...actual,
     // Creation is mocked here; expose its supplied source without acquiring a database writer.
     captureClientVoiceSessionWriter: ({
       physicalSource,
@@ -672,32 +681,7 @@ describe("talk.config handler", () => {
     }
   });
 
-  it.each<{
-    name: string;
-    runtimeConfig: OpenClawConfig;
-    sourceConfig?: OpenClawConfig;
-    expected: Record<string, unknown>;
-    providerConfig?: Record<string, unknown>;
-  }>([
-    {
-      name: "runtime transport absent from source",
-      runtimeConfig: realtimeConfig({ transport: "provider-websocket" }),
-      sourceConfig: {},
-      expected: { transport: "provider-websocket" },
-    },
-    {
-      name: "unavailable non-OpenAI model without a bundled projector",
-      runtimeConfig: realtimeConfig({
-        provider: "other-realtime",
-        model: "other-live-model",
-        providers: {
-          "other-realtime": { model: "other-live-model", voice: "other-voice" },
-        },
-      }),
-      expected: { provider: "other-realtime", model: "other-live-model" },
-      providerConfig: { model: "other-live-model", voice: "other-voice" },
-    },
-  ])(
+  it.each(talkRealtimeConfigProjectionCases)(
     "projects realtime config: $name",
     async ({ runtimeConfig, sourceConfig, expected, providerConfig }) => {
       setSourceConfig(sourceConfig ?? runtimeConfig);

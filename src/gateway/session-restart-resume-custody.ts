@@ -118,6 +118,7 @@ async function recoverRequesterCompletionCustody(params: {
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision ?? null,
       env: params.env,
+      exactTranscript: true,
     });
     const requester = target;
     await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>

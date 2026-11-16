@@ -1506,6 +1506,7 @@ AFTER_CD
       ["docs/old.md", "docs/plugins/plugin-inventory.md", "true", "true"],
       ["src/old.ts", "src/new.ts", "false", "false"],
       ["test/fixtures/old.md", "docs/new.md", "true", "false"],
+      ["docs/reference/templates/AGENTS.md", "docs/reference/templates/AGENTS.md", "true", "false"],
       ["docs/removed.md", null, "true", "true"],
       ["VISION.md", "AGENTS.md", "true", "true"],
       ["docs/old.md", "VISION.md", "true", "true"],
@@ -2724,7 +2725,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     {
       file: "openclaw-npm-preflight.yml",
       runner: "blacksmith-8vcpu-ubuntu-2404",
-      job: "check_openclaw_npm",
+      job: "check_openclaw_npm_stage",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
     const workflow = readWorkflow(`.github/workflows/${file}`);

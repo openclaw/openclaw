@@ -117,7 +117,7 @@ it.skipIf(skipBroker)(
       ]);
       expect(brokerSpawn).toHaveBeenCalledTimes(1);
       expect(spawn).not.toHaveBeenCalled();
-      publication = watchAuthProfileNativeCommits(source);
+      publication = watchAuthProfileNativeCommits(source, readAuthProfileDatabaseIdentity(source));
       pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
       await scope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();

@@ -49,7 +49,7 @@ export function startSessionColdStorageMaintenance(params: {
     run: () => {
       const config = params.getRuntimeConfig();
       if (scheduler.signal.aborted || !hasTranscriptMaintenanceWork(config)) {
-        throw new Error("Transcript maintenance is disabled");
+        throw new Error("Chat history maintenance is disabled");
       }
       if (inFlight) {
         return inFlight;
@@ -62,7 +62,7 @@ export function startSessionColdStorageMaintenance(params: {
           isGatewayWorkAdmissionClosed()
         ) {
           throw new Error(
-            "Transcript archival canceled because its runtime configuration changed or the Gateway is stopping",
+            "Chat history archival canceled because its runtime configuration changed or the Gateway is stopping",
           );
         }
       };
@@ -144,7 +144,7 @@ export function requestGatewaySessionColdStorageMaintenance(
 ): void {
   const owner = owners.get(getRuntimeConfig);
   if (!owner) {
-    throw new Error("Transcript maintenance is not running; wait for Gateway startup to finish");
+    throw new Error("Chat history maintenance is not running; wait for Gateway startup to finish");
   }
   // The lifecycle owner records completion/errors and drains this job on shutdown.
   void owner.run().catch(() => {});

@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { forceFullGc } from "../test-utils/retention.js";
 import { createSqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
+import { bindSqliteWorkerDatabaseAdmissionCursor } from "./sqlite-worker-database-admission-relay.js";
 import {
-  bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteDatabaseAdmissionRelay,
   createSqliteWorkerOperationAdmission as createAdmission,
 } from "./sqlite-worker-operation-admission.js";
@@ -66,10 +66,11 @@ it.each(["admit", "prepare", "relay", "context", "cursor"] as const)(
         },
         [],
       );
-      admission.finish();
-      return { admission, reference };
+      const finishing = admission.finish();
+      return { admission, reference, finishing };
     }
     const finished = finishCaptured();
+    onTestFinished(() => finished.finishing);
     try {
       const control = new WeakRef({});
       await collect();
@@ -82,7 +83,7 @@ it.each(["admit", "prepare", "relay", "context", "cursor"] as const)(
       });
       expect(() => finished.admission.observeRequests(() => {})).toThrow("closed");
     } finally {
-      finished.admission.finish();
+      await finished.admission.finish();
       context.disable();
     }
   },
@@ -124,7 +125,8 @@ it("lets an accepted preparation settle after closure without admitting its dela
     );
     pending.admission.service();
     await started.promise;
-    pending.admission.finish();
+    const finishing = pending.admission.finish();
+    onTestFinished(() => finishing);
     expect(Atomics.load(decision, 0)).toBe(2);
     release.resolve();
     await completed.promise;
@@ -136,6 +138,6 @@ it("lets an accepted preparation settle after closure without admitting its dela
     expect(Atomics.load(decision, 0)).toBe(2);
   } finally {
     release.resolve();
-    pending.admission.finish();
+    await pending.admission.finish();
   }
 });
