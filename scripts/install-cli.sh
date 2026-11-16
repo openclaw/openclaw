@@ -411,7 +411,10 @@ parse_args() {
           fail "Missing value for $1"
         fi
         case "$1" in
-          --prefix) PREFIX="$2" ;;
+          --prefix)
+            [[ -n "$2" ]] || fail "Missing value for --prefix"
+            PREFIX="$2"
+            ;;
           --version) OPENCLAW_VERSION="$2" ;;
           --compatible-with) REQUIRED_COMPATIBLE_VERSION="$2" ;;
           --node-version)

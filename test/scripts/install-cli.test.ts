@@ -120,6 +120,16 @@ function runNpmPolicy(spec: string) {
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
+  it("rejects an empty prefix before preparing an installation", () => {
+    const result = runInstallCliShell(`
+      prepare_tmpdir() { echo unexpected-preparation; return 93; }
+      main --prefix "" --node-only
+    `);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Missing value for --prefix");
+    expect(result.stdout + result.stderr).not.toContain("unexpected-preparation");
+  });
+
   it.each(["--install-method npn", "--method npn", ""])(
     "rejects invalid methods without switching the active runtime (%s)",
     (args) => {
