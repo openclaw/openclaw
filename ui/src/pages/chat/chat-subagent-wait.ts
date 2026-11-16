@@ -419,7 +419,7 @@ export function projectSubagentStatus(
   const pausedNote = pausedOnly && !handoffRunId;
   // A hydrated roster with no unfinished or paused children ends the wait.
   const wait: ChatSubagentWait | null =
-    waitStartedAt !== null && (!hydrated || unfinished.length + yielded.length > 0)
+    handoffRunId && waitStartedAt !== null && (!hydrated || unfinished.length + yielded.length > 0)
       ? {
           startedAt: waitStartedAt,
           ...(handoffRunId ? { runId: handoffRunId } : {}),

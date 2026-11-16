@@ -89,8 +89,6 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           : `background exec ${exec.id} could not confirm its cleanup; inspect it with process log`;
     const child = () =>
       listSubagentRunsForRequester(target.sessionKey, {
-        requesterSessionId: entry.sessionId,
-        requesterLifecycleRevision: entry.lifecycleRevision,
         requesterAgentId: target.agentId,
         requesterStorePath: target.storePath,
       }).find(

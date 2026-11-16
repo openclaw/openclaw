@@ -456,10 +456,7 @@ export function applyLocalWorkspaceCheckpoint(params: {
 }): ReturnType<typeof applyStagedWorkerWorkspace> {
   params.current();
   let conflictPaths: string[] | undefined;
-  const acceptance: Pick<
-    Parameters<typeof applyStagedWorkerWorkspace>[0],
-    "journal" | "acceptance"
-  > = {
+  const acceptance = {
     journal: {
       load: async () => undefined,
       begin: async (journal) => {
@@ -509,13 +506,13 @@ export function applyLocalWorkspaceCheckpoint(params: {
       },
     },
     acceptance: {
-      kind: "reconcile",
-      publish: async (value) => {
+      kind: "checkpoint",
+      publish: async (paths) => {
         params.current();
-        conflictPaths = value.conflictPaths;
+        conflictPaths = paths;
       },
     },
-  };
+  } satisfies Pick<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance">;
   return withLocalWorkspaceReconciliation(
     {
       worktreeId: params.selected.worktree_id,

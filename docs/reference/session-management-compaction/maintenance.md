@@ -20,7 +20,7 @@ title: "Store maintenance and retention"
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion       |
 | `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                                   |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid            |
-| `coldStorage.enabled`   | `false`               | move eligible inactive transcript payloads to compressed JSONL files in a background worker       |
+| `coldStorage.enabled`   | `true`                | move eligible inactive transcript payloads to compressed JSONL files in a background worker       |
 | `coldStorage.afterDays` | `30`                  | positive integer inactivity cutoff in days for cold storage                                       |
 
 The Gateway applies configured reset/deletion archive expiry at startup and once
@@ -52,7 +52,7 @@ archive replaces those rows with a compressed transcript blob in SQLite's
 `session_transcript_archives` table and a derived JSONL file in the sessions
 directory. The compressed payload therefore still occupies database space; the
 file is not its only copy. Runtimes without zstd support write plain JSONL
-reset/deletion archives. Optional [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+reset/deletion archives. [Cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 moves inactive transcript payloads entirely out of SQLite; `pruneAfter`
 controls session retention, and `resetArchiveRetention` controls reset/deletion
 archive deletion.
@@ -79,7 +79,7 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
 
-`maxEntries` counts unarchived session rows; archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions until the unarchived total reaches `maxEntries` or no eligible victims remain. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers such as group sessions and thread-scoped chat sessions remain protected, so protected rows can keep the unarchived total above the cap. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) remain disposable and can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run check retention.
+`maxEntries` counts unarchived session rows; archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions until the unarchived total reaches `maxEntries` or no eligible victims remain. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers such as group sessions and thread-scoped chat sessions remain protected, so protected rows can keep the unarchived total above the cap. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) remain disposable and can still be removed once they exceed the configured age, count, or disk budget. The exception is a sub-agent session whose run is still running or whose completion is still owed to its requester: it stays protected until the requester settles that completion, even after the child's own cleanup has finished. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run check retention.
 
 Every new archive records a structured reason automatically. Explicit archive actions record `manual`; count-cap and stale-dashboard maintenance record their respective causes; `pruneAfter` archives eligible durable sessions with `age-retention` while deleting disposable automation; recovery archives record `restart-recovery`. The Control UI renders a human-readable explanation. Missing or unrecognized reasons are treated as protected legacy state rather than inferred.
 
@@ -124,8 +124,9 @@ change; retention and archive durability are unchanged.
 
 ### Cold transcript storage
 
-Enable cold storage to keep older transcript payloads in compressed
-`.jsonl.zst` files while retaining their session identities in SQLite:
+Cold storage is enabled by default after 30 inactive days. It keeps older
+transcript payloads in compressed `.jsonl.zst` files while retaining their
+session identities in SQLite. These are the defaults:
 
 ```json5
 {
@@ -150,7 +151,7 @@ requiring a new message. Changes to these settings apply to future work without
 restarting the Gateway; turning the feature off does not discard or strand
 existing cold history.
 
-`coldStorage.enabled` is a separate opt-in policy. It runs even when
+`coldStorage.enabled` is a separate, default-on policy. It runs even when
 `session.maintenance.mode` is `warn`; that mode controls age, count, and
 disk-budget cleanup. Disable `coldStorage.enabled` to stop future extraction.
 

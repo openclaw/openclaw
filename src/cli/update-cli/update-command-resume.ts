@@ -10,7 +10,10 @@ import {
 } from "../../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
 import type { HandoffProcessIdentity } from "../../infra/update-managed-service-handoff-schema.js";
 import {
@@ -129,7 +132,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
         : null;
       if (
         legacyPackageBridge &&
-        (!inPostCore(record) || !executingRoot || resolveUpdateInstallRoot(executingRoot) !== root)
+        (!inPostCore(record) || !executingRoot || !updateInstallRootsMatch(executingRoot, root))
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "Legacy post-core update does not match its running installation.",
@@ -150,10 +153,13 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
       if (meta?.handoffId && meta.root) {
         const { assertManagedServiceUpdateHandoffRoot } =
           await import("../../infra/update-managed-service-handoff.js");
+        // A release link and the release it selects are one installation; pass one spelling.
+        const sameInstallation = (candidate: string | null) =>
+          candidate && updateInstallRootsMatch(meta.root!, candidate) ? meta.root! : candidate;
         await assertManagedServiceUpdateHandoffRoot({
           expectedRoot: meta.root,
-          root,
-          executingRoot,
+          root: sameInstallation(root)!,
+          executingRoot: sameInstallation(executingRoot),
           postCore: true,
         });
       }
