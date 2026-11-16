@@ -4,13 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDoctorChain } from "./state-upgrade-doctor.js";
 import { writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
-import {
-  createDoctorChain,
-  isStateUpgradePending,
-  upgradeStateDirectory,
-} from "./state-upgrade.js";
+import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(() => {

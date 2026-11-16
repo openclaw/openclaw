@@ -451,6 +451,8 @@ const repositoryScriptEntries = [
   "scripts/generate-browser-inspect-script-swift.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
+  // The heap rig preloads its soak observer through --import.
+  "scripts/lib/gateway-heap-rig-soak-preload.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
   "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
