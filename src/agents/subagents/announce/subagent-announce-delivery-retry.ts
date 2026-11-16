@@ -122,6 +122,7 @@ export function classifyAnnounceDeliveryError(
     interruption?: "requester_aborted" | "requester_timed_out";
     replaySafe?: boolean;
     beforeAdmission?: boolean;
+    requesterSettle?: boolean;
   } = {},
 ): SubagentAnnounceDeliveryResult {
   const safeAbort = findReplaySafeRunAbort(error);
@@ -157,7 +158,8 @@ export function classifyAnnounceDeliveryError(
     disposition: hasAnnounceSendEvidence(error)
       ? "ambiguous"
       : !isPermanentAnnounceDeliveryError(error) &&
-          (facts.beforeAdmission ||
+          ((!reason && facts.requesterSettle === false) ||
+            facts.beforeAdmission ||
             (reason && facts.replaySafe) ||
             hasAnnounceErrorMatch(
               error,

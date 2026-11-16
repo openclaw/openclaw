@@ -42,6 +42,8 @@ schedule. Every retryable settle outcome keeps its wake; exhausting the budget
 records a permanent failure and the existing blocked-delivery notice. Runs with
 committed or unknown effects remain failed for explicit recovery instead of
 repeating their work.
+Ordinary completion delivery retains its existing frozen-result retry policy and
+delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
 precedence; cancellation does not revive work those owners have closed.
 

@@ -97,6 +97,9 @@ async function sendSubagentAnnounceDirectlyBound(
     });
   }
   const parentOnly = params.completionTarget === "parent";
+  const sourceToolId =
+    normalizeOptionalLowercaseString(params.sourceTool) ??
+    (params.expectsCompletionMessage ? "subagent_announce" : "");
   const cfg = getSubagentAnnounceRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
@@ -140,9 +143,6 @@ async function sendSubagentAnnounceDirectlyBound(
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
-    const sourceToolId =
-      normalizeOptionalLowercaseString(params.sourceTool) ??
-      (params.expectsCompletionMessage ? "subagent_announce" : "");
     const isSubagentCompletion = sourceToolId === "subagent_announce";
     const trustedCompletionEvent = resolveExactSubagentCompletionEvent({
       inputProvenance: {
@@ -550,6 +550,7 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       params.onDeliveryError?.(err);
       directFailure = classifyAnnounceDeliveryError(err, {
+        requesterSettle: sourceToolId === "subagent_settle",
         replaySafe: !executionStarted,
         beforeAdmission: beforeAdmission(),
         ...(params.signal?.aborted ? { interruption: "requester_aborted" } : {}),
@@ -565,6 +566,7 @@ async function sendSubagentAnnounceDirectlyBound(
     }
     params.onDeliveryError?.(err);
     return classifyAnnounceDeliveryError(err, {
+      requesterSettle: sourceToolId === "subagent_settle",
       replaySafe: !executionStarted,
       beforeAdmission: beforeAdmission(),
     });
