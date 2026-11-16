@@ -117,6 +117,26 @@ function changeStatus(container: HTMLElement, status = "running") {
   control.dispatchEvent(new Event("change"));
 }
 
+it("names the board and the cards' default agent like the Workboard page", async () => {
+  const { fixture, mount } = setup(async () => ({
+    ...snapshot(),
+    boards: [{ id: "ops", name: "Product Operations" }],
+  }));
+  Object.assign(fixture.host.agents, { defaultId: null });
+  const board = mount("board", { boardId: "ops" });
+  const mini = mount("mini", { boardId: "ops" });
+  await settle(() => expect(texts(board, ".workboard-card__session-name")).toHaveLength(3));
+  expect(texts(board, ".workboard-widget-board__header strong")).toEqual(["Product Operations"]);
+  expect(texts(mini, ".workboard-widget-mini header strong")).toEqual(["Product Operations"]);
+
+  // The roster can arrive after the cards on a cold start.
+  Object.assign(fixture.host.agents, { defaultId: "main", rows: [{ id: "main", name: "Molty" }] });
+  fixture.notify();
+  await settle(() =>
+    expect(new Set(texts(board, ".workboard-card__session-name"))).toEqual(new Set(["Molty"])),
+  );
+});
+
 it("discloses incomplete widget data and loads an absent card on demand for read-only viewers", async () => {
   const first = expectDefined(cards[0], "first card");
   const cursor = { id: first.id, position: first.position, createdAt: first.createdAt };
