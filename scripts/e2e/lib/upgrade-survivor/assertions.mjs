@@ -498,15 +498,21 @@ function assertConfigSurvived() {
 
   if (coverage && acceptsIntent(coverage, "skill-library-split")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    const mode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE ?? "current";
+    assert(mode === "current" || mode === "preserve", "Unknown skill library migration contract");
+    const preserve = baseline || mode === "preserve";
     assert(
       JSON.stringify(config.tools?.allow) ===
         JSON.stringify(
-          baseline ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+          preserve ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
         ),
       "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
     );
     assert(
-      baseline || config.meta?.migrations?.skillLibraryToolSplit === true,
+      baseline ||
+        (mode === "preserve"
+          ? config.meta?.migrations?.skillLibraryToolSplit === undefined
+          : config.meta?.migrations?.skillLibraryToolSplit === true),
       "Skill library split migration marker was not recorded",
     );
   }
