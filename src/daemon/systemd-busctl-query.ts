@@ -94,17 +94,19 @@ export function createSystemdBusctlQuery(options: {
     }
     if (result.code !== 0) {
       const unitName = options.unitName ?? args[6];
-      // systemd 245 busctl colors this line even when stderr is not a terminal.
-      const detail = stripAnsi(result.stderr).trim();
+      // systemd 239 omits the prefix; 245 can color it even when stderr is a pipe.
+      const detail = stripAnsi(result.stderr)
+        .trim()
+        .replace(/^Call failed: /, "");
       if (
         result.termination === "exit" &&
-        ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||
+        ((args.includes("LoadUnit") && detail === `Unit ${unitName} not found.`) ||
           (args.includes("GetUnit") &&
-            (detail === `Call failed: Unit ${unitName} not loaded.` ||
-              detail === `Call failed: Unit ${unitName} not found.`)) ||
+            (detail === `Unit ${unitName} not loaded.` ||
+              detail === `Unit ${unitName} not found.`)) ||
           (args.includes("GetUnitFileState") &&
-            (detail === `Call failed: Unit file ${unitName} does not exist.` ||
-              detail === "Call failed: No such file or directory")))
+            (detail === `Unit file ${unitName} does not exist.` ||
+              detail === "No such file or directory")))
       ) {
         return null;
       }

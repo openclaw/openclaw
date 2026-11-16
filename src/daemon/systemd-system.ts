@@ -1,8 +1,6 @@
 /** Detects system-scope systemd ownership before mutating a user gateway unit. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -17,12 +15,8 @@ import {
   readSystemdUnitObjectPath,
   systemdUnitCallArgs,
 } from "./systemd-bus-query.js";
-import {
-  execBusctlSystem,
-  execSystemctl,
-  isRunningAsRoot,
-  readSystemctlDetail,
-} from "./systemd-exec.js";
+import { createSystemdBusctlQuery } from "./systemd-busctl-query.js";
+import { execSystemctl, isRunningAsRoot, readSystemctlDetail } from "./systemd-exec.js";
 
 type SystemSystemdOwnership =
   | { status: "absent"; unitName: string }
@@ -124,40 +118,29 @@ async function inspectLoadedSystemOwnership(
         inspectionBudget.now() +
         (timeoutMs && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000);
       const unavailable = () => new Error("Non-loading system manager inspection unavailable.");
+      const busQuery = createSystemdBusctlQuery({
+        env: {},
+        scope: "system",
+        deadline,
+        calls: 3,
+        boundCalls: true,
+        noAutoStart: true,
+        unitName,
+        unavailable,
+      });
       const query = async (
         args: string[],
         signature: string,
         allowMissing = false,
       ): Promise<unknown> => {
-        const remaining = deadline - inspectionBudget.now();
-        if (remaining <= 0) {
-          throw unavailable();
-        }
-        const result = await execBusctlSystem(
-          ["--auto-start=no", "--json=short", ...args],
-          remaining,
-        );
-        if (result.termination !== "exit" || inspectionBudget.now() >= deadline) {
-          throw unavailable();
-        }
-        if (result.code !== 0) {
-          // systemd 245 busctl colors this line even when stderr is not a terminal.
-          if (
-            allowMissing &&
-            [
-              `Call failed: Unit ${unitName} not loaded.`,
-              `Call failed: Unit ${unitName} not found.`,
-            ].includes(stripAnsi(result.stderr).trim())
-          ) {
+        const values = await busQuery(args, [signature]);
+        if (values === null) {
+          if (allowMissing) {
             return missingUnit;
           }
           throw unavailable();
         }
-        const parsed = asOptionalRecord(JSON.parse(result.stdout));
-        if (parsed?.type !== signature) {
-          throw unavailable();
-        }
-        return parsed.data;
+        return values[0];
       };
       const readOwner = () =>
         readSystemdBusOwner(

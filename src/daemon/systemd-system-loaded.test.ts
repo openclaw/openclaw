@@ -100,6 +100,35 @@ it("proves absence when systemd 245 busctl colors the missing-unit line", async 
   );
   await expect(absent()).resolves.toBeUndefined();
 });
+it.each(["absent", "loaded", "denied"] as const)(
+  "keeps legacy system-manager ownership %s after output negotiation",
+  async (state) => {
+    exec.mockImplementation(async (_command, args) => {
+      if (args.includes("--json=short")) {
+        return commandResult("", "busctl: unrecognized option '--json=short'", 1);
+      }
+      if (args.includes("GetNameOwner")) {
+        return commandResult(`s "${owner}"`);
+      }
+      if (args.includes("GetUnit")) {
+        return state === "loaded"
+          ? commandResult('o "/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice"')
+          : commandResult("", state === "absent" ? `Unit ${unit} not loaded.` : "Access denied", 1);
+      }
+      if (args.includes("UnitPath")) {
+        return commandResult('as 2 "/etc/systemd/system" "/run/systemd/system"');
+      }
+      throw new Error("Unexpected manager query");
+    });
+    if (state === "absent") {
+      await expect(absent()).resolves.toBeUndefined();
+    } else {
+      await expect(absent()).rejects.toMatchObject({
+        ownership: { status: state === "loaded" ? "loaded" : "unverifiable" },
+      });
+    }
+  },
+);
 it("refuses filesystem uncertainty", async () => {
   vi.spyOn(fs, "lstat").mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
   await expect(absent()).rejects.toMatchObject({
