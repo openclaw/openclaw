@@ -708,6 +708,23 @@ describe("Claude native stdio boundary", () => {
     ).toMatchObject({ synthetic: true, privateContext: "second private context" });
   });
 
+  it("keeps private context above Claude Code's hook limit readable", async () => {
+    const framing = "completion framing";
+    // A long child result whose surrogate pair straddles the first 10,000-character boundary.
+    const appendContext = `${"r".repeat(9_979)}🦞${"s".repeat(4_000)}CHILD-RESULT-TAIL`;
+    const detail = await runDetail(
+      await createContext("hook-context-limit", {
+        promptContext: { prependContext: framing, appendContext },
+      }),
+    );
+    const hookContexts = detail.hookContexts as string[];
+
+    expect(detail.modelContext).toContain("CHILD-RESULT-TAIL");
+    expect(hookContexts.join("")).toBe(`${framing}\n\n${appendContext}`);
+    expect(hookContexts.map((value) => value.length <= 10_000)).not.toContain(false);
+    expect(hookContexts[1]?.startsWith("🦞")).toBe(true);
+  });
+
   it.each([
     ["mcp-hook", "hookDecision", { continue: true }],
     ["mcp-elicitation", "elicitation", { action: "decline" }],

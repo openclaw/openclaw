@@ -396,6 +396,11 @@ For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
 native session retains the context for resume. Imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
+Claude Code saves a single hook value above 10,000 characters to a file and
+shows the model only a preview, which message-only turns cannot open. OpenClaw
+splits longer private context, such as a long subagent result in a completion
+turn, across several prompt hooks of at most 10,000 characters each, so Claude
+receives the whole text up to 200,000 characters.
 
 Local plugin-managed Claude turns also receive the renderer-owned Runtime facts
 through this private hook context on every turn. Session identity stays out of the

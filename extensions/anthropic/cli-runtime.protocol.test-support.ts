@@ -42,6 +42,7 @@ let firstInputUuid;
 let injectedContext;
 let injectedRerunContext;
 const priorResponses = {};
+const limitResponses = {};
 const hostFrames = [];
 let credentialProof;
 let shutdownDescendant;
@@ -330,6 +331,14 @@ for await (const line of createInterface({ input: process.stdin })) {
       });
       continue;
     }
+    if (scenario === "hook-context-limit") {
+      // Claude Code runs every registered prompt hook and caps each additionalContext string.
+      for (const [index, callback_id] of hooks.UserPromptSubmit[0].hookCallbackIds.entries()) {
+        request("limit-" + index, { subtype: "hook_callback", callback_id,
+          input: { hook_event_name: "UserPromptSubmit", prompt: user } });
+      }
+      continue;
+    }
     if (scenario === "large-split-record") {
       const record = JSON.stringify({ type: "assistant", message: { role: "assistant",
         content: [{ type: "text", text: "🦞" + "x".repeat(300_000) + "🦞" }] } });
@@ -454,6 +463,19 @@ for await (const line of createInterface({ input: process.stdin })) {
       if (Object.keys(priorResponses).length === 3) {
         lifecycle("started", pendingInputUuid);
         result({ matchedInputUuid: pendingInputUuid, priorResponses });
+      }
+    } else if (id.startsWith("limit-")) {
+      limitResponses[id] = response.hookSpecificOutput?.additionalContext;
+      const callbackCount = hooks.UserPromptSubmit[0].hookCallbackIds.length;
+      if (Object.keys(limitResponses).length === callbackCount) {
+        const hookContexts = [...Array(callbackCount).keys()]
+          .map((index) => limitResponses["limit-" + index])
+          .filter((value) => value !== undefined);
+        // Native over-limit handling: a saved-file notice plus a 2,000-character preview.
+        const modelContext = hookContexts.map((value) => value.length > 10000
+          ? "Output too large. Full output saved to: tool-results/additionalContext.txt\n" + value.slice(0, 2000)
+          : value).join("");
+        result({ hookContexts, modelContext });
       }
     } else if (id === "late-approval") {
       lateDecision = response;
