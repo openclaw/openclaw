@@ -476,6 +476,9 @@ export async function persistAbortedPartial(params: {
     }).added) {
       await manager.appendMessageAsync(result);
     }
+    if (!snapshot.value.message.trim()) {
+      return undefined;
+    }
   }
   const appended = await appendInjectedAssistantMessageToTranscript({
     ...snapshot.value,

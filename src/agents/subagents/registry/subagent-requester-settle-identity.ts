@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -313,4 +314,16 @@ export function isRequesterYieldCohortMember(
     wake.batchRunIds?.length === batchRunIds.length &&
     wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])
   );
+}
+
+/** Completion rows for a settled batch: one finished, failed, timed-out or stopped row per child. */
+export function settledSubagentCompletions(rows: readonly SubagentRunRecord[]) {
+  return rows.flatMap((entry) => {
+    const completion = subagentCompletionForOutcome(
+      { runId: entry.runId, sessionKey: entry.childSessionKey, label: entry.label },
+      entry.execution.outcome?.status,
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED,
+    );
+    return completion ? [completion] : [];
+  });
 }

@@ -134,7 +134,9 @@ export function LifecycleOperations(props: {
             ? launch?.label
             : addressedSession(card, subagents?.subagentSessions, subagents?.recordedStopNames)
                 ?.name,
-        key: launch?.childKey,
+        // A stop receipt names the stopped child's session, so its name opens it too.
+        key:
+          props.kind === "launch" ? launch?.childKey : readSubagentCancellation(card)?.sessionKey,
         open: (child?.session?.listed && subagents?.onOpenSubagent) || subagents?.onOpenSession,
       };
     });

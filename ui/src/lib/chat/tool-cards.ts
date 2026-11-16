@@ -381,8 +381,12 @@ function extractToolCards(message: unknown): ToolCard[] {
       ? undefined
       : (asNullableRecord(details)?.bridgeDispatchStarted ?? recordedResult?.bridgeDispatchStarted);
     const exitCode = readToolExitCode(item, details, recordedResult, standalone ? undefined : m);
+    const collectionErrors = item.subagentCollectionErrors ?? m.subagentCollectionErrors;
     return {
       outputText: text,
+      ...(typeof collectionErrors === "number" && collectionErrors > 0
+        ? { subagentCollectionErrors: collectionErrors }
+        : {}),
       ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
       resultMessageId: catalogSource
         ? undefined

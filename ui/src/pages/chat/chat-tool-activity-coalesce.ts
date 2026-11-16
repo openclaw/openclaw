@@ -61,6 +61,7 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
     details: card.details,
     isError: card.isError,
     exitCode: card.exitCode,
+    subagentCollectionErrors: card.subagentCollectionErrors,
     __openclaw: {
       id: card.resultMessageId,
       toolOutput: card.toolOutput,
@@ -184,6 +185,9 @@ function readProjections(item: MessageItem, index: number): Projection[] {
         ...(card?.details !== undefined ? { details: card.details } : {}),
         ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
         ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
+        ...(!call && card?.subagentCollectionErrors
+          ? { subagentCollectionErrors: card.subagentCollectionErrors }
+          : {}),
       },
     };
   });

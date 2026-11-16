@@ -2,7 +2,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { readCollectedSubagentCompletions } from "../shared/subagent-completion.js";
+import {
+  readCollectedSubagentCompletions,
+  readCollectionErrorCount,
+} from "../shared/subagent-completion.js";
 
 export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
@@ -29,6 +32,7 @@ const activityDetails = z
         }),
       )
       .optional(),
+    subagentCollectionErrors: z.number().int().positive().optional(),
     result: z.object({ content: z.array(z.unknown()), details: z.unknown().optional() }),
     isError: z.boolean(),
     startedAt: z.number().finite(),
@@ -75,10 +79,11 @@ export function readOwnNestedToolActivity(value: unknown): NestedToolActivity | 
 export function createNestedToolActivity(
   details: Omit<NestedToolActivity["details"], "result"> & { result: unknown },
 ): NestedToolActivity {
-  const completions =
-    unwrapToolCallForDisplay({ name: details.toolName, args: details.input }).name === "agents_wait"
-      ? readCollectedSubagentCompletions(details.result)
-      : [];
+  const collection =
+    unwrapToolCallForDisplay({ name: details.toolName, args: details.input }).name ===
+    "agents_wait";
+  const completions = collection ? readCollectedSubagentCompletions(details.result) : [];
+  const errors = collection ? readCollectionErrorCount(details.result) : 0;
   const input = boundedJsonUtf8Bytes(details.input, 8_192).complete
     ? structuredClone(details.input)
     : "[Nested tool input omitted: exceeds display limit]";
@@ -98,6 +103,7 @@ export function createNestedToolActivity(
       input,
       result,
       ...(completions.length ? { subagentCompletions: completions } : {}),
+      ...(errors ? { subagentCollectionErrors: errors } : {}),
     },
     timestamp: details.startedAt,
   });

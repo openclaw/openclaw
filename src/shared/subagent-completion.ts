@@ -92,8 +92,8 @@ export function subagentCompletionMessage(
   };
 }
 
-/** Only callers that have identified an agents_wait result may use this parser. */
-export function readCollectedSubagentCompletions(value: unknown): SubagentCompletion[] {
+/** The agents_wait output from its structured result, details or JSON text. */
+function readCollection(value: unknown) {
   const result = asOptionalRecord(value);
   const details = asOptionalRecord(result?.details);
   const text =
@@ -107,13 +107,26 @@ export function readCollectedSubagentCompletions(value: unknown): SubagentComple
             })
             .join("\n")
         : undefined;
-  const parsed = Array.isArray(result?.completed)
+  const isCollection = (record: Record<string, unknown> | undefined) =>
+    Array.isArray(record?.completed) || Array.isArray(record?.errors);
+  return isCollection(result)
     ? result
-    : Array.isArray(details?.completed)
+    : isCollection(details)
       ? details
       : text
         ? safeParseJsonRecord(text)
         : undefined;
+}
+
+/** Per-ID collection errors (not found, not owned) have no completion row. */
+export function readCollectionErrorCount(value: unknown): number {
+  const errors = readCollection(value)?.errors;
+  return Array.isArray(errors) ? errors.length : 0;
+}
+
+/** Only callers that have identified an agents_wait result may use this parser. */
+export function readCollectedSubagentCompletions(value: unknown): SubagentCompletion[] {
+  const parsed = readCollection(value);
   // Every settled child gets a row: a failure must not disappear with its hidden wait.
   return readSubagentCompletions(
     Array.isArray(parsed?.completed)
@@ -141,6 +154,18 @@ export function preserveCollectedSubagentCompletions<T>(message: T): T {
   }
   const retained = readSubagentCompletions(record?.subagentCompletions);
   const completions = retained.length ? retained : readCollectedSubagentCompletions(record);
-  // SAFETY: the record is the caller's message; adding a field keeps its shape.
-  return completions.length ? ({ ...record, subagentCompletions: completions } as T) : message;
+  const errors =
+    typeof record?.subagentCollectionErrors === "number"
+      ? record.subagentCollectionErrors
+      : readCollectionErrorCount(record);
+  if (!completions.length && !errors) {
+    return message;
+  }
+  const preserved = {
+    ...record,
+    ...(completions.length ? { subagentCompletions: completions } : {}),
+    ...(errors ? { subagentCollectionErrors: errors } : {}),
+  };
+  // SAFETY: the record is the caller's message; adding facts keeps its shape.
+  return preserved as T;
 }

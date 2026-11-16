@@ -25,22 +25,6 @@ export type ChatAbortSessionSnapshot = Result<
   unknown
 >;
 
-/** Empty markers require an owned transcript; recovery text retains its error reporting. */
-export function shouldCaptureAbort(
-  text: string | undefined,
-  session: ChatAbortSessionSnapshot | undefined,
-  sessionId: string,
-  controlUiVisible?: boolean,
-): boolean {
-  return (
-    controlUiVisible !== false &&
-    Boolean(
-      text?.trim() ||
-      (session?.ok && session.value.canonicalKey && session.value.entry?.sessionId === sessionId),
-    )
-  );
-}
-
 /** Prepare fallible transcript metadata before synchronous cancellation can signal a producer. */
 export async function prepareChatAbortSessionSnapshot(
   params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],

@@ -463,6 +463,13 @@ it("names a stop from the roster or its recorded launch, keeping its outcome", a
     const group = createToolGroup("stop", [createMessageEntry("stop-entry", current)]);
     expect(await render([group], { subagents })).toEqual([expected]);
   }
+  // The stopped name opens the session its stop receipt recorded.
+  const onOpenSession = vi.fn();
+  await render([createToolGroup("stop", [createMessageEntry("stop-entry", stop)])], {
+    subagents: { recordedStopNames: indexRecordedSubagentStopNames([prior, stop]), onOpenSession },
+  });
+  document.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!.click();
+  expect(onOpenSession).toHaveBeenCalledWith(worker.key);
 });
 
 it("retains an unlabeled historical launch disclosure while its roster name hydrates", async () => {

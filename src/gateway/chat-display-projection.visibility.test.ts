@@ -445,16 +445,18 @@ it("projects recorded subagent completions without exposing the private continua
   ).toEqual([1, 4, 2, 3]);
   // A direct agents_wait result keeps its completion facts but not the private child output.
   const collected = { ...completion, status: "done", result: "private-result".repeat(4_000) };
+  const mixed = { completed: [collected], errors: [{ runId: "gone", error: "not_found" }] };
   const direct = projectChatDisplayMessages([
     {
       role: "toolResult",
       toolName: "agents_wait",
       toolCallId: "direct-collect",
-      content: [{ type: "text", text: JSON.stringify({ completed: [collected] }) }],
-      details: { completed: [collected] },
+      content: [{ type: "text", text: JSON.stringify(mixed) }],
+      details: mixed,
     },
   ])[0]!;
   expect(direct.subagentCompletions).toEqual([completion]);
+  expect(direct.subagentCollectionErrors).toBe(1);
   expect(JSON.stringify(direct)).not.toContain(collected.result);
   expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);
 });

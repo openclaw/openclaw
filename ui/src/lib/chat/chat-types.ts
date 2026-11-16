@@ -517,6 +517,8 @@ export type ToolCard = {
   liveOutput?: LiveToolOutput;
   /** Result identity stays distinct from the assistant call after presentation grouping. */
   resultMessageId?: string;
+  /** agents_wait per-ID errors recorded before the output cap; they have no completion row. */
+  subagentCollectionErrors?: number;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
   /** Bounded external preview; does not authorize full-message recovery. */

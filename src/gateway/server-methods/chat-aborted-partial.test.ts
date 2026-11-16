@@ -18,8 +18,7 @@ it.each([
   ["rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, false, false],
   ["wrapped rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, true, false],
   ["unrelated format failure", undefined, false, true],
-  ["empty cancelled turn", undefined, false, true],
-] as const)("honors the settled producer's %s", (name, code, wrapped, retained) =>
+] as const)("honors the settled producer's %s", (_name, code, wrapped, retained) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -31,7 +30,7 @@ it.each([
     const cfg = { agents: { entries: { main: {} } } };
     const producer = createDeferred<unknown>();
     let settlement: Promise<void> | undefined;
-    const text = name === "empty cancelled turn" ? "" : "Unvalidated partial";
+    const text = "Unvalidated partial";
     const snapshot = partial.captureAbortedPartial({
       ...scope,
       runId: "rejected-partial",
@@ -68,13 +67,6 @@ it.each([
       const message = expect.objectContaining({
         role: "assistant",
         content: [{ type: "text", text }],
-        // An empty cancellation stays visible as a marker but never enters model context.
-        ...(text
-          ? {}
-          : {
-              excludeFromContext: true,
-              openclawAbort: { aborted: true, origin: "rpc", runId: "rejected-partial" },
-            }),
       });
       expect(await loadTranscriptEvents(scope)).toEqual(
         retained ? expect.arrayContaining([expect.objectContaining({ message })]) : before,

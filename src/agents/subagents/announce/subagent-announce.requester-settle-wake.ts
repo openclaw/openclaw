@@ -8,7 +8,6 @@ import {
   type SessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -16,7 +15,6 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
@@ -33,6 +31,7 @@ import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
   resolveCurrentRequesterSettleWakeBatch,
+  settledSubagentCompletions,
 } from "../registry/subagent-requester-settle-identity.js";
 import { isClaimedByLiveRequesterTurn } from "../registry/subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -617,14 +616,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             triggerMessage: wakeMessage,
             subagentCompletions: pauseNotice
               ? undefined
-              : completionRows.flatMap((entry) => {
-                  const completion = subagentCompletionForOutcome(
-                    { runId: entry.runId, sessionKey: entry.childSessionKey, label: entry.label },
-                    entry.execution.outcome?.status,
-                    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED,
-                  );
-                  return completion ? [completion] : [];
-                }),
+              : settledSubagentCompletions(completionRows),
             requesterSessionOrigin,
             directOrigin,
             sourceSessionKey: batchSessionKeys[0],

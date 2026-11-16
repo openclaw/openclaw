@@ -6,6 +6,7 @@ import {
   unwrapToolResultTextForDisplay,
 } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
+import { readCollectionErrorCount } from "../../../../../src/shared/subagent-completion.js";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -126,11 +127,13 @@ export function collectActivityGroup(
     ) {
       continue;
     }
-    const result = {
+    // Live results carry the errors; persisted ones may keep only the compact count.
+    const recorded = card.subagentCollectionErrors;
+    const live = readCollectionErrorCount({
       ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
       ...asNullableRecord(card.details),
-    };
-    if (Array.isArray(result.errors) && result.errors.length > 0) {
+    });
+    if (recorded || live) {
       const item = preparedByCard.get(card);
       if (item) {
         errorWaits.add(item);

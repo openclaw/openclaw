@@ -318,9 +318,7 @@ function isCompletedAssistantMessage(message: Record<string, unknown>): boolean 
 
 /** Sanitized reasoning is display material without being a recovery-completing answer. */
 function hasAssistantHistoryMaterial(message: Record<string, unknown>): boolean {
-  const abort = asOptionalRecord(message.openclawAbort);
   return (
-    (abort?.aborted === true && typeof abort.runId === "string" && abort.runId.trim().length > 0) ||
     hasVisibleAssistantReplyText(message) ||
     hasAssistantDisplayableNonTextContent(message) ||
     hasTranscriptMediaFacts(message) ||

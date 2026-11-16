@@ -13,4 +13,5 @@
 # failure outcomes and error-bearing collection waits add the remaining lines.
 # Exact excess against integrated baseline 25c9790: 1394 net test lines minus the
 # normal 400-line allowance.
-994
+# Review fixes add collection-error retention and stopped-subagent link regressions.
+1024

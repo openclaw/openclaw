@@ -164,9 +164,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
           model: "gateway-injected",
           ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
           ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
-          ...(params.contextFreeCommand === true || (params.abortMeta && !params.message.trim())
-            ? { excludeFromContext: true }
-            : {}),
+          ...(params.contextFreeCommand === true ? { excludeFromContext: true } : {}),
           ...(Object.keys(openclawMeta).length ? { __openclaw: openclawMeta } : {}),
           ...(params.abortMeta
             ? {

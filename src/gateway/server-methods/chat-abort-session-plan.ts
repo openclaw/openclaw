@@ -48,7 +48,6 @@ import type { ChatSessionAbortParams, ChatSessionAbortResult } from "./chat-abor
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
-  shouldCaptureAbort,
   deferAbortedPartialPersistence,
   type AbortedPartialSnapshot,
 } from "./chat-aborted-partial.js";
@@ -350,7 +349,7 @@ export function prepareChatSessionAbort(
             return undefined;
           }
           const text = params.context.chatRunState.resolveBuffer(runId, { final: true }).text;
-          if (!shouldCaptureAbort(text, params.session, identity.sessionId)) {
+          if (!text?.trim()) {
             return undefined;
           }
           const snapshot = captureAbortedPartial({
@@ -358,7 +357,7 @@ export function prepareChatSessionAbort(
             sessionKey: identity.sessionKey,
             sessionId: identity.sessionId,
             agentId: identity.agentId ?? params.agentId,
-            text: text ?? "",
+            text,
             abortOrigin: params.abortOrigin,
             resolveTerminalProducer: entry.adapter.resolveTerminalProducer,
             session: params.session,
