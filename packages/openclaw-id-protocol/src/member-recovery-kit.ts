@@ -53,6 +53,7 @@ export async function readMemberRecoveryKit(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Paste the whole member recovery kit.");
   }
+  // SAFETY: JSON.parse returned a non-null, non-array object; fields remain unknown below.
   const record = value as Record<string, unknown>;
   if (
     Object.keys(record).toSorted().join(",") !== "account_id,claw_id,code,hostname,kind,root_fp" ||
@@ -70,7 +71,7 @@ export async function readMemberRecoveryKit(
   ) {
     throw new Error("Paste the whole member recovery kit.");
   }
-  // The strict field checks above establish the complete export shape.
+  // SAFETY: the strict field checks above establish every MemberRecoveryKit field and its type.
   const kit = record as MemberRecoveryKit;
   const secret = await decodeKit(kit.code.replace(/^OCM1-/i, "OCK1-"));
   try {

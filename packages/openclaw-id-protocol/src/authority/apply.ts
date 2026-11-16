@@ -62,6 +62,7 @@ function mailboxAllows(statement: SignedStatement, authority: Authority): boolea
     authority.kind === "root" ||
     (authority.kind === "member_recovery_kit" &&
       statement.type === "MembershipChange" &&
+      // SAFETY: parseStatement validated the body for the checked MembershipChange type.
       (statement as SignedStatement<"MembershipChange">).body.target.op === "add_member_device")
   );
 }
@@ -116,6 +117,7 @@ async function applyOwnerStatement(
     context.channel === "mailbox" &&
     (!mailboxAllows(statement, verified.authority) ||
       (statement.type === "MembershipChange" &&
+        // SAFETY: parseStatement validated the body for the checked MembershipChange type.
         (statement as SignedStatement<"MembershipChange">).body.target.op ===
           "set_member_recovery_kit"))
   ) {

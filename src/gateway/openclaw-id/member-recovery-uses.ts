@@ -2,17 +2,7 @@
 import { fingerprint } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { StoredClaw } from "./claw-store.js";
 import { retainMemberProfiles, type OpenClawIdMemberProfiles } from "./member-profiles.js";
-
-/** Owner-visible evidence; no signing material and no authority to approve another browser. */
-export type MemberRecoveryUse = {
-  seq: number;
-  accountId: string;
-  memberName: string;
-  deviceLabel: string;
-  peerKey: string;
-  peerFp: string;
-  usedAt: number;
-};
+import type { MemberRecoveryUse } from "./member-recovery-use-contract.js";
 
 /** Retains each accepted kit use even after the member, browser, or kit is removed. */
 export async function retainMemberRecoveryUses(

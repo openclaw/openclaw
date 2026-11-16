@@ -1,20 +1,15 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.ts";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { evaluateControlUiContext } from "../../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../../ui/src/test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  createControlUiMockBootstrapConfig,
   createControlUiMockSameOriginGatewayScript,
   defaultControlUiFeatureMethods,
   startControlUiE2eServer,
 } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
-import {
-  installNativePluginMockGateway,
-  prepareNativePluginMockGatewayScenario,
-} from "../../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
+import { installNativePluginMockGateway } from "../../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 
 // The Inbox is core UI: an older installed shell cannot prove this source change.
 const suite = createControlUiE2eSuite({
@@ -83,6 +78,7 @@ suite.define(() => {
         };
         link.members.unshift({ ...link.members[0]!, ...otherMember });
         const scenario = {
+          openclawIdEnabled: true,
           presenceUsers: [{ self: true, id: "owner-synthetic", name: "Synthetic Owner" }],
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -129,17 +125,6 @@ suite.define(() => {
             },
           },
         });
-        const prepared = await prepareNativePluginMockGatewayScenario(scenario);
-        await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
-          route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            body: JSON.stringify({
-              ...createControlUiMockBootstrapConfig(prepared.scenario),
-              openclawIdEnabled: true,
-            }),
-          }),
-        );
         await page.goto(`${suite.server.baseUrl}plugin?plugin=openclaw-id-access&id=access`);
         const surface = page.locator(".ocid-access");
         await surface.waitFor();

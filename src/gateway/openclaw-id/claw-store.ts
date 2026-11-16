@@ -8,7 +8,7 @@ import type {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
 import type { DeviceTokenBinding } from "./device-token-binding.js";
-import type { MemberRecoveryUse } from "./member-recovery-uses.js";
+import type { MemberRecoveryUse } from "./member-recovery-use-contract.js";
 
 /** The signed-in account the Gateway's verified sign-in reports. */
 export type OpenClawIdAccount = {
