@@ -128,7 +128,7 @@ suite.define(() => {
               2;
             return [
               ...element.querySelectorAll<HTMLElement>(
-                ".sidebar-agent-card__main, .sidebar-new-session, [data-navigation-view], .sidebar-rail__more, .sidebar-brand__search, .sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
+                ".sidebar-agent-card__main, .sidebar-new-session, [data-navigation-view], [data-sidebar-entry] .nav-item, .sidebar-rail__more, .sidebar-brand__search, .sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
               ),
             ].map((control) => {
               const box = control.getBoundingClientRect();
@@ -145,9 +145,9 @@ suite.define(() => {
             expect(Math.abs(measured.offset), measured.control).toBeLessThanOrEqual(0.5);
             expect(measured.size, measured.control).toBe(geometry[0]!.size);
           }
-          // The top stack (agent card, People, Pages) keeps one 8px pitch; search sits in
-          // the footer with Home and Inbox.
-          for (let index = 1; index < 3; index += 1) {
+          // The top stack (agent card, People, the default pins, Pages) keeps one 8px pitch;
+          // search sits in the footer with Home and Inbox.
+          for (let index = 1; index < 6; index += 1) {
             const control = geometry[index]!;
             expect(control.top - geometry[index - 1]!.bottom, control.control).toBeCloseTo(8, 1);
           }
