@@ -127,6 +127,24 @@ describe("OpenAI Responses reasoning replay", () => {
   );
 
   it.each(responseConverters)(
+    "$name keeps ciphertext written by another model in the same session",
+    ({ convert }) => {
+      const item = {
+        type: "reasoning",
+        id: "rs_other_model",
+        summary: [],
+        encrypted_content: "synthetic-other-model-reasoning",
+      };
+      const block = {
+        ...thinking(item),
+        openclawReasoningReplay: { ...metadata, model: "gpt-6-astra" },
+      };
+      const { id: _id, ...wire } = item;
+      expect(convert({ messages: [createAssistant([block])] })).toEqual([wire]);
+    },
+  );
+
+  it.each(responseConverters)(
     "$name removes standalone reasoning when replay identity strips its ciphertext",
     ({ name, convert }) => {
       const item = {
@@ -140,7 +158,6 @@ describe("OpenAI Responses reasoning replay", () => {
         null,
         { ...metadata, v: 2 },
         { ...metadata, provider: "other-provider" },
-        { ...metadata, model: "other-model" },
         { ...metadata, baseUrlHash: "other-endpoint" },
         { ...metadata, sessionHash: "other-session" },
       ]) {
