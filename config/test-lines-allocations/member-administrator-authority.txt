@@ -12,4 +12,5 @@
 # assertions cover the restacked membership-first contract (20 extra budget lines).
 # Historical non-null-grant retry fixtures and linked-profile no-effects controls
 # exercise both publication backends while preserving the original accepted authority.
-312
+# Non-member mention/personal-file and publication fixtures preserve unchanged-caller contracts.
+336
