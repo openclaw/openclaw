@@ -118,16 +118,16 @@ it("limits live copy to the newest activity group in the active run, not history
     { persistCommentary: true },
   );
   await waitForSolid(() =>
-    expect(texts(".chat-activity-group__label--live")).toEqual(["Reading latest.ts…"]),
+    expect(texts(".chat-activity-group__label--live")).toEqual(["Reading latest.ts"]),
   );
-  expectLabels(["Read files", "Read files", "Reading latest.ts…", "Reading files"]);
+  expectLabels(["Read files", "Read files", "Reading latest.ts", "Reading files"]);
 });
 
 it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
   async (scope) => {
     draw([user, first()]);
-    await waitForSolid(() => expectLabels(["Reading first.ts…"]));
+    await waitForSolid(() => expectLabels(["Reading first.ts"]));
     vi.advanceTimersByTime(100);
     const messages = [
       user,
@@ -142,7 +142,7 @@ it.each(["end", "session", "run", "connection"] as const)(
       expectLabels(["Reading files"]);
       vi.advanceTimersByTime(3_000);
       expectLabels(["Reading files"]);
-      expect(container.textContent).not.toContain("Reading next.ts…");
+      expect(container.textContent).not.toContain("Reading next.ts");
       return;
     }
     const owner = scope === "run" ? "replacement-run" : runId;
@@ -158,8 +158,8 @@ it.each(["end", "session", "run", "connection"] as const)(
         ...(scope === "connection" ? { connectionEpoch: 2 } : {}),
       },
     );
-    await waitForSolid(() => expectLabels(["Reading fresh.ts…"]));
+    await waitForSolid(() => expectLabels(["Reading fresh.ts"]));
     vi.advanceTimersByTime(3_000);
-    expectLabels(["Reading fresh.ts…"]);
+    expectLabels(["Reading fresh.ts"]);
   },
 );

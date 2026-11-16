@@ -297,7 +297,7 @@ it("keeps the identity card available during recovery and offers retry only offl
   expect(find(".gateway-status")).toBeNull();
   expect(card?.getAttribute("data-connection-status")).toBe("reconnecting");
   expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
-  expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Reconnecting…");
+  expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Reconnecting");
   expect(find(".sidebar-agent-card__subtitle-row")).toBeNull();
 
   card?.click();

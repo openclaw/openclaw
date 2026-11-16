@@ -30,7 +30,6 @@ import type {
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
 import { createCodeModeSessionStoreAccess } from "./code-mode-session-store.js";
-import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
@@ -614,11 +613,10 @@ export function storeSuspendedRun(
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  const recorded = recordCodeModeToolOutcome(result, result, params.pending);
   // Successful observers can close before the next wait. Parked work remains
   // owned by the parent run, catalog and expiry, not that completed call.
   params.owner.releaseCall();
-  return recorded;
+  return result;
 }
 
 export function codeModeAbortedResult(params: {

@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  removeGatewayTempHome as removeGatewayTempHomeOwner,
+  setupGatewayTempHome as setupGatewayTempHomeOwner,
+} from "./gateway-temp-home.test-support.js";
 import { removeGatewayTempHome, setupGatewayTempHome } from "./gateway.test-support.js";
 
 describe("setupGatewayTempHome", () => {
   it.skipIf(process.platform === "win32")(
     "creates private state before recursive agent setup under umask 0002",
     async () => {
-      const helperUrl = new URL("./gateway.test-support.ts", import.meta.url);
+      expect(setupGatewayTempHome).toBe(setupGatewayTempHomeOwner);
+      expect(removeGatewayTempHome).toBe(removeGatewayTempHomeOwner);
+      const helperUrl = new URL("./gateway-temp-home.test-support.ts", import.meta.url);
       const result = await runNodeScript(
         (workerArgv) => [
           ...workerArgv(helperUrl).slice(0, -1),

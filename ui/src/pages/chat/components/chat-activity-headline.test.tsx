@@ -132,9 +132,9 @@ function nestedStep(childName: string, parent: AgentActivityItem, child: AgentAc
 }
 
 it.each([
-  ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
-  ["web_search", { query: "new plugin APIs" }, "start", 'Web Search for "new plugin APIs"…'],
-  ["lookup_record", { query: "release notes" }, "start", "Lookup Record release notes…"],
+  ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect"],
+  ["web_search", { query: "new plugin APIs" }, "start", 'Web Search for "new plugin APIs"'],
+  ["lookup_record", { query: "release notes" }, "start", "Lookup Record release notes"],
   ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
   ["exec", {}, "result", "Script execution"],
   ["session_status", {}, "result", "Session Status"],
@@ -220,7 +220,7 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   await settleToolBridges(container);
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
   advanceTimersByTime(900);
-  expect(label()).toBe('Web Search for "API docs"…');
+  expect(label()).toBe('Web Search for "API docs"');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   await draw([exec, search], false);
   expect(label()).toBe("Running commands, searching");
@@ -253,7 +253,7 @@ it("preserves a pending headline deadline when inline presentation splits and re
       { ...liveOptions, inlineCommands: inlineCommands ? inline : undefined },
     );
   await draw(false, false);
-  expectAfter(200, "Writing write-a.ts…");
+  expectAfter(200, "Writing write-a.ts");
   advanceTimersByTime(100);
   await draw(true, false);
   expect(label()).toBe("Wrote write-a.ts");
@@ -262,9 +262,9 @@ it("preserves a pending headline deadline when inline presentation splits and re
   expect(label()).toBe("Wrote write-a.ts");
   expect(query("summary")?.closest<HTMLElement>(".chat-activity-group")?.hidden).toBe(false);
   expectAfter(749, "Wrote write-a.ts");
-  expectAfter(1, "Writing write-b.ts…");
+  expectAfter(1, "Writing write-b.ts");
   await draw(true, false);
-  expect(label()).toBe("Writing write-b.ts…");
+  expect(label()).toBe("Writing write-b.ts");
 });
 
 it("keeps accessible disclosure identity while the current action advances", () => {
@@ -312,7 +312,7 @@ it("selects only visible activity from the matching run and newest eligible grou
   ];
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "current" });
   advanceTimersByTime(200);
-  expect(label()).toBe("Reading current.ts…");
+  expect(label()).toBe("Reading current.ts");
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "newer-group" });
   expect(label()).toBe("Reading files");
   activityRoot.render(groups, { ...liveOptions, activityRunId: "absent-run" });
@@ -414,7 +414,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
   expect(activitySummary.getAttribute("aria-label")).toBeNull();
   expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-  expect(label()).toBe("Editing a.ts…");
+  expect(label()).toBe("Editing a.ts");
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
@@ -471,7 +471,7 @@ it("gates newly mounted live groups without hiding durable or urgent activity", 
   expect(liveGroup()?.hidden).toBe(true);
   advanceTimersByTime(1);
   expect(liveGroup()?.hidden).toBe(false);
-  expect(label()).toBe("Reading durable.ts…");
+  expect(label()).toBe("Reading durable.ts");
   activityRoot.render([group("current", [prepared("durable", "completed")])], liveOptions);
   expect(label()).toBe("Read durable.ts");
   expect(container.querySelector(".text-shimmer")).toBeNull();
@@ -497,7 +497,7 @@ it("gates newly mounted live groups without hiding durable or urgent activity", 
   }
   advanceTimersByTime(40);
   expect(liveGroup()?.hidden).toBe(false);
-  expect(label()).toBe("Reading next-24.ts…");
+  expect(label()).toBe("Reading next-24.ts");
 });
 
 it("keeps routine-only execution containers hidden throughout the run", async () => {
@@ -536,8 +536,8 @@ it.each([false, true])(
     advanceTimersByTime(799);
     expect(label()).toBe("Read first.ts");
     advanceTimersByTime(1);
-    expect(container.querySelector(".text-shimmer")?.textContent).toBe("Reading next.ts…");
-    expect(label()).toBe("Reading next.ts…");
+    expect(container.querySelector(".text-shimmer")?.textContent).toBe("Reading next.ts");
+    expect(label()).toBe("Reading next.ts");
   },
 );
 
@@ -629,7 +629,7 @@ it("defers transient replacements and refreshes a held container after its child
   draw(wrapper("running"), prepared("child"));
   expect(label()).toBe("Read first.ts");
   advanceTimersByTime(200);
-  expect(label()).toBe("Reading child.ts…");
+  expect(label()).toBe("Reading child.ts");
 
   // An initial container can already be visible before its actual child is known.
   activityRoot.unmount();
@@ -637,13 +637,13 @@ it("defers transient replacements and refreshes a held container after its child
   draw(wrapper("running"));
   expect(container.querySelector<HTMLElement>(".chat-activity-group")?.hidden).toBe(true);
   advanceTimersByTime(200);
-  expect(label()).toBe("Running a script…");
+  expect(label()).toBe("Running a script");
   advanceTimersByTime(40);
   draw(wrapper("completed"), prepared("child"));
   expect(label()).toBe("Ran a script");
   expect(container.querySelector(".text-shimmer")).toBeNull();
   advanceTimersByTime(960);
-  expect(label()).toBe("Reading child.ts…");
+  expect(label()).toBe("Reading child.ts");
 });
 
 it("keeps an expanded execution active between sequential child commands", async () => {

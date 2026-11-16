@@ -21,6 +21,8 @@ export type ClawHubTemplateCatalogOverview = {
 };
 export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   version: string;
+  /** The Template's own agent id; Add derives the new agent's id from it. */
+  agentId: string;
   agentName?: string;
   agentDescription?: string;
   workspaceFiles: number;

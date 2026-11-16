@@ -492,7 +492,7 @@ describe("transcript projection", () => {
     view.draw();
     await view.settle();
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(liveLabels()).toEqual(["Reading Latest operation.txt…"]));
+    await waitForSolid(() => expect(liveLabels()).toEqual(["Reading Latest operation.txt"]));
     props.messages = props.messages.map((message) =>
       message === latest ? { ...latest, runId: "peer" } : message,
     );
@@ -502,7 +502,7 @@ describe("transcript projection", () => {
     view.draw();
     // A new run has its own initial presentation hold.
     await vi.advanceTimersByTimeAsync(200);
-    expect(liveLabels()).toEqual(["Reading Latest operation.txt…"]);
+    expect(liveLabels()).toEqual(["Reading Latest operation.txt"]);
     props.runActive = false;
     view.draw();
     expect(liveLabels()).toEqual([]);

@@ -131,14 +131,43 @@ gh run rerun <run-id> --repo owner/repo --failed
 
 ### Wait for CI
 
-Run one of these as a single background `exec` (`background: true`, `timeoutSeconds` above the expected CI time). When its running result says the exit wakes this conversation, end the turn: the wake carries the exit code and the output tail. Otherwise, collect it with `process poll`. Do not start a second waiter for the same checks. Polling loops and one-shot automations cost a model turn per check ([#199122](https://github.com/openclaw/openclaw/pull/199122)).
+Run the waiter below as a single background `exec` (`background: true`, `timeoutSeconds` above the expected CI time). When its running result says the exit wakes this conversation, end the turn: the wake carries the exit code and the output tail. Otherwise, collect it with `process poll`. Do not start a second waiter for the same checks. Polling loops and one-shot automations cost a model turn per check ([#199122](https://github.com/openclaw/openclaw/pull/199122)).
+
+Pin the commit you pushed. A waiter that reads the PR head live can see the old head as settled right after a push and exit at once; `gh pr checks --watch` has this race ([#199663](https://github.com/openclaw/openclaw/pull/199663)).
 
 ```bash
-# Exits 0 when every check passes, non-zero at the first failure.
-gh pr checks 55 --repo owner/repo --watch --fail-fast
-# Exits non-zero when the run fails.
-gh run watch <run-id> --repo owner/repo --exit-status
+# Exit 0: every check passed. 1: a check failed. 11: the PR head moved. 12: no check ran.
+# 2: GitHub API reads failed 5 times in a row.
+pr=55 repo=owner/repo sha=$(git rev-parse HEAD) # the exact commit you pushed
+seen=0 n=0 e=0
+while :; do
+  head=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid)
+  if [ "$head" = "$sha" ]; then
+    seen=1
+    if ! runs=$(gh api --paginate "repos/$repo/commits/$sha/check-runs" \
+      --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"') ||
+      ! st=$(gh api "repos/$repo/commits/$sha/status" --jq 'select(.total_count > 0) | .state'); then
+      e=$((e + 1)); [ "$e" -ge 5 ] && { echo "API-ERROR $sha"; exit 2; }
+      n=$((n + 1)); sleep 30; continue
+    fi
+    e=0
+    bad=$(printf '%s\n' "$runs" | grep -E '^completed (failure|timed_out|action_required|startup_failure) ')
+    [ -n "$bad" ] && { echo "FAIL $sha"; echo "$bad"; exit 1; }
+    case "$st" in failure | error) echo "FAIL $sha commit status: $st"; exit 1 ;; esac
+    if [ "$st" != pending ] && { [ -z "$runs" ] ||
+      ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) '; }; then
+      { [ "$st" = success ] || printf '%s\n' "$runs" | grep -q '^completed success '; } &&
+        { echo "PASS $sha"; exit 0; }
+      [ "$n" -ge 4 ] && { echo "NO-RUN $sha"; exit 12; }
+    fi
+  elif [ -n "$head" ] && { [ "$seen" = 1 ] || [ "$n" -ge 4 ]; }; then
+    echo "HEAD-MOVED expected=$sha actual=$head"; exit 11
+  fi
+  n=$((n + 1)); sleep 30
+done
 ```
+
+The loop gives GitHub about 2 minutes to show the new head. It waits on queued, running and `stale` runs, and ignores cancelled runs, because concurrency groups cancel superseded runs. It also reads commit statuses, which some aggregate gates use. It exits 12 when no run succeeded, for example when every run was skipped or none started, because draft PRs skip CI. For one known run, `gh run watch <run-id> --repo owner/repo --exit-status` exits non-zero when the run fails.
 
 ## API
 

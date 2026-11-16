@@ -297,7 +297,7 @@ describe("status text truncation", () => {
       phase: "retrying",
       message: input,
     });
-    expect(startupLabel(host)).toBe("Retrying…");
+    expect(startupLabel(host)).toBe("Retrying");
     emitEvent(host, "run-1", 2, "notice", {
       phase: "provider_policy",
       category: "cyber",
@@ -940,7 +940,7 @@ it("shows a fallback attempt in the claw until same-run output resumes", () => {
     fallbackStepToModel: "example/backup",
     fallbackStepFinalOutcome: "next_fallback",
   });
-  expect(startupLabel(host)).toBe("Trying fallback model…");
+  expect(startupLabel(host)).toBe("Trying fallback model");
   emitEvent(host, "run-1", 12, "assistant", { text: "Recovered" });
   expect(startupLabel(host)).toBeUndefined();
 });

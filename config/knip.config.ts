@@ -451,6 +451,8 @@ const repositoryScriptEntries = [
   "scripts/generate-browser-inspect-script-swift.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
+  // The heap rig preloads its soak observer through --import.
+  "scripts/lib/gateway-heap-rig-soak-preload.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
   "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
@@ -636,9 +638,25 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       }
     }
   }
-  return names.size
-    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
-    : "";
+  const consumers = names.size
+    ? [`import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`]
+    : [];
+  // Preserve the planner's actual member uses; an entry exemption would hide unused exports.
+  const plannerPath = source.match(
+    /["']plugin-prerelease-test-plan["']:\s*["']\.\/(scripts\/[^"'\r\n]+)["']/u,
+  )?.[1];
+  const planner = source.match(
+    /\bconst\s+\w+\s*=\s*await\s+import\(\s*targetPlanPath\(["']plugin-prerelease-test-plan["']\)\s*\);[\s\S]*?(?=\n\s*\}\s*catch\b)/u,
+  )?.[0];
+  if (plannerPath && planner) {
+    consumers.push(
+      planner.replace(
+        /targetPlanPath\(["']plugin-prerelease-test-plan["']\)/u,
+        JSON.stringify(`../../${plannerPath}`),
+      ),
+    );
+  }
+  return consumers.join("\n");
 }
 
 function compileShellConsumers(source: string, filePath: string): string {

@@ -6523,7 +6523,7 @@ function retainedBootstrapGate(paths, expected) {
   retainedAdoptionChecked(value.intent.path, value.intent);
   return file;
 }
-function retainedBootstrapLoad(root, operation, request) {
+function retainedBootstrapLoad(root, operation, request, completed = false) {
   const paths = retainedBootstrapPaths(retainedAdoptionLocations(root, operation));
   const file = retainedAdoptionChecked(paths.prefix + ".intent.json");
   const intent = migrationJson(file.bytes);
@@ -6532,7 +6532,7 @@ function retainedBootstrapLoad(root, operation, request) {
       intent.request.operation !== operation || (request && !isDeepStrictEqual(intent.request, request)))
     reject("controller bootstrap request changed");
   retainedAdoptionRequest(root, intent.request);
-  if (!isDeepStrictEqual(intent.lock, retainedRepairLock())) reject("controller bootstrap lock inode changed");
+  if (!isDeepStrictEqual(intent.lock, retainedRepairLock()) && !completed) reject("controller bootstrap lock inode changed");
   retainedBootstrapGate(paths, { operation, intent: file.descriptor });
   if (intent.original.path !== paths.prefix + ".original.json") reject("controller bootstrap original path changed");
   const original = retainedAdoptionChecked(intent.original.path, intent.original);
@@ -6927,7 +6927,7 @@ function retainedAdoptionRunner(request, completedClosure, archived) {
     if (!(fromArchive && archive.sha256 === request.replacement[1].sha256 && isDeepStrictEqual(file.descriptor, archive)))
       reject("controller adoption must run the exact approved replacement library");
 }
-function retainedAdoptionLoad(root, input) {
+function retainedAdoptionLoad(root, input, completed = false) {
   suspensionObject(input, ["operation", "intentSha256"], "controller adoption binding");
   if (!/^[a-f0-9]{64}$/.test(input.intentSha256)) reject("controller adoption intent hash is invalid");
   const paths = retainedAdoptionLocations(root, input.operation);
@@ -6938,7 +6938,7 @@ function retainedAdoptionLoad(root, input) {
   if (intent.version !== 1 || intent.kind !== "retained-controller-adoption" || intent.protocol !== retainedAdoptionProtocol || intent.request.operation !== input.operation)
     reject("controller adoption intent has the wrong owner");
   retainedAdoptionRequest(root, intent.request, Object.hasOwn(intent.request, "historical"), Object.hasOwn(intent.request, "steady"));
-  if (!isDeepStrictEqual(intent.lock, retainedRepairLock())) reject("controller adoption lock inode changed");
+  if (!isDeepStrictEqual(intent.lock, retainedRepairLock()) && !completed) reject("controller adoption lock inode changed");
   if (!isDeepStrictEqual(intent.metadata, paths.destinations.map((path, index) => ({
     path, mode: index === 0 ? 0o755 : 0o644, uid: paths.owner, gid: rootGroup(),
   })))) reject("controller adoption ownership or mode policy changed");
@@ -6959,7 +6959,7 @@ function retainedAdoptionLoad(root, input) {
   }
   let bootstrap;
   if (Object.hasOwn(intent, "bootstrap")) {
-    bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, intent.request));
+    bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, intent.request, completed));
     if (!isDeepStrictEqual(bootstrap.closed.descriptor, intent.bootstrap) ||
         bootstrap.original.descriptor.sha256 !== original.descriptor.sha256)
       reject("controller adoption bootstrap predecessor changed");
@@ -7306,7 +7306,8 @@ function retainedAdoptionApply(root, binding) {
   return retainedAdoptionContext(root, binding);
 }
 function retainedAdoptionCompletion(root, binding, current = true) {
-  const context = retainedAdoptionLoad(root, binding);
+  // Completed evidence outlives /run across boots; only active publication pins its inode.
+  const context = retainedAdoptionLoad(root, binding, true);
   if (current) retainedAdoptionGate(context.paths, context.file.descriptor);
   const file = retainedAdoptionChecked(context.paths.prefix + ".complete.json");
   const value = migrationJson(file.bytes);
