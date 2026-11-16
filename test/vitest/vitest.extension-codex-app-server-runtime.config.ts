@@ -8,7 +8,6 @@ function createExtensionCodexAppServerRuntimeVitestConfig(
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/app-server-policy.test.ts",
-      "extensions/codex/src/app-server/auth-bridge.test.ts",
       "extensions/codex/src/app-server/auth-profile-runtime-contract.test.ts",
       "extensions/codex/src/app-server/client.test.ts",
       "extensions/codex/src/app-server/compact.cancellation.test.ts",
@@ -17,7 +16,6 @@ function createExtensionCodexAppServerRuntimeVitestConfig(
       "extensions/codex/src/app-server/managed-binary.test.ts",
       "extensions/codex/src/app-server/models.test.ts",
       "extensions/codex/src/app-server/session-binding.test.ts",
-      "extensions/codex/src/app-server/shared-client.test.ts",
       "extensions/codex/src/app-server/startup-binding.test.ts",
       "extensions/codex/src/app-server/thread-lifecycle*.test.ts",
       "extensions/codex/src/app-server/transport-*.test.ts",

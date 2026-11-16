@@ -3467,7 +3467,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       dockerBuild,
       dockerE2e,
       "openai-image-auth-docker-client",
-      "extensions/openai/image-generation-provider.test.ts",
+      "extensions/openai/image-generation-provider.auth.test.ts",
     ],
   ],
   ["scripts/e2e/lib/openai-chat-tools/client.mjs", [openaiChatToolsE2e]],
@@ -4184,7 +4184,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^test\/e2e\/qa-lab\/runtime\/openai-image-auth-docker-client\.ts$/u,
     [
       "openai-image-auth-docker-client",
-      "extensions/openai/image-generation-provider.test.ts",
+      "extensions/openai/image-generation-provider.auth.test.ts",
       "src/image-generation/openai-compatible-image-provider.test.ts",
     ],
   ],

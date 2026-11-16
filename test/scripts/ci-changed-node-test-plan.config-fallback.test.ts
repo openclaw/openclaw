@@ -137,7 +137,7 @@ describe("CI changed Node test plan", () => {
       // Explicit-file prerequisite authority must survive a config migration.
       const runtimeFiles = [
         "extensions/codex/src/app-server/event-projector.verbose-hooks.test.ts",
-        "extensions/codex/src/app-server/transcript-mirror.test.ts",
+        "extensions/codex/src/app-server/transcript-mirror.admission.test.ts",
       ];
       const files = [
         ...runtimeFiles,

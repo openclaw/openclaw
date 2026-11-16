@@ -10,7 +10,6 @@ export function createExtensionCodexAppServerToolsVitestConfig(
       "extensions/codex/src/app-server/approval-bridge.test.ts",
       "extensions/codex/src/app-server/computer-use.test.ts",
       "extensions/codex/src/app-server/dynamic-tool*.test.ts",
-      "extensions/codex/src/app-server/dynamic-tools.test.ts",
       "extensions/codex/src/app-server/elicitation-bridge.test.ts",
       "extensions/codex/src/app-server/native-execution-policy.test.ts",
       "extensions/codex/src/app-server/native-hook-relay.test.ts",

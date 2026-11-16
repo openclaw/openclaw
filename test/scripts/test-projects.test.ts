@@ -1442,7 +1442,7 @@ export const single = {
         "test/scripts",
         "docker-build-helper docker-e2e-plan openai-image-auth-docker-client",
       ),
-      "extensions/openai/image-generation-provider.test.ts",
+      "extensions/openai/image-generation-provider.auth.test.ts",
       "src/image-generation/openai-compatible-image-provider.test.ts",
     ]);
   });
