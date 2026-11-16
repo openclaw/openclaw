@@ -66,8 +66,6 @@ export type SubagentAnnounceDirectParams = {
   inputAttachments?: AgentRunRequest["attachments"];
   expectsCompletionMessage: boolean;
   completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  completionRequesterLifecycleRevision?: string;
   requireVisibleReply?: boolean;
   requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;
