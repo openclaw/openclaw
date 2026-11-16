@@ -487,6 +487,10 @@ export function Members(props: {
                   selectedDevice={props.selectedMember ? props.selectedDevice : undefined}
                   ownerDevices={props.ownerDevices}
                   onRemoveDevice={props.onRemoveDevice}
+                  components={props.components}
+                  roles={props.roles}
+                  locale={props.locale}
+                  onChangeRole={props.onChangeRole}
                   error={props.error}
                   readOnly={props.readOnly}
                   disabled={props.disabled}

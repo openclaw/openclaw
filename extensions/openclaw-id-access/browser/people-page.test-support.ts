@@ -5,7 +5,6 @@ import type { Invite, MemberRecoveryUse, StatusResult } from "./types.js";
 
 export const { default: plugin } = await import("./index.js");
 export const disposers: Array<() => void> = [];
-import type { ControlUiHost as Host, ControlUiPage } from "openclaw/plugin-sdk/control-ui";
 
 export const pendingInvite: Invite = {
   inviteId: "inv-1",
@@ -71,7 +70,10 @@ export const button = (container: HTMLElement, label: string) =>
   [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
 
 // The host owns picker behavior; this adapter exposes its public selection contract here.
-const mountSelectPicker: Host["components"]["mountSelectPicker"] = (container, initial) => {
+const mountSelectPicker: UI.ControlUiHost["components"]["mountSelectPicker"] = (
+  container,
+  initial,
+) => {
   const select = document.createElement("select");
   select.setAttribute("aria-label", initial.accessibleLabel);
   let current = initial;
@@ -111,7 +113,7 @@ export function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
   });
   const disposePage = vi.fn();
   const disposeNavigation = vi.fn();
-  const registerPage = vi.fn<(page: ControlUiPage) => () => void>(() => disposePage);
+  const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => disposePage);
   const registerNavigation = vi.fn(() => disposeNavigation);
   const subscribers = new Set<() => void>();
   const events = new Map<string, Set<(payload: unknown) => void>>();
@@ -143,7 +145,7 @@ export function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
     },
     ui: { registerPage, registerNavigation },
     components: { mountSelectPicker },
-  } as unknown as Host;
+  } as unknown as UI.ControlUiHost;
   return {
     host,
     request,
@@ -198,4 +200,3 @@ export async function mountPage(
     update: (props: Readonly<Record<string, string>>) => view?.update?.({ ...context, props }),
   };
 }
-
