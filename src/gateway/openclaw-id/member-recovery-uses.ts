@@ -3,6 +3,7 @@ import { fingerprint } from "../../../packages/openclaw-id-protocol/src/index.js
 import type { StoredClaw } from "./claw-store.js";
 import { retainMemberProfiles, type OpenClawIdMemberProfiles } from "./member-profiles.js";
 import type { MemberRecoveryUse } from "./member-recovery-use-contract.js";
+import { describeMemberDevices } from "./membership-views.js";
 
 /** Retains each accepted kit use even after the member, browser, or kit is removed. */
 export async function retainMemberRecoveryUses(
@@ -17,10 +18,10 @@ export async function retainMemberRecoveryUses(
   }
   const uses: MemberRecoveryUse[] = [];
   for (const [accountId, member] of Object.entries(state.members)) {
-    for (const peerKey of member.peer_keys) {
-      const device = member.devices?.[peerKey];
+    for (const device of await describeMemberDevices(member)) {
+      const peerKey = device.peer_key;
       if (
-        device?.approved_by.kind !== "member_recovery_kit" ||
+        device.approved_by?.kind !== "member_recovery_kit" ||
         previous?.authority?.members[accountId]?.peer_keys.includes(peerKey)
       ) {
         continue;
