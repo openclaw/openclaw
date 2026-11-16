@@ -120,6 +120,7 @@ import { getHeapStatistics } from "node:v8";
 import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
 import * as projectionOperation from "./worker-environments/local-workspace-projection-operation.js";
+import * as publicationGit from "./github-publication-git-transport.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 
 installGitHubPublicationTestHarness({ creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true });
@@ -170,6 +171,18 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
   console.log("publication-pause: upstream history ready");
   const fetched: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
+  const snapshots: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
+  const captureSnapshot = publicationGit.captureSettledGitHubPublicationWorkspaceSnapshot;
+  using snapshotSpy = vi.spyOn(publicationGit, "captureSettledGitHubPublicationWorkspaceSnapshot");
+  snapshotSpy.mockImplementation(async (...args) => {
+    const started = performance.now();
+    const pausedAtStart = runtime.isPaused();
+    try {
+      return await captureSnapshot(...args);
+    } finally {
+      snapshots.push({ durationMs: performance.now() - started, pausedAtStart, pausedAtEnd: runtime.isPaused() });
+    }
+  });
   const pauses: { start: number; end?: number }[] = [];
   const phases: { phase: string; at: number; paused: boolean }[] = [];
   let phase = "operation";
@@ -291,7 +304,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
-    heapBefore, heapAfter, mainAllocatedBytes, sampledAllocationBytes, fetched, pauseMs, phaseMs,
+    heapBefore, heapAfter, mainAllocatedBytes, sampledAllocationBytes, fetched, snapshots, pauseMs, phaseMs,
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
     totalPauseMs: pauseMs.reduce((sum, value) => sum + value, 0), maxPauseMs: Math.max(0, ...pauseMs),
     pausedAtReturn: runtime.isPaused(), outcome, failure, verified: false,
