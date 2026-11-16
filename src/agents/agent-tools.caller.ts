@@ -74,8 +74,8 @@ export function createCodingToolsGatewayCaller(params: {
           ...(options.sourceReplyDeliveryMode === "message_tool_only"
             ? { sessionEventDelivery: false as const }
             : {}),
-          // The existing source fence rechecks this after tool preparation and at final I/O.
-          receiptAuthority: settleBatch?.isCurrent,
+          // Keep the admitted requester live independently of mutable child delivery progress.
+          receiptAuthority: settleBatch?.isExecutionCurrent ?? settleBatch?.isCurrent,
           receiptAdmissions: settleBatch?.receiptAdmission
             ? [settleBatch.receiptAdmission]
             : undefined,

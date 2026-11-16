@@ -4,8 +4,8 @@ import type { SessionControllerInput } from "../../../sessions/session-controlle
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
-import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import type { SubagentCompletionDeliveryState } from "../registry/subagent-registry-read.types.js";
+import type { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
 
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 type SubagentAnnounceDeliveryDisposition = NonNullable<
@@ -79,7 +79,7 @@ export type SubagentAnnounceDirectParams = {
   sourceTool?: string;
   settleWakeSourceSessionKeys?: readonly string[];
   isSourceSessionEffectsAllowed?: () => boolean;
-  sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
+  sourceReceiptAdmission?: ReturnType<typeof createRequesterSettleReceiptAdmission>;
   /** Reconcile an already-admitted public settle turn; never dispatch or send. */
   /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
