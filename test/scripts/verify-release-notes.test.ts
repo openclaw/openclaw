@@ -147,6 +147,47 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("preserves concurrent edits during ledger generation", () => {
+    const artifact = "CHANGELOG/2026.7.1.md";
+    const { cwd, base } = seedRepository("openclaw-notes-concurrent-");
+    splitChangelog({ rootDir: cwd });
+    const initialized = runVerifier(cwd, { base });
+    expect(initialized.status, initialized.stderr).toBe(0);
+    const before = new Map(
+      ["CHANGELOG.md", "CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"].map((file) => [
+        file,
+        readFileSync(join(cwd, file), "utf8"),
+      ]),
+    );
+    const edited = before
+      .get(artifact)!
+      .replace("- One.", "- Operator edit made during discovery.");
+    const preload = join(cwd, "edit-during-discovery.mjs");
+    writeFileSync(
+      preload,
+      `import childProcess from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = childProcess.execFileSync;
+let edited = false;
+childProcess.execFileSync = function(command, args, options) {
+  if (!edited && command === 'git' && args.includes('log')) {
+    edited = true;
+    writeFileSync(${JSON.stringify(join(cwd, artifact))}, ${JSON.stringify(edited)});
+  }
+  return original.call(this, command, args, options);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const result = runVerifier(cwd, { base, preload });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("changed during release-note generation");
+    for (const [file, contents] of before) {
+      expect(readFileSync(join(cwd, file), "utf8")).toBe(file === artifact ? edited : contents);
+    }
+  });
+
   it("explains how to recover when a shallow checkout cannot resolve the beta merge base", () => {
     const origin = tempDirs.make("openclaw-shallow-release-origin-");
     git(origin, ["init", "-q", "-b", "main"]);

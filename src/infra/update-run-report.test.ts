@@ -149,6 +149,26 @@ it.each([true, false])("bounds runtime guidance (saved=%s)", (saved) => {
   expect(report.markdown.includes("Historical recovery advice:")).toBe(saved);
 });
 
+it("leads a fresh prerequisite refusal with its refusal block, not a saved one", () => {
+  const block =
+    "Update refused: openclaw@2026.11.9 needs Node >=24.22.1, but the Gateway service runs Node 24.20.0 at /n/node. No changes were made.\n1. Run `export OPENCLAW_PROFILE=work`.\n2. Run `nvm install 24.22.1 && nvm use 24.22.1`.";
+  const record = failed({
+    reason: "preflight-node-runtime-incompatible",
+    origin: { nextAction: `${block}\n\nFailing check node-runtime`, cause: "node-unsupported" },
+    steps: [failedStep("requested")],
+  });
+  const fresh = renderRecord(record, { nextAction: record.origin.nextAction });
+  const [headline, ...steps] = block.split("\n");
+  expect(fresh.headline).toBe(`⚠️ ${headline}`);
+  expect(fresh.lines).toEqual(steps);
+  expectText(fresh.markdown, [
+    "Reason code: preflight-node-runtime-incompatible",
+    "Cause: node-unsupported",
+  ]);
+  // Re-rendered history must not announce a fresh refusal after the host was repaired.
+  expect(renderRecord(record).headline).not.toContain("Update refused");
+});
+
 it.each([true, false])("separates saved and current health (responding=%s)", (responding) => {
   const record = failed({
     reason: "node-runtime-preflight",

@@ -163,6 +163,31 @@ describe("update run ledger", () => {
     expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
   });
 
+  it("keeps the closed cause enum exact when diagnostics overflow the origin budget", () => {
+    const options = isolatedOptions();
+    const detail = "d".repeat(1000);
+    // Just under the 16 KiB budget at creation, so only the terminal write overflows it.
+    const checks = Array.from({ length: 15 }, (_, index) => ({
+      name: `check-${index}`,
+      status: "refuse" as const,
+      detail,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { admission: { owner: "candidate", protocol: 1, checks } },
+      },
+      options,
+    );
+    // Compaction halves diagnostic strings; "disk-full" must not become an invalid "disk".
+    finishUpdateRun(
+      run.runId,
+      { status: "failed", reason: "preflight-insufficient-space", nextAction: detail },
+      options,
+    );
+    expect(getUpdateRun(run.runId, options)?.origin.cause).toBe("disk-full");
+  });
+
   it("keeps full-capacity recovery receipts exact while evicting admission and routing", () => {
     const options = isolatedOptions();
     const receipts = {

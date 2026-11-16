@@ -77,7 +77,6 @@ async function runWithRetainedUpdateRuntime<T>(
 ): Promise<T> {
   let directory: string | undefined;
   let prepared = false;
-  let unusable = false;
   let closing = false;
   let preparation: ReturnType<RetainUpdateRuntime> | undefined;
   let unregister: (() => void) | undefined;
@@ -93,13 +92,11 @@ async function runWithRetainedUpdateRuntime<T>(
           }
           params.assertCurrent();
         };
-        let nativeGateBound = false;
-        let importsBound = false;
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
           const temporaryRoot = (env ?? process.env).TMPDIR?.trim();
           assertCurrent();
-          if (prepared || unusable) {
+          if (prepared) {
             return undefined;
           }
           const root = await resolveOpenClawPackageRoot({ moduleUrl });
@@ -203,9 +200,8 @@ async function runWithRetainedUpdateRuntime<T>(
           const nativeGate = resolveRuntimeScriptEntrypointUrl("updateNativeGate", privateRoot);
           await fs.writeFile(nativeGate, UPDATE_NATIVE_GATE_SOURCE, { mode: 0o600, flag: "wx" });
           assertCurrent();
-          // Native recovery still runs when full rollback retention is unavailable.
+          // Native recovery uses the retained helper after replacement removes the installed one.
           bind((url) => (url.href === nativeGateSource.href ? nativeGate : url));
-          nativeGateBound = true;
           const candidateRoot = projectRetainedRuntimePath(privateRoot, sourceRoot);
           const roots: string[] = [];
           for (const name of ["package.json", "dist", "node_modules"]) {
@@ -245,12 +241,11 @@ async function runWithRetainedUpdateRuntime<T>(
             retainedFiles,
             RetainedRuntimeFilesSchema,
           );
+          // Rollback after activation loads its code from this retained runtime: without it
+          // a failed Doctor or boot cannot restore the previous release and its databases.
+          // Every retention failure therefore stops the update before activation.
           if ("unusableReason" in retained) {
-            unusable = true;
-            log.warn(
-              `${retained.unusableReason}; continuing update without a verified retained rollback runtime`,
-            );
-            return undefined;
+            throw new Error(retained.unusableReason);
           }
           const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
           if (metrics.linkFallback) {
@@ -278,7 +273,6 @@ async function runWithRetainedUpdateRuntime<T>(
             url.href === nativeGateSource.href
               ? nativeGate
               : pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
-          importsBound = true;
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
@@ -286,18 +280,13 @@ async function runWithRetainedUpdateRuntime<T>(
           prepared = true;
           return metrics;
         })().catch((error: unknown) => {
-          // Retention is best effort once native recovery has its retained helper.
-          // Earlier failures, uncertain subprocess cleanup, cancellation, a lost
-          // update fence, or a half-bound runtime still stop the update.
-          if (!nativeGateBound || importsBound || hasCommandProcessCleanupError(error)) {
+          if (signal?.aborted || closing || hasCommandProcessCleanupError(error)) {
             throw error;
           }
-          assertCurrent();
-          unusable = true;
-          log.warn(
-            `${formatErrorMessage(error)}; continuing update without a verified retained rollback runtime`,
+          throw new Error(
+            `Could not retain the running updater (${formatErrorMessage(error)}). The update stopped before changing the installation; retry it.`,
+            { cause: error },
           );
-          return undefined;
         });
         return preparation;
       }),

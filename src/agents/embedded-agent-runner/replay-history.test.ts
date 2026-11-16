@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
+import { suppressOpenAIResponsesCompaction } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
@@ -137,6 +138,28 @@ function transcriptArtifact(model: "delivery-mirror" | "gateway-injected"): Agen
 }
 
 describe("normalizeAssistantReplayContent", () => {
+  it.each(["error", "silent"] as const)(
+    "preserves the recovery receipt of a discarded %s row",
+    (kind) => {
+      const model = makeProviderModelFixture({
+        id: "test-model",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      const content = kind === "silent" ? [textBlock("NO_REPLY")] : [];
+      const source = makeAssistantMessageFixture({
+        content,
+        stopReason: kind === "silent" ? "stop" : "error",
+      });
+      suppressOpenAIResponsesCompaction(source, model, undefined, undefined, "repair-anchor");
+      const normalized = normalize([source]);
+      expect(normalized).toHaveLength(1);
+      expect(normalized[0]).toMatchObject({ content: [], providerReplay: source.providerReplay });
+      expect(source.content).toEqual(content);
+    },
+  );
+
   it("reconstructs hidden tool calls, results, and internal answers in the provider request", () => {
     const model = completionsModel();
     const toolCall = call("call_hidden");

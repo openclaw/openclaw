@@ -264,10 +264,10 @@ describe("buildContextReply", () => {
     },
   );
 
-  it("describes compactable transcript counts in help output", async () => {
+  it("describes compactable chat history counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
-      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
     );
   });
 
@@ -368,7 +368,7 @@ describe("buildContextReply", () => {
       async (target) => {
         const { text } = await buildContextReply(detailParams(target));
         expect(text).toContain(
-          `Compactable transcript: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} transcript message(s)`,
+          `Compactable chat history: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} history entries`,
         );
         if (paged) {
           expect(text).not.toContain("Compaction note:");

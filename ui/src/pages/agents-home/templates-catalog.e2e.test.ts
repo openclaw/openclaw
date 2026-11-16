@@ -56,6 +56,8 @@ const researchTemplate = {
   packageName: "@maker/release-scout",
   displayName: "Release Scout",
 };
+const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
+const publishedAtMs = 1_780_000_000_000;
 const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
 const skillExcerpt =
   "Research trips and compare destinations against the approved itinerary. ".repeat(24);
@@ -144,6 +146,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
             plugins: 1,
             mcpServers: 0,
             scheduledJobs: 0,
+            createdAtMs: publishedAtMs,
+            categories: ["research", "productivity"],
+            security: { verdict: "benign", auditUrl },
             contents: {
               instructions: [
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
@@ -352,6 +357,50 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
     expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
   });
+
+  it.each([viewports[0], viewports[3]])(
+    "shows the release audit and facts in the plugin page's rail at $name width",
+    async (viewport) => {
+      const { page } = await fixture(viewport);
+      const detail = await openDetail(page);
+      const rail = detail.locator(".plugin-catalog-detail__sidebar");
+      await capture(page, `detail-rail-${viewport.name}`, rail, rail);
+      const audit = rail.locator(".plugin-catalog-detail__security");
+      expect(await audit.getAttribute("href")).toBe(auditUrl);
+      expect(await audit.locator("strong").textContent()).toBe("Clean");
+      expect(await audit.locator(".is-filled").count()).toBe(3);
+      const date = (value: number) =>
+        new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(value);
+      expect(
+        await rail
+          .locator(".plugin-metadata__facts > div")
+          .evaluateAll((rows) =>
+            rows.map((row) => [
+              row.querySelector("dt")!.textContent,
+              row.querySelector("dd")!.textContent,
+            ]),
+          ),
+      ).toEqual([
+        ["Version", "1.2.0"],
+        ["Updated", date(workflowOperator.updatedAtMs)],
+        ["Published", date(publishedAtMs)],
+        ["Downloads", "1.2k"],
+      ]);
+      expect(await rail.locator(".chip").allTextContents()).toEqual(["research", "productivity"]);
+      const railBox = (await rail.boundingBox())!;
+      const contents = (await detail.locator(".plugin-catalog-detail__panel").boundingBox())!;
+      // The rail sits beside the contents on a wide page and after them in one column.
+      if (viewport.name === "desktop") {
+        expect(railBox.x).toBeGreaterThanOrEqual(contents.x + contents.width);
+        expect(railBox.y).toBeLessThan(contents.y + contents.height);
+      } else {
+        expect(railBox.y).toBeGreaterThanOrEqual(contents.y + contents.height);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+    },
+  );
 
   it.each([viewports[0], viewports[3]])(
     "shows bundled and referenced contents at $name width",

@@ -1,10 +1,6 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
-import {
-  hasAgentRunContextExecutionOwner,
-  listAgentRunsForSession,
-} from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -16,7 +12,7 @@ import {
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
   listRunningSessions,
   processSessionInstanceId,
@@ -65,7 +61,7 @@ export function prepareExecExitNotification(
   if (hiddenSubagent && !sessionsYieldAvailable) {
     return undefined;
   }
-  const oneShot = hiddenSubagent || isCronRunSessionKey(session.sessionKey);
+  const oneShot = subagentSession || isOneShotRunSessionKey(session.sessionKey);
   // Ordinary event admission can address the cron run directly, unlike heartbeat drains.
   const targetKey = oneShot
     ? session.sessionKey
@@ -80,18 +76,6 @@ export function prepareExecExitNotification(
     retainRequesterOwner: true,
   }).then(
     (target) => {
-      if (isCronRunSessionKey(targetKey)) {
-        const runs = listAgentRunsForSession({
-          sessionKey: targetKey,
-          sessionId: target.sessionId,
-        });
-        // The originating run must survive queue acceptance, not the queued follow-up.
-        session.assertExitNotificationAcceptanceCurrent = () => {
-          if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
-            throw new Error("Originating cron run ended; inspect the result with process log");
-          }
-        };
-      }
       if (oneShot && sessionsYieldAvailable) {
         session.exitWakeAfterYield = true;
       }
@@ -272,7 +256,6 @@ async function notifyOnExit(
         {
           ...eventOptions,
           sourceRunId: session.originRunId,
-          assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
         },
       );
       recordNotifyOnExitRemoval(session, receipt.cancel);
@@ -285,7 +268,7 @@ async function notifyOnExit(
       });
     } catch (error) {
       logWarn(
-        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the process result.`,
+        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,
       );
     }
     return;

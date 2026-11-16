@@ -477,6 +477,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     // the accepted candidate boundary to that owner.
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage,
+    replayCurrentTranscript: sessionPromptState.activePrompt.replayCurrentTranscript,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>

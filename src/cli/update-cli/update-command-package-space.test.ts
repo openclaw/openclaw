@@ -39,7 +39,7 @@ function seedPackageShortfall() {
   return { file, backupDirectory };
 }
 
-it("refuses a package update before staging when only the candidate copy fits", async () => {
+it("refuses a package update before staging when the activation database backup cannot fit", async () => {
   const { file, backupDirectory } = seedPackageShortfall();
   const before = fs.readFileSync(file);
 

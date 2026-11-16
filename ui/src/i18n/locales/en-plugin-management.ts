@@ -32,7 +32,7 @@ const enPluginManagement = {
       "session-list": "Session list",
       composer: "Composer",
       workspace: "Workspace",
-      transcript: "Transcript",
+      transcript: "Chat",
       "tool-result": "Tool results",
     },
   },

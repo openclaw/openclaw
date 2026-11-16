@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpRows from "../acp/runtime/session-meta-keys.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -23,6 +26,7 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -32,7 +36,13 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
@@ -40,7 +50,13 @@ import {
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { ready } from "./session-row-projection-record.js";
+import {
+  ready,
+  create as createRow,
+  identity,
+  type RetainedSessionRowDatabaseFacts,
+} from "./session-row-projection-record.js";
+import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-facts.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
@@ -837,11 +853,11 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     });
     const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
-      const identity = { type: "agent" as const, id: `peer-${index}` };
+      const participantIdentity = { type: "agent" as const, id: `peer-${index}` };
       for (const promptedAt of [10, 20]) {
         rowFactReads.length = 0;
         sharedReads.mockClear();
-        expect(await record(target, { identity, promptedAt })).toBe(
+        expect(await record(target, { identity: participantIdentity, promptedAt })).toBe(
           promptedAt === 10 ? "inserted" : "updated",
         );
         await describe({
@@ -895,5 +911,90 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     replaceSessionEntrySync(target, { sessionId: "replacement-session", updatedAt: 2 });
     const respond = await describe({ sessionId: "replacement-session" });
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("session.placement");
+  });
+});
+
+it("prepares cold ACP shared facts without filesystem work in optional receipt lookup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const key = "agent:main:acp:cold-shared-probe";
+    const entry: SessionEntry = {
+      sessionId: "cold-shared-probe",
+      lifecycleRevision: "probe-generation",
+      updatedAt: 1,
+    };
+    const row = createRow(
+      {
+        key,
+        agentId: "main",
+        storeTarget: { agentId: "main", storePath: state.path("agent-projection.sqlite") },
+      },
+      entry,
+    );
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const readCount = () =>
+      reads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts").length;
+    const prepare = async (env: NodeJS.ProcessEnv, expectedReads: number) => {
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const beforeReads = readCount();
+      const prepared: RetainedSessionRowDatabaseFacts = {
+        sessionKey: key,
+        entry,
+        hasBoard: false,
+        transcriptAssistantMessage: null,
+      };
+      using filesystem = observeMainThreadFs();
+      const read = acpRows.readPublishedAcpSessionRows;
+      let getterFilesystemCalls = 0;
+      using observed = vi
+        .spyOn(acpRows, "readPublishedAcpSessionRows")
+        .mockImplementation((...args) => {
+          const before = filesystem.count();
+          try {
+            return read(...args);
+          } finally {
+            getterFilesystemCalls += filesystem.count() - before;
+          }
+        });
+      const shared = captureOpenClawStateReadWorkerContext({ env, path: databasePath });
+      const pending = prepareSessionRowSharedFacts({
+        rows: [row],
+        facts: new Map([[identity(row), prepared]]),
+        env,
+        shared,
+      });
+      if (pending) {
+        const reply = await pending.reply;
+        pending.assertCurrent();
+        pending.accept(reply);
+        pending.assertCurrent();
+      }
+      expect(observed).toHaveBeenCalledTimes(1);
+      expect(getterFilesystemCalls).toBe(0);
+      expect(readCount() - beforeReads).toBe(expectedReads);
+      return prepared.acpMeta;
+    };
+    const original = resolveOpenClawStateSqlitePath(state.env);
+    expect(getSqliteDatabaseAdmissionIdentityForPath(original)).toBeUndefined();
+    expect(await prepare(state.env, 1)).toBeNull();
+    expect(await prepare(state.env, 1)).toBeNull();
+    await expect(fs.stat(original)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const metadata = acpProjectionMeta("probe-backend", "probe-runtime", 7);
+    seedCanonicalAcpSessionMeta({
+      sessionKey: key,
+      lifecycleRevision: entry.lifecycleRevision,
+      meta: metadata,
+      env: state.env,
+    });
+    expect(await prepare(state.env, 0)).toMatchObject(metadata);
+
+    await closeOpenClawStateDatabaseAsync();
+    const env = { ...state.env, OPENCLAW_STATE_DIR: state.path("copied-shared-state") };
+    const copied = resolveOpenClawStateSqlitePath(env);
+    await fs.mkdir(path.dirname(copied), { recursive: true });
+    await fs.copyFile(original, copied);
+    expect(getSqliteDatabaseAdmissionIdentityForPath(copied)).toBeUndefined();
+    expect(await prepare(env, 1)).toMatchObject(metadata);
+    expect(await prepare(env, 0)).toMatchObject(metadata);
   });
 });
