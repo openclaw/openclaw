@@ -11,13 +11,17 @@ export async function openOwnerInboxAction(
   >,
   current: () => boolean,
 ): Promise<void> {
-  if (!current()) return;
+  if (!current()) {
+    return;
+  }
   if (action.kind === "openClawIdBrowserApproval") {
     await openBrowserRequestApproval(context.gateway.snapshot.client, action.remote, current);
     return;
   }
   const { openSidebarKeyRecovery } = await import("../../components/openclaw-id/key-attention.ts");
-  if (current()) await openSidebarKeyRecovery(context);
+  if (current()) {
+    await openSidebarKeyRecovery(context);
+  }
 }
 
 /** Open the signing surface on this owner device; a notice itself grants nothing. */

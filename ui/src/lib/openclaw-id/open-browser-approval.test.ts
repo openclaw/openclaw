@@ -6,9 +6,11 @@ const hooks = vi.hoisted(() => ({ approve: vi.fn(), recover: vi.fn(), devices: v
 vi.mock("../../components/openclaw-id/owner-approval-dialog.tsx", () => ({
   showOwnerApprovalDialog: hooks.approve,
 }));
+// mock-isolation: keep the devices modal host out of this action-lifetime unit test.
 vi.mock("../../components/openclaw-id/owner-devices-dialog.tsx", () => ({
   showOwnerDevicesDialog: hooks.devices,
 }));
+// mock-isolation: inject recovery rejection without account storage or Gateway reads.
 vi.mock("../../components/openclaw-id/key-attention.ts", () => ({
   openSidebarKeyRecovery: hooks.recover,
 }));

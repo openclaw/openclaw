@@ -62,7 +62,9 @@ async function mountAttention(entries?: SidebarInboxEntry[]) {
     sources as unknown as Parameters<typeof createSidebarAttentionStore>[0],
   );
   store.activate(SidebarAttentionStoreOwner);
-  if (entries) vi.spyOn(store, "entries", "get").mockReturnValue(entries);
+  if (entries) {
+    vi.spyOn(store, "entries", "get").mockReturnValue(entries);
+  }
   // SAFETY: The context fixture fills unrelated application capabilities.
   const provider = createApplicationContextProvider({
     ...sources,

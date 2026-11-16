@@ -197,7 +197,9 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       } catch (error) {
         showToast({ message: formatUiError(error), severity: "error" });
       } finally {
-        if (item.action.kind === "openClawIdRecovery") context.sidebarAttention.refreshOpenClawId();
+        if (item.action.kind === "openClawIdRecovery") {
+          context.sidebarAttention.refreshOpenClawId();
+        }
       }
       return;
     }

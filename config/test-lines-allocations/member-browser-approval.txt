@@ -6,4 +6,4 @@
 # Review repairs add production-reader replacement/in-flight and uncertain-handoff
 # regressions, mounted-UI recovery navigation, and real predecessor-row reopen proof.
 # Lazy Inbox action coverage preserves retirement fences and recovery error ownership.
-768
+772
