@@ -445,7 +445,7 @@ s.listen(0, "127.0.0.1", () => {
 );
 
 it.skipIf(process.platform === "win32")(
-  "tracks every survivor of one command past the cap and refuses a new declared service",
+  "tracks every survivor of one command past the cap without blocking a declared service",
   async () => {
     const cwd = tempDirs.make("exec-cap-");
     const scopeKey = "agent:main:exec-cap";
@@ -540,9 +540,12 @@ it.skipIf(process.platform === "win32")(
       for (const pid of pids) {
         expect(output).toContain(`pid ${pid}`);
       }
-      await expect(
-        exec.execute("over-cap", { command: sleeper, background: true }),
-      ).rejects.toThrow(/process list.*process kill/s);
+      // Survivors are tracked, not counted: a declared service still starts at once.
+      const declared = await exec.execute("declared", {
+        command: `echo PID=$$; exec ${sleeper}`,
+        background: true,
+      });
+      expect(declared.details).toMatchObject({ status: "running" });
       const extra = await exec.execute("extra", {
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
       });
@@ -567,13 +570,13 @@ it.skipIf(process.platform === "win32")(
     const scopeKey = "agent:main:exec-reserve";
     await withEnvAsync(testEnv(cwd, "exec-reserve-test"), async () => {
       const exec = hostExec(cwd, scopeKey, true);
-      const fill = await exec.execute("fill", {
-        command: `for i in $(seq ${MAX_SERVICES_PER_SESSION - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
-      });
-      started.push(
-        ...[...aggregated(fill.details).matchAll(/PID=(\d+)/g)].map((m) => Number(m[1])),
-      );
-      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION - 1);
+      for (let index = 1; index < MAX_SERVICES_PER_SESSION; index += 1) {
+        await exec.execute(`fill-${index}`, { command: `exec ${sleeper}`, background: true });
+      }
+      // Survivors never count toward the limit of declared services.
+      await exec.execute("survivor", { command: `${sleeper} >/dev/null 2>&1 & echo PID=$!` });
+      started.push(...runningIn(scopeKey).flatMap((session) => session.pid ?? []));
+      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION);
       const starts = await Promise.allSettled(
         ["a", "b"].map((id) =>
           exec.execute(`start-${id}`, {
@@ -585,19 +588,22 @@ it.skipIf(process.platform === "win32")(
       expect(starts.filter((start) => start.status === "fulfilled")).toHaveLength(1);
       expect(starts.filter((start) => start.status === "rejected")).toHaveLength(1);
       started.push(...runningIn(scopeKey).flatMap((session) => session.pid ?? []));
-      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION + 1);
+      await expect(
+        exec.execute("over-cap", { command: sleeper, background: true }),
+      ).rejects.toThrow(/16 of 16 allowed services.*process list.*process kill/s);
     });
   },
   60_000,
 );
 
 it.skipIf(process.platform === "win32")(
-  "never stops helpers a command leaves for capacity, and tracks a loop that keeps running",
+  "never stops or counts helpers a command leaves, and tracks a loop that keeps running",
   async () => {
     const cwd = tempDirs.make("exec-helpers-");
     const scopeKey = "agent:main:exec-helpers";
     await withEnvAsync(testEnv(cwd, "exec-helpers-test"), async () => {
-      const exec = hostExec(cwd, scopeKey);
+      const exec = hostExec(cwd, scopeKey, true);
       for (let call = 0; call < 3; call += 1) {
         const result = await exec.execute(`helpers-${call}`, {
           command: "for i in $(seq 17); do sleep 0.5 & done; echo ok",
@@ -605,8 +611,15 @@ it.skipIf(process.platform === "win32")(
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
         expect(aggregated(result.details)).not.toMatch(/Stopped|could not confirm/i);
       }
+      // Helpers that are still exiting never block a declared service.
+      const declared = await exec.execute("declared", {
+        command: `echo PID=$$; exec ${sleeper}`,
+        background: true,
+      });
+      expect(declared.details).toMatchObject({ status: "running" });
+      started.push(...runningIn(scopeKey).flatMap((session) => session.pid ?? []));
       // Helpers end on their own and their sessions drop out within one reap interval.
-      expect(await waitFor(() => runningIn(scopeKey).length === 0, 8_000)).toBe(true);
+      expect(await waitFor(() => runningIn(scopeKey).length === 1, 8_000)).toBe(true);
       const loop = await exec.execute("loop", {
         command: "while :; do sleep 0.05; done >/dev/null 2>&1 & echo PID=$!",
       });
