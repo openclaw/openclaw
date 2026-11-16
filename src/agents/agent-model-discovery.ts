@@ -22,6 +22,7 @@ type DiscoverModelsOptions = {
   config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
+  modelsJsonSanitizedFallback?: boolean;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
@@ -55,6 +56,7 @@ function prepareModelRegistryOptions(options?: DiscoverModelsOptions) {
     ...(options?.modelsJsonContents !== undefined
       ? { modelsJsonContents: options.modelsJsonContents }
       : {}),
+    ...(options?.modelsJsonSanitizedFallback ? { modelsJsonSanitizedFallback: true as const } : {}),
     ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
     staticProviderConfigs: options?.staticProviderConfigs,
   };

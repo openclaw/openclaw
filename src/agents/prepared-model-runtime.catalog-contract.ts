@@ -51,6 +51,7 @@ export type PreparedModelRuntimeCatalogSource = Readonly<{
   providerExpiries?: Map<string, number>;
   servingLimits?: ProviderServingContextLimits;
   modelsJsonContents: string | null;
+  modelsJsonSanitizedFallback?: boolean;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 }>;

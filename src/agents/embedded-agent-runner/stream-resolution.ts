@@ -5,6 +5,7 @@ import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
+import type { ModelRequestHeaders } from "../../llm/types.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
@@ -75,6 +76,7 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
+  requestHeaders?: ModelRequestHeaders;
   transportAuthAvailable?: boolean;
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
@@ -106,6 +108,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   }
   const wrapOptions = {
     runSignal: params.signal,
+    requestHeaders: params.requestHeaders,
     authProfileId: params.authProfileId,
     promptCacheKey: params.promptCacheKey,
     assertCurrent: params.assertCurrent,
@@ -138,9 +141,10 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     const vertexStreamFn = createAnthropicVertexStreamFnForModel(params.model);
     return {
       streamFn:
-        params.signal || params.assertCurrent
+        params.signal || params.requestHeaders || params.assertCurrent
           ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
               runSignal: params.signal,
+              requestHeaders: params.requestHeaders,
               assertCurrent: params.assertCurrent,
             })
           : vertexStreamFn,
@@ -194,10 +198,11 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal && !params.assertCurrent
+      !promptCacheKey && !params.signal && !params.requestHeaders && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
             runSignal: params.signal,
+            requestHeaders: params.requestHeaders,
             promptCacheKey,
             assertCurrent: params.assertCurrent,
           }),
@@ -223,6 +228,7 @@ function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;
+    requestHeaders?: ModelRequestHeaders;
     authProfileId?: string;
     sessionId?: string;
     promptCacheKey?: string;
@@ -249,6 +255,12 @@ function wrapEmbeddedAgentStreamFn(
     }
     if (params.authProfileId && !merged?.authProfileId) {
       merged = { ...merged, authProfileId: params.authProfileId };
+    }
+    if (params.requestHeaders) {
+      merged = {
+        ...merged,
+        headers: { ...params.requestHeaders, ...merged?.headers },
+      };
     }
     return signal ? { ...merged, signal } : merged;
   };

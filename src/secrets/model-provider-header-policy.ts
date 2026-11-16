@@ -20,6 +20,7 @@ export function isLikelySensitiveModelProviderHeaderName(value: string): boolean
   const normalized = normalizeLowercaseStringOrEmpty(value);
   return (
     normalized === "authorization" ||
+    normalized === "cookie" ||
     normalized === "proxy-authorization" ||
     SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment))
   );

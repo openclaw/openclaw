@@ -17,6 +17,7 @@ import {
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
+import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
@@ -797,6 +798,54 @@ describe("ModelRegistry no-auth", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each(["authorization-bearer", "header"] as const)(
+    "does not resolve overridden registry credentials with explicit %s auth",
+    async (mode) => {
+      vi.stubEnv("OPENCLAW_TEST_UNUSED_AUTHORIZATION", "");
+      const registry = capturedRegistry({
+        custom: providerConfig(
+          [
+            {
+              id: "model",
+              headers: {
+                "x-api-key": "!exit 1",
+                aUtHoRiZaTiOn: "OPENCLAW_TEST_UNUSED_AUTHORIZATION",
+                ...(mode === "header" ? { "x-fixture-key": "!exit 1" } : {}),
+                "X-Model": "model-route",
+              },
+            },
+          ],
+          {
+            authHeader: true,
+            apiKey: "!exit 1",
+            headers: {
+              Authorization: "!exit 1",
+              "API-KEY": "!exit 1",
+              "X-Provider": "provider-route",
+            },
+          },
+        ),
+      });
+      const model = applyPreparedRuntimeAuthToModel(registry.find("custom", "model")!, {
+        request: {
+          auth:
+            mode === "authorization-bearer"
+              ? { mode, token: "request-token" }
+              : { mode, headerName: "X-Fixture-Key", value: "request-token" },
+        },
+      });
+      await expect(registry.getApiKeyAndHeaders(model)).resolves.toEqual(
+        authResult(undefined, {
+          "X-Provider": "provider-route",
+          "X-Model": "model-route",
+          ...(mode === "authorization-bearer"
+            ? { Authorization: "Bearer request-token" }
+            : { "X-Fixture-Key": "request-token" }),
+        }),
+      );
+    },
+  );
 
   function noAuthRegistry(params: {
     providerApi?: "openai-completions" | "openai-responses";

@@ -469,6 +469,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedApiKey: attempt.resolvedApiKey,
     authStorage: attempt.authStorage,
   });
+  const requestAuth = await attempt.modelRegistry.getApiKeyAndHeaders(attempt.model);
+  if (!requestAuth.ok) {
+    throw new Error(requestAuth.error);
+  }
   const {
     streamFn,
     strategy: streamStrategy,
@@ -481,6 +485,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     signal: input.abortSignal,
     model: attempt.model,
     resolvedApiKey: attempt.resolvedApiKey,
+    requestHeaders: requestAuth.headers,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
