@@ -4,7 +4,7 @@
  */
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
-import type { ProcessSession } from "./bash-process-registry.js";
+import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "./sessions/tools/tool-contracts.js";
 
 export type ExecProcessFailureKind =
@@ -125,15 +125,17 @@ export const EXEC_RETENTION_CAP_NOTE =
 export const EXEC_OUTPUT_FILE_MAX_BYTES = 64 * 1024 * 1024;
 
 /** The one rendering of a kept exec output file, for wakes, results and process logs. */
-export function renderExecOutputFile(file: NonNullable<ProcessSession["outputFile"]>): string {
+export function renderExecOutputFile(file: PrivateTempFileStream): string {
   const limit = file.limitReached
     ? `; output after the ${EXEC_OUTPUT_FILE_MAX_BYTES}-byte file limit was discarded`
     : "";
   return `${formatFullOutputFooter(file.path)} (${file.bytes} bytes${limit})`;
 }
 
-export type ExecDroppedOutputFacts = Pick<ProcessSession, "totalOutputChars" | "outputFile"> & {
+export type ExecDroppedOutputFacts = {
+  totalOutputChars: number;
   output: { length: number };
+  outputFile?: PrivateTempFileStream;
 };
 
 /** Leads model-visible output when the in-memory window lost earlier output. */

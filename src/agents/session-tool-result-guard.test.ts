@@ -172,6 +172,35 @@ describe("installSessionToolResultGuard", () => {
     expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
   });
 
+  it("marks an exec output file cut at its limit as partial", () => {
+    const outputFile = {
+      path: "/tmp/openclaw-exec-1.log",
+      bytes: 64,
+      limitReached: true,
+      write() {},
+      close: async () => true,
+      remove: async () => {},
+    };
+    const output = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "x",
+        timedOut: false,
+      },
+      session: { totalOutputChars: 128, output: { length: 1 }, outputFile },
+    });
+    expect(output.details).toMatchObject({
+      fullOutputPath: outputFile.path,
+      spillTruncated: true,
+    });
+    expect(output.content[0]).toMatchObject({
+      text: expect.stringContaining("file limit was discarded"),
+    });
+  });
+
   it("preserves ordering with multiple tool calls and partial results", () => {
     const { sm, guard } = setup();
     sm.appendMessage(

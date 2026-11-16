@@ -31,7 +31,7 @@ export function buildExecForegroundResult(params: {
   const warning = params.warningText?.trim();
   const warningText = warning ? `${params.warningText}\n\n` : "";
   const retentionCapNote = params.session ? renderExecDroppedOutputNote(params.session) : "";
-  const fullOutputPath = params.session?.outputFile?.path;
+  const file = params.session?.outputFile;
   const outcome = params.outcome;
   const details: ExecToolDetails = {
     status: outcome.status,
@@ -45,8 +45,11 @@ export function buildExecForegroundResult(params: {
     noOutputTimedOut: outcome.noOutputTimedOut,
     cwd: params.cwd,
     ...(warning ? { warningText: warning } : {}),
-    // Record-time truncation keeps this path visible when it cuts the result.
-    ...(fullOutputPath ? { fullOutputPath } : {}),
+    // Record-time truncation keeps this path visible when it cuts the result; a file cut at
+    // its limit stays marked partial through history elision.
+    ...(file
+      ? { fullOutputPath: file.path, ...(file.limitReached ? { spillTruncated: true } : {}) }
+      : {}),
   };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
