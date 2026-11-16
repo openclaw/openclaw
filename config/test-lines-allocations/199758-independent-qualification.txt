@@ -1,0 +1,7 @@
+# PR #199758: +601 net test lines against integrated base abaf2ced62fc8a29426ce69864560196e7b9bec8.
+# The 201 lines above the standard 400 cover distinct C/Q/P boundaries:
+# authenticated inventory replay, retained producer/recovery identity, plugin
+# artifact policy readback, Q-owned harness closure invalidation, and strict
+# admitted scenario coverage through the actual dispatch shell. These
+# regressions exercise production owners; helper-only proof misses the callers.
+201
