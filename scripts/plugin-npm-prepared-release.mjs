@@ -281,11 +281,10 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
-      producerSha === sourceSha &&
-        current.workflowRefProof ===
-          (current.manifest.receiptRecovery
-            ? "receipt-backed-recovery-v1"
-            : "candidate-owned-admission-v1") &&
+      current.workflowRefProof ===
+        (current.manifest.receiptRecovery
+          ? "receipt-backed-recovery-v1"
+          : "candidate-owned-admission-v1") &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );

@@ -58,7 +58,10 @@ import {
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 import { withStateDirEnv } from "./session-utils.test-support.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -161,42 +164,48 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
-  it("reads a first database created during target discovery", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const agentId = "cold";
-      const key = `agent:${agentId}:first-session`;
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { [agentId]: {} } },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const entry = { sessionId: "created-during-discovery", updatedAt: 1 };
-      const prepare = inventoryRuntime.prepareSessionStoreTargetInventoryRead;
-      using _ = vi
-        .spyOn(inventoryRuntime, "prepareSessionStoreTargetInventoryRead")
-        .mockImplementationOnce((...args) => {
-          const inventory = prepare(...args);
-          return {
-            ...inventory,
-            async withRead<T>(
-              operation: Parameters<typeof inventory.withRead<T>>[0],
-              assertCurrent?: () => void,
-              signal?: AbortSignal,
-            ) {
-              await replaceSessionEntry({ agentId, sessionKey: key, env }, entry);
-              return inventory.withRead(operation, assertCurrent, signal);
-            },
-          };
-        });
-      const observed = await withGatewaySessionStoreTarget(
-        { cfg, key, agentId, env },
-        (target, _members, assertCurrent) => {
-          assertCurrent();
-          return target.store[key];
-        },
-      );
-      expect(observed).toMatchObject(entry);
-    });
-  });
+  it.each(["target", "entry"] as const)(
+    "reads a first database created during %s discovery",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+        const agentId = "cold";
+        const key = `agent:${agentId}:first-session`;
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { [agentId]: {} } },
+        };
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const entry = { sessionId: "created-during-discovery", updatedAt: 1 };
+        const prepare = inventoryRuntime.prepareSessionStoreTargetInventoryRead;
+        using _ = vi
+          .spyOn(inventoryRuntime, "prepareSessionStoreTargetInventoryRead")
+          .mockImplementationOnce((...args) => {
+            const inventory = prepare(...args);
+            return {
+              ...inventory,
+              async withRead<T>(
+                operation: Parameters<typeof inventory.withRead<T>>[0],
+                assertCurrent?: () => void,
+                signal?: AbortSignal,
+              ) {
+                await replaceSessionEntry({ agentId, sessionKey: key, env }, entry);
+                return inventory.withRead(operation, assertCurrent, signal);
+              },
+            };
+          });
+        const observed =
+          kind === "entry"
+            ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key, agentId, env })).entry
+            : await withGatewaySessionStoreTarget(
+                { cfg, key, agentId, env },
+                (target, _members, assertCurrent) => {
+                  assertCurrent();
+                  return target.store[key];
+                },
+              );
+        expect(observed).toMatchObject(entry);
+      });
+    },
+  );
 
   it("rejects an unreadable canonical candidate instead of returning its alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
