@@ -306,13 +306,19 @@ export async function createVoiceCallRuntime(params: {
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = resolveCallAgentId(call);
-          const sessionKey = resolveVoiceCallSessionKey({
+          const callerSessionKey = resolveVoiceCallSessionKey({
             config: { ...effectiveConfig, agentId },
             callId: call.callId,
             phone: call.direction === "outbound" ? call.to : call.from,
             explicitSessionKey: call.sessionKey,
             coreSession: cfg.session,
           });
+          // Results from owner tools must not reach the caller's shared session, where a later
+          // call without the PIN could read them back. Elevated consults get a session that
+          // belongs to this call only.
+          const sessionKey = handlerContext.elevated
+            ? `${callerSessionKey}:elevated:${call.callId}`
+            : callerSessionKey;
           const requesterSessionKey =
             typeof call.metadata?.requesterSessionKey === "string"
               ? call.metadata.requesterSessionKey

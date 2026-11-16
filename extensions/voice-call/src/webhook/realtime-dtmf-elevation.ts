@@ -3,8 +3,8 @@ import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import type { RealtimeVoiceAgentConsultToolPolicy } from "openclaw/plugin-sdk/realtime-voice";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { VoiceCallRealtimeElevationConfig } from "../config.js";
-import type { CallRecord } from "../types.js";
+import type { VoiceCallRealtimeConfig, VoiceCallRealtimeElevationConfig } from "../config.js";
+import type { CallRecord, ToolHandlerContext } from "../types.js";
 
 const PIN_MAX_DIGITS = 12;
 const DTMF_ELEVATION_INTER_DIGIT_TIMEOUT_MS = 3_000;
@@ -213,4 +213,26 @@ export function createRealtimeElevationReporter(params: {
       },
     );
   };
+}
+
+/** Consult context fields for one call: its tool policy, and `elevated` once its PIN was accepted. */
+export type ElevationConsultPolicy = Pick<ToolHandlerContext, "toolPolicy" | "elevated">;
+
+/** This call's consult policy; `elevated` is set only when keypad elevation granted it. */
+export function resolveElevationConsultPolicy(
+  call: Pick<DtmfElevationCall, "toolPolicy"> | undefined,
+  fallback: VoiceCallRealtimeConfig["toolPolicy"],
+): ElevationConsultPolicy {
+  return call?.toolPolicy
+    ? { toolPolicy: call.toolPolicy, elevated: true }
+    : { toolPolicy: fallback };
+}
+
+/** Consult policy for the binding that owns `bridge`; any other bridge gets the configured policy. */
+export function resolveBindingConsultPolicy<TBridge>(
+  binding: { bridge: TBridge; consultPolicy: () => ElevationConsultPolicy } | undefined,
+  bridge: TBridge,
+  fallback: VoiceCallRealtimeConfig["toolPolicy"],
+): ElevationConsultPolicy {
+  return binding?.bridge === bridge ? binding.consultPolicy() : { toolPolicy: fallback };
 }

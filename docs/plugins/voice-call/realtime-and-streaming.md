@@ -333,6 +333,13 @@ running keeps the policy it started with.
   only narrows who may try.
 - Elevation lasts until the call's media stream ends. A stream reconnect or
   hangup returns the call to `toolPolicy`.
+- Elevated consults run in a session of their own for that call
+  (`<caller session key>:elevated:<callId>`), so results from owner tools
+  never land in the caller's shared session. With the default
+  `sessionScope: "per-phone"`, a later call from the same number without the
+  PIN therefore cannot read them back. Consults before the PIN still use the
+  caller's normal session. For no carry-over between calls at all, set
+  `sessionScope: "per-call"`.
 - Keypad digits never reach the realtime model, the call transcript, or logs.
   Caller audio is withheld from the model between the prefix and submission.
   Logs record only the outcome and attempt count. After a correct or wrong PIN,

@@ -548,8 +548,15 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(realtimeArgs()[7]).toBeInstanceOf(DtmfElevationGate);
 
     await handler({ question: "Check my calendar." }, "call-1", { toolPolicy: "safe-read-only" });
-    await handler({ question: "Check my calendar." }, "call-1", { toolPolicy: "owner" });
+    await handler({ question: "Check my calendar." }, "call-1", {
+      toolPolicy: "owner",
+      elevated: true,
+    });
     const [unelevated, elevated] = runEmbeddedAgent.mock.calls.map(([params]) => params);
+    // Owner-tool results stay in a session for this call only, so a later call from the same
+    // number without the PIN cannot read them back from the caller's shared session.
+    expect(elevated?.sessionKey).toBe(`${unelevated?.sessionKey}:elevated:call-1`);
+    expect(unelevated?.sessionKey).not.toContain(":elevated:");
     expect(unelevated?.toolsAllow).toEqual([
       "read",
       "web_search",

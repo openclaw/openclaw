@@ -49,6 +49,8 @@ import {
 import {
   createRealtimeElevationReporter,
   type DtmfElevationGate,
+  resolveBindingConsultPolicy,
+  resolveElevationConsultPolicy,
 } from "./realtime-dtmf-elevation.js";
 import {
   appendTranscriptText,
@@ -139,7 +141,7 @@ type RealtimeTelephonyBinding = {
   acknowledgeCarrierMark: (markName?: string) => void;
   close: (cause?: RealtimeCallEndCause) => Promise<void>;
   /** Consult tool policy for this binding, including keypad elevation. */
-  consultToolPolicy: () => VoiceCallRealtimeConfig["toolPolicy"];
+  consultPolicy: () => Pick<ToolHandlerContext, "toolPolicy" | "elevated">;
   acceptDtmf: (digit: string) => void;
   /** True while PIN digits are being entered; caller audio is withheld from the model. */
   isCollectingPin: () => boolean;
@@ -812,10 +814,7 @@ export class RealtimeCallHandler {
                 question: handle.question,
               },
               callId,
-              {
-                abortSignal: abortController.signal,
-                toolPolicy: telephonyBinding.consultToolPolicy(),
-              },
+              { abortSignal: abortController.signal, ...telephonyBinding.consultPolicy() },
             );
           }),
         };
@@ -1345,7 +1344,7 @@ export class RealtimeCallHandler {
         }
       },
       close: (cause) => closeBinding(cause),
-      consultToolPolicy: () => elevationCall?.toolPolicy ?? this.config.toolPolicy,
+      consultPolicy: () => resolveElevationConsultPolicy(elevationCall, this.config.toolPolicy),
       acceptDtmf: (digit) => elevationCall?.acceptDigit(digit),
       isCollectingPin: () => elevationCall?.collecting === true,
       endCall: () => {
@@ -1677,8 +1676,7 @@ export class RealtimeCallHandler {
           const context = {
             partialUserTranscript: transcript?.text,
             abortSignal: abortController.signal,
-            toolPolicy:
-              binding?.bridge === bridge ? binding.consultToolPolicy() : this.config.toolPolicy,
+            ...resolveBindingConsultPolicy(binding, bridge, this.config.toolPolicy),
           };
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
           return await invokeHandler(handlerArgs, context);
