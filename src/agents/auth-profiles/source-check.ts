@@ -117,20 +117,24 @@ export async function hasAnyAuthProfileStoreSourceAsync(
               reader.database.agentId,
         )
       : undefined;
-  // Capture both possible shared owners before the first read can yield.
+  // Each possible shared owner captures revocation before filesystem preparation yields.
   const readers = new Map(
-    paths
-      .filter((databasePath) => databasePath !== cohortPath)
-      .map((databasePath) => [
-        databasePath,
-        prepareAgentAuthProfileRowsRead({
-          databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-          env,
-        }),
-      ]),
+    await Promise.all(
+      paths
+        .filter((databasePath) => databasePath !== cohortPath)
+        .map(
+          async (databasePath) =>
+            [
+              databasePath,
+              await prepareAgentAuthProfileRowsRead({
+                databasePath,
+                env,
+              }),
+            ] as const,
+        ),
+    ),
   );
-  const usedReaders = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const usedReaders = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   let usedShared = false;
   let usedCohort = false;
   const hasSource = (rows: AuthProfileRowRead): boolean =>
@@ -211,9 +215,8 @@ export async function hasLocalAuthProfileStoreSourceAsync(agentDir: string): Pro
     return true;
   }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  const source = prepareAgentAuthProfileRowsRead({
+  const source = await prepareAgentAuthProfileRowsRead({
     databasePath,
-    agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
     env,
   });
   return withAuthProfileReaderCleanup(

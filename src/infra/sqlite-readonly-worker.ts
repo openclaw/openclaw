@@ -281,7 +281,7 @@ export function createScopedSqliteReadOnlyWorker(
         "session",
       ],
       requestArgs: sqliteReadOnlyWorkerRequestArgs,
-      readBudget: (pathname) => readSqliteInspectionBudget("read-only snapshot", pathname),
+      readBudget: (pathname) => readSqliteInspectionBudgetAsync("read-only snapshot", pathname),
       // Detached staging ownership retains its own budget inside caller-owned inspection scopes.
       deadlineOwnedByCaller:
         launch.retainLifetime === false ? () => false : isSqliteInspectionDeadlineOwnedByCaller,
@@ -477,88 +477,101 @@ export function runOneShotSqliteInspection<T>(
 ): Promise<T> {
   assertChildRuntimeAvailable();
   const pathname = params.mode === "staging-sweep" ? "snapshot staging" : params.pathname;
-  const { timeoutMs, size } =
-    params.mode === "staging-sweep"
-      ? resolveSqliteInspectionBudget(params.operation, pathname, undefined)
-      : readSqliteInspectionBudget(params.operation, pathname);
-  return new Promise<T>((resolve, reject) => {
-    let output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }> = {
-      kind: "launched",
-      stderr: "",
-      stdout: "",
-      status: null,
-    };
-    let stopped = false;
-    let nativeClosed = false;
-    const child = childProcess.execFile(
-      process.execPath,
-      params.argv,
-      {
-        encoding: "utf8",
-        windowsHide: true,
-        env: params.env ?? resolveNodeCompileCacheEnv(),
-        cwd: params.cwd,
-        maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
-        timeout: params.deadlineOwnedByCaller ? undefined : timeoutMs,
-        killSignal: "SIGKILL",
-      },
-      (error, stdout, stderr) => {
-        const timedOut = error?.killed && error.signal === "SIGKILL" && error.code == null;
-        output = {
-          kind: "launched",
-          status: child.exitCode,
-          failure: error
-            ? stopped
-              ? params.stoppedFailure
-              : timedOut
-                ? sqliteInspectionTimeoutError(params.operation, pathname, timeoutMs, size).message
-                : `exited unsuccessfully: ${error.message}`
-            : undefined,
-          stderr,
-          stdout,
-          cause: error ?? undefined,
-        };
-      },
-    );
-    const runtimeFailure = observeChildRuntime(child);
-    const abort = () => {
-      if (!stopped && !nativeClosed) {
-        stopped = true;
-        child.kill("SIGKILL");
-      }
-    };
-    const closed = retainSnapshotWork(
-      new Promise<void>((resolveClosed) => {
-        // Retain snapshot and generation custody through diagnosis and result publication.
-        const finishClose = async () => {
-          nativeClosed = true;
-          try {
-            const failure = await runtimeFailure();
-            if (failure) {
-              throw failure;
-            }
-            resolve(params.read(output));
-          } catch (workerError) {
-            reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
-          } finally {
-            params.signal?.removeEventListener("abort", abort);
-            resolveClosed();
-          }
-        };
-        child.once("close", () => {
-          void finishClose();
-        });
-      }),
-      abort,
-    );
-    params.runtimeGeneration?.retain(child, async () => {
-      await closed;
-    });
-    params.signal?.addEventListener("abort", abort, { once: true });
-    if (params.signal?.aborted) {
-      abort();
+  const env = params.env ?? resolveNodeCompileCacheEnv();
+  const executable = process.execPath;
+  const cwd = params.cwd ?? tryProcessCwd();
+  let stopped = false;
+  let stop = () => {
+    stopped = true;
+  };
+  const operation = (async () => {
+    const { timeoutMs, size } =
+      params.mode === "staging-sweep"
+        ? resolveSqliteInspectionBudget(params.operation, pathname, undefined)
+        : await readSqliteInspectionBudgetAsync(params.operation, pathname);
+    params.signal?.throwIfAborted();
+    if (stopped) {
+      throw new Error(params.stoppedFailure);
     }
-  });
+    return new Promise<T>((resolve, reject) => {
+      let output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }> = {
+        kind: "launched",
+        stderr: "",
+        stdout: "",
+        status: null,
+      };
+      let nativeClosed = false;
+      const child = childProcess.execFile(
+        executable,
+        params.argv,
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          env,
+          cwd,
+          maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
+          timeout: params.deadlineOwnedByCaller ? undefined : timeoutMs,
+          killSignal: "SIGKILL",
+        },
+        (error, stdout, stderr) => {
+          const timedOut = error?.killed && error.signal === "SIGKILL" && error.code == null;
+          output = {
+            kind: "launched",
+            status: child.exitCode,
+            failure: error
+              ? stopped
+                ? params.stoppedFailure
+                : timedOut
+                  ? sqliteInspectionTimeoutError(params.operation, pathname, timeoutMs, size)
+                      .message
+                  : `exited unsuccessfully: ${error.message}`
+              : undefined,
+            stderr,
+            stdout,
+            cause: error ?? undefined,
+          };
+        },
+      );
+      const runtimeFailure = observeChildRuntime(child);
+      const abort = () => {
+        if (!stopped && !nativeClosed) {
+          stopped = true;
+          child.kill("SIGKILL");
+        }
+      };
+      stop = abort;
+      // Retain snapshot and generation custody through diagnosis and result publication.
+      const finishClose = async () => {
+        nativeClosed = true;
+        try {
+          const failure = await runtimeFailure();
+          if (failure) {
+            throw failure;
+          }
+          resolve(params.read(output));
+        } catch (workerError) {
+          reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
+        } finally {
+          params.signal?.removeEventListener("abort", abort);
+        }
+      };
+      child.once("close", () => {
+        void finishClose();
+      });
+      params.signal?.addEventListener("abort", abort, { once: true });
+      if (params.signal?.aborted) {
+        abort();
+      }
+    });
+  })();
+  if (params.runtimeGeneration) {
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    params.runtimeGeneration.retain(settled, () => settled);
+  }
+  return retainSnapshotWork(operation, () => stop());
 }
 
 export function runSqliteReadOnlyWorkerSync(

@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
@@ -40,10 +41,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
-function createSession() {
+function createSession(deadlineOwnedByCaller = () => true) {
   const child = new MockChild();
   mock.spawn.mockReturnValueOnce(child);
-  const readBudget = vi.fn(() => ({ timeoutMs: 60_000, size: "fixture" }));
+  const readBudget = vi.fn<Parameters<typeof createSqliteReadOnlyWorkerSession>[0]["readBudget"]>(
+    async () => ({ timeoutMs: 60_000, size: "fixture" }),
+  );
   const requestArgs = vi.fn((file: string, { mode }: { mode: string }) => [mode, file]);
   const env = { OPENCLAW_STATE_DIR: "/fixture/state" };
   const session = createSqliteReadOnlyWorkerSession({
@@ -55,7 +58,7 @@ function createSession() {
     retainOnOperationError: true,
     requestArgs,
     readBudget,
-    deadlineOwnedByCaller: () => true,
+    deadlineOwnedByCaller,
     timeoutError: () => new Error("fixture budget expired"),
     closeTimeoutMs: 60_000,
   });
@@ -245,6 +248,7 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
       sessions.push({ session, child });
       timer.mockClear();
       const result = session.run("/fixture/staging", { mode: "staging-create" });
+      await vi.waitFor(() => expect(child.send).toHaveBeenCalledOnce());
       const budgeted = timer.mock.calls.some(([, delay]) => typeof delay === "number" && delay > 0);
       reply(child, { ok: true, location: "/fixture/staged" });
       await expect(result).resolves.toBe("/fixture/staged");
@@ -253,6 +257,23 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
     },
     { signal: new AbortController().signal, deadlineOwnedByCaller: true },
   );
+});
+
+it("does not send a request when its worker closes during budget preparation", async () => {
+  const { session, child, readBudget, requestArgs } = createSession(() => false);
+  const budget = createDeferredCore<{ timeoutMs: number; size: string }>();
+  readBudget.mockReturnValueOnce(budget.promise);
+  const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
+  const rejected = expect(result).rejects.toThrow("exited with code 0");
+  expect(child.send).not.toHaveBeenCalled();
+  const closing = session.close();
+  child.emit("close", 0, null);
+  await closing;
+  budget.resolve({ timeoutMs: 60_000, size: "fixture" });
+  await nextTurn();
+  await rejected;
+  expect(requestArgs).not.toHaveBeenCalled();
+  expect(child.send).toHaveBeenCalledExactlyOnceWith("close", expect.any(Function));
 });
 
 it("captures only read scope and refuses callbacks after owner retirement", async () => {

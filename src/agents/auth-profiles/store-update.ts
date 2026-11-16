@@ -168,13 +168,14 @@ export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promi
         params.agentDir,
         { ...params.options, env },
         assertCurrent,
+        params.existingDatabaseTarget,
       );
       const sharedIdentity =
         prepared.sharedOwner.location === "state-db"
           ? context.admission.identity
           : await readAuthProfileDatabaseIdentityAsync(prepared.sharedOwner.sharedDatabasePath);
       assertCurrent();
-      const databaseTarget = params.existingDatabaseTarget ?? prepared.databaseTarget;
+      const { databaseTarget } = prepared;
       transferred = databaseTarget.kind === "agent" && databaseTarget.path === target?.path;
       // Bootstrap's acknowledged handoff selects the already-captured shared-state owner.
       execution = transferred ? execution : undefined;
