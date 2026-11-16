@@ -531,15 +531,11 @@ describe("buildAgentSystemPrompt", () => {
 
         expect(prompt).toContain("Keep this user guidance.");
         expect(prompt).toContain("Keep this too.");
-        for (const token of [
-          "## Heartbeats",
-          "HEARTBEAT_OK",
-          "HEARTBEAT.md",
-          heartbeatPrompt,
-          "Default heartbeat prompt:",
-        ]) {
-          expect(prompt).not.toContain(token);
-        }
+        expect(prompt).not.toContain("## Heartbeats");
+        expect(prompt).not.toContain("HEARTBEAT_OK");
+        expect(prompt).not.toContain("HEARTBEAT.md");
+        expect(prompt).not.toContain(heartbeatPrompt);
+        expect(prompt).not.toContain("Default heartbeat prompt:");
       }
     }
   });
@@ -649,13 +645,9 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("child completion will not resume this turn");
       expect(prompt).toMatch(/collect=true.*agents_wait.*in this turn/);
       expect(prompt).toContain("Fire-and-forget is valid when child output is the deliverable");
-      for (const token of [
-        "wait for runtime completion events",
-        "Announced completion is push-based",
-        "Announcing children:",
-      ]) {
-        expect(prompt).not.toContain(token);
-      }
+      expect(prompt).not.toContain("wait for runtime completion events");
+      expect(prompt).not.toContain("Announced completion is push-based");
+      expect(prompt).not.toContain("Announcing children:");
       const coordinationSection = prompt.split(
         overrides.subagentDelegationMode === "prefer" ? "## Delegation" : "## Messaging",
       )[1];

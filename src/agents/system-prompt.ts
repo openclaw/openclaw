@@ -535,12 +535,12 @@ export function buildAgentSystemPrompt(params: {
     workspaceDir: sanitizedWorkspaceDir,
     canonicalWorkspaceDir: params.canonicalWorkspaceDir,
   });
+  // Cache keys and bootstrap checks retain the original ordered file objects.
+  const contextFiles = preparedContextFiles.map(({ file }) => file);
   const bootstrapSystemPromptSections = buildBootstrapSystemPromptSection({
     bootstrapMode: params.bootstrapMode,
     bootstrapCompleted: params.bootstrapCompleted,
-    bootstrapContextInjected: preparedContextFiles.some(({ file }) =>
-      isBootstrapContextFile(file.path),
-    ),
+    bootstrapContextInjected: contextFiles.some((file) => isBootstrapContextFile(file.path)),
   });
   const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   if (bootstrapTruncationNotice) {
