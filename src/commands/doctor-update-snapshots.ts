@@ -35,9 +35,11 @@ export async function collectUpdateSnapshotHealthFindings(
     ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(path.dirname(packageRoot))
     : null;
   const roots: [string, RegExp][] = [
-    ...(layout ? [[layout.globalRoot, SNAPSHOT_NAME] as [string, RegExp]] : []),
     [resolveUpdateCaptureRoot(resolveStateDir(env)), ONLINE_SNAPSHOT_NAME],
   ];
+  if (layout) {
+    roots.unshift([layout.globalRoot, SNAPSHOT_NAME]);
+  }
 
   const deadline = performance.now() + SCAN_BUDGET_MS;
   const directories: string[] = [];
