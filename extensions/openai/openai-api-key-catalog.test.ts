@@ -144,6 +144,14 @@ it.each([
       profileId: "openai:api-key",
       ...(apiKey === "secretref-managed" ? { rejectionScope: "catalog" } : {}),
       status,
+      ...(status === "ready"
+        ? {
+            modelIdCatalog: {
+              baseUrl: "https://api.openai.com/v1",
+              modelIds: ["text-embedding-3-small"],
+            },
+          }
+        : {}),
     },
   ]);
   if (apiKey === "secretref-managed") {

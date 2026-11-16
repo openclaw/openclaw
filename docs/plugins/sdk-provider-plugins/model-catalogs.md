@@ -236,6 +236,14 @@ Filtering above); the next turn asks the user to pick another model before makin
 an inference request. Projections must preserve `inference`, including
 `chatEvidence`, so chat listings hide those rows and saved pins keep a useful
 diagnosis.
+A listed model can still fail its first chat request. When the provider answers
+with a 400, 403 or 404 that says the model does not exist, is not supported on
+that endpoint, needs other response modalities or cannot be sampled, and the
+successful listing made with the same credential returned that model ID, the
+turn reports that the provider lists the model but rejected a chat request. It
+moves to the next configured fallback without a retry, another login or a
+compaction, and records nothing. The listing comes from the outcome's
+`listedModelIds` or `modelIdCatalog`.
 To restrict the list, pass `readModelId(row)` and return `undefined` for rows the
 provider does not support; the returned string also becomes the model ID. Pass
 `projectRows` when the live API publishes richer model metadata:

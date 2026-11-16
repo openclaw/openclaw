@@ -165,7 +165,10 @@ export interface ProcessSession {
     finalize: () => Promise<void>;
     drain: () => Promise<void>;
   };
-  /** Run whose exec call started this process; completion provenance only, never authority. */
+  /**
+   * Run that owns this process: the run whose exec call started it, or the run that continued
+   * that run's paused subagent task. Completion provenance only, never authority.
+   */
   originRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
@@ -765,6 +768,15 @@ export function tail(text: string, max = 2000) {
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */
 export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
+}
+
+/** A paused subagent task continues under a new run id; its running commands move with it. */
+export function moveRunningSessionsToRun(previousRunId: string, nextRunId: string): void {
+  for (const session of runningSessions.values()) {
+    if (session.originRunId === previousRunId) {
+      session.originRunId = nextRunId;
+    }
+  }
 }
 
 /** Lists retained finished background sessions. */

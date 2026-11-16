@@ -149,6 +149,46 @@ describe("chat attachment paste", () => {
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
 
+  it.each(["dropped", "inserted", "unfocused"] as const)(
+    "recovers a %s native text paste once from the event snapshot",
+    async (mode) => {
+      const onDraftChange = vi.fn();
+      const textarea = getComposerTextarea(renderChatView({ draft: "Draft: ", onDraftChange }));
+      textarea.focus();
+      textarea.setSelectionRange(7, 7);
+      const paste = createPasteEvent("dictated text");
+      textarea.dispatchEvent(paste);
+      if (mode === "inserted") {
+        textarea.setRangeText("dictated text", 7, 7, "end");
+        textarea.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }),
+        );
+      } else if (mode === "unfocused") {
+        textarea.blur();
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(paste.defaultPrevented).toBe(false);
+      expect(textarea.value).toBe(mode === "unfocused" ? "Draft: " : "Draft: dictated text");
+      expect(onDraftChange.mock.calls.map(([draft]) => draft)).toEqual(
+        mode === "unfocused" ? [] : ["Draft: dictated text"],
+      );
+    },
+  );
+
+  it("keeps a recovered text paste within maxlength", async () => {
+    const textarea = getComposerTextarea(renderChatView({ draft: "Draft: " }));
+    textarea.maxLength = 10;
+    textarea.focus();
+    textarea.setSelectionRange(7, 7);
+    textarea.dispatchEvent(createPasteEvent("dictated text"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(textarea.value).toBe("Draft: dic");
+  });
+
   it("preserves pasted-text presentation and restore behavior across handoff", async () => {
     const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
     const original = registerChatAttachmentPayload({

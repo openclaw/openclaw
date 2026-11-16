@@ -242,6 +242,9 @@ export function createSlackProgressRuntime(runtimeParams: {
         ...(narrationUpdate.delta ? { text: narrationUpdate.delta } : {}),
         ...(chunks?.length ? { chunks } : {}),
       };
+      if (narrationUpdate.delta) {
+        delivery.pendingTextIsProgress = true;
+      }
       const accepted = hadSession
         ? await nativeTransport.append(streamUpdate)
         : await nativeTransport.start(streamUpdate, retainedThreadTs);

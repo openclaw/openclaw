@@ -1030,6 +1030,30 @@ line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
 and local ClawSweeper report no actionable findings. The shared cleanup helper
 is unchanged and retains its prior 11-pass / one-Windows-skip proof.
 
+### Agent startup fixture cleanup custody
+
+At `33d26e441f91c3d2534071a8d36e8aa9d146d07f`, the agent startup timing fixture clears
+its directory tracker before asynchronous removal succeeds. A failed removal
+therefore leaves the root untracked. Delegate cleanup to the existing shared
+owner, preserving the order: flush timeline, restore stubbed environment, remove
+tracked roots. The single declaration / expanded case and all timeline-content
+assertions remain; production and shared-helper code are unchanged.
+
+Direct execution and an actual Vitest `afterEach` fault/retry probe reproduce
+the original hook forgetting its failed root. The candidate preserves the exact
+error, removes a healthy sibling, retains the failed root, and removes it when
+the same hook runs again without the fault. Both versions flush and restore the
+two diagnostics environment variables before removal. Each fault run reports
+one intentional teardown failure after the original assertions execute.
+Temporary instrumentation was restored byte-for-byte.
+
+The clean baseline and candidate each pass the single case (11.64 s and 6.21 s
+wall time; Vitest durations 3.67 s and 1.78 s). These are qualification
+observations, not a performance comparison. Scoped agent-test typecheck, lint,
+formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independent
+preservation and local ClawSweeper review found no actionable issue. The shared
+cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
