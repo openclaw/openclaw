@@ -48,6 +48,38 @@ describe("proof annotations", () => {
     ).toContain(label);
   });
 
+  it("preserves the selected accent and optional label fields", () => {
+    const svg = renderProofAnnotations(
+      [
+        {
+          kind: "outline",
+          rect: first,
+          text: "Wider account menu",
+          detail: "336 CSS px wide",
+          badge: "+32",
+          color: "#8570ad",
+        },
+      ],
+      viewport,
+    );
+    expect(svg).toContain("Wider account menu");
+    expect(svg).toContain("336 CSS px wide");
+    expect(svg).toContain("+32");
+    expect(svg).toContain('stroke="#8570ad"');
+  });
+
+  it.each([{ color: 'red" onload="alert(1)' }, { detail: "" }, { badge: "x".repeat(17) }])(
+    "rejects invalid card presentation fields: %j",
+    (fields) => {
+      expect(() =>
+        validateProofAnnotations(
+          [{ kind: "outline", rect: first, text: "Menu", ...fields }],
+          viewport,
+        ),
+      ).toThrow("Invalid proof annotations:");
+    },
+  );
+
   it("treats label content as text rather than SVG markup", () => {
     const svg = renderProofAnnotations(
       [{ kind: "outline", rect: first, text: '<script>&"' }],
