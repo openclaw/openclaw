@@ -515,9 +515,14 @@ it.each(["initial placement", "programmatic reveal"])(
   },
 );
 
-it.each([false, true])(
-  "loads an unobserved first jump only after reader input (%s)",
-  async (readerInput) => {
+it.each([
+  { readerInput: false, previous: null },
+  { readerInput: true, previous: null },
+  { readerInput: false, previous: 0 },
+  { readerInput: true, previous: 0 },
+])(
+  "loads an unobserved first jump only after reader input ($readerInput, $previous)",
+  async ({ readerInput, previous }) => {
     const { pane, state, request } = historyPane();
     state.handleChatScroll = vi.fn();
     const thread = appendChatThread(pane, {
@@ -527,7 +532,14 @@ it.each([false, true])(
     });
     appendSentinel(thread, pane);
     installHistoryObserver();
-    pane.transcriptScrollTop = null;
+    if (previous === 0) {
+      thread.scrollTop = 0;
+      const initial = new Event("scroll");
+      Object.defineProperty(initial, "target", { value: thread });
+      pane.handleTranscriptScroll(initial);
+      // End placement can move the root without delivering another native scroll.
+      thread.scrollTop = 5500;
+    }
     if (readerInput) {
       pane.handleTranscriptHistoryIntent(new KeyboardEvent("keydown", { key: "Home" }));
     }

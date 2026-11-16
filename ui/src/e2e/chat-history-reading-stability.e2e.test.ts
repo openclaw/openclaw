@@ -87,6 +87,21 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.getByText(/^Answer 190\./).waitFor();
+        // A mounted last row does not prove that the initial end placement has landed.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const inner = element.querySelector(".chat-thread-inner");
+              return (
+                element.clientHeight > 0 &&
+                element.scrollHeight > element.clientHeight &&
+                Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) <= 2 &&
+                inner !== null &&
+                getComputedStyle(inner).visibility === "visible"
+              );
+            }),
+          )
+          .toBe(true);
         // Native input retires end-follow ownership. WebKit uses the explicit
         // edge action rather than relying on a wheel animation through measured rows.
         if (engine === "webkit") {

@@ -1,6 +1,7 @@
 import { t } from "../../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
 import {
@@ -138,8 +139,8 @@ export function appendChatAttachmentFiles(
 // Chromium drops a native paste, after beforeinput and without input, when the
 // system clipboard changes while the paste event runs. Dictation tools such as
 // Wispr Flow restore the previous clipboard right after their Cmd+V, so the
-// event's own snapshot is the only reliable copy of the text. Replacing the
-// original selection again is idempotent when the native insert did land.
+// event's own snapshot is the only reliable copy of the text. Native input
+// retires recovery even if a later edit restores the original value.
 // Like native paste, the recovered insert keeps to maxlength.
 // Accepted edge case: the recovered insert is outside the native undo stack.
 function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
@@ -148,7 +149,9 @@ function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
     return;
   }
   const { value, selectionStart: start, selectionEnd: end } = target;
-  setTimeout(() => {
+  const stopInput = listen(target, "input", () => clearTimeout(timer), { once: true });
+  const timer = setTimeout(() => {
+    stopInput();
     if (
       e.defaultPrevented ||
       target.value !== value ||

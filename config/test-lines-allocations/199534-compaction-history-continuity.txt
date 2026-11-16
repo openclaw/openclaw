@@ -1,4 +1,5 @@
 # Required regressions for compaction cursor recovery, physical branch/generation isolation,
-# the real composer goal/queued-input flow, committed-prefix readiness, and first-jump admission:
-# 505 net test lines minus the unchanged 400-line ordinary allowance.
-105
+# the real composer goal/queued-input flow, committed-prefix readiness, first-jump admission,
+# and retiring completed native-paste recovery before later edits:
+# 551 net test lines minus the unchanged 400-line ordinary allowance.
+151
