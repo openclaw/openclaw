@@ -54,8 +54,8 @@ export type AgentRuntimeIdentity = {
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
   delegatedAuthority: AgentRuntimeDelegatedAuthority;
-  /** Host-prepared tool posture; only explicit true bypasses operator approval. */
-  fullPermission?: true;
+  /** Host-prepared tool posture; absent or false never bypasses operator approval. */
+  fullPermission?: boolean;
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
