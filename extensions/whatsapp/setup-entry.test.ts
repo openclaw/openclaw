@@ -8,6 +8,7 @@ vi.mock("baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
 });
 
+// mock-isolation: Fail if dependency-light setup imports the socket/auth runtime.
 vi.mock("./src/auth-store.js", () => {
   throw new Error("setup auth checks must not load auth-store");
 });

@@ -945,7 +945,6 @@
 ["extensions/whatsapp/src/channel-outbound.test.ts","./runtime.js","744721a2944b5866950197cc2e9522d40ec248d503d9f09d18c3657e0ebdf436",1]
 ["extensions/whatsapp/src/channel-outbound.test.ts","./send.js","f367a71aeb5556720f025b7914b28d2c3f3773fd2d00c51ab019b92587c8b118",1]
 ["extensions/whatsapp/src/channel-react-action.test.ts","./channel-react-action.runtime.js","1326d620580b25b535012a49c3dd070b36bc0d235a517f6b61ffd267550370c7",1]
-["extensions/whatsapp/src/channel-runtime-loader.test.ts","./auth-store.js","68dd342f5406b6b150692fa7d83ec33a41077ccad9fab68bfbfb55fd20b0e88d",1]
 ["extensions/whatsapp/src/channel-runtime-loader.test.ts","./channel.runtime.js","51b9e15129c5e55d10c9a2b0bcf86df5afa9797b2264a334ad583fa20a5b7b2a",1]
 ["extensions/whatsapp/src/channel.status.test.ts","./channel-runtime-loader.js","e19bdbe373939be4a5313ec75b0b23c72c474242ed0df950325c8deb67d27e87",1]
 ["extensions/whatsapp/src/connection-controller.test.ts","./connection-owner.js","e0f795b84db23cb3dedf2140fd4dfb0673b3045355c21d850c3b0dc54589ed77",1]
