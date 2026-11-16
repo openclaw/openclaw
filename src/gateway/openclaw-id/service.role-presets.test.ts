@@ -7,28 +7,12 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type {
-  GatewayOperatorRoleDefinition,
-  GatewayOperatorRolesConfig,
-} from "../../config/types.gateway.js";
+import type { GatewayOperatorRolesConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { MEMBER_ROLE_PRESETS as presets } from "./member-role-presets.test-support.js";
 import { createOpenClawIdService } from "./service.js";
 
-const presets: Record<"operator" | "viewer", GatewayOperatorRoleDefinition> = {
-  operator: {
-    sessions: { others: "write" },
-    agents: "*",
-    scopes: [
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.talk",
-    ],
-  },
-  viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.sessions.read"] },
-};
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -91,6 +75,7 @@ describe("OpenClaw ID member role preset activation", () => {
       assignments: { byGithubLogin: { maintainer: "custom" } },
       definitions: {
         operator: { ...presets.viewer },
+        guest: { ...presets.operator },
         custom: { sessions: { others: "none" }, agents: "*", scopes: ["operator.admin"] },
       },
     };
@@ -127,6 +112,7 @@ describe("OpenClaw ID member role preset activation", () => {
     await f.save(edited);
     await f.service.reconcileRuntimePolicy();
     expect((await f.read()).gateway?.roles?.definitions.viewer).toEqual(presets.viewer);
+    expect((await f.read()).gateway?.roles?.definitions.guest).toEqual(presets.guest);
   });
 
   it("does not write with OpenClaw ID off or after the service stops", async () => {

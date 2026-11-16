@@ -113,8 +113,10 @@ describe("worktree Git size estimates", () => {
 
   it("hydrates missing contents with 20,000 unrelated repository config entries", async () => {
     const { clone, commit, missing } = await partialClone();
+    const common = path.join(path.dirname(clone), process.platform === "win32" ? "meta" : "meta ");
+    await git(clone, "init", "--template=", `--separate-git-dir=${common}`);
     await fs.appendFile(
-      path.join(clone, ".git/config"),
+      path.join(common, "config"),
       Array.from(
         { length: 10_000 },
         (_, index) =>

@@ -349,13 +349,15 @@ describe("managed worktree pending slots", () => {
         signal,
       );
       const sourceWaiting = createDeferred();
-      const acquire = stateLease.withOpenClawStateLease;
-      vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation((options, run) => {
-        if (options.scope === "projects.checkout" && options.key === repoRoot) {
-          sourceWaiting.resolve();
-        }
-        return acquire(options, run);
-      });
+      const acquire = stateLease.withOpenClawStateLeaseAsync;
+      vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation(
+        (options, context, run) => {
+          if (options.scope === "projects.checkout" && options.key === repoRoot) {
+            sourceWaiting.resolve();
+          }
+          return acquire(options, context, run);
+        },
+      );
       const second = create(1, "project-second");
       operations.push(second);
       await withinTest(

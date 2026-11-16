@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
+import { hasErrnoCode, isErrno } from "../infra/errno.ts";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
@@ -76,36 +77,73 @@ function hasLinuxProcfs(): boolean {
  * Reject recycled worker TIDs and terminal leaders without live sibling threads.
  * Missing or reaped procfs snapshots require a fresh existence probe.
  */
+function exitedLinuxStatus(pid: number, status: string): boolean | undefined {
+  const state = status.match(/^State:\s+(\S)/m)?.[1];
+  const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
+  if (threads === "0") {
+    // A read can outlive signal metadata; PID reuse or a nonleader exec may
+    // still leave a live owner. The caller must repeat the kernel probe.
+    return undefined;
+  }
+  // process.pid records a leader; kill(pid, 0) also accepts recycled worker TIDs.
+  const tgid = status.match(/^Tgid:[ \t]+(\d+)[ \t]*$/m)?.[1];
+  // pthread_exit can leave a terminal leader with live workers. Reaping also
+  // moves the last retained task from Z to X before removing its PID.
+  return (
+    (tgid !== undefined && Number(tgid) !== pid) ||
+    ((state === "Z" || state === "X") && threads === "1")
+  );
+}
+
+function isMissingPid(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    return hasErrnoCode(error, "ESRCH");
+  }
+  return false;
+}
+
 function isExitedLinuxProcess(pid: number): boolean {
   if (!hasLinuxProcfs()) {
     return false;
   }
   try {
-    const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const state = status.match(/^State:\s+(\S)/m)?.[1];
-    const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
-    if (threads !== "0") {
-      // process.pid records a leader; kill(pid, 0) also accepts recycled worker TIDs.
-      const tgid = status.match(/^Tgid:[ \t]+(\d+)[ \t]*$/m)?.[1];
-      // pthread_exit can leave a terminal leader with live workers. Reaping also
-      // moves the last retained task from Z to X before removing its PID.
-      return (
-        (tgid !== undefined && Number(tgid) !== pid) ||
-        ((state === "Z" || state === "X") && threads === "1")
-      );
+    const exited = exitedLinuxStatus(pid, fsSync.readFileSync(`/proc/${pid}/status`, "utf8"));
+    if (exited !== undefined) {
+      return exited;
     }
   } catch {
     // Reaping can remove procfs after the caller's existence probe.
   }
-  // A successful read can outlive the task's signal metadata and report zero
-  // threads. PID reuse or a nonleader exec can still leave a live current owner.
+  return isMissingPid(pid);
+}
+
+/** Async Linux transport retains the same terminal-leader and live-thread policy. */
+export async function isPidDefinitelyDeadAsync(pid: number): Promise<boolean> {
+  if (!hasLinuxProcfs()) {
+    return isPidDefinitelyDead(pid);
+  }
+  if (!isValidPid(pid)) {
+    return true;
+  }
   try {
     process.kill(pid, 0);
   } catch (error) {
-    // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
-    return (error as NodeJS.ErrnoException).code === "ESRCH";
+    return hasErrnoCode(error, "ESRCH");
   }
-  return false;
+  try {
+    const exited = exitedLinuxStatus(
+      pid,
+      await fsSync.promises.readFile(`/proc/${pid}/status`, "utf8"),
+    );
+    if (exited !== undefined) {
+      return exited;
+    }
+  } catch {
+    // A missing or unclassifiable row requires a fresh kernel absence probe.
+  }
+  return isMissingPid(pid);
 }
 
 /** Returns true only when a positive PID exists and is not a known terminal task. */
@@ -116,7 +154,7 @@ export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = isErrno(error) ? error.code : undefined;
     if (code !== "EPERM") {
       // A visibility policy can hide a live process even from the signal probe.
       return code === "ESRCH" ? (readNativeLiveness(pid) ?? false) : false;
@@ -134,7 +172,7 @@ export function isPidDefinitelyDead(pid: number): boolean {
   try {
     process.kill(pid, 0);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = isErrno(error) ? error.code : undefined;
     if (code !== "ESRCH" && !(process.platform === "win32" && code === "EPERM")) {
       return false;
     }
@@ -184,30 +222,37 @@ function getDarwinProcessStartTime(
   }
 }
 
+/** Parse the parent and birth identity from one Linux procfs stat snapshot. */
+export function parseLinuxProcessStat(
+  pid: number,
+  stat: string,
+): { parentPid: number; startedAt: number } | null {
+  const commEndIndex = stat.lastIndexOf(")");
+  if (commEndIndex < 0 || !stat.startsWith(`${pid} (`)) {
+    return null;
+  }
+  // The comm field (field 2) is wrapped in parens and can contain spaces,
+  // so split after the last ")" to get fields 3..N reliably.
+  const afterComm = stat.slice(commEndIndex + 1).trimStart();
+  const fields = afterComm.split(/\s+/);
+  // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
+  const starttime = Number(fields[19]);
+  const parentPid = Number(fields[1]);
+  return Number.isSafeInteger(starttime) &&
+    starttime >= 0 &&
+    Number.isSafeInteger(parentPid) &&
+    parentPid >= 0
+    ? { parentPid, startedAt: starttime }
+    : null;
+}
+
 /** Kernel parent and birth ticks share one procfs snapshot, independent of native addons. */
 export function readLinuxProcessStat(pid: number): { parentPid: number; startedAt: number } | null {
   if (!isValidPid(pid) || !hasLinuxProcfs()) {
     return null;
   }
   try {
-    const stat = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const commEndIndex = stat.lastIndexOf(")");
-    if (commEndIndex < 0 || !stat.startsWith(`${pid} (`)) {
-      return null;
-    }
-    // The comm field (field 2) is wrapped in parens and can contain spaces,
-    // so split after the last ")" to get fields 3..N reliably.
-    const afterComm = stat.slice(commEndIndex + 1).trimStart();
-    const fields = afterComm.split(/\s+/);
-    // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
-    const starttime = Number(fields[19]);
-    const parentPid = Number(fields[1]);
-    return Number.isSafeInteger(starttime) &&
-      starttime >= 0 &&
-      Number.isSafeInteger(parentPid) &&
-      parentPid >= 0
-      ? { parentPid, startedAt: starttime }
-      : null;
+    return parseLinuxProcessStat(pid, fsSync.readFileSync(`/proc/${pid}/stat`, "utf8"));
   } catch {
     return null;
   }

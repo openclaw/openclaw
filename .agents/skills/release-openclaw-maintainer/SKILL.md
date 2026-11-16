@@ -77,7 +77,11 @@ later. This is recommended bookkeeping, not another release gate.
 FRV must conclude **success** under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Apply only the exact exceptions in that policy, including its operator-authorized
-Kova grants; preserve each grant’s version, job, and optional attempt restrictions.
+Kova grants; preserve each grant’s version, job, optional candidate SHA, and
+optional attempt restrictions.
+For grant-only edits, reuse the policy tests; add cases only for new matching or
+validation behavior. Keep new reasons to one sentence and authorization details
+in the PR/handoff, not published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
 A failed-job grant is not permission to skip the job or change C/Q. All other
 required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor

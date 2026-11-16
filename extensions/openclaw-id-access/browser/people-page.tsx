@@ -281,14 +281,18 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   </h2>
                   <Show when={latest(ownDevicePub)}>
                     <InviteForm
+                      link={current().link}
                       motion={motion}
                       components={host.components}
                       disabled={!canManage() || latest(creatingInvite)}
                       busy={latest(creatingInvite)}
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
-                      onCreate={(email, role: MemberRole) =>
-                        run("invite", (link) => createInvite(host.request, link, email, role))
+                      existingProfiles={current().link.existingProfiles ?? []}
+                      onCreate={(email, role: MemberRole, existingProfileId) =>
+                        run("invite", (link) =>
+                          createInvite(host.request, link, email, role, existingProfileId),
+                        )
                       }
                     />
                   </Show>

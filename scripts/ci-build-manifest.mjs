@@ -10,6 +10,7 @@ import {
 } from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -658,6 +659,20 @@ process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
 const nodeSelectionReasons = [];
 let selectedTestTargets;
+// Preserve the original policy independently of later execution opt-ins.
+const nodeVolumeContext =
+  runtimePullRequest && changedPaths !== null
+    ? Object.freeze({
+        revision: checkoutRevision,
+        runtimePolicy: testRuntimeMode,
+        environment: Object.freeze({ ...process.env }),
+        eligibility: Object.freeze({
+          changedPaths: Object.freeze([...changedPaths]),
+          includeReleaseOnlyRuntimeTests,
+          includePrExemptRuntimeTests,
+        }),
+      })
+    : undefined;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
     throw new Error("Current PR CI requires complete changed paths for Node test planning");
@@ -922,6 +937,7 @@ if (runtimePullRequest && runNodeFull) {
     throw new Error("Current PR CI target does not export createChangedNodeTestShards");
   }
   changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+    volumeContext: nodeVolumeContext,
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     compactNodeJobCap: compactPlanMode ? nodeMatrixLimit : undefined,
     selectedTestTargets,
@@ -1393,6 +1409,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 }) => ({
   configs,
   env,
@@ -1401,6 +1418,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 });
 const uiTestRuntimePolicy =
   (!compatibilityTarget || Boolean(dispatchRuntimePolicy)) &&
@@ -1507,11 +1525,7 @@ const nodeTestShards = targetNodeTestShards
       isCanonicalRepository &&
       !frozenTarget &&
       !shard.requiresDist &&
-      groups?.some(
-        (group) =>
-          group.configs?.length === 1 &&
-          group.configs[0] === "test/vitest/vitest.cli-process.config.ts",
-      ) &&
+      groups?.some((group) => resolveCiTestAuditConfig(group.configs)) &&
       !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
     const row = {
       check_name: shard.checkName,

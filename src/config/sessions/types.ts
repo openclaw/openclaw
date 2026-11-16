@@ -727,7 +727,6 @@ export type InternalSessionEntryCore = SessionEntryCore & {
         source: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
       }
     >;
-    hadBackgroundExec?: true;
   };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only

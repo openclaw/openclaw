@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -27,6 +28,7 @@ it.runIf(process.platform !== "win32")(
   async () => {
     const root = tempDirs.make("openclaw-git-native-settlement-");
     const repo = await repository(root);
+    await fs.writeFile(path.join(repo, "dirty.txt"), "pending recovery\n");
     const held = createEnteredGate();
     const abort = new AbortController();
     let temporaryDirectory = "";

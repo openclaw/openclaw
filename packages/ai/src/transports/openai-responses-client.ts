@@ -47,7 +47,10 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
-import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-policy.js";
+import {
+  enforceOpenAIResponsesCompactionReplayStorage,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "./openai-responses-payload-policy.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   recordResponsesReasoningState,
@@ -57,6 +60,7 @@ import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-u
 import {
   createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithRecovery,
+  createResponsesItemConflictRecovery,
 } from "./openai-responses-replay-internal.js";
 import { createResponsesRequestFetch } from "./openai-responses-request-fetch.js";
 import {
@@ -72,12 +76,11 @@ import {
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
-import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
   combineWebSocketTimeoutSignal,
-  createOpenAIResponsesWebSocketStream,
   resolveNativeOpenAIResponsesWebSocketMode,
-} from "./openai-responses-websocket.js";
+} from "./openai-responses-websocket-options.js";
+import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -144,6 +147,7 @@ function createResponsesTransportExecutor(config: {
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       let requestSignal = options?.signal;
       let continuationClaim: ReturnType<typeof claimOpenAIResponsesHttpContinuation>;
+      const itemRecovery = createResponsesItemConflictRecovery(output, model, responsesOptions);
       const requestLifecycle = responsesRequestLifecycle.get(options);
       try {
         if (compactRequest && requestLifecycle) {
@@ -222,6 +226,10 @@ function createResponsesTransportExecutor(config: {
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
           }
+          enforceOpenAIResponsesCompactionReplayStorage(
+            params,
+            resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "preserve" }),
+          );
           if (preserveUsers) {
             params = { ...params, input: preserveUsers(params.input ?? []) };
           }
@@ -276,6 +284,7 @@ function createResponsesTransportExecutor(config: {
               Boolean(v2Compaction),
             ),
           );
+        const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);
         let params = await buildRequest("checkpoint");
         const asyncTools =
           !compactRequest &&
@@ -373,6 +382,7 @@ function createResponsesTransportExecutor(config: {
             initialAttemptKind,
             initialRejectedCompaction,
             buildFullHistoryRequest: () => buildRequest("full-history"),
+            buildItemConflictRequest,
             onCompactionRejected: (checkpoint) =>
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,
@@ -432,6 +442,11 @@ function createResponsesTransportExecutor(config: {
         if (websocketMode) {
           requestSignal = websocketSignal;
           try {
+            const { createOpenAIResponsesWebSocketStream } =
+              await import("./openai-responses-websocket.js");
+            if (websocketSignal.aborted) {
+              throw transportAbortError(websocketSignal);
+            }
             const websocket = createOpenAIResponsesWebSocketStream({
               client,
               request: params,
@@ -491,6 +506,7 @@ function createResponsesTransportExecutor(config: {
               options,
               output,
               buildRequest,
+              buildItemConflictRequest,
               createSseStream,
               closeWebSocketForFallback,
               logWebSocketFallback,
@@ -603,6 +619,7 @@ function createResponsesTransportExecutor(config: {
         );
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
+        itemRecovery.reject(error);
         if (error instanceof DegenerateToolCallArgumentsError) {
           firstEventAbort?.abort(error);
         }
@@ -628,6 +645,7 @@ function createResponsesTransportExecutor(config: {
           }),
         });
       } finally {
+        itemRecovery.finish();
         continuationClaim?.release();
         firstEventAbort?.dispose();
       }

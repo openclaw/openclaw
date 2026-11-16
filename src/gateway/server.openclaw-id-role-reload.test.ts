@@ -23,7 +23,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
 import * as presetActivation from "./openclaw-id/member-role-presets.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { isOpenClawIdTunnelPrincipalAdmitted } from "./openclaw-id/tunnel-principal.js";
 import { startGatewayServerCore } from "./server-start.js";

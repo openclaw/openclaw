@@ -146,6 +146,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Host-only source check after queue selection, before preflight or execution. */
+  assertTurnAdmissionCurrent?: () => void;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-captured requester identity for policy resolution across internal continuations. */
@@ -269,6 +271,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   pinnedWidgetAuthoring: undefined,
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
+  assertTurnAdmissionCurrent: undefined,
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,

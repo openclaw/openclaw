@@ -388,7 +388,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - npm or ClawHub: `@openclaw/tavily-plugin`. Adds agent-callable tools. Adds web search provider support.
 
-- **[team-reports](/plugins/reference/team-reports)** (`@openclaw/team-reports`) - npm or ClawHub: `@openclaw/team-reports`. Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.
+- **[team-reports](/plugins/reference/team-reports)** (`@openclaw/team-reports`) - npm or ClawHub: `@openclaw/team-reports`. Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, shown in the OpenClaw app.
 
 - **[teams-meetings](/plugins/reference/teams-meetings)** (`@openclaw/teams-meetings`) - npm or ClawHub: `@openclaw/teams-meetings`. Join Microsoft Teams meetings as a Chrome browser guest.
 

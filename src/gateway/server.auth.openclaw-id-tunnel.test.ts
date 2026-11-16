@@ -28,7 +28,7 @@ import * as profileWrites from "../state/user-profile-writes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
-import { MEMBER_ROLE_PRESETS as PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS as PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { setOpenClawIdOwnerAccountResolver } from "./openclaw-id/owner-account.js";
 import {
   setOpenClawIdTunnelPrincipalResolver,
@@ -75,7 +75,12 @@ const PRINCIPALS: Record<string, OpenClawIdTunnelPrincipal> = {
   [OWNER_KEY]: { kind: "owner", peerKey: OWNER_KEY },
   [OPERATOR_KEY]: { kind: "member", peerKey: OPERATOR_KEY, accountId: "acct_op", role: "operator" },
   [VIEWER_KEY]: { kind: "member", peerKey: VIEWER_KEY, accountId: "acct_view", role: "viewer" },
-  [GUEST_KEY]: { kind: "member", peerKey: GUEST_KEY, accountId: "acct_guest", role: "guest" },
+  [GUEST_KEY]: {
+    kind: "member",
+    peerKey: GUEST_KEY,
+    accountId: "acct_guest",
+    role: "unconfigured-role",
+  },
 };
 
 let started: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
