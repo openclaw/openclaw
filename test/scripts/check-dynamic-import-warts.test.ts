@@ -33,6 +33,15 @@ it.each([
     line: 1,
     reason: 'repeated direct dynamic import of "./runtime.js" (2 callsites: 1, 2)',
   },
+  {
+    title: "flags direct dynamic imports inside execute paths",
+    source: `export function createTool() {
+  return { execute: async () => { return await import("./runtime.js"); } };
+}`,
+    line: 2,
+    reason:
+      'direct dynamic import of "./runtime.js" inside execute path; move it behind a cached loader',
+  },
 ])("$title", ({ source, line, reason }) => {
   expect(advisories(source)).toEqual([{ line, reason }]);
 });
@@ -58,17 +67,4 @@ it.each([
   ],
 ])("%s", (_title, source) => {
   expect(advisories(source)).toStrictEqual([]);
-});
-
-it("flags direct dynamic imports inside execute paths", () => {
-  const source = `export function createTool() {
-  return { execute: async () => { return await import("./runtime.js"); } };
-}`;
-  expect(advisories(source)).toEqual([
-    {
-      line: 2,
-      reason:
-        'direct dynamic import of "./runtime.js" inside execute path; move it behind a cached loader',
-    },
-  ]);
 });

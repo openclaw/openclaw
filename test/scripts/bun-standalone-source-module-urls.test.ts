@@ -305,29 +305,78 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     });
   });
 
-  it("rejects changed output until its postbuild owner verifies and updates the hash", async () => {
-    const { sourceRoot, helper } = fixture();
+  it("keeps emitted module identity authoritative through postbuild updates and corrupt metadata", async () => {
+    const { root, sourceRoot, helper } = fixture();
     const config = await buildOwner(sourceRoot, "esm");
     const index = () => createStandaloneSourceEntries({ sourceRoot, configs: [config] });
     const output = index().resolveModuleUrl(helper, config);
-    const filename = path.join(sourceRoot, output);
-    const original = fs.readFileSync(filename, "utf8");
-    const rewritten = `${original}\n// postbuild import rewrite\n`;
-    fs.writeFileSync(filename, rewritten);
+    const outputRoot = path.join(sourceRoot, "dist");
+    const directory = path.join(outputRoot, ".source-module-urls");
+    const [metadataName] = fs.readdirSync(directory);
+    assert(metadataName, "Missing module URL metadata");
+    const metadataPath = path.join(directory, metadataName);
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    const rewrites = metadata.chunks.map((chunk: { output: string }) => {
+      const filename = path.join(outputRoot, chunk.output);
+      const original = fs.readFileSync(filename, "utf8");
+      const rewritten = `${original}\n// batched postbuild rewrite\n`;
+      fs.writeFileSync(filename, rewritten);
+      return { filename, original, rewritten };
+    });
+    expect(rewrites.length).toBeGreaterThan(1);
     expect(() => index().resolveModuleUrl(helper, config)).toThrow("chunk hash mismatch");
     expect(() =>
       updateStandaloneSourceModuleUrlChunks({
-        outputRoot: path.join(sourceRoot, "dist"),
-        rewrites: [{ filename, original: "wrong old bytes", rewritten }],
+        outputRoot,
+        rewrites: [{ ...rewrites[0]!, original: "wrong old bytes" }],
       }),
     ).toThrow("original hash mismatch");
-    expect(
-      updateStandaloneSourceModuleUrlChunks({
-        outputRoot: path.join(sourceRoot, "dist"),
-        rewrites: [{ filename, original, rewritten }],
-      }),
-    ).toBe(1);
+    const reads = vi.spyOn(fs, "readFileSync");
+    const writes = vi.spyOn(fs, "writeFileSync");
+    expect(updateStandaloneSourceModuleUrlChunks({ outputRoot, rewrites })).toBe(1);
+    expect(reads.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
+    expect(writes.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
+    reads.mockRestore();
+    writes.mockRestore();
     expect(index().resolveModuleUrl(helper, config)).toBe(output);
+
+    const current = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    for (const corrupt of [
+      { ...current, version: 2 },
+      {
+        ...current,
+        chunks: current.chunks.map(
+          ({ facadeSource: _omitted, ...chunk }: Record<string, unknown>) => chunk,
+        ),
+      },
+    ]) {
+      fs.writeFileSync(metadataPath, JSON.stringify(corrupt));
+      expect(() => index().resolveModuleUrl(helper, config)).toThrow("Run pnpm build");
+    }
+
+    const body = current.chunks.find(
+      (chunk: { output: string }) => chunk.output === path.relative("dist", output),
+    );
+    const duplicate = "duplicate-body.mjs";
+    fs.copyFileSync(path.join(sourceRoot, output), path.join(outputRoot, duplicate));
+    fs.writeFileSync(
+      metadataPath,
+      JSON.stringify({ ...current, chunks: [...current.chunks, { ...body, output: duplicate }] }),
+    );
+    const entries = index();
+    expect(() => entries.resolveModuleUrl(helper, config)).toThrow("found 2");
+    const runtimeRoot = path.join(root, "runtime");
+    fs.mkdirSync(path.join(runtimeRoot, "node_modules"), { recursive: true });
+    const graph = createStandaloneSourceGraph({
+      sourceRoot,
+      runtimeRoot,
+      outputRoot: root,
+      sourceEntries: entries,
+      embeddedPaths: {},
+    });
+    expect(() => graph.addEmittedChunk({ id: helper, config })).toThrow("found 2");
+    fs.rmSync(directory, { recursive: true });
+    expect(() => index().resolveModuleUrl(helper, config)).toThrow("Run pnpm build");
   });
 
   it("refreshes metadata when declared static JavaScript replaces a bundled entry", async () => {
@@ -371,42 +420,6 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     expect(fs.readFileSync(path.join(sourceRoot, assetOutput), "utf8")).toBe(assetContents);
     expect(index().resolveModuleUrl(helper, config)).toBe(output);
     runRelocatedHelper(root, sourceRoot, output);
-  });
-
-  it("updates multiple chunks with one read and write per metadata ledger", async () => {
-    const { sourceRoot, helper } = fixture();
-    const config = await buildOwner(sourceRoot, "esm");
-    const metadataDirectory = path.join(sourceRoot, "dist/.source-module-urls");
-    const [metadataName] = fs.readdirSync(metadataDirectory);
-    if (!metadataName) {
-      throw new Error("Missing module URL metadata");
-    }
-    const metadataPath = path.join(metadataDirectory, metadataName);
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-    const rewrites = metadata.chunks.map((chunk: { output: string }) => {
-      const filename = path.join(sourceRoot, "dist", chunk.output);
-      const original = fs.readFileSync(filename, "utf8");
-      const rewritten = `${original}\n// batched postbuild rewrite\n`;
-      fs.writeFileSync(filename, rewritten);
-      return { filename, original, rewritten };
-    });
-    expect(rewrites.length).toBeGreaterThan(1);
-    const reads = vi.spyOn(fs, "readFileSync");
-    const writes = vi.spyOn(fs, "writeFileSync");
-    expect(
-      updateStandaloneSourceModuleUrlChunks({
-        outputRoot: path.join(sourceRoot, "dist"),
-        rewrites,
-      }),
-    ).toBe(1);
-    expect(reads.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
-    expect(writes.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
-    expect(
-      createStandaloneSourceEntries({ sourceRoot, configs: [config] }).resolveModuleUrl(
-        helper,
-        config,
-      ),
-    ).toMatch(/^dist\//);
   });
 
   it("binds a pnpm dependency entry to its emitted physical module", async () => {
@@ -466,36 +479,6 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     runRelocatedHelper(root, sourceRoot, output);
   });
 
-  it("requires fresh producer metadata instead of inferring an emitted location", async () => {
-    const { sourceRoot, helper } = fixture();
-    const config = await buildOwner(sourceRoot, "esm");
-    const directory = path.join(sourceRoot, "dist/.source-module-urls");
-    const [metadataName] = fs.readdirSync(directory);
-    if (!metadataName) {
-      throw new Error("Missing module URL metadata");
-    }
-    const filename = path.join(directory, metadataName);
-    const metadata = JSON.parse(fs.readFileSync(filename, "utf8"));
-    fs.writeFileSync(filename, JSON.stringify({ ...metadata, version: 2 }));
-    expect(() =>
-      createStandaloneSourceEntries({ sourceRoot, configs: [config] }).resolveModuleUrl(
-        helper,
-        config,
-      ),
-    ).toThrow("Run pnpm build");
-    delete metadata.chunks[0].facadeSource;
-    fs.writeFileSync(filename, JSON.stringify(metadata));
-    expect(() =>
-      createStandaloneSourceEntries({ sourceRoot, configs: [config] }).resolveModuleUrl(
-        helper,
-        config,
-      ),
-    ).toThrow("Run pnpm build");
-    fs.rmSync(directory, { recursive: true });
-    const entries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
-    expect(() => entries.resolveModuleUrl(helper, config)).toThrow("Run pnpm build");
-  });
-
   it("keeps the same source's emitted URL separate for each real build configuration", async () => {
     const { sourceRoot, helper } = fixture();
     const main = await buildOwner(sourceRoot, "esm", "dist/main");
@@ -506,41 +489,6 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     expect(mainOutput).toMatch(/^dist\/main\//);
     expect(workerOutput).toMatch(/^dist\/worker\//);
     expect(mainOutput).not.toBe(workerOutput);
-  });
-
-  it("rejects two recorded bodies inside one configuration", async () => {
-    const { root, sourceRoot, helper } = fixture();
-    const config = await buildOwner(sourceRoot, "esm");
-    const output = createStandaloneSourceEntries({
-      sourceRoot,
-      configs: [config],
-    }).resolveModuleUrl(helper, config);
-    const metadataDirectory = path.join(sourceRoot, "dist/.source-module-urls");
-    const [metadataName] = fs.readdirSync(metadataDirectory);
-    if (!metadataName) {
-      throw new Error("Missing module URL metadata");
-    }
-    const metadataPath = path.join(metadataDirectory, metadataName);
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-    const body = metadata.chunks.find(
-      (chunk: { output: string }) => chunk.output === path.relative("dist", output),
-    );
-    const duplicate = "duplicate-body.mjs";
-    fs.copyFileSync(path.join(sourceRoot, output), path.join(sourceRoot, "dist", duplicate));
-    metadata.chunks.push({ ...body, output: duplicate });
-    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
-    const entries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
-    expect(() => entries.resolveModuleUrl(helper, config)).toThrow("found 2");
-    const runtimeRoot = path.join(root, "runtime");
-    fs.mkdirSync(path.join(runtimeRoot, "node_modules"), { recursive: true });
-    const graph = createStandaloneSourceGraph({
-      sourceRoot,
-      runtimeRoot,
-      outputRoot: root,
-      sourceEntries: entries,
-      embeddedPaths: {},
-    });
-    expect(() => graph.addEmittedChunk({ id: helper, config })).toThrow("found 2");
   });
 
   it("keeps inventory-emitted companions out of the declared entry contract", async () => {

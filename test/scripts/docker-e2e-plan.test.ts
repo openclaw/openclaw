@@ -963,55 +963,37 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.omittedUnsupportedLanes).toEqual([selectedLane]);
   });
 
-  it("fails closed when an unknown legacy scenario catalog lacks the command", () => {
-    const targetRoot = tempDirs.make("openclaw-frozen-failed-scenario-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(
-      assertionsFile,
-      [
+  it.each([
+    {
+      name: "fails closed when an unknown legacy scenario catalog lacks the command",
+      source: [
         'const SCENARIOS = new Set(["base"]);',
         'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
       ].join("\n"),
-    );
-
-    expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorScenarios: "reported-issues",
-        upgradeSurvivorTargetRoot: targetRoot,
-      }),
-    ).toThrow("unknown upgrade-survivor assertion command: list-scenarios");
-  });
-
-  it("fails closed when a frozen target scenario command returns non-JSON output", () => {
-    const targetRoot = tempDirs.make("openclaw-frozen-non-json-scenario-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(assertionsFile, 'process.stdout.write("base");\n');
-
-    expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorScenarios: "reported-issues",
-        upgradeSurvivorTargetRoot: targetRoot,
-      }),
-    ).toThrow("list-scenarios did not return JSON");
-  });
-
-  it("fails closed when a frozen target scenario command returns an invalid catalog", () => {
+      error: "unknown upgrade-survivor assertion command: list-scenarios",
+    },
+    {
+      name: "fails closed when a frozen target scenario command returns non-JSON output",
+      source: 'process.stdout.write("base");\n',
+      error: "list-scenarios did not return JSON",
+    },
+    {
+      name: "fails closed when a frozen target scenario command returns an invalid catalog",
+      source: 'process.stdout.write("[\\"base\\",\\"base\\"]");\n',
+      error: "list-scenarios returned an invalid catalog",
+    },
+  ])("$name", ({ source, error }) => {
     const targetRoot = tempDirs.make("openclaw-frozen-invalid-scenario-harness-");
     const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(assertionsFile, 'process.stdout.write("[\\"base\\",\\"base\\"]");\n');
-
+    writeFileSync(assertionsFile, source);
     expect(() =>
       planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
         upgradeSurvivorScenarios: "reported-issues",
         upgradeSurvivorTargetRoot: targetRoot,
       }),
-    ).toThrow("list-scenarios returned an invalid catalog");
+    ).toThrow(error);
   });
 
   it("excludes Open WebUI from skip-live Docker all plans", () => {

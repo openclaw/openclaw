@@ -1160,8 +1160,15 @@ describe("gateway concurrency benchmark script", () => {
   });
 
   it("parses bounded mock and live benchmark controls without booting a gateway", () => {
-    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
-    expect(testing.parseOptions([]).postgres).toBe(false);
+    expect(testing.parseOptions([])).toMatchObject({
+      gatewayRuntime: process.execPath,
+      postgres: false,
+      provider: "mock",
+      turnsPerSession: 1,
+      agentCount: 1,
+      diagnosticsTimeline: true,
+      probeRounds: undefined,
+    });
     expect(testing.parseOptions(["--postgres"]).postgres).toBe(true);
     expect(
       testing.parseOptions([
@@ -1173,17 +1180,54 @@ describe("gateway concurrency benchmark script", () => {
         "1",
       ]),
     ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1", agentWarmupTurns: 1 });
-    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
-    expect(() => testing.parseOptions(["--agent-warmup-turns", "11"])).toThrow(
-      "--agent-warmup-turns",
-    );
-    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
-    expect(testing.parseOptions([]).provider).toBe("mock");
+    const controls = [
+      ["agent-count", "12", "agentCount", 12],
+      ["concurrency", "12", "concurrency", 12],
+      ["turns-per-session", "8", "turnsPerSession", 8],
+      ["runs", "2", "runs", 2],
+      ["warmup", "0", "warmup", 0],
+      ["cadence-ms", "50", "cadenceMs", 50],
+      ["timeout-ms", "90000", "timeoutMs", 90_000],
+      ["cpu-prof-dir", "/tmp/gateway-cpu-profiles", "cpuProfDir", "/tmp/gateway-cpu-profiles"],
+      ["heap-prof-dir", "/tmp/gateway-heap-profiles", "heapProfDir", "/tmp/gateway-heap-profiles"],
+      ["plugin-count", "50", "pluginCount", 50],
+      ["probe-rounds", "20", "probeRounds", 20],
+      ["session-count", "120", "sessionCount", 120],
+      ["history-messages", "20", "historyMessages", 20],
+      ["history-message-chars", "8192", "historyMessageChars", 8192],
+      ["history-clients", "6", "historyClients", 6],
+      ["history-burst", "5", "historyBurst", 5],
+      ["session-updates", "500", "sessionUpdates", 500],
+      ["session-update-clients", "8", "sessionUpdateClients", 8],
+      ["subscribers", "4", "subscribers", 4],
+      ["stream-chunk-delay-ms", "2000", "streamChunkDelayMs", 2_000],
+      ["max-control-ms", "2000", "maxControlMs", 2_000],
+      ["max-handshake-ms", "2000", "maxHandshakeMs", 2_000],
+      ["output", "concurrency.json", "output", "concurrency.json"],
+    ] as const;
+    expect(
+      testing.parseOptions([
+        ...controls.flatMap(([flag, value]) => [`--${flag}`, value]),
+        "--control-plane",
+        "--tool-events",
+        "--no-diagnostics-timeline",
+        "--visible-observer",
+        "--workspace-fanout",
+        "--json",
+      ]),
+    ).toMatchObject({
+      ...Object.fromEntries(controls.map((control) => [control[2], control[3]])),
+      controlPlane: true,
+      toolEvents: true,
+      diagnosticsTimeline: false,
+      visibleObserver: true,
+      workspaceFanout: true,
+      json: true,
+    });
     const liveArgs = ["--provider", "openai", "--runs", "1", "--warmup", "0", "--concurrency", "1"];
     expect(
       testing.parseOptions([...liveArgs, "--load-cpu-prof-dir", "/tmp/profiles"]).provider,
     ).toBe("openai");
-    expect(() => testing.parseOptions(["--provider", "other"])).toThrow("--provider");
     for (const extra of [
       ["--tool-events"],
       ["--agent-warmup-turns", "1"],
@@ -1192,144 +1236,50 @@ describe("gateway concurrency benchmark script", () => {
     ]) {
       expect(() => testing.parseOptions([...liveArgs, ...extra])).toThrow("OpenAI requires");
     }
-    expect(() =>
-      testing.parseOptions(["--load-cpu-prof-dir", "/tmp/cpu", "--heap-prof-dir", "/tmp/heap"]),
-    ).toThrow("--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs");
-    expect(
-      testing.parseOptions(
-        [
-          ["--agent-count", "12"],
-          ["--concurrency", "12"],
-          ["--turns-per-session", "8"],
-          ["--runs", "2"],
-          ["--warmup", "0"],
-          ["--cadence-ms", "50"],
-          ["--timeout-ms", "90000"],
-          ["--cpu-prof-dir", "/tmp/gateway-cpu-profiles"],
-          ["--heap-prof-dir", "/tmp/gateway-heap-profiles"],
-          ["--plugin-count", "50"],
-          ["--probe-rounds", "20"],
-          ["--session-count", "120"],
-          ["--control-plane"],
-          ["--history-messages", "20"],
-          ["--history-message-chars", "8192"],
-          ["--history-clients", "6"],
-          ["--history-burst", "5"],
-          ["--session-updates", "500"],
-          ["--session-update-clients", "8"],
-          ["--subscribers", "4"],
-          ["--stream-chunk-delay-ms", "2000"],
-          ["--max-control-ms", "2000"],
-          ["--max-handshake-ms", "2000"],
-          [
-            "--tool-events",
-            "--no-diagnostics-timeline",
-            "--visible-observer",
-            "--workspace-fanout",
-          ],
-          ["--output", "concurrency.json"],
-          ["--json"],
-        ].flat(),
-      ),
-    ).toMatchObject({
-      agentCount: 12,
-      cadenceMs: 50,
-      concurrency: 12,
-      cpuProfDir: "/tmp/gateway-cpu-profiles",
-      heapProfDir: "/tmp/gateway-heap-profiles",
-      diagnosticsTimeline: false,
-      json: true,
-      historyBurst: 5,
-      historyClients: 6,
-      historyMessages: 20,
-      historyMessageChars: 8192,
-      controlPlane: true,
-      maxControlMs: 2_000,
-      maxHandshakeMs: 2_000,
-      output: "concurrency.json",
-      pluginCount: 50,
-      probeRounds: 20,
-      runs: 2,
-      sessionCount: 120,
-      sessionUpdateClients: 8,
-      sessionUpdates: 500,
-      streamChunkDelayMs: 2_000,
-      subscribers: 4,
-      timeoutMs: 90_000,
-      toolEvents: true,
-      turnsPerSession: 8,
-      visibleObserver: true,
-      warmup: 0,
-      workspaceFanout: true,
-    });
-    expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
-      "--concurrency must be at most 64",
-    );
-    expect(testing.parseOptions([]).turnsPerSession).toBe(1);
-    expect(testing.parseOptions([]).agentCount).toBe(1);
-    expect(
-      testing.parseOptions(["--agent-count", "128", "--session-count", "1000"]).agentCount,
-    ).toBe(128);
-    for (const value of ["0", "1.5", "129"]) {
-      expect(() => testing.parseOptions(["--agent-count", value])).toThrow("--agent-count");
+    for (const [args, error] of [
+      [["--gateway-runtime", "bun\0"], "--gateway-runtime"],
+      [["--agent-warmup-turns", "11"], "--agent-warmup-turns"],
+      [["--gateway-cpus", "0-1"], "--gateway-cpus"],
+      [["--provider", "other"], "--provider"],
+      [
+        ["--load-cpu-prof-dir", "/tmp/cpu", "--heap-prof-dir", "/tmp/heap"],
+        "--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs",
+      ],
+      [["--concurrency", "65"], "--concurrency must be at most 64"],
+      ...["0", "1.5", "129"].map((value) => [["--agent-count", value], "--agent-count"] as const),
+      [["--agent-count", "9"], "--agent-count must not exceed the total session count"],
+      [["--turns-per-session", "0"], "--turns-per-session"],
+      [["--turns-per-session", "101"], "--turns-per-session must be at most 100"],
+      [["--runs", "2", "--runs", "3"], "--runs was provided more than once"],
+      [["--wat"], "Unknown argument: --wat"],
+      [["--plugin-count", "101"], "--plugin-count must be at most 100"],
+      [["--session-count", "10001"], "--session-count must be at most 10000"],
+      [["--history-burst", "33"], "--history-burst must be at most 32"],
+      [["--session-updates", "100001"], "--session-updates must be at most 100000"],
+      [["--probe-rounds", "0"], undefined],
+      [["--probe-rounds", "2049"], "--probe-rounds must be at most 2048"],
+      [
+        ["--probe-rounds", "205", "--history-clients", "2", "--history-burst", "5"],
+        "fixed history workload must not exceed 2048 requests per run",
+      ],
+      [["--session-count", "10000", "--history-messages", "500"], "synthetic history"],
+      [
+        ["--session-count", "1000", "--history-messages", "10", "--history-message-chars", "65536"],
+        "synthetic history",
+      ],
+    ] as const) {
+      expect(() => testing.parseOptions([...args])).toThrow(error);
     }
-    expect(() => testing.parseOptions(["--agent-count", "9"])).toThrow(
-      "--agent-count must not exceed the total session count",
-    );
-    expect(
-      testing.parseOptions(["--load-cpu-prof-dir", "/tmp/gateway-load-cpu-profiles"])
-        .loadCpuProfDir,
-    ).toBe("/tmp/gateway-load-cpu-profiles");
-    expect(() => testing.parseOptions(["--turns-per-session", "0"])).toThrow("--turns-per-session");
-    expect(() => testing.parseOptions(["--turns-per-session", "101"])).toThrow(
-      "--turns-per-session must be at most 100",
-    );
-    expect(() => testing.parseOptions(["--runs", "2", "--runs", "3"])).toThrow(
-      "--runs was provided more than once",
-    );
-    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-    expect(() => testing.parseOptions(["--plugin-count", "101"])).toThrow(
-      "--plugin-count must be at most 100",
-    );
-    expect(testing.parseOptions(["--session-count", "10000"]).sessionCount).toBe(10_000);
-    expect(() => testing.parseOptions(["--session-count", "10001"])).toThrow(
-      "--session-count must be at most 10000",
-    );
-    expect(() => testing.parseOptions(["--history-burst", "33"])).toThrow(
-      "--history-burst must be at most 32",
-    );
-    expect(() => testing.parseOptions(["--session-updates", "100001"])).toThrow(
-      "--session-updates must be at most 100000",
-    );
-    expect(testing.parseOptions([]).diagnosticsTimeline).toBe(true);
-    expect(testing.parseOptions([]).probeRounds).toBeUndefined();
-    expect(() => testing.parseOptions(["--probe-rounds", "0"])).toThrow();
-    expect(() => testing.parseOptions(["--probe-rounds", "2049"])).toThrow(
-      "--probe-rounds must be at most 2048",
-    );
-    expect(() =>
-      testing.parseOptions([
-        "--probe-rounds",
-        "205",
-        "--history-clients",
-        "2",
-        "--history-burst",
-        "5",
-      ]),
-    ).toThrow("fixed history workload must not exceed 2048 requests per run");
-    expect(() =>
-      testing.parseOptions(["--session-count", "10000", "--history-messages", "500"]),
-    ).toThrow("synthetic history");
-    expect(() =>
-      testing.parseOptions([
-        "--session-count",
-        "1000",
-        "--history-messages",
-        "10",
-        "--history-message-chars",
-        "65536",
-      ]),
-    ).toThrow("synthetic history");
+    for (const [args, expected] of [
+      [["--agent-count", "128", "--session-count", "1000"], { agentCount: 128 }],
+      [["--session-count", "10000"], { sessionCount: 10_000 }],
+      [
+        ["--load-cpu-prof-dir", "/tmp/gateway-load-cpu-profiles"],
+        { loadCpuProfDir: "/tmp/gateway-load-cpu-profiles" },
+      ],
+    ] as const) {
+      expect(testing.parseOptions([...args])).toMatchObject(expected);
+    }
   });
 
   it.each([

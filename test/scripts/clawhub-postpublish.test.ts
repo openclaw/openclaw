@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { crc32 } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +30,7 @@ import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validatio
 import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
@@ -107,31 +107,7 @@ function sealParent(f: ReturnType<typeof fixture>, conclusion = "success") {
   ]);
 }
 
-function zip(name: string, bytes: Buffer) {
-  const fileName = Buffer.from(name);
-  const local = Buffer.alloc(30);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(20, 4);
-  local.writeUInt32LE(crc32(bytes), 14);
-  local.writeUInt32LE(bytes.length, 18);
-  local.writeUInt32LE(bytes.length, 22);
-  local.writeUInt16LE(fileName.length, 26);
-  const central = Buffer.alloc(46);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(20, 4);
-  central.writeUInt16LE(20, 6);
-  central.writeUInt32LE(crc32(bytes), 16);
-  central.writeUInt32LE(bytes.length, 20);
-  central.writeUInt32LE(bytes.length, 24);
-  central.writeUInt16LE(fileName.length, 28);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
-  end.writeUInt32LE(central.length + fileName.length, 12);
-  end.writeUInt32LE(local.length + fileName.length + bytes.length, 16);
-  return Buffer.concat([local, fileName, bytes, central, fileName, end]);
-}
+const zip = (name: string, bytes: Buffer) => makeStoredZip({ [name]: bytes });
 
 function fixture(
   parentOnMain = false,
