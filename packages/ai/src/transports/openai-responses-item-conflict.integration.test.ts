@@ -73,9 +73,9 @@ it.each([
           argumentDelta(partial.id, " ".repeat(4096)),
         ];
       }
-      // Model a stored item's immutable identity, not a fixed failure count.
+      // Model a rejected saved identity, not a fixed failure count.
       const input = server.requests.at(-1)?.input as Array<Record<string, unknown>>;
-      if (input.some((item) => item.id === call.id && item.arguments !== call.arguments)) {
+      if (input.some((item) => item.call_id === call.call_id)) {
         return mode === "http-error"
           ? { status: 400, body: { error: conflict.response.error } }
           : [
@@ -275,7 +275,6 @@ it.each([
     expect(server.requests[1]?.input).toContainEqual(
       expect.objectContaining({
         type: "function_call",
-        ...(identity === "same" ? { id: call.id } : {}),
         arguments: identity === "same" ? argumentsText : '{"n":"9007199254740993"}',
       }),
     );
@@ -377,7 +376,8 @@ it.each(
         ];
       }
       const input = server.requests.at(-1)?.input as Array<Record<string, unknown>>;
-      if (input.some((item) => item.id === "msg_poisoned")) {
+      // The repair drops the rejected reasoning; stored IDs are no longer replayed.
+      if (input.some((item) => item.encrypted_content === reasoning.encrypted_content)) {
         if (output.endsWith("-snapshot")) {
           return [
             {
@@ -451,5 +451,90 @@ it.each(
     messages.push(failed, userMessage("Continue after the interruption.", 2));
     expect((await respond()).stopReason).toBe("stop");
     expect(server.requests).toHaveLength(3);
+  },
+);
+
+it.each(["sse", "websocket-cached"] as const)(
+  "replays reasoning from an unstored response without a conflicting ID over %s",
+  async (transport) => {
+    const host = getAiTransportHost();
+    configureAiTransportHost({});
+    onTestFinished(() => configureAiTransportHost(host));
+    // Real Responses behavior: stored output may be replayed by ID. Ciphertext from an
+    // unstored response is recorded under its ID by the first stored replay; the next
+    // stored replay then fails after output has streamed.
+    const storedOutput = new Set<string>();
+    const recorded = new Set<string>();
+    const server = await createResponsesLoopbackServer((turn) => {
+      const request = server.requests.at(-1);
+      const input = request?.input;
+      assert(Array.isArray(input));
+      const ids = input.flatMap((item) =>
+        item.encrypted_content && typeof item.id === "string" && !storedOutput.has(item.id)
+          ? [item.id]
+          : [],
+      );
+      // A stored message ID also requires its reasoning ID in the same input.
+      const orphan = input.find(
+        (item) => item.type === "message" && storedOutput.has(String(item.id)),
+      );
+      if (orphan && !input.some((item) => item.id === String(orphan.id).replace("msg_", "rs_"))) {
+        return [{ type: "error", error: { message: "Missing required reasoning item." } }];
+      }
+      const conflicts = request?.store === true && ids.some((id) => recorded.has(id));
+      const thought = { ...reasoning, id: `rs_${turn}` };
+      const text = wireMessage(`msg_${turn}`, "Done.");
+      if (request?.store === true) {
+        ids.forEach((id) => recorded.add(id));
+        storedOutput.add(thought.id).add(text.id);
+      }
+      return [
+        outputItem("added", thought),
+        outputItem("done", thought),
+        outputItem("added", { ...text, content: [] }, 1),
+        {
+          type: "response.output_text.delta",
+          item_id: text.id,
+          output_index: 1,
+          content_index: 0,
+          delta: "Done.",
+        },
+        conflicts ? conflict : completedResponse(`resp_${turn}`, [thought, text]),
+      ];
+    });
+    onTestFinished(() => server.close());
+    const messages: Context["messages"] = [userMessage("Start.")];
+    // A compacted or side request runs with store:false; later turns store again.
+    const respond = async (store: boolean) => {
+      cleanupSessionResources();
+      const options = {
+        apiKey: "synthetic-unstored-key",
+        sessionId: `unstored-reasoning-${transport}`,
+        transport,
+        replayResponsesItemIds: true,
+        onPayload: (payload: unknown) => ({ ...(payload as object), store }),
+      } satisfies Parameters<typeof streamOpenAIResponses>[2];
+      const result = await (
+        await createOpenAIResponsesTransportStreamFn()(
+          responsesLoopbackModel,
+          { messages },
+          options,
+        )
+      ).result();
+      messages.push(result, userMessage("Continue.", messages.length + 1));
+      return result;
+    };
+    await respond(false);
+    for (const _ of [1, 2]) {
+      expect(await respond(true)).toMatchObject({ stopReason: "stop" });
+    }
+    const last = server.requests.at(-1)?.input;
+    assert(Array.isArray(last));
+    const replayed = last.filter((item) => item.type === "reasoning");
+    expect(replayed).toHaveLength(2);
+    for (const item of replayed) {
+      expect(item).toMatchObject({ encrypted_content: reasoning.encrypted_content });
+      expect(item).not.toHaveProperty("id");
+    }
   },
 );

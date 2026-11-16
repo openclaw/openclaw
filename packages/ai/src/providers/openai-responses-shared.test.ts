@@ -312,9 +312,10 @@ describe("convertResponsesMessages", () => {
       };
       const golden = `[${[
         '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
-        '{"id":"rs_prior","type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
-        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","id":"msg_prior","phase":"commentary"}',
-        String.raw`{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
+        // Ciphertext replays without IDs that may name no stored record.
+        '{"type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
+        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","phase":"commentary"}',
+        String.raw`{"type":"function_call","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
         '{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"result"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
       ].join(",")}]`;
       const build = (target = model, options = reasoningReplayIdentity) =>
@@ -517,7 +518,6 @@ describe("convertResponsesMessages", () => {
           expect(item).toEqual(
             preservesCiphertext
               ? {
-                  ...(replayIds ? { id: "rs_route_fenced" } : {}),
                   type: "reasoning",
                   summary,
                   ...(content ? { content } : {}),

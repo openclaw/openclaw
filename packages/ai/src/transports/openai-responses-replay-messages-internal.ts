@@ -440,7 +440,7 @@ function convertResponsesMessagesWithStyle(
       const output = converted;
       let textFallbackId: string | undefined;
       let textFallbackOrdinal = 0;
-      let previousReplayItemWasReasoning = false;
+      let previousReasoningHasId = false;
       let seenReplayableReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
@@ -470,35 +470,33 @@ function convertResponsesMessagesWithStyle(
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,
             );
-            if (!replayItemIds) {
+            // Ciphertext is self-contained. Its ID may name no stored record (store:false or
+            // compacted turns), and a second stored replay then fails with item_conflict.
+            // Provider message and call IDs require the reasoning ID, so they follow it.
+            if (replayableReasoningItem.encrypted_content) {
               delete replayableReasoningItem.id;
-              // Summaries alone cannot verify stateless reasoning and poison
-              // the next cached continuation, even if this request succeeds.
-              if (!replayableReasoningItem.encrypted_content) {
-                continue;
-              }
-            }
-            if (
-              replayItemIds &&
-              !providerStyle &&
-              model.provider === "github-copilot" &&
-              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
+            } else if (
+              // Summaries alone cannot verify stateless reasoning and poison the next cached continuation.
+              !replayItemIds ||
+              (!providerStyle &&
+                model.provider === "github-copilot" &&
+                !isSafeResponsesReplayItemId(replayableReasoningItem.id))
             ) {
               continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
-            previousReplayItemWasReasoning = true;
+            const reasoningId: unknown = replayableReasoningItem.id;
+            previousReasoningHasId = typeof reasoningId === "string";
             seenReplayableReasoning ||=
-              typeof replayableReasoningItem.id === "string" &&
-              replayableReasoningItem.id.startsWith("rs_");
+              typeof reasoningId === "string" && reasoningId.startsWith("rs_");
           }
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
           let msgId: string | undefined;
           if (replayItemIds) {
             if (textSignature?.id) {
-              // Signed text can only replay its ID after reasoning.
-              msgId = previousReplayItemWasReasoning ? textSignature.id : undefined;
+              // Signed text can only replay its ID after its reasoning ID.
+              msgId = previousReasoningHasId ? textSignature.id : undefined;
             } else {
               if (!textFallbackId) {
                 const sourceTurnKey = responsesAssistantTurnKey(msg);
@@ -540,7 +538,7 @@ function convertResponsesMessagesWithStyle(
             phase: textSignature?.phase,
           };
           output.push(messageItem as ResponseInputItem);
-          previousReplayItemWasReasoning = false;
+          previousReasoningHasId = false;
         } else if (block.type === "toolCall") {
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
@@ -563,7 +561,7 @@ function convertResponsesMessagesWithStyle(
               msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
             ),
           });
-          previousReplayItemWasReasoning = false;
+          previousReasoningHasId = false;
         }
       }
       // Completed encrypted reasoning is self-contained, including steered async
