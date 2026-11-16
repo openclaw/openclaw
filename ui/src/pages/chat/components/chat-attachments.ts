@@ -135,6 +135,35 @@ export function appendChatAttachmentFiles(
   return files.length;
 }
 
+// Chromium drops a native paste, after beforeinput and without input, when the
+// system clipboard changes while the paste event runs. Dictation tools such as
+// Wispr Flow restore the previous clipboard right after their Cmd+V, so the
+// event's own snapshot is the only reliable copy of the text. Replacing the
+// original selection again is idempotent when the native insert did land.
+// Accepted edge case: the recovered insert is outside the native undo stack.
+function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
+  const target = e.target;
+  if (!text || !(target instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const { value, selectionStart: start, selectionEnd: end } = target;
+  setTimeout(() => {
+    if (
+      e.defaultPrevented ||
+      target.value !== value ||
+      target.disabled ||
+      target.readOnly ||
+      target.ownerDocument.activeElement !== target
+    ) {
+      return;
+    }
+    target.setRangeText(text, start, end, "end");
+    target.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
+    );
+  }, 0);
+}
+
 export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
   if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
@@ -143,12 +172,14 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
     const hasFiles = Array.from(e.clipboardData.items ?? []).some(
       (item) => item.kind === "file" || item.type.startsWith("image/"),
     );
-    const hasInlineImage = /^data:image\//i.test(e.clipboardData.getData("text/plain").trim());
-    if (hasFiles || hasInlineImage) {
+    const text = e.clipboardData.getData("text/plain");
+    if (hasFiles || /^data:image\//i.test(text.trim())) {
       e.preventDefault();
       showToast({ severity: "error", message: uploadsDisabledMessage() });
+      return;
     }
     // Large text remains ordinary native paste instead of becoming a file.
+    recoverDroppedTextPaste(e, text);
     return;
   }
   const imageFiles = Array.from(e.clipboardData.items ?? [])
@@ -163,6 +194,7 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
   if (imageFiles.length === 0) {
     // Clipboard text is user input regardless of length; file conversion would
     // route it through document extraction's untrusted external-content boundary.
+    recoverDroppedTextPaste(e, text ?? "");
     return;
   }
   e.preventDefault();
