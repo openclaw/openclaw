@@ -604,11 +604,7 @@ export async function authenticateCandidateOwnedArtifact({
   if (!manifest?.sourceAdmission?.qualificationAdmission) {
     return null;
   }
-  if (
-    candidateSha !== qualificationSha ||
-    manifest.targetSha !== candidateSha ||
-    manifest.workflowSha !== qualificationSha
-  ) {
+  if (manifest.targetSha !== candidateSha || manifest.workflowSha !== qualificationSha) {
     throw new Error("Candidate-owned artifact source and qualification SHA differ");
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);

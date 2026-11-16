@@ -15899,7 +15899,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Only the helper creates the immutable",
       "Never raw-dispatch, manually create its ref, or mint",
       "A new explicit main/protected route is diagnostic",
-      "cannot replace this admitted Q=C publish proof",
+      "cannot replace this admitted C/Q/P publish proof",
     ]);
     expectTextToIncludeAll(releaseCi, [
       "Current all-group FRV also owns read-only core and selected-plugin npm",
