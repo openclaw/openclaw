@@ -397,9 +397,40 @@ it.each([
     expected: { ...queued, path: "direct" },
   },
   {
+    name: "positively replay-safe aborted requester",
+    input: { status: "timeout", stopReason: "rpc", replaySafe: true },
+    expected: { delivered: false, reason: "requester_aborted", disposition: "retryable" },
+  },
+  {
+    name: "aborted requester with unknown effects",
+    input: { status: "timeout", result: { payloads: [], meta: { aborted: true } } },
+    expected: { delivered: false, reason: "requester_aborted", disposition: undefined },
+  },
+  {
     name: "explicit stop",
     input: { status: "error", stopReason: "rpc" },
     expected: { delivered: false, disposition: undefined },
+  },
+  {
+    name: "effectful tool before cancellation",
+    input: {
+      status: "timeout",
+      result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
+    },
+    expected: { delivered: false, reason: "requester_aborted", disposition: undefined },
+  },
+  {
+    name: "unconfirmed automatic send before cancellation",
+    input: {
+      status: "timeout",
+      replaySafe: true,
+      result: {
+        payloads: [],
+        meta: { aborted: true },
+        deliveryStatus: { status: "partial_failed", resultCount: 1 },
+      },
+    },
+    expected: { delivered: false, disposition: "ambiguous" },
   },
   {
     name: "partial send failure",

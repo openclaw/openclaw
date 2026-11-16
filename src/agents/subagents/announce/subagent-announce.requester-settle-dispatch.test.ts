@@ -83,6 +83,49 @@ describe("requester settle dispatch deadline", () => {
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
+  it.each([false, true])(
+    "retries proven-safe aborts with a bounded budget (persistent=%s)",
+    async (persistent) => {
+      const context = createContext();
+      const { child, completeBatch, params } = dispatchFixture();
+      useDirectDelivery();
+      const runIds: string[] = [];
+      startTurn.mockImplementation(async (turn) => {
+        acceptTurn(turn);
+        runIds.push(turn.preflight.request.idempotencyKey);
+        if (persistent || runIds.length === 1) {
+          turn.io.emitFinal([
+            true,
+            { status: "timeout", stopReason: "rpc", replaySafe: true },
+            undefined,
+          ]);
+        } else {
+          finishTurn(turn.io, "Recovered child result.");
+        }
+      });
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+      using clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      await expect(run()).resolves.toBe(false);
+      expect(await deliver.mock.results[0]?.value).toMatchObject({
+        delivered: false,
+        reason: "requester_aborted",
+        disposition: "retryable",
+      });
+      expect(completeBatch).not.toHaveBeenCalled();
+      for (const delay of persistent ? [30_000, 120_000] : [30_000]) {
+        expect(child.requesterSettleWake?.nextAttemptAt).toBe(Date.now() + delay);
+        clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
+        await expect(run()).resolves.toBe(!persistent);
+      }
+      expect(runIds).toHaveLength(persistent ? 3 : 2);
+      expect(new Set(runIds).size).toBe(runIds.length);
+      expect(completeBatch).toHaveBeenCalledOnce();
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledTimes(persistent ? 3 : 2);
+    },
+  );
+
   it("does not reserve a foreground-blocking source for a wholly superseded yielded cohort", async () => {
     const context = createContext();
     const { child, completeBatch, params } = dispatchFixture();

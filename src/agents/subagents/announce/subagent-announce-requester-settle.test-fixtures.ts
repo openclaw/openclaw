@@ -127,7 +127,9 @@ export function createRequesterSettleCases() {
           requesterContinuationSettled: settled,
           acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
         },
-        localOnly,
+        aborted
+          ? { ...localOnly, expected: { ...missingRequesterFinal, reason: "requester_aborted" } }
+          : localOnly,
       ),
     ),
     ...["accepted", "in_flight"].map((status) =>
