@@ -53,6 +53,8 @@ const enSystems = {
     closeDetails: "Close details",
     stats: "Show statistics",
     hideStats: "Hide statistics",
+    collapseStats: "Collapse statistics",
+    expandStats: "Expand statistics",
     online: "Online",
     offline: "Offline",
     unknown: "Unknown",

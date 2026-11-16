@@ -14,6 +14,7 @@ import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-l
 import { createPageRequest } from "../../lib/page-request.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   loadSystemsInventory,
   projectSystemsInventory,
@@ -33,6 +34,17 @@ const TELEMETRY_SAMPLE_LIMIT = 120;
 const UNPLACED = JSON.stringify([null, null]);
 
 const PHONE_WIDTH_QUERY = "(max-width: 640px)";
+
+// A browser view preference: the health strip stays as one line once collapsed.
+const HEALTH_COLLAPSED_STORAGE_KEY = "openclaw:systems:health-collapsed";
+
+function readHealthCollapsed(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(HEALTH_COLLAPSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 // Worker lifecycle is only reported by environments.list; a placement change signals it moved.
 function placementFact(payload: unknown): [sessionKey: string, fact: string] | undefined {
@@ -59,6 +71,7 @@ type SystemsState = {
   /** The operator's toggle choice; null until they make one. */
   showStats: boolean | null;
   showDetails: boolean;
+  healthCollapsed: boolean;
   desktopSetupError: string | null;
   backups: BackupStatusResult | null;
   backupsError: string | null;
@@ -77,6 +90,7 @@ export function createSystems(context: ApplicationContext) {
     statusFilter: "all",
     showStats: null,
     showDetails: false,
+    healthCollapsed: readHealthCollapsed(),
     desktopSetupError: null,
     backups: null,
     backupsError: null,
@@ -525,6 +539,15 @@ export function createSystems(context: ApplicationContext) {
       >,
     ): void {
       Object.assign(state, patch);
+      notify();
+    },
+    setHealthCollapsed(collapsed: boolean): void {
+      state.healthCollapsed = collapsed;
+      try {
+        getSafeLocalStorage()?.setItem(HEALTH_COLLAPSED_STORAGE_KEY, String(collapsed));
+      } catch {
+        // Keep the choice for this window when browser storage is unavailable.
+      }
       notify();
     },
     /** A sidebar subscription only redraws; it never starts a second inventory reader. */
