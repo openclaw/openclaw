@@ -84,14 +84,21 @@ it.each([
   },
 );
 
-it("omits empty content and removes collapsed activity when the last waiting child settles", () => {
+it("shows the collapsed working count until the last child settles", () => {
   const { view, setRows, setCollapsed } = mountSubagents([]);
   expect(view.container.childElementCount).toBe(0);
   setCollapsed(true);
   setRows([{ key: "waiting-child", label: "Waiting child", status: "waiting" }]);
   flush();
   expect(view.getByRole("img", { name: "1 subagent running" })).toBeTruthy();
-  expect([view.queryByRole("button"), view.container.textContent]).toEqual([null, ""]);
+  expect([view.queryByRole("button"), view.container.textContent]).toEqual([null, "1 Working"]);
+  setRows([
+    { key: "waiting-child", label: "Waiting child", status: "waiting" },
+    { key: "running-child", label: "Running child", status: "running" },
+    { key: "failed-child", label: "Failed child", status: "failed" },
+  ]);
+  flush();
+  expect(view.getByRole("img", { name: "2 subagents running" }).textContent).toBe("2 Working");
   setRows([{ key: "waiting-child", label: "Waiting child", status: "done" }]);
   flush();
   expect(view.container.childElementCount).toBe(0);

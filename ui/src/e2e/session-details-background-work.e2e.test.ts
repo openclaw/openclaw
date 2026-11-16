@@ -282,6 +282,13 @@ suite.define(() => {
               .getByRole("img", { name: "2 subagents running", exact: true })
               .waitFor();
             expect(await summary.isVisible()).toBe(false);
+            await checkThemes(async () => {
+              await capture(`subagents-collapsed-${width}-${colorScheme}`, details, [heading]);
+            });
+            expect(await heading.getByText("2 Working", { exact: true }).isVisible()).toBe(true);
+            expect(await pane.locator(".chat-working-indicator__subagents").textContent()).toBe(
+              "2 subagents running",
+            );
             await heading.click();
             await summary.waitFor();
             // Desktop Details keeps each stacked subagent's identity tint.
@@ -694,6 +701,13 @@ suite.define(() => {
           await collection.locator(".subagents-desktop__disclosure").getAttribute("aria-expanded"),
         ).toBe("true");
         await expect.poll(() => collection.locator("[data-session-key]").count()).toBe(6);
+        expect(await collection.locator('[data-group="active"][data-session-key]').count()).toBe(2);
+        expect(await collection.locator('[data-group="done"][data-session-key]').count()).toBe(3);
+        expect(
+          await collection
+            .locator('[data-session-key="agent:main:subagent:bench"]')
+            .getAttribute("data-group"),
+        ).toBe("failed");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },
     );
