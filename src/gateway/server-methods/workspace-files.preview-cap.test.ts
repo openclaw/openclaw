@@ -158,4 +158,32 @@ describe("workspace file preview caps", () => {
     expect(binEntry.previewKind).toBe("unsupported");
     expect(binEntry.content).toBeUndefined();
   });
+
+  it("denies the image cap to a .png that actually contains UTF-8 text", async () => {
+    const dir = tempDirs.make("openclaw-workspace-preview-cap-");
+
+    // Over the text cap: the prefix sniff rejects the image cap, so the file
+    // follows the legacy prefix-sniff path: no inline content and no CAS
+    // edit hash (byte-identical to upstream behavior for 300 KiB text).
+    const unit = "晨雪光 事实核对\n";
+    const repeats = Math.ceil((300 * 1024) / Buffer.byteLength(unit, "utf8"));
+    const text = unit.repeat(repeats);
+    const textBytes = Buffer.byteLength(text, "utf8");
+    expect(textBytes).toBeGreaterThan(TEXT_CAP);
+    expect(textBytes).toBeLessThan(IMAGE_CAP);
+    await putFile(dir, "report.png", Buffer.from(text, "utf8"));
+    const file = await getEntry(dir, "report.png");
+    expect(file.size).toBe(textBytes);
+    expect(file.previewKind).toBeUndefined();
+    expect(file.content).toBeUndefined();
+    expect(file.hash).toBeUndefined();
+
+    // Under the text cap: still a normal utf8 text preview with edit hash.
+    const smallText = "png 文件其实是文本\n".repeat(100);
+    await putFile(dir, "tiny.png", Buffer.from(smallText, "utf8"));
+    const small = await getEntry(dir, "tiny.png");
+    expect(small.previewKind).toBe("text");
+    expect(small.content).toBe(smallText);
+    expect(small.hash).toBe(createHash("sha256").update(smallText).digest("hex"));
+  });
 });

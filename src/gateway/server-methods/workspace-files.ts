@@ -230,11 +230,24 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  // Images may be inlined up to the image preview cap; everything else stays
-  // under the generic text preview cap.
-  const previewCap = IMAGE_PREVIEW_EXTENSIONS.has(path.extname(browserPath).toLowerCase())
-    ? WORKSPACE_IMAGE_PREVIEW_MAX_BYTES
-    : WORKSPACE_PREVIEW_MAX_BYTES;
+  // Images may be inlined up to the image preview cap, but only when the
+  // content is verified as a browser-safe image (MIME sniff on the prefix,
+  // not the extension alone); image-named non-images keep the generic text
+  // preview cap, so oversized text stays content-free without an edit hash.
+  const extIsImage = IMAGE_PREVIEW_EXTENSIONS.has(path.extname(browserPath).toLowerCase());
+  let previewCap = WORKSPACE_PREVIEW_MAX_BYTES;
+  if (extIsImage) {
+    const sniff = await readWorkspaceFilePrefix(readRoot, browserPath, MIME_SNIFF_PREFIX_BYTES);
+    if (sniff === "unsupported") {
+      // Remote bridges cannot prefix-sniff; keep the extension-based cap.
+      previewCap = WORKSPACE_IMAGE_PREVIEW_MAX_BYTES;
+    } else if (sniff) {
+      const sniffMime = await detectMime({ buffer: sniff.buffer });
+      if (sniffMime && BROWSER_IMAGE_MIME_TYPES.has(sniffMime)) {
+        previewCap = WORKSPACE_IMAGE_PREVIEW_MAX_BYTES;
+      }
+    }
+  }
   const inline = stat.size <= previewCap;
   const read = inline
     ? await readWorkspaceFile(readRoot, browserPath, {
