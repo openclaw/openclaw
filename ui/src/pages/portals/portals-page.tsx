@@ -555,29 +555,35 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
               <PortalReadiness model={props.model} readReady={readReady}>
                 <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
                   <section class={sidebarLists() ? "portals-opened" : "portals-layout"}>
-                    <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>
-                      <For each={state().portals} keyed={(portal) => portal.id}>
-                        {(portal) => (
-                          <button
-                            class={[
-                              "portals-rail__item",
-                              { active: portal().id === selectedPortal()!.id },
-                            ]}
-                            type="button"
-                            aria-current={portal().id === selectedPortal()!.id ? "true" : undefined}
-                            onClick={() => props.model.selectPortal(portal())}
-                          >
-                            <span class="portals-rail__title">{portal().title}</span>
-                            <span class="portals-rail__port">
-                              {t("portalsPage.portLabel", { port: String(portal().port) })}
-                            </span>
-                            <Show when={portal().description}>
-                              <span class="portals-rail__description">{portal().description}</span>
-                            </Show>
-                          </button>
-                        )}
-                      </For>
-                    </aside>
+                    <Show when={!sidebarLists()}>
+                      <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>
+                        <For each={state().portals} keyed={(portal) => portal.id}>
+                          {(portal) => (
+                            <button
+                              class={[
+                                "portals-rail__item",
+                                { active: portal().id === selectedPortal()!.id },
+                              ]}
+                              type="button"
+                              aria-current={
+                                portal().id === selectedPortal()!.id ? "true" : undefined
+                              }
+                              onClick={() => props.model.selectPortal(portal())}
+                            >
+                              <span class="portals-rail__title">{portal().title}</span>
+                              <span class="portals-rail__port">
+                                {t("portalsPage.portLabel", { port: String(portal().port) })}
+                              </span>
+                              <Show when={portal().description}>
+                                <span class="portals-rail__description">
+                                  {portal().description}
+                                </span>
+                              </Show>
+                            </button>
+                          )}
+                        </For>
+                      </aside>
+                    </Show>
                     <PortalPreview
                       model={props.model}
                       portal={selectedPortal()!}

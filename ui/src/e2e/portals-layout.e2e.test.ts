@@ -44,14 +44,21 @@ suite.define(() => {
           methodResponses: { "portal.list": { portals: [portal] } },
         });
         await page.goto(`${suite.server.baseUrl}portals`);
-        await page.locator(".portals-rail").waitFor();
+        // Beside the Portals sidebar the page is the open portal; on a phone it keeps its list.
+        const narrow = kind === "narrow";
+        if (!narrow) {
+          await expect
+            .poll(() => page.locator(".sidebar-portals__row").allTextContents())
+            .toEqual(["Seeded appPort 3000"]);
+        }
         await page.locator(".portals-preview__frame").waitFor();
-        const geometry = await page.locator(".portals-layout").evaluate((layout) => {
+        const layoutSelector = narrow ? ".portals-layout" : ".portals-opened";
+        const geometry = await page.locator(layoutSelector).evaluate((layout, listed) => {
           const content = layout.closest("main.content");
           const preview = layout.querySelector(".portals-preview");
           const frame = layout.querySelector(".portals-preview__frame");
           const rail = layout.querySelector(".portals-rail");
-          if (!content || !preview || !frame || !rail) {
+          if (!content || !preview || !frame || Boolean(rail) !== listed) {
             throw new DOMException("Incomplete Portal layout", "DataError");
           }
           const box = (element: Element) => {
@@ -69,9 +76,9 @@ suite.define(() => {
             layout: box(layout),
             preview: box(preview),
             frame: box(frame),
-            rail: box(rail),
+            rail: rail ? box(rail) : null,
           };
-        });
+        }, narrow);
         const { layout, preview, frame, rail } = geometry;
         if (kind === "tall") {
           expect(layout.height).toBeGreaterThan(720);
@@ -80,7 +87,9 @@ suite.define(() => {
             geometry.contentClientHeight + 1,
           );
           expect(frame.height).toBeGreaterThan(720);
-          expect(Math.abs(frame.bottom - preview.bottom)).toBeLessThanOrEqual(2);
+          // The frame sits inset inside the preview card.
+          expect(preview.bottom - frame.bottom).toBeGreaterThanOrEqual(0);
+          expect(preview.bottom - frame.bottom).toBeLessThanOrEqual(10);
         } else if (kind === "short") {
           expect(frame.height).toBeGreaterThanOrEqual(480);
           expect(frame.bottom).toBeLessThanOrEqual(preview.bottom + 2);
@@ -88,7 +97,7 @@ suite.define(() => {
           expect(geometry.contentScrollHeight).toBeGreaterThan(geometry.contentClientHeight);
         } else {
           expect(geometry.gridTemplateColumns.split(" ")).toHaveLength(1);
-          expect(rail.bottom).toBeLessThanOrEqual(preview.top);
+          expect(rail!.bottom).toBeLessThanOrEqual(preview.top);
           expect(preview.height).toBeGreaterThanOrEqual(560);
           expect(preview.right).toBeLessThanOrEqual(geometry.contentInnerRight + 1);
         }
