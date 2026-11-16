@@ -1,5 +1,6 @@
 // Response shapes of the OpenClaw ID Gateway methods (openclawId.*) the Control UI reads.
 import type {
+  MemberDeviceApprover,
   MemberRole,
   SignedStatement,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
@@ -82,7 +83,13 @@ type OpenClawIdConnection =
 /** Owner-only link state (`openclawId.people` result `link`). */
 export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
-  members?: { accountId: string; displayName: string | null; email: string | null }[];
+  /** Current member-device admission provenance, returned only to an owner. */
+  members?: Array<{
+    accountId: string;
+    displayName: string | null;
+    email: string | null;
+    devices?: Array<{ peerKey: string; approvedBy: MemberDeviceApprover | null }>;
+  }>;
   /** Accepted member recovery-kit uses, retained after member or browser removal. */
   recoveryUses?: OpenClawIdRecoveryUse[];
   /** Active owner devices only; removed and expired ones are not listed. */

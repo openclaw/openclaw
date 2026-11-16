@@ -768,7 +768,7 @@ describe("Access page", () => {
     expect(history()?.querySelector("a")).toBeNull();
   });
 
-  it("opens the exact recovery member and browser, reuses confirmed removal, and updates retained routes", async () => {
+  it("sorts the requested recovery browser first and follows route changes without remounting", async () => {
     const deviceFp = `fp:${"1".repeat(64)}` as const;
     const device = {
       peerKey: recoveryUse.peerKey,
@@ -799,15 +799,7 @@ describe("Access page", () => {
       devices: [],
     };
     const harness = await mountPage(
-      [
-        linked({ invites: [], members: [other, member], recoveryUses: [recoveryUse] }),
-        linked({
-          invites: [],
-          members: [other, { ...member, peerKeys: [], devices: [] }],
-          recoveryUses: [recoveryUse],
-        }),
-        linked({ invites: [], members: [other], recoveryUses: [recoveryUse] }),
-      ],
+      [linked({ invites: [], members: [other, member], recoveryUses: [recoveryUse] })],
       {},
       { member: member.accountId, device: device.peerKey },
     );
@@ -817,40 +809,9 @@ describe("Access page", () => {
     );
     expect(row().textContent).toContain(member.displayName);
     expect(row().textContent).not.toContain(other.displayName);
-    const history = () =>
-      harness.container.querySelector('[aria-labelledby="ocid-access-recovery-uses"]')!;
-    expect(history().querySelector("a")?.textContent).toBe("Review browser");
     const highlighted = row().querySelector<HTMLElement>(".ocid-access__device--highlighted")!;
     expect(highlighted.textContent).toContain(device.label);
     expect(row().querySelector(".ocid-access__device")).toBe(highlighted);
-    button(highlighted, "Remove device")!.click();
-    await vi.waitFor(() => expect(button(highlighted, `Remove ${device.label}`)).toBeDefined());
-    expect(harness.request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
-    button(highlighted, `Remove ${device.label}`)!.click();
-    await vi.waitFor(() =>
-      expect(harness.request).toHaveBeenCalledWith("openclawId.authority", {
-        action: "submit",
-        statement: { signed: { op: "revoke_device", peer_key: device.peerKey } },
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(row().textContent).toContain(
-        "This browser has been removed. It no longer has access.",
-      ),
-    );
-    expect(harness.container.textContent).toContain(`${device.label} removed`);
-    expect(row().querySelector(".ocid-access__device--highlighted")).toBeNull();
-    expect(history().textContent).toContain(`Browser added: ${device.label}`);
-    expect(history().querySelector("a")).toBeNull();
-    harness.emit();
-    await vi.waitFor(() =>
-      expect(harness.container.textContent).toContain(
-        "This member has been removed. Their devices no longer have access.",
-      ),
-    );
-    expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(0);
-    expect(history().textContent).toContain(`Browser added: ${device.label}`);
-    expect(history().querySelector("a")).toBeNull();
     harness.update({ member: other.accountId });
     await vi.waitFor(() => expect(row().textContent).toContain(other.displayName));
     harness.update({});

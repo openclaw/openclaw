@@ -321,7 +321,7 @@ suite.define(() => {
         expect((await gateway.getRequests("openclawId.authority")).length).toBe(1);
         // Sign in this synthetic owner after the history flow. The production lifetime reads
         // the browser key, binds its mailbox, then renders notices through the real toast host.
-        const mailLink = { ...ownerLink, seq: 11, members: [], recoveryUses: [use] };
+        const mailLink = { ...ownerLink, seq: 12, recoveryUses: [use] };
         await page.evaluate(() => {
           const key = "openclaw.openclawId.account";
           localStorage.setItem(
@@ -335,14 +335,20 @@ suite.define(() => {
           window.dispatchEvent(new StorageEvent("storage", { key }));
         });
         try {
-          for (const recovery of [false, true]) {
+          for (const recovery of [true, false]) {
+            // Re-admit the same keys ordinarily while preserving their recovery history.
+            for (const member of mailLink.members) {
+              for (const device of member.devices) {
+                device.approvedBy.kind = recovery ? "member_recovery_kit" : "member_device";
+              }
+            }
             await expect.poll(() => Boolean(receiveMail)).toBe(true);
             const receive = receiveMail!;
             receiveMail = undefined;
             receive({
               status: 200,
               body: JSON.stringify({
-                cursor: recovery ? "2" : "1",
+                cursor: recovery ? "1" : "2",
                 messages: [
                   {
                     message_id: recovery ? "recovery-notice" : "ordinary-notice",
@@ -354,7 +360,7 @@ suite.define(() => {
                     payload: {
                       kind: "notice",
                       event: "member_device_added",
-                      ref: recovery ? use.peerFp : `fp:${"2".repeat(64)}`,
+                      ref: use.peerFp,
                     },
                   },
                 ],

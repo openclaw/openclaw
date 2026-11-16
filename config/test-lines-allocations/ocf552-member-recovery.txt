@@ -1,5 +1,13 @@
-# Recovery-only authority and key separation require distinct negative protocol cases.
-# Gateway mailbox persistence/replay/removal tests prove the production commit boundary.
-# Owner-only history, immutable Inbox dismissal and light/dark browser coverage prove
-# the separately required notice path; these cannot share the loader's mocked SW tests.
-472
+# +1254 net test lines after removing 39 lines of duplicated page removal/history proof.
+# 379 protocol: artifact/key separation and recovery-only authority, replay, replacement,
+#     removal/reinvite and pending-invite collision negatives at the signed boundary.
+# 216 Gateway: malformed mail, commit failure, reload/replay, owner-only persisted history,
+#     member provenance and tunnel principal decoding at the production storage boundary.
+# 127 People page/support (net): literal safe history, non-owner access and retained route
+#     updates/browser ordering. Confirmed removal/history transitions live in browser E2E.
+# 413 browser: source core + plugin Inbox deep link, owner-key signing, confirmed removal,
+#     retained history, same-key admission toast and required light/dark mobile/desktop proof.
+# 119 core UI: owner-only Inbox/dismissal persistence and current-admission notice provenance.
+# The browser composition covers native routing/key/mailbox/toast lifetimes that isolated
+# page or protocol tests cannot. 400 default lines + 854 allocation = 1254 total.
+854

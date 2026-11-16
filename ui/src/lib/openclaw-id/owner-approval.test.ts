@@ -20,7 +20,7 @@ import {
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createOwnerApproval, type OwnerApproval } from "./owner-approval.ts";
-import type { OpenClawIdRecoveryUse } from "./types.ts";
+import type { OpenClawIdPeopleLink, OpenClawIdRecoveryUse } from "./types.ts";
 
 const held = vi.hoisted(() => ({ d: undefined as unknown, w: undefined as unknown }));
 // mock-isolation: the signed-in account and device key come from fixtures instead of browser storage.
@@ -150,7 +150,7 @@ async function setup(
   const operations: string[] = [];
   let submitted: SignedStatement<"MembershipChange"> | undefined;
   let handoff: unknown;
-  let members =
+  let members: NonNullable<OpenClawIdPeopleLink["members"]> =
     invalid === "member"
       ? []
       : [{ accountId: "alice", displayName: "Alice", email: "alice@example.test" }];
@@ -287,6 +287,7 @@ async function setup(
       return next.request_id;
     },
     recoveryUses,
+    members,
     notice: (
       ref: string,
       event: "kit_used" | "member_device_added" = "kit_used",
@@ -480,26 +481,48 @@ describe("local original-D SAS approval", () => {
     expect(f.operations).toEqual(["accept"]);
     expect(owner.read().requests).toHaveLength(1);
   });
-  it("identifies a member's kit use only from the Gateway record matching the notice fingerprint", async () => {
-    const f = await setup();
-    const use: OpenClawIdRecoveryUse = {
-      seq: 9,
-      accountId: "member-mira",
-      memberName: "Mira Example",
-      deviceLabel: "Firefox on Linux",
-      peerKey: `iroh:${"12".repeat(32)}`,
-      peerFp: "fp:recovered-peer",
-      usedAt: 1_800_000_000,
-    };
-    f.recoveryUses.push({ ...use, peerFp: "fp:another-peer" }, use);
-    f.notice("fp:ordinary-peer", "member_device_added");
-    f.notice(use.peerFp, "member_device_added");
-    await vi.waitFor(() => expect(f.memberDeviceAdded).toHaveBeenCalledTimes(2));
-    expect(f.memberDeviceAdded).toHaveBeenNthCalledWith(1, undefined);
-    expect(f.memberDeviceAdded).toHaveBeenNthCalledWith(2, use);
-    expect(f.kitUsed).not.toHaveBeenCalled();
-    expect(f.operations).toEqual(["accept"]);
-  });
+  it.each(["member_recovery_kit", "invite", "member_device", "revoked", "removed"] as const)(
+    "classifies reused peer keys by current admission, not retained kit history: %s",
+    async (admission) => {
+      const f = await setup();
+      const use: OpenClawIdRecoveryUse = {
+        seq: 9,
+        accountId: "member-mira",
+        memberName: "Mira Example",
+        deviceLabel: "Current browser",
+        peerKey: `iroh:${"12".repeat(32)}`,
+        peerFp: "fp:recovered-peer",
+        usedAt: 1_800_000_000,
+      };
+      f.recoveryUses.push({ ...use, seq: 3, deviceLabel: "Former browser" }, use);
+      if (admission !== "removed") {
+        f.members.push({
+          accountId: use.accountId,
+          displayName: use.memberName,
+          email: null,
+          devices:
+            admission === "revoked"
+              ? []
+              : [
+                  {
+                    peerKey: use.peerKey,
+                    approvedBy:
+                      admission === "invite"
+                        ? { kind: admission, invite_id: "new-invite" }
+                        : { kind: admission, device_fp: `fp:${"34".repeat(32)}` },
+                  },
+                ],
+        });
+      }
+      f.notice(use.peerFp, "member_device_added");
+      await vi.waitFor(() => expect(f.memberDeviceAdded).toHaveBeenCalledTimes(1));
+      expect(f.memberDeviceAdded).toHaveBeenCalledWith(
+        admission === "member_recovery_kit" ? use : undefined,
+      );
+      expect(f.kitUsed).not.toHaveBeenCalled();
+      expect(f.operations).toEqual(["accept"]);
+    },
+  );
   it("approves a browser without a node", async () => {
     const f = await setup();
     expect(owner.read().requests[0]?.tools).toBeUndefined();
