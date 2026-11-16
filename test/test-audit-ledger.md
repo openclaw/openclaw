@@ -1004,6 +1004,21 @@ observations, not speed-comparison data. Independent preservation and full local
 ClawSweeper review found no actionable issue. This closes the earlier channel
 and model fixture environment-restoration follow-up.
 
+### Startup fixture cleanup custody
+
+At `5dc8071931853986c9a924c2e99996b8b5753a71`, the startup metadata and
+command-timing fixtures empty their directory trackers before removal succeeds.
+A failed removal leaves the root untracked and unavailable to a later cleanup
+attempt. Delegate both hooks to the existing shared cleanup owner. Keep the
+timing fixture's synchronous timeline flush immediately before removal.
+All four declarations / four expanded cases remain; production and shared
+helper code are unchanged.
+
+Direct execution of both original hooks with an injected removal failure
+preserves the error but loses the failed directory from its tracker. A second
+cleanup makes no removal attempt. Runtime fault/retry probes and clean consumer
+qualification are pending in the native PR workspace.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
