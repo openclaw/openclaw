@@ -965,8 +965,19 @@ support changes by +2/-3 lines; production and shared helper code are unchanged.
 Direct execution of the baseline cleanup body with an injected removal failure
 leaves the failed directory present and untracked after both cleanup attempts.
 The other directory is removed and the exact error and exit code are preserved.
-Observations precede emergency cleanup. Full consumer and fault-path Vitest
-qualification remain pending.
+The same fault in an existing Vitest consumer case confirms that the candidate
+retains the failed path and removes it on the second cleanup call. Both versions
+remove the healthy workspace and restore the temporary home, environment, cwd
+and exit code. Observations precede emergency cleanup; temporary instrumentation
+was restored byte for byte.
+
+All five consumer suites pass on both versions: 56 cases pass and the one
+Windows-only case is skipped on macOS. Baseline wall time was 106.39 seconds;
+the candidate took 138.65 seconds (121.87 seconds reported by Vitest). These are
+qualification observations, not speed-comparison data. The unchanged shared
+helper passes 11 cases with its Windows-only case skipped. Independent
+preservation and full local ClawSweeper review found no actionable issue.
+This closes the earlier MCP temporary-directory removal follow-up.
 
 ## Pending qualification and proof repairs
 
