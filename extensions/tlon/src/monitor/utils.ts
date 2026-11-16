@@ -66,9 +66,6 @@ export function isBotMentioned(
 
   if (nickname) {
     const escapedNickname = escapeRegExp(nickname);
-    // Keep nickname boundaries aligned with the ship pattern above so bold,
-    // italic and strike markers (*, **, ~) and trailing ; : don't drop a real
-    // mention — the ship branch already accepts them after #197037.
     const nicknamePattern = new RegExp(`(^|[\\s*~])${escapedNickname}(?=$|[\\s*~,.!?;:])`, "i");
     if (nicknamePattern.test(messageText)) {
       return true;
