@@ -5,6 +5,7 @@ import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { resolveFilesystemPath } from "../infra/home-dir.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { digestTemplateBytes } from "./digest.js";
 import { readTemplateOpenClawProfile } from "./openclaw-profile.js";
@@ -240,7 +241,12 @@ async function resolveSource(
 ): Promise<
   { ok: true; source: ResolvedTemplateSource } | { ok: false; diagnostics: TemplateDiagnostic[] }
 > {
-  const inputPath = resolve(path);
+  let inputPath: string;
+  try {
+    inputPath = resolveFilesystemPath(path);
+  } catch {
+    return fileFailure("read_failed", `Could not resolve Template source ${path}.`);
+  }
   const inputStat = await stat(inputPath).catch(() => undefined);
   if (!inputStat) {
     return fileFailure("read_failed", `Could not resolve Template source ${inputPath}.`);

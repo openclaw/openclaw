@@ -9,6 +9,7 @@ import type { inspectLocalAudioSelection } from "../media-understanding/local-au
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import { registerMediaPathCapabilityCliTests } from "./capability-cli.media-paths.test-support.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -522,6 +523,7 @@ describe("capability cli", () => {
   const firstPreparedModelParams = () =>
     callArg<Record<string, unknown>>(mocks.acquireSimpleCompletionModelForAgent);
   const firstJsonOutput = () => callArg<Record<string, unknown>>(mocks.runtime.writeJson);
+  registerMediaPathCapabilityCliTests({ mocks, tempDirs, firstJsonOutput });
   const imageDescribeCall = (index = 0) =>
     callArg<ImageDescribeParams>(mocks.describeImageFile, index);
   const firstImagePrepareCall = () =>

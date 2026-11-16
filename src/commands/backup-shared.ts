@@ -24,7 +24,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveFilesystemPath } from "../infra/home-dir.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
@@ -119,7 +119,13 @@ export function resolveBackupArchivePath(
   if (!value?.trim()) {
     throw new Error(`Missing required ${label} value.`);
   }
-  return path.resolve(expandHomePrefix(value));
+  try {
+    return resolveFilesystemPath(expandHomePrefix(value));
+  } catch (error) {
+    throw new Error(terminalText`Could not resolve ${label}: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
 }
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";

@@ -132,6 +132,25 @@ describe("backupRestoreCommand", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "restores where a symlinked target folder's `..` leads, not to the lexical neighbor",
+    async () => {
+      await withState(async (state) => {
+        await fs.mkdir(state.path("physical", "nested"), { recursive: true });
+        await fs.symlink(state.path("physical", "nested"), state.path("target-link"));
+        await writeArchive({ archivePath: state.path("backup.tar.gz") });
+        const result = await backupRestoreCommand(createTestRuntime(), {
+          archive: state.path("backup.tar.gz"),
+          target: `${state.path("target-link")}/../restored`,
+        });
+        const restored = path.join(await fs.realpath(state.path("physical")), "restored");
+        expect(result.targetPath).toBe(restored);
+        expect(await fs.readFile(path.join(restored, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+        await expect(fs.stat(state.path("restored"))).rejects.toThrow();
+      });
+    },
+  );
+
   it("selects a captured config payload from a legacy relative alias without following live paths", async () => {
     await withState(async (state) => {
       const archiveRoot = "backup";

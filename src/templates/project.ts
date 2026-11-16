@@ -4,6 +4,7 @@ import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { resolveFilesystemPath } from "../infra/home-dir.js";
 import { templateContainedRelativePath } from "./path-containment.js";
 import { readTemplateManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableTemplatePathKey } from "./schema-portability.js";
@@ -109,7 +110,7 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
 }
 
 async function discoverTemplateProjectRoot(projectPath: string): Promise<string> {
-  const input = resolve(projectPath);
+  const input = resolveFilesystemPath(projectPath);
   const inputStat = await lstat(input).catch(() => undefined);
   if (!inputStat) {
     throw new TemplateProjectError(
@@ -162,7 +163,7 @@ export async function createTemplateProject(
   projectPath: string,
   options: { name?: string; agentId?: string } = {},
 ): Promise<{ root: string; packageJson: TemplateProjectPackageJson; filesWritten: string[] }> {
-  const root = resolve(projectPath);
+  const root = resolveFilesystemPath(projectPath);
   const initialState = await pathState(root);
   if (initialState === "occupied") {
     throw new TemplateProjectError(
@@ -227,6 +228,7 @@ export async function createTemplateProject(
 export async function validateTemplateProject(
   projectPath: string,
 ): Promise<TemplateProjectValidationResult> {
+  // Discovery resolves the path for I/O; this spelling only labels its failures.
   let root = resolve(projectPath);
   const failure = (
     code: string,

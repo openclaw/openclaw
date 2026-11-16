@@ -1,8 +1,9 @@
 import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { resolveFilesystemPath } from "../infra/home-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { digestTemplateBytes } from "./digest.js";
 import {
@@ -49,7 +50,7 @@ export async function extractBuiltTemplateArtifact(
     prefix: "openclaw-template-artifact-",
   });
   try {
-    await tar.x({ cwd: workspace.dir, file: resolve(artifact), strict: true });
+    await tar.x({ cwd: workspace.dir, file: resolveFilesystemPath(artifact), strict: true });
     const packageRoot = workspace.path("package");
     const packageStat = await lstat(packageRoot);
     if (!packageStat.isDirectory()) {
@@ -74,7 +75,7 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
     );
   }
 
-  const artifact = resolve(outputPath);
+  const artifact = resolveFilesystemPath(outputPath);
   if (!artifact.toLowerCase().endsWith(".tgz")) {
     throw new TemplateProjectError(
       "invalid_artifact_path",

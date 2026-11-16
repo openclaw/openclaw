@@ -367,6 +367,10 @@ Focus on model runs, image generation, video generation, audio transcription, TT
 
 A good infer-based skill maps common user intents to the right subcommand, includes a few standard examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
 
+On POSIX systems, `--file` and `--output` paths follow directory symlinks
+before resolving `..`, matching filesystem path resolution. Final-file symlinks
+remain subject to the existing media-directory checks.
+
 ## Related
 
 - [CLI reference](/cli)

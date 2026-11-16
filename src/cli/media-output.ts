@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { resolveFilesystemPath } from "../infra/home-dir.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
@@ -26,7 +27,7 @@ export async function writeOutputAsset(params: {
     return { path: saved.path, mimeType: saved.contentType, size: saved.size };
   }
 
-  const resolvedOutput = path.resolve(params.outputPath);
+  const resolvedOutput = resolveFilesystemPath(params.outputPath);
   const parsed = path.parse(resolvedOutput);
   const detectedMime =
     (await detectMime({
@@ -62,9 +63,9 @@ export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
   return await Promise.all(
-    files.map(async (filePath) => ({
-      path: path.resolve(filePath),
-      buffer: await fs.readFile(path.resolve(filePath)),
-    })),
+    files.map(async (filePath) => {
+      const resolvedPath = resolveFilesystemPath(filePath);
+      return { path: resolvedPath, buffer: await fs.readFile(resolvedPath) };
+    }),
   );
 }

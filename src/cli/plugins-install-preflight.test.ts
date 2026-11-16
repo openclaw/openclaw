@@ -1,5 +1,10 @@
 // Invalid plugin install requests must fail before persistent state or source execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import * as fixture from "./plugins-cli-test-helpers.js";
 
 const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
@@ -12,6 +17,8 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
   withPluginLifecycleLeaseAsync: withPluginLifecycleLeaseMock,
   hasPluginLifecycleLease: () => false,
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const install = (...args: string[]) =>
   fixture.runPluginsCommand(["plugins", "install", ...args, "--force"]);
@@ -47,6 +54,61 @@ describe("plugin install mutation-free preflight", () => {
           await run({ assertOwned: vi.fn(), assertCurrent: vi.fn() }),
       );
   });
+
+  it.skipIf(process.platform === "win32").each([
+    { flags: [], mode: {} },
+    // A linked install validates in place and records this same path in plugins.load.paths.
+    { flags: ["--link"], mode: { dryRun: true } },
+  ])(
+    "installs the plugin a symlinked parent's `..` leads to, keeping its final link $flags",
+    async ({ flags, mode }: { flags: string[]; mode: { dryRun?: boolean } }) => {
+      const root = fs.realpathSync(tempDirs.make("plugin-symlink-parent-"));
+      fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
+      fs.mkdirSync(path.join(root, "physical", "plugin-real"));
+      fs.symlinkSync("plugin-real", path.join(root, "physical", "plugin-b"));
+      fs.mkdirSync(path.join(root, "plugin-b"));
+      fs.symlinkSync(path.join(root, "physical", "nested"), path.join(root, "selected"));
+
+      await expect(install(`${root}/selected/../plugin-b`, ...flags)).rejects.toThrow("__exit__:1");
+      expect(fixture.installPluginFromPathMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: path.join(root, "physical", "plugin-b"), ...mode }),
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "names the typed path when a folder before `..` is missing",
+    async () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-missing-parent-"));
+      fs.mkdirSync(path.join(root, "plugin-b"));
+      await expectRejected(
+        [`${root}/missing/../plugin-b`],
+        `Plugin path not found: ${root}/missing/../plugin-b (ENOENT`,
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "plans the local Git repository a symlinked parent's `..` leads to",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-git-symlink-parent-"));
+      fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
+      fs.mkdirSync(path.join(root, "physical", "repo"));
+      fs.mkdirSync(path.join(root, "repo"));
+      fs.symlinkSync(path.join(root, "physical", "nested"), path.join(root, "selected"));
+      // Local Git sources must be relative (`./`, `../` or `~/`).
+      const selected = path.relative(process.cwd(), path.join(root, "selected"));
+
+      expect(
+        resolvePluginInstallSourcePlan({ raw: `git:${selected}/../repo`, mode: "install" }),
+      ).toMatchObject({
+        request: {
+          source: "git",
+          spec: `git:${pathToFileURL(path.join(root, "physical", "repo")).href}`,
+        },
+      });
+    },
+  );
 
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {
     fixture.resolveMarketplaceInstallShortcutMock.mockResolvedValue({
