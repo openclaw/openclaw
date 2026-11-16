@@ -114,28 +114,42 @@ it("still requires credentials for a remote without edgeAuth", async () => {
 });
 
 it.each([
-  [false, /Run `openclaw tui` once to pair this device/],
-  [true, /^missing scope: operator\.read$/],
-])("names the TUI for an unpaired edgeAuth device (identity %s)", async (hasIdentity, message) => {
-  // The proxy admits a device with no identity, but with no scopes.
-  state.config = {
-    gateway: {
-      mode: "remote",
-      remote: { url: "wss://gateway.example", edgeAuth: { "Cf-Access-Token": "access-token" } },
-    },
-  };
-  state.hasIdentity = hasIdentity;
-  state.requestError = new GatewayClientRequestError({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.read",
-    details: {
-      code: "MISSING_SCOPE",
-      missingScope: "operator.read",
-      requiredScopes: ["operator.read"],
-    },
-  });
+  ["remote", undefined, false, /Run `openclaw tui` once to pair this device/],
+  // Bare `openclaw tui` would select the local Gateway, not the one that refused.
+  [
+    "local",
+    "wss://gateway.example",
+    false,
+    /Run `openclaw tui --url wss:\/\/gateway\.example` once to pair this device/,
+  ],
+  ["remote", undefined, true, /^missing scope: operator\.read$/],
+] as const)(
+  "names the TUI for an unpaired edgeAuth device (mode %s, url %s, identity %s)",
+  async (mode, url, hasIdentity, message) => {
+    // The proxy admits a device with no identity, but with no scopes.
+    state.config = {
+      gateway: {
+        mode,
+        remote: { url: "wss://gateway.example", edgeAuth: { "Cf-Access-Token": "access-token" } },
+      },
+    };
+    state.hasIdentity = hasIdentity;
+    state.requestError = new GatewayClientRequestError({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
 
-  await expect(
-    callGatewayCli({ method: "sessions.list", sharedStateMode: "read-only" }),
-  ).rejects.toThrow(message);
-});
+    await expect(
+      callGatewayCli({
+        method: "sessions.list",
+        sharedStateMode: "read-only",
+        ...(url ? { url } : {}),
+      }),
+    ).rejects.toThrow(message);
+  },
+);

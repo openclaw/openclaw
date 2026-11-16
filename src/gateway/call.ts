@@ -766,7 +766,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (settled || dispatchGeneration !== connectionGeneration) {
               return;
             }
-            stop(withEdgeAuthPairingHint(err as Error, edgeAuthHeaders, deviceIdentity));
+            stop(withEdgeAuthPairingHint(err as Error, edgeAuthHeaders, deviceIdentity, opts.url));
           }
         })();
       },
