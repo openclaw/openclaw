@@ -32,6 +32,7 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
+packages/gateway-protocol/src/clawhub-trust-error-details.ts
 packages/gateway-protocol/src/compiled/protocol.generated/predicates.js
 packages/gateway-protocol/src/compiled/protocol.generated/schema-presence.js
 packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-approval.js
@@ -496,6 +497,7 @@ src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
 src/agents/worktrees/run-lease.ts
 src/agents/worktrees/service-preparation.ts
+src/agents/worktrees/storage-root.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
@@ -1418,6 +1420,7 @@ src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-config.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
+src/infra/update-doctor-migration-context.ts
 src/infra/update-doctor-result.ts
 src/infra/update-doctor-scan-receipts.ts
 src/infra/update-failure-facts-format.ts
@@ -1757,6 +1760,7 @@ src/plugins/plugin-generation-metrics.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-reference-capture.ts
 src/plugins/plugin-generation-source-lookup.ts
+src/plugins/plugin-generation-steps.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-background.ts
 src/plugins/legacy-sdk-resource-host.ts
@@ -1836,6 +1840,7 @@ src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-capture-state.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-snapshot.types.ts
@@ -2685,6 +2690,7 @@ src/agents/live-model-errors.ts
 src/agents/sandbox-host.ts
 src/agents/sandbox-widget-scroll-bridge.ts
 src/agents/sessions/session-manager-append-codec.ts
+src/agents/sessions/tools/tool-contracts.ts
 src/agents/tools/chat-history-text.ts
 src/agents/usage.ts
 src/auto-reply/reply/history.ts

@@ -1,0 +1,3 @@
+# Shared evidence validator: authenticated recovery/consumer regressions and real retained-archive fixture.
+# Reuses that fixture in the existing recovery suite; preserves seal ordering, byte integrity, adoption, authority and publication-inventory checks.
+180

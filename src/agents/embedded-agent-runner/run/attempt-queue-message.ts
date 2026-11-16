@@ -71,8 +71,6 @@ export function createPendingSteerToolControl(
   };
 }
 
-const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
-
 class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -124,7 +122,7 @@ async function cancelQueuedSteeringMessage(
 /**
  * Tracks one steer until commit or terminal cleanup. Admission-only receipts
  * resolve after enqueue, but retain exact-message cleanup until the run ends.
- * Commit-waiting callers also retain their delivery deadline.
+ * Only explicit delivery deadlines withdraw input before the receiving run ends.
  */
 async function steerWithTranscriptLifecycle(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
@@ -147,7 +145,7 @@ async function steerWithTranscriptLifecycle(
     currentInboundContext,
     queueIdentity = crypto.randomUUID(),
   } = options;
-  const timeoutMs = options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS;
+  const timeoutMs = options.deliveryTimeoutMs;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let accepted = false;
@@ -231,19 +229,22 @@ async function steerWithTranscriptLifecycle(
         },
       );
     };
-    const timer = setTimeout(
-      () => {
-        const tools = activeSession.agent?.getToolInterruptionStatus?.();
-        rejectAfterCancellation(
-          "queued steering message was not committed to the transcript before timeout",
-          tools && (tools.interruptible.length > 0 || tools.blocked.length > 0)
-            ? "tool_boundary_timeout"
-            : "transcript_commit_timeout",
-        );
-      },
-      Math.max(1, timeoutMs),
-    );
-    timer.unref();
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(
+            () => {
+              const tools = activeSession.agent?.getToolInterruptionStatus?.();
+              rejectAfterCancellation(
+                "queued steering message was not committed to the transcript before timeout",
+                tools && (tools.interruptible.length > 0 || tools.blocked.length > 0)
+                  ? "tool_boundary_timeout"
+                  : "transcript_commit_timeout",
+              );
+            },
+            Math.max(1, timeoutMs),
+          );
+    timer?.unref();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (
         event.type === "message_end" &&

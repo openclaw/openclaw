@@ -224,6 +224,14 @@ export function recordRequesterDelivery(
   }
 }
 
+export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    entry.delivery?.requesterDelivery?.state === "consumed" &&
+    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
+    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+  );
+}
+
 /** A cancelled private continuation cannot unconsume its committed input. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
@@ -232,13 +240,7 @@ export function resolveRequesterDeliveryOutcome(
   return outcome &&
     !outcome.delivered &&
     entries.length > 0 &&
-    entries.every(
-      (entry) =>
-        entry.delivery?.requesterDelivery?.state === "consumed" &&
-        entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-        (entry.completionTarget === "parent" ||
-          entry.requesterSettleWake?.privateInput !== undefined),
-    )
+    entries.every(hasConsumedPrivateRequesterInput)
     ? { delivered: true, path: "direct" }
     : outcome;
 }

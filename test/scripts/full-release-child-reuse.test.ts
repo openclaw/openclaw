@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -243,7 +243,232 @@ async function fixture(
   };
 }
 
+function crossQualificationTrees(data: Awaited<ReturnType<typeof fixture>>) {
+  const next = "c".repeat(40);
+  const entry = (path: string, sha: string, type = "blob") => ({
+    path,
+    sha,
+    type,
+    mode: type === "tree" ? "040000" : "100644",
+  });
+  const tree = (sha: string, entries: ReturnType<typeof entry>[]) => ({
+    sha,
+    truncated: false,
+    tree: entries,
+  });
+  const previousRoot = "1".repeat(40);
+  const nextRoot = "2".repeat(40);
+  const previousGithub = "3".repeat(40);
+  const nextGithub = "4".repeat(40);
+  const previousWorkflows = "5".repeat(40);
+  const nextWorkflows = "6".repeat(40);
+  const stable = "7".repeat(40);
+  const blobResponses: Record<string, unknown> = {};
+  const blob = (source: string) => {
+    const bytes = Buffer.from(source);
+    const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    blobResponses[`git/blobs/${sha}`] = {
+      sha,
+      size: bytes.length,
+      encoding: "base64",
+      content: bytes.toString("base64"),
+    };
+    return sha;
+  };
+  const workflowBlob = blob("jobs:\n  checks:\n    uses: ./.github/workflows/shared.yml\n");
+  const sharedBlob = blob("jobs:\n  checks:\n    runs-on: ubuntu-latest\n");
+  const previous = tree(previousRoot, [
+    entry("scripts", stable, "tree"),
+    ...["config", "packages", "src", "test"].map((path) => entry(path, stable, "tree")),
+    entry("pnpm-lock.yaml", stable),
+    entry(".github", previousGithub, "tree"),
+  ]);
+  const current = tree(nextRoot, [
+    entry("scripts", stable, "tree"),
+    ...["config", "packages", "src", "test"].map((path) => entry(path, stable, "tree")),
+    entry("pnpm-lock.yaml", stable),
+    entry(".github", nextGithub, "tree"),
+  ]);
+  const previousActions = tree(previousGithub, [
+    entry("actions", stable, "tree"),
+    entry("workflows", previousWorkflows, "tree"),
+  ]);
+  const currentActions = tree(nextGithub, [
+    entry("actions", stable, "tree"),
+    entry("workflows", nextWorkflows, "tree"),
+  ]);
+  const previousWorkflow = tree(previousWorkflows, [
+    entry(releaseChildSpec(data.request.role).workflow, workflowBlob),
+    entry("shared.yml", sharedBlob),
+    entry("full-release-validation.yml", "8".repeat(40)),
+  ]);
+  const currentWorkflow = tree(nextWorkflows, [
+    entry(releaseChildSpec(data.request.role).workflow, workflowBlob),
+    entry("shared.yml", sharedBlob),
+    entry("full-release-validation.yml", (data.request.role === "normalCi" ? "9" : "8").repeat(40)),
+  ]);
+  const responses: Record<string, unknown> = {
+    [`git/commits/${data.request.workflowSha}`]: {
+      sha: data.request.workflowSha,
+      tree: { sha: previousRoot },
+    },
+    [`git/commits/${next}`]: { sha: next, tree: { sha: nextRoot } },
+    [`git/trees/${previousRoot}`]: previous,
+    [`git/trees/${nextRoot}`]: current,
+    [`git/trees/${previousGithub}`]: previousActions,
+    [`git/trees/${nextGithub}`]: currentActions,
+    [`git/trees/${previousWorkflows}`]: previousWorkflow,
+    [`git/trees/${nextWorkflows}`]: currentWorkflow,
+  };
+  const github = data.deps.github;
+  data.deps.github = async (endpoint) =>
+    blobResponses[endpoint] ?? responses[endpoint] ?? github(endpoint);
+  data.request.workflowSha = next;
+  return { current, currentActions, currentWorkflow, previousWorkflow, blob };
+}
+
 describe("independent release child reuse", () => {
+  it("retains original C-owned child identity across a parent-only Q repair", async () => {
+    const data = await fixture("normalCi", undefined, TARGET);
+    crossQualificationTrees(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).toMatchObject({
+      workflowSha: TARGET,
+      runId: "101",
+      receiptSha256: data.receipt.sha256,
+    });
+    await expect(
+      validateReusableReleaseChild(selection, data.request, data.deps),
+    ).resolves.toMatchObject({
+      receipt: { workflowSha: TARGET, targetSha: TARGET },
+    });
+    // Equivalence does not allow changing the target or normalized child inputs.
+    await expect(
+      validateReusableReleaseChild(selection, { ...data.request, targetSha: TOOLING }, data.deps),
+    ).rejects.toThrow("selection identity");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        { ...data.request, inputs: { ...data.request.inputs, release_scope: "changed" } },
+        data.deps,
+      ),
+    ).rejects.toThrow("selection identity");
+  });
+
+  it.each([
+    "scripts",
+    "config",
+    "packages",
+    "src",
+    "test",
+    "dependencies",
+    "actions",
+    "child workflow",
+    "transitive workflow",
+    "truncated inventory",
+    "wrong tree identity",
+  ])("invalidates cross-Q evidence when %s changes", async (changed) => {
+    const data = await fixture("normalCi", undefined, TARGET);
+    const trees = crossQualificationTrees(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
+    if (changed === "truncated inventory") {
+      trees.current.truncated = true;
+    } else if (changed === "wrong tree identity") {
+      trees.current.sha = "e".repeat(40);
+    } else {
+      const entries =
+        changed === "actions"
+          ? trees.currentActions.tree
+          : ["child workflow", "transitive workflow"].includes(changed)
+            ? trees.currentWorkflow.tree
+            : trees.current.tree;
+      const path =
+        changed === "dependencies"
+          ? "pnpm-lock.yaml"
+          : changed === "transitive workflow"
+            ? "shared.yml"
+            : changed === "child workflow"
+              ? "ci.yml"
+              : changed;
+      entries.find((entry) => entry.path === path)!.sha = [
+        "child workflow",
+        "transitive workflow",
+      ].includes(changed)
+        ? trees.blob("jobs:\n  changed:\n    runs-on: ubuntu-latest\n")
+        : "d".repeat(40);
+    }
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      ["truncated inventory", "wrong tree identity"].includes(changed)
+        ? "incomplete or invalid"
+        : "workload closure changed",
+    );
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+  });
+  it("invalidates script-dispatched workflow changes without guessing script dependencies", async () => {
+    const data = await fixture("releaseChecksIndependent", undefined, TARGET);
+    const trees = crossQualificationTrees(data);
+    const descendant = {
+      path: "qa-telegram.yml",
+      sha: "e".repeat(40),
+      type: "blob",
+      mode: "100644",
+    };
+    trees.previousWorkflow.tree.push(descendant);
+    trees.currentWorkflow.tree.push({ ...descendant });
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
+    trees.currentWorkflow.tree.find((entry) => entry.path === descendant.path)!.sha = "f".repeat(
+      40,
+    );
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      "workload closure changed",
+    );
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+  });
+
+  it("ignores unrelated Q product and workflow changes but fails closed on unknown dependencies", async () => {
+    const data = await fixture("normalCi", undefined, TARGET);
+    const trees = crossQualificationTrees(data);
+    trees.current.tree.push({ path: "apps", sha: "e".repeat(40), type: "tree", mode: "040000" });
+    trees.currentWorkflow.tree.push({
+      path: "other.yml",
+      sha: "f".repeat(40),
+      type: "blob",
+      mode: "100644",
+    });
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
+    trees.currentWorkflow.tree.find((entry) => entry.path === "ci.yml")!.sha = trees.blob(
+      "jobs:\n  checks:\n    uses: *unresolved\n",
+    );
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      "unsupported reusable workflow reference",
+    );
+  });
+
+  it.each([
+    "normalCi",
+    "pluginPrereleaseIndependent",
+    "releaseChecksIndependent",
+    "productPerformance",
+    "npmTelegram",
+  ])("recognizes the real %s workflow closure", async (role) => {
+    const data = await fixture(role, undefined, TARGET);
+    const trees = crossQualificationTrees(data);
+    const workflows = readdirSync(".github/workflows")
+      .filter((name) => /\.ya?ml$/u.test(name))
+      .map((name) => ({
+        path: name,
+        sha: trees.blob(readFileSync(join(".github/workflows", name), "utf8")),
+        type: "blob",
+        mode: "100644",
+      }));
+    trees.currentWorkflow.tree = workflows;
+    trees.previousWorkflow.tree = workflows;
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
+  });
+
   it("recovers an exact policy-waived receipt without treating its failed workload as success", async () => {
     const data = await fixture();
     const original = await discoverReusableReleaseChild(data.request, data.deps);
@@ -645,28 +870,31 @@ describe("independent release child reuse", () => {
 
   it.each([
     { workflowSha: "", reason: "current parent workflow SHA is invalid" },
-    { workflowSha: "c".repeat(40), reason: "same tooling is required" },
-  ])("rejects invalid current-parent tooling: $reason", async ({ workflowSha, reason }) => {
-    const data = await fixture();
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    data.request.workflowSha = workflowSha;
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      reason,
-    );
-    if (!workflowSha) {
-      await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
-      return;
-    }
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `run 101 ${data.run.display_title}: rejected: tooling ${TOOLING} differs from current parent ${"c".repeat(40)}`,
-      ),
-    );
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining('evaluated 0; dispatching fresh work; skipped {"other tooling":1}'),
-    );
-  });
+    { workflowSha: "c".repeat(40), reason: "Full release child evidence API GET" },
+  ])(
+    "rejects invalid or unavailable current-parent tooling: $reason",
+    async ({ workflowSha, reason }) => {
+      const data = await fixture();
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      data.request.workflowSha = workflowSha;
+      await expect(
+        validateReusableReleaseChild(selection, data.request, data.deps),
+      ).rejects.toThrow(reason);
+      if (!workflowSha) {
+        await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
+        return;
+      }
+      expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+      expect(data.deps.report).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `run 101 ${data.run.display_title}: rejected: Full release child evidence API GET`,
+        ),
+      );
+      expect(data.deps.report).toHaveBeenCalledWith(
+        expect.stringContaining("evaluated 1; dispatching fresh work; skipped {}"),
+      );
+    },
+  );
 
   it.each(["active parent", "publisher cleanup failure"])(
     "reuses sealed green work despite %s",

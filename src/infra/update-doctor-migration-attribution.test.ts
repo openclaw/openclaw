@@ -52,15 +52,17 @@ import { readUpdateDatabaseGenerations } from "./update-database-generations.js"
 import * as updateGenerations from "./update-database-generations.js";
 import { recordUpdateModelRetirement } from "./update-deferred-model-retirement.js";
 import {
+  runWithDoctorMigrationBackup,
+  runWithUpdateDoctorMigrationCapture,
+} from "./update-doctor-migration-attribution.js";
+import {
   beginUpdateSqliteCompanion,
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-  runWithDoctorMigrationBackup,
-  runWithUpdateDoctorMigrationCapture,
-} from "./update-doctor-migration-attribution.js";
+} from "./update-doctor-migration-context.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
