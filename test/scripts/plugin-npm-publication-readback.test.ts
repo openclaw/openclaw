@@ -65,93 +65,75 @@ it("retries only transient GitHub reads and honors rate-limit guidance", async (
   expect(permanent).toHaveBeenCalledOnce();
 });
 
-it("revalidates child identity after a transient GET retry", async () => {
-  const value = await createNpmPublicationReadbackFixture(
-    tempDirs.make("npm-parent-readback-run-retry-"),
-  );
-  const runGh = value.options.runGh;
-  let reads = 0;
-  value.options.runGh = (args: string[]) => {
-    if (args[1]?.endsWith(`/actions/runs/${value.options.runId}`)) {
-      expect(args).toContain("--include");
-      reads += 1;
-      if (reads === 1) {
-        throw transientGitHubError("HTTP/2 429 Too Many Requests\r\nretry-after: 7\r\n\r\n");
-      }
-      const run = parseGithubResponse(runGh(args)).body;
-      run.head_sha = "c".repeat(40);
-      return `HTTP/2 200 OK\r\n\r\n${JSON.stringify(run)}`;
-    }
-    return runGh(args);
-  };
-  vi.useFakeTimers();
-  const pending = expect(createPluginNpmPublicationReadback(value.options)).rejects.toThrow(
+it.each([
+  [
+    "revalidates child identity after a transient GET retry",
+    "run",
     "child identity or successful attempt does not match publication",
-  );
-  await vi.advanceTimersByTimeAsync(6999);
-  expect(reads).toBe(1);
-  await vi.advanceTimersByTimeAsync(1);
-
-  await pending;
-  expect(reads).toBe(2);
-});
-
-it("revalidates publisher job identity after a transient inventory retry", async () => {
+  ],
+  [
+    "revalidates publisher job identity after a transient inventory retry",
+    "jobs",
+    "publisher job does not match",
+  ],
+  [
+    "revalidates artifact identity after a transient metadata retry",
+    "artifact",
+    "immutable publication tuple",
+  ],
+] as const)("%s", async (_name, stage, message) => {
   const value = await createNpmPublicationReadbackFixture(
-    tempDirs.make("npm-parent-readback-job-retry-"),
+    tempDirs.make(`npm-parent-readback-${stage}-retry-`),
   );
   const runGh = value.options.runGh;
   let reads = 0;
   value.options.runGh = (args: string[]) => {
-    if (args[1]?.includes(`/actions/runs/${value.options.runId}/jobs?`)) {
+    const endpoint = args[1] ?? "";
+    const matches =
+      stage === "run"
+        ? endpoint.endsWith(`/actions/runs/${value.options.runId}`)
+        : stage === "jobs"
+          ? endpoint.includes(`/actions/runs/${value.options.runId}/jobs?`)
+          : endpoint.endsWith("/actions/artifacts/41");
+    if (!matches) {
+      return runGh(args);
+    }
+    if (stage !== "artifact") {
       expect(args).toContain("--include");
-      reads += 1;
-      if (reads === 1) {
-        throw transientGitHubError();
-      }
-      const inventory = parseGithubResponse(runGh(args)).body;
-      inventory.jobs.find((job: { name?: string }) =>
+    }
+    reads += 1;
+    if (reads === 1) {
+      throw transientGitHubError(
+        stage === "run" ? "HTTP/2 429 Too Many Requests\r\nretry-after: 7\r\n\r\n" : undefined,
+      );
+    }
+    const body = parseGithubResponse(runGh(args)).body;
+    if (stage === "run") {
+      body.head_sha = "c".repeat(40);
+    } else if (stage === "jobs") {
+      body.jobs.find((job: { name?: string }) =>
         job.name?.startsWith("Publish plugin npm package"),
       ).head_sha = "c".repeat(40);
-      return `HTTP/2 200 OK\r\n\r\n${JSON.stringify(inventory)}`;
+    } else {
+      body.digest = `sha256:${"f".repeat(64)}`;
     }
-    return runGh(args);
+    return `HTTP/2 200 OK\r\n\r\n${JSON.stringify(body)}`;
   };
+  const parent =
+    stage === "artifact" ? await createPluginNpmPublicationReadback(value.options) : undefined;
   vi.useFakeTimers();
-  const pending = expect(createPluginNpmPublicationReadback(value.options)).rejects.toThrow(
-    "publisher job does not match",
-  );
-  await vi.advanceTimersByTimeAsync(1000);
-
-  await pending;
-  expect(reads).toBe(2);
-});
-
-it("revalidates artifact identity after a transient metadata retry", async () => {
-  const value = await createNpmPublicationReadbackFixture(
-    tempDirs.make("npm-parent-readback-artifact-retry-"),
-  );
-  const runGh = value.options.runGh;
-  let reads = 0;
-  value.options.runGh = (args: string[]) => {
-    if (args[1]?.endsWith("/actions/artifacts/41")) {
-      reads += 1;
-      if (reads === 1) {
-        throw transientGitHubError();
-      }
-      const artifact = parseGithubResponse(runGh(args)).body;
-      artifact.digest = `sha256:${"f".repeat(64)}`;
-      return `HTTP/2 200 OK\r\n\r\n${JSON.stringify(artifact)}`;
-    }
-    return runGh(args);
-  };
-  const parent = await createPluginNpmPublicationReadback(value.options);
-  vi.useFakeTimers();
-  const pending = expect(parent.verify(packageName, version, "beta")).rejects.toThrow(
-    "immutable publication tuple",
-  );
-  await vi.advanceTimersByTimeAsync(1000);
-
+  const pending = expect(
+    parent
+      ? parent.verify(packageName, version, "beta")
+      : createPluginNpmPublicationReadback(value.options),
+  ).rejects.toThrow(message);
+  if (stage === "run") {
+    await vi.advanceTimersByTimeAsync(6999);
+    expect(reads).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+  } else {
+    await vi.advanceTimersByTimeAsync(1000);
+  }
   await pending;
   expect(reads).toBe(2);
 });

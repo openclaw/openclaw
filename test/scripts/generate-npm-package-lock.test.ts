@@ -35,6 +35,38 @@ function writeJson(file: string, value: unknown) {
   writeFileSync(file, JSON.stringify(value));
 }
 
+// Conflict detection mutates shrinkwrap metadata, so each case needs a fresh graph.
+function shrinkwrapFixture({
+  root = { dependencies: { parent: "1.0.0" } },
+  parentVersion = "1.0.0",
+  childVersion = "2.0.0",
+  childKey = "forked",
+  childName,
+  peer = false,
+}: {
+  root?: Record<string, unknown>;
+  parentVersion?: string;
+  childVersion?: string;
+  childKey?: string;
+  childName?: string;
+  peer?: boolean;
+} = {}) {
+  return {
+    packages: {
+      "": root,
+      "node_modules/parent": {
+        [peer ? "peerDependencies" : "dependencies"]: { [childKey]: childVersion },
+        ...(!peer && { hasShrinkwrap: true }),
+        version: parentVersion,
+      },
+      [`node_modules/${childKey}`]: {
+        ...(childName && { name: childName }),
+        version: childVersion,
+      },
+    },
+  };
+}
+
 describe("generate-npm-package-lock", () => {
   function repoRelativePath(value: string): string {
     return path.relative(process.cwd(), value).replaceAll("\\", "/");
@@ -415,133 +447,90 @@ describe("generate-npm-package-lock", () => {
     expect(parsePnpmPackageKey("invalid")).toBeNull();
   });
 
-  it("disables a shrinkwrap that violates a scoped rule with the global version", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "1.0.0" } },
-        "node_modules/parent": {
-          dependencies: { forked: "2.0.0" },
-          hasShrinkwrap: true,
-          version: "1.0.0",
-        },
-        "node_modules/forked": { version: "2.0.0" },
+  it.each<{
+    name: string;
+    fixture?: Parameters<typeof shrinkwrapFixture>[0];
+    overrides: NonNullable<
+      Parameters<typeof disableDependencyShrinkwrapOverrideConflictSources>[2]
+    >;
+    expected: string[];
+  }>([
+    {
+      name: "disables a shrinkwrap that violates a scoped rule with the global version",
+      overrides: { forked: "2.0.0", parent: { ".": "1.0.0", forked: "1.0.0" } },
+      expected: ["node_modules/parent"],
+    },
+    {
+      name: "matches a scoped override against the incoming dependency range",
+      fixture: { root: { dependencies: { parent: "^1.0.0" } }, parentVersion: "1.1.0" },
+      overrides: { "parent@1.0.0": { forked: "1.0.0" } },
+      expected: ["node_modules/parent"],
+    },
+    {
+      name: "applies a wildcard scoped override to a plain Git edge",
+      fixture: {
+        root: { dependencies: { parent: "git+https://example.test/parent.git" } },
+        parentVersion: "1.1.0",
       },
-    };
-    const overrides = {
-      forked: "2.0.0",
-      parent: { ".": "1.0.0", forked: "1.0.0" },
-    };
-
+      overrides: { forked: "2.0.0", "parent@*": { forked: "1.0.0" } },
+      expected: ["node_modules/parent"],
+    },
+    {
+      name: "accepts a hoisted peer that satisfies its scoped override",
+      fixture: { childVersion: "1.0.0", peer: true },
+      overrides: { forked: "2.0.0", parent: { ".": "1.0.0", forked: "1.0.0" } },
+      expected: [],
+    },
+  ])("$name", ({ fixture, overrides, expected }) => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(["node_modules/parent"]);
-  });
-
-  it("matches a scoped override against the incoming dependency range", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "^1.0.0" } },
-        "node_modules/parent": {
-          dependencies: { forked: "2.0.0" },
-          hasShrinkwrap: true,
-          version: "1.1.0",
-        },
-        "node_modules/forked": { version: "2.0.0" },
-      },
-    };
-    const overrides = {
-      "parent@1.0.0": { forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(["node_modules/parent"]);
-  });
-
-  it.each([
-    {
-      expected: ["node_modules/parent"],
-      name: "plain Git spec",
-      root: { dependencies: { parent: "git+https://example.test/parent.git" } },
-    },
-    {
-      expected: ["node_modules/parent"],
-      name: "hosted Git URL without suffix",
-      root: { dependencies: { parent: "https://github.com/example/parent" } },
-    },
-    {
-      expected: [],
-      name: "hosted archive URL",
-      root: {
-        dependencies: { parent: "https://github.com/example/parent/archive/v1.0.0.tar.gz" },
-      },
-    },
-    {
-      expected: [],
-      name: "local tarball",
-      root: { dependencies: { parent: "file:./parent.tgz" } },
-    },
-    {
-      expected: [],
-      name: "local directory",
-      root: { dependencies: { parent: "../parent" } },
-    },
-    {
-      expected: ["node_modules/parent"],
-      name: "GitHub shorthand",
-      root: { dependencies: { parent: "example/parent" } },
-    },
-    {
-      expected: [],
-      name: "Git semver range",
-      root: { dependencies: { parent: "git+https://example.test/parent.git#semver:^1.0.0" } },
-    },
-    {
-      expected: [],
-      name: "npm alias range",
-      root: { dependencies: { parent: "npm:aliased-parent@^1.0.0" } },
-    },
-    {
-      expected: ["node_modules/parent"],
-      name: "optional dependency precedence",
-      root: {
-        dependencies: { parent: "1.0.0" },
-        optionalDependencies: { parent: "2.0.0" },
-      },
-    },
-  ])("matches scoped selectors using the effective edge spec ($name)", ({ expected, root }) => {
-    const lockfile = {
-      packages: {
-        "": root,
-        "node_modules/parent": {
-          dependencies: { forked: "1.0.0" },
-          hasShrinkwrap: true,
-          version: "1.1.0",
-        },
-        "node_modules/forked": { version: "1.0.0" },
-      },
-    };
-    const overrides = {
-      forked: "2.0.0",
-      "parent@1.0.0": { forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
+        shrinkwrapFixture(fixture),
         validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(expected);
   });
+
+  it.each([
+    ["plain Git spec", "git+https://example.test/parent.git", true, undefined],
+    ["hosted Git URL without suffix", "https://github.com/example/parent", true, undefined],
+    [
+      "hosted archive URL",
+      "https://github.com/example/parent/archive/v1.0.0.tar.gz",
+      false,
+      undefined,
+    ],
+    ["local tarball", "file:./parent.tgz", false, undefined],
+    ["local directory", "../parent", false, undefined],
+    ["GitHub shorthand", "example/parent", true, undefined],
+    ["Git semver range", "git+https://example.test/parent.git#semver:^1.0.0", false, undefined],
+    ["npm alias range", "npm:aliased-parent@^1.0.0", false, undefined],
+    ["optional dependency precedence", "1.0.0", true, "2.0.0"],
+  ] as const)(
+    "matches scoped selectors using the effective edge spec (%s)",
+    (_name, spec, conflict, optionalSpec) => {
+      const lockfile = shrinkwrapFixture({
+        root: {
+          dependencies: { parent: spec },
+          ...(optionalSpec && { optionalDependencies: { parent: optionalSpec } }),
+        },
+        parentVersion: "1.1.0",
+        childVersion: "1.0.0",
+      });
+      const overrides = {
+        forked: "2.0.0",
+        "parent@1.0.0": { forked: "1.0.0" },
+      };
+
+      expect(
+        disableDependencyShrinkwrapOverrideConflictSources(
+          lockfile,
+          validationOverrideRulesFromOverrides(overrides),
+          overrides,
+        ),
+      ).toEqual(conflict ? ["node_modules/parent"] : []);
+    },
+  );
 
   it("enforces a version-qualified override object's implicit parent version", () => {
     const lockfile = {
@@ -572,47 +561,15 @@ describe("generate-npm-package-lock", () => {
     ).toEqual(["node_modules/wrapper"]);
   });
 
-  it("applies a wildcard scoped override to a plain Git edge", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "git+https://example.test/parent.git" } },
-        "node_modules/parent": {
-          dependencies: { forked: "2.0.0" },
-          hasShrinkwrap: true,
-          version: "1.1.0",
-        },
-        "node_modules/forked": { version: "2.0.0" },
-      },
-    };
-    const overrides = {
-      forked: "2.0.0",
-      "parent@*": { forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(["node_modules/parent"]);
-  });
-
   it.each([
     { actualName: "foo", expected: ["node_modules/parent"], name: "original package" },
     { actualName: "patched-foo", expected: [], name: "alias target" },
   ])("validates npm override alias identity ($name)", ({ actualName, expected }) => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "1.0.0" } },
-        "node_modules/parent": {
-          dependencies: { foo: "1.0.0" },
-          hasShrinkwrap: true,
-          version: "1.0.0",
-        },
-        "node_modules/foo": { name: actualName, version: "1.0.0" },
-      },
-    };
+    const lockfile = shrinkwrapFixture({
+      childKey: "foo",
+      childVersion: "1.0.0",
+      childName: actualName,
+    });
     const overrides = { foo: "npm:patched-foo@1.0.0" };
 
     expect(
@@ -622,31 +579,6 @@ describe("generate-npm-package-lock", () => {
         overrides,
       ),
     ).toEqual(expected);
-  });
-
-  it("accepts a hoisted peer that satisfies its scoped override", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "1.0.0" } },
-        "node_modules/parent": {
-          peerDependencies: { forked: "1.0.0" },
-          version: "1.0.0",
-        },
-        "node_modules/forked": { version: "1.0.0" },
-      },
-    };
-    const overrides = {
-      forked: "2.0.0",
-      parent: { ".": "1.0.0", forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual([]);
   });
 
   it("selects only top-level optional runtime platform dependencies", () => {

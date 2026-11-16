@@ -504,37 +504,51 @@ describe("scripts/test-group-report", () => {
     );
   });
 
+  // Populated report/comparison snapshots below retain exact formatting; these rows cover limits.
+  const reportLines = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.trim().replace(/\s+/gu, " "))
+      .filter(Boolean);
+  const groupedReport = (
+    files: Record<string, [durationMs: number, tests: Record<string, number>]>,
+    runs: NonNullable<Parameters<typeof buildGroupedTestComparison>[0]["before"]["runs"]> = [],
+  ) => ({
+    ...buildGroupedTestReport({
+      groupBy: "area",
+      reports: [
+        {
+          config: "test/vitest/vitest.commands.config.ts",
+          report: {
+            testResults: Object.entries(files).map(([file, [durationMs, tests]]) =>
+              testResult(file, [0, durationMs], Object.entries(tests)),
+            ),
+          },
+        },
+      ],
+    }),
+    runs,
+  });
+
   it("preserves bounded empty report output", () => {
     const report = buildGroupedTestReport({ groupBy: "area", reports: [] });
-    expect(renderGroupedTestReport(report)).toMatchInlineSnapshot(`
-      "[test-group-report] groupBy=area files=0 tests=0 file-sum=0.0ms
-
-      Top groups (0 of 0)
-
-      Top configs (0 of 0)
-
-      Top files (0 of 0)"
-    `);
-    expect(
-      renderGroupedTestComparison(buildGroupedTestComparison({ before: report, after: report })),
-    ).toMatchInlineSnapshot(`
-      "[test-group-report:compare] groupBy=area file-sum=0.0ms -> 0.0ms (0.0ms, 0.0%) files=0->0 (0) tests=0->0 (0) addedFiles=0 removedFiles=0
-
-      Top group regressions (0 of 0)
-        (none)
-
-      Top group gains (0 of 0)
-        (none)
-
-      Config duration deltas (0 of 0)
-        (none)
-
-      Top file regressions (0 of 0)
-        (none)
-
-      Top file gains (0 of 0)
-        (none)"
-    `);
+    expect(reportLines(renderGroupedTestReport(report))).toEqual([
+      "[test-group-report] groupBy=area files=0 tests=0 file-sum=0.0ms",
+      "Top groups (0 of 0)",
+      "Top configs (0 of 0)",
+      "Top files (0 of 0)",
+    ]);
+    const comparison = buildGroupedTestComparison({ before: report, after: report });
+    expect(reportLines(renderGroupedTestComparison(comparison))).toEqual([
+      "[test-group-report:compare] groupBy=area file-sum=0.0ms -> 0.0ms (0.0ms, 0.0%) files=0->0 (0) tests=0->0 (0) addedFiles=0 removedFiles=0",
+      ...[
+        "Top group regressions",
+        "Top group gains",
+        "Config duration deltas",
+        "Top file regressions",
+        "Top file gains",
+      ].flatMap((heading) => [`${heading} (0 of 0)`, "(none)"]),
+    ]);
   });
 
   it("preserves bounded populated report output", () => {
@@ -567,6 +581,7 @@ describe("scripts/test-group-report", () => {
         },
       ],
     });
+    const headline = "[test-group-report] groupBy=area files=4 tests=5 file-sum=2200.0ms";
     expect(renderGroupedTestReport(report, { limit: 1, topFiles: 2 })).toMatchInlineSnapshot(`
       "[test-group-report] groupBy=area files=4 tests=5 file-sum=2200.0ms
 
@@ -584,80 +599,36 @@ describe("scripts/test-group-report", () => {
        1.     90.0ms | passed | unit-fast | src/c/fourth.test.ts | slowest
        2.     80.0ms | passed | commands | src/a/first.test.ts | slow"
     `);
-    expect(renderGroupedTestReport(report, { limit: 0, topFiles: 0 })).toMatchInlineSnapshot(`
-      "[test-group-report] groupBy=area files=4 tests=5 file-sum=2200.0ms
-
-      Top groups (0 of 3)
-
-      Top configs (0 of 2)
-
-      Top files (0 of 4)
-
-      Slow tests (0 of 3)"
-    `);
+    expect(reportLines(renderGroupedTestReport(report, { limit: 0, topFiles: 0 }))).toEqual([
+      headline,
+      "Top groups (0 of 3)",
+      "Top configs (0 of 2)",
+      "Top files (0 of 4)",
+      "Slow tests (0 of 3)",
+    ]);
   });
 
   it("preserves bounded comparison output", () => {
-    const report = (cases: Parameters<typeof testResult>[]) =>
-      buildGroupedTestReport({
-        groupBy: "area",
-        reports: [
-          {
-            config: "test/vitest/vitest.commands.config.ts",
-            report: { testResults: cases.map((args) => testResult(...args)) },
-          },
-        ],
-      });
-    const before = {
-      ...report([
-        [
-          "src/a/first.test.ts",
-          [0, 700],
-          [
-            ["a", 20],
-            ["b", 30],
-          ],
-        ],
-        [
-          "src/b/second.test.ts",
-          [0, 300],
-          [
-            ["c", 40],
-            ["d", 50],
-          ],
-        ],
-      ]),
-      runs: [runCounter(2000, 100), { config: "unit-fast", elapsedMs: 500, status: 1 }],
-    };
-    const after = {
-      ...report([
-        [
-          "src/a/first.test.ts",
-          [0, 800],
-          [
-            ["a", 20],
-            ["b", 30],
-            ["extra", 40],
-          ],
-        ],
-        [
-          "src/a/new.test.ts",
-          [0, 100],
-          [
-            ["new", 30],
-            ["added", 40],
-          ],
-        ],
-        ["src/c/third.test.ts", [0, 600], [["other", 40]]],
-      ]),
-      runs: [runCounter(1800, 80), { config: "unit-fast", elapsedMs: 600, status: 0 }],
-    };
-    expect(
-      renderGroupedTestComparison(buildGroupedTestComparison({ before, after }), {
-        limit: 1,
-        topFiles: 2,
-      }),
-    ).toMatchInlineSnapshot(`
+    const before = groupedReport(
+      {
+        "src/a/first.test.ts": [700, { a: 20, b: 30 }],
+        "src/b/second.test.ts": [300, { c: 40, d: 50 }],
+      },
+      [runCounter(2000, 100), { config: "unit-fast", elapsedMs: 500, status: 1 }],
+    );
+    const after = groupedReport(
+      {
+        "src/a/first.test.ts": [800, { a: 20, b: 30, extra: 40 }],
+        "src/a/new.test.ts": [100, { new: 30, added: 40 }],
+        "src/c/third.test.ts": [600, { other: 40 }],
+      },
+      [runCounter(1800, 80), { config: "unit-fast", elapsedMs: 600, status: 0 }],
+    );
+    const comparison = buildGroupedTestComparison({ before, after });
+    const headline =
+      "[test-group-report:compare] groupBy=area file-sum=1000.0ms -> 1500.0ms (+500.0ms, +50.0%) files=2->3 (+1) tests=4->6 (+2) addedFiles=2 removedFiles=1";
+    expect(renderGroupedTestComparison(comparison, { limit: 1, topFiles: 2 }))
+      .toMatchInlineSnapshot(`
       "[test-group-report:compare] groupBy=area file-sum=1000.0ms -> 1500.0ms (+500.0ms, +50.0%) files=2->3 (+1) tests=4->6 (+2) addedFiles=2 removedFiles=1
 
       Top group regressions (1 of 2)
@@ -679,31 +650,22 @@ describe("scripts/test-group-report", () => {
       Top file gains (1 of 1)
        1.    -300.0ms (-100.0%) | before=   300.0ms after=     0.0ms | tests=  -2 | commands | src/b/second.test.ts"
     `);
-    expect(
-      renderGroupedTestComparison(buildGroupedTestComparison({ before, after }), {
-        limit: 0,
-        topFiles: 0,
-      }),
-    ).toMatchInlineSnapshot(`
-      "[test-group-report:compare] groupBy=area file-sum=1000.0ms -> 1500.0ms (+500.0ms, +50.0%) files=2->3 (+1) tests=4->6 (+2) addedFiles=2 removedFiles=1
-
-      Top group regressions (0 of 2)
-        (none)
-
-      Top group gains (0 of 1)
-        (none)
-
-      Config duration deltas (0 of 1)
-        (none)
-
-      Config wall/RSS deltas (0 of 2)
-
-      Top file regressions (0 of 3)
-        (none)
-
-      Top file gains (0 of 1)
-        (none)"
-    `);
+    expect(reportLines(renderGroupedTestComparison(comparison, { limit: 0, topFiles: 0 }))).toEqual(
+      [
+        headline,
+        "Top group regressions (0 of 2)",
+        "(none)",
+        "Top group gains (0 of 1)",
+        "(none)",
+        "Config duration deltas (0 of 1)",
+        "(none)",
+        "Config wall/RSS deltas (0 of 2)",
+        "Top file regressions (0 of 3)",
+        "(none)",
+        "Top file gains (0 of 1)",
+        "(none)",
+      ],
+    );
   });
 
   it("keeps sharded run labels distinct in comparisons", () => {

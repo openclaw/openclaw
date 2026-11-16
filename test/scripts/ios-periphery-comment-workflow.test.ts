@@ -1101,9 +1101,13 @@ it("reads an in-flight iOS report from the previous automatic producer", async (
   expect(result.core.warnings).toEqual([]);
 });
 
-it.each(["macOS", "iOS"] as const)(
-  "attempts both app reports before surfacing a rejected %s artifact download",
-  async (failedPlatform) => {
+it.each(
+  (["artifact download", "comment write"] as const).flatMap((failure) =>
+    (["macOS", "iOS"] as const).map((failedPlatform) => ({ failure, failedPlatform })),
+  ),
+)(
+  "attempts both app reports before surfacing a rejected $failedPlatform $failure",
+  async ({ failure, failedPlatform }) => {
     const archive = await findingArchive;
     const result = await runReport(
       archive,
@@ -1113,39 +1117,9 @@ it.each(["macOS", "iOS"] as const)(
           artifact: makeArtifact({ id: 78, size_in_bytes: archive.length }),
           archiveData: archive,
         },
-        downloadErrorArtifactId: failedPlatform === "macOS" ? artifactFixture.id : 78,
-        captureError: true,
-      },
-      { name: "macos-periphery-dead-code-12345-2" },
-    );
-    expect(result.downloadCount).toBe(2);
-    expect(result.createdBodies).toHaveLength(1);
-    expect(result.createdBodies[0]).toContain(
-      failedPlatform === "macOS"
-        ? "<!-- openclaw-ios-periphery-dead-code -->"
-        : "<!-- openclaw-macos-periphery-dead-code -->",
-    );
-    expect(result.error).toBeInstanceOf(AggregateError);
-    expect(result.core.errors).toEqual([
-      `Could not publish ${failedPlatform.toLowerCase()}-periphery-dead-code report.`,
-    ]);
-  },
-);
-
-it.each(["macOS", "iOS"] as const)(
-  "attempts both app reports before surfacing a rejected %s comment write",
-  async (failedPlatform) => {
-    const archive = await findingArchive;
-    const result = await runReport(
-      archive,
-      {
-        platform: "macOS",
-        otherReport: {
-          artifact: makeArtifact({ id: 78, size_in_bytes: archive.length }),
-          archiveData: archive,
-        },
-        commentErrorStatus: 500,
-        commentErrorPlatform: failedPlatform,
+        ...(failure === "artifact download"
+          ? { downloadErrorArtifactId: failedPlatform === "macOS" ? artifactFixture.id : 78 }
+          : { commentErrorStatus: 500, commentErrorPlatform: failedPlatform }),
         captureError: true,
       },
       { name: "macos-periphery-dead-code-12345-2" },
