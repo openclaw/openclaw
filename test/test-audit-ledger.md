@@ -979,6 +979,21 @@ helper passes 11 cases with its Windows-only case skipped. Independent
 preservation and full local ClawSweeper review found no actionable issue.
 This closes the earlier MCP temporary-directory removal follow-up.
 
+### Channel and model fixture environment restoration
+
+At `ea8bbbb3b672b7df04d3747941d75cf7345a37fc`, the channel catalog-row
+and model-status cold-import fixtures remove their suite roots before restoring
+stubbed environment variables. A removal error skips that restoration. Keep each
+existing suite-lifetime root and put environment restoration in `finally`.
+All three declarations / four expanded cases remain, including both channel
+account shapes, missing-owner repair hints and all three model-status routes.
+Test code changes by +10/-4 lines; production and shared support are unchanged.
+
+Direct execution of both original teardown bodies with an injected removal
+failure preserves the exact error but skips environment restoration. Runtime
+fault injection and clean consumer qualification remain pending in the native
+PR workspace; the source worktree has no qualified dependency installation.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
