@@ -83,7 +83,10 @@ suite.define(() => {
         }
         const sidebarRow = page.locator(`openclaw-app-sidebar [data-session-key="${key}"]`).first();
         await expect.poll(() => sidebarRow.textContent()).toContain("Initial roster title");
-        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: mainKey } });
+        // Dashboards has its own sidebar, so no Sessions list reads the main session's children.
+        if (route !== "dashboards") {
+          await gateway.waitForRequest("sessions.list", { match: { spawnedBy: mainKey } });
+        }
         if (route === "chat") {
           await gateway.waitForRequest("sessions.list", { match: { spawnedBy: key } });
         }
