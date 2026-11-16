@@ -155,6 +155,7 @@ it.each([
   "current tool deny",
   "role revoked",
   "role revoked during merge",
+  "session edited",
   "session replaced",
   "queued owner payload edit",
   "queued manager rename",
@@ -489,15 +490,13 @@ it.each([
     setRuntimeConfigSnapshot(config);
   } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
-  } else if (scenario === "session replaced") {
-    replaceSessionEntrySync(
-      { sessionKey: SESSION },
-      {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement",
-      },
-    );
+  } else if (scenario === "session edited" || scenario === "session replaced") {
+    // A message edit rotates only the session id; a reset also rotates the revision.
+    await accessor.replaceSessionEntry(target, {
+      ...entry,
+      sessionId: "replacement-session",
+      ...(scenario === "session replaced" ? { lifecycleRevision: "replacement" } : {}),
+    });
   }
 
   // Publication creation/storage and actual GitHub credentials are outside this regression.
@@ -865,7 +864,6 @@ it.each([
     }
     if (
       roleRevoked ||
-      scenario === "session replaced" ||
       scenario === "principal ingress revoked" ||
       scenario === "principal ingress replaced" ||
       scenario === "principal access revoked"
@@ -899,6 +897,9 @@ it.each([
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
+        // The continuation's conversation is linked by key: an edit or reset keeps it.
+        scenario === "session edited" ||
+        scenario === "session replaced" ||
         ownerEdit ||
         recurring
       ) {
@@ -942,6 +943,8 @@ it.each([
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
+      scenario !== "session edited" &&
+      scenario !== "session replaced" &&
       !ownerEdit &&
       !recurring &&
       scenario !== "role revoked during merge"

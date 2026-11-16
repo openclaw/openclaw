@@ -214,7 +214,7 @@ export function createOpenClawDelegateToolsForRun(
     description:
       "Delegate system setup or repair to a separate model turn. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
-      "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
+      "Gateway restart, config, channels, plugins, published ClawHub Template review/install, agents, models/providers, API keys. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
       `Changes wait for the user to approve ${approvalLocation} unless current Full Access or a standing delegation grant permits application without asking for approval. Returns the final outcome.`,

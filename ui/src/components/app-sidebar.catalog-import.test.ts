@@ -103,7 +103,7 @@ describe("AppSidebar catalog import", () => {
     } else if (outcome === "failure") {
       expect(toast.textContent).toContain("Source device is unavailable");
     } else {
-      expect(toast.textContent).toContain("Imported 2 transcript items.");
+      expect(toast.textContent).toContain("Imported 2 chat items.");
       const nativeRow = sidebar.querySelector('[data-catalog-session-key*="thread-1"]');
       expect(nativeRow?.getAttribute("data-session-key")).toContain(":catalog:codex:");
       toast.querySelector<HTMLButtonElement>(".app-toast__action")!.click();

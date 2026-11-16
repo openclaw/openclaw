@@ -9,11 +9,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import * as directoryWatch from "../../infra/directory-watch-host.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   authProfileSourceExists,
   captureAuthProfileFileIdentity,
   readAuthProfileDatabaseIdentity,
+  readAuthProfileDatabaseIdentityAsync,
   noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
   authProfileFileChanges,
@@ -258,7 +260,13 @@ it("publishes a first owner write to previously admitted directory aliases", () 
   const before = readAuthProfileDatabaseIdentity(aliasPath);
   expect(before?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
-  noteAuthProfileFileWrite(fs.realpathSync(databasePath));
+  const identity = readDatabasePathIdentitySync(databasePath);
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  syncBuiltinESMExports();
+  noteAuthProfileFileWrite(identity.canonicalPath, identity);
+  expect(stat).not.toHaveBeenCalled();
+  expect(realpath).not.toHaveBeenCalled();
   const current = captureAuthProfileFileIdentity(aliasPath);
   expect(current.identity?.key).toMatch(/^file:/);
   expect(current.identity?.canonicalPath).toBe(before?.canonicalPath);
@@ -435,3 +443,49 @@ it("retires legacy source observations when their agent database closes", async 
   fs.writeFileSync(legacyPath, "{}");
   expect(authProfileSourceExists(legacyPath)).toBe(true);
 });
+
+it.each(["publish", "retire"] as const)(
+  "settles cold file admission against an overtaking owner %s",
+  async (action) => {
+    const { databasePath } = fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = fs.promises.stat;
+    vi.spyOn(fs.promises, "stat").mockImplementationOnce(async (...args) => {
+      const result = await original(...args).then(
+        (value) => ({ ok: true, value }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
+      );
+      entered.resolve();
+      await release.promise;
+      if (!result.ok) {
+        throw result.error;
+      }
+      return result.value;
+    });
+    syncBuiltinESMExports();
+    const admitting = readAuthProfileDatabaseIdentityAsync(databasePath);
+    const settled = Promise.allSettled([admitting]);
+    let published;
+    try {
+      await entered.promise;
+      if (action === "publish") {
+        fs.writeFileSync(databasePath, "created synthetic database");
+        published = readDatabasePathIdentitySync(databasePath);
+        noteAuthProfileFileWrite(databasePath, published);
+      } else {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    } finally {
+      release.resolve();
+    }
+    expect(await settled).toEqual([
+      action === "publish"
+        ? { status: "fulfilled", value: published }
+        : {
+            status: "rejected",
+            reason: new Error("Auth profile file owner retired during admission"),
+          },
+    ]);
+  },
+);

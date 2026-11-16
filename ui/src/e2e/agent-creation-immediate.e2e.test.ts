@@ -1,5 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -14,7 +18,7 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI immediate agent creation" });
-const creationStatus = "Creating new agent…";
+const creationStatus = "Creating new agent";
 const previousMessage = "Synthetic Harbor conversation before agent creation.";
 const pendingSelector = 'openclaw-pending-session-create[aria-hidden="false"]';
 const pageOptions = {
@@ -181,6 +185,10 @@ suite.define(() => {
       await dialog.waitFor({ state: "visible" });
       await dialog.locator('input[name="name"]').fill("New agent");
       const submit = dialog.locator('button[type="submit"]');
+      const proofTime = Date.now();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.clock.setFixedTime(proofTime);
+      }
 
       const [firstPaint] = await Promise.all([
         page.evaluate(
@@ -222,6 +230,20 @@ suite.define(() => {
       expect(firstPaint.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(firstPaint.elapsedMs).toBeLessThan(5_000);
       expect(firstPaint.previousPanePresented).toBe(false);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.clock.setFixedTime(proofTime + 4_000);
+        const pending = page.locator(pendingSelector);
+        const status = pending.locator(".chat-working-indicator__status");
+        await expect.poll(() => status.textContent()).toContain("4s");
+        const artifacts = createControlUiE2eArtifactDir("agent-creation-status-copy");
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [status], {
+          animations: "disabled",
+          elements: [pending.locator(".chat-working-indicator")],
+        });
+        await writeFile(path.join(artifacts, "creation.png"), frame.png);
+        await writeFile(path.join(artifacts, "creation-status.png"), frame.elements[0]!.png);
+        console.log("Creation copy proof:", artifacts);
+      }
       const request = await gateway.waitForRequest("agents.create");
       if (
         !request.params ||

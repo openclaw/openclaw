@@ -47,9 +47,6 @@ const requesterEntry = (context: DeliveryContext): SessionEntry => ({
   updatedAt: 1,
   delivery: normalizeSessionDeliveryState({ context }),
 });
-const cronContinuationCleanupMocks = vi.hoisted(() => ({
-  removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
-}));
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
@@ -70,7 +67,6 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
     return consume({ ok: true, value: sessionMocks.loadSessionEntry() });
   },
 }));
-vi.mock("../../cron/run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
 
 import {
   createDefaultMediaGenerateBackgroundScheduler,
@@ -109,7 +105,6 @@ beforeEach(() => {
   detachedTaskRuntimeMocks.completeOperation.mockClear();
   detachedTaskRuntimeMocks.failOperation.mockClear();
   detachedTaskRuntimeMocks.recordProgress.mockClear();
-  cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry
     .mockReset()
     .mockReturnValue({ sessionId: "media-requester", updatedAt: 1 });
@@ -199,35 +194,6 @@ describe("media generation detachment admission", () => {
       prompt: "a synthetic lighthouse",
     });
     expect(handle?.detach).toBe(detach);
-  });
-
-  it("keeps exact cron media inline until a CLI resume binding is durable", async () => {
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    const entry: SessionEntry = {
-      sessionId: "run-123",
-      updatedAt: 1,
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "running",
-        cliExecutionProvider: "google-gemini-cli",
-      },
-    };
-    sessionMocks.loadSessionEntry.mockReturnValue(entry);
-    const lifecycle = createImageMediaLifecycle();
-    expect((await lifecycle.createTaskRun({ sessionKey, prompt: "before binding" }))?.detach).toBe(
-      false,
-    );
-
-    sessionMocks.loadSessionEntry.mockReturnValue({
-      ...entry,
-      updatedAt: 2,
-      cliSessionBindings: {
-        "google-gemini-cli": { sessionId: "native-gemini-session" },
-      },
-    });
-    expect((await lifecycle.createTaskRun({ sessionKey, prompt: "after binding" }))?.detach).toBe(
-      true,
-    );
   });
 });
 
@@ -392,99 +358,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       count: 1,
       terminalResult: undefined,
     });
-  });
-
-  it.each([
-    {
-      label: "delivered",
-      delivery: { delivered: true, path: "direct" },
-      requesterOrigin: undefined,
-      mediaUrls: undefined,
-      terminal: { status: "succeeded" },
-    },
-    {
-      label: "stale",
-      delivery: {
-        delivered: false,
-        path: "direct",
-        reason: "completion_handoff_unavailable",
-        error: "cron run continuation owner was lost during gateway restart",
-      },
-      requesterOrigin: { channel: "discord", to: "channel:123" },
-      mediaUrls: ["/tmp/proof.png"],
-      terminal: {
-        terminalOutcome: "blocked",
-      },
-    },
-  ])(
-    "cleans one-shot cron after $label completion without raw fallback",
-    async ({ delivery, requesterOrigin, mediaUrls, terminal }) => {
-      const sessionKey = "agent:main:cron:one-shot:run:run-123";
-      const scheduled: Array<() => Promise<void>> = [];
-      subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce(delivery);
-      const lifecycle = createImageMediaLifecycle();
-      const handle = await lifecycle.createTaskRun({
-        sessionKey,
-        requesterOrigin,
-        prompt: "proof image",
-      });
-      assert(handle);
-      scheduleImageCompletion({
-        lifecycle,
-        handle,
-        scheduleBackgroundWork: (work) => scheduled.push(work),
-        run: async () => ({
-          ...generatedImageResult(),
-          attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
-          ...(mediaUrls ? { mediaUrls } : {}),
-        }),
-      });
-      await scheduled[0]?.();
-      expectCall(detachedTaskRuntimeMocks.completeOperation, terminal);
-      expect(
-        cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
-      ).toHaveBeenCalledWith(sessionKey);
-    },
-  );
-  it("keeps pending cron media active until a handoff retry delivers it", async () => {
-    vi.useFakeTimers();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    const scheduled: Array<() => Promise<void>> = [];
-    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement
-      .mockResolvedValueOnce({
-        delivered: false,
-        path: "none",
-        reason: "completion_handoff_pending",
-        error: "cron run continuation is not ready",
-      })
-      .mockResolvedValueOnce({ delivered: true, path: "direct" });
-    const lifecycle = createImageMediaLifecycle();
-    const handle = await lifecycle.createTaskRun({
-      sessionKey,
-      prompt: "proof image",
-    });
-    assert(handle);
-
-    scheduleImageCompletion({
-      lifecycle,
-      handle,
-      scheduleBackgroundWork: (work) => scheduled.push(work),
-    });
-
-    const backgroundWork = scheduled[0]?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
-    expect(detachedTaskRuntimeMocks.completeOperation).not.toHaveBeenCalled();
-    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(249);
-    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await backgroundWork;
-
-    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(2);
-    expect(detachedTaskRuntimeMocks.completeOperation).toHaveBeenCalledTimes(1);
-    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
   });
 
   it("caps exponential pending-handoff retries until delivery succeeds", async () => {

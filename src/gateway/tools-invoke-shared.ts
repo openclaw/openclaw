@@ -47,7 +47,10 @@ import {
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveOperatorRolePolicy,
+} from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -332,7 +335,9 @@ async function invokeGatewayToolWithSignal(
         })
       ).entry;
   const profiles =
-    isGatewayAdmin(client) && !isNamedOperatorRoleEnforcementEnabled(params.cfg)
+    isGatewayAdmin(client) &&
+    !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+    resolveOperatorRolePolicy(client, params.cfg)?.sandbox !== "required"
       ? undefined
       : await prepareSessionSharingProfiles(client);
   const prepareAuthorization = async (
@@ -345,7 +350,10 @@ async function invokeGatewayToolWithSignal(
   ) => {
     if (!profiles) {
       sessionChecks.push(() => {
-        if (isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig())) {
+        if (
+          isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()) ||
+          resolveOperatorRolePolicy(client, getRuntimeConfig())?.sandbox === "required"
+        ) {
           throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
       });

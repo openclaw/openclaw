@@ -2,10 +2,8 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -28,7 +26,7 @@ import {
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
-import { clearRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
+import { invalidateRuntimeAuthProfileStoreSnapshotsForOwner } from "./runtime-snapshots.js";
 import { loadPersistedAuthProfileStoreFromRows } from "./sqlite-read.js";
 import {
   prepareAuthProfileWriteTransactionAsync,
@@ -42,7 +40,6 @@ import {
   resolveRuntimeAuthProfileAgentDir,
 } from "./store.js";
 import { reserveAuthProfileUsagePreparation, runAuthProfileUsage } from "./usage-lifecycle.js";
-import { captureAuthProfileWriteExecution } from "./write-execution.js";
 
 function inlineAuthFailureError(payload: OpenClawStateWorkerErrorPayload): Error {
   const error = new Error("Auth usage transaction failed");
@@ -62,11 +59,14 @@ export async function persistInlineAuthFailure(
   }
   const databasePath = resolveAuthProfileDatabasePath(effectiveAgentDir);
   return runAuthProfileUsage(async () => {
-    const execution = captureAuthProfileWriteExecution({
+    const captured = captureOpenClawAgentDatabaseExecutionAsync({
       path: databasePath,
       agentId: resolveAuthProfileDatabaseOwnerId(effectiveAgentDir),
       env,
-    });
+    }).then(
+      (value) => ({ ok: true, value }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
     const inheritedUsageStats = structuredClone(getScopedSharedAuthStore()?.usageStats);
     let transferred = false;
     const reservation = reserveAuthProfileUsagePreparation([
@@ -75,6 +75,11 @@ export async function persistInlineAuthFailure(
     ]);
     try {
       await reservation.ready;
+      const result = await captured;
+      if (!result.ok) {
+        throw result.error;
+      }
+      const execution = result.value;
       const prepared = await prepareAuthProfileWriteTransactionAsync(
         effectiveAgentDir,
         { env },
@@ -89,10 +94,14 @@ export async function persistInlineAuthFailure(
         inheritedUsageStats,
       );
     } finally {
-      if (!transferred) {
-        await execution.release();
+      try {
+        const result = await captured;
+        if (!transferred && result.ok) {
+          await result.value.release();
+        }
+      } finally {
+        reservation.release();
       }
-      reservation.release();
     }
   });
 }
@@ -101,31 +110,29 @@ async function persistPreparedInlineAuthFailure(
   effectiveAgentDir: string | undefined,
   input: Omit<InlineAuthFailureInput, "expectedCredentials" | "inheritedUsageStats">,
   prepared: Awaited<ReturnType<typeof prepareAuthProfileWriteTransactionAsync>>,
-  execution: ReturnType<typeof captureAuthProfileWriteExecution>,
+  execution: OpenClawAgentDatabaseExecution,
   inheritedUsageStats: InlineAuthFailureInput["inheritedUsageStats"],
 ): Promise<InlineAuthFailureReceipt | null> {
   const { databaseTarget, sharedOwner } = prepared;
   if (databaseTarget.kind !== "agent") {
     throw new Error("Inline auth failure requires its selected agent database");
   }
-  const owner = { ...sharedOwner, databasePath: databaseTarget.path };
+  const owner = {
+    ...sharedOwner,
+    databasePath: databaseTarget.path,
+    get databaseIdentity() {
+      return execution.fileIdentity;
+    },
+  };
   const candidates = resolveLegacyAuthProfileSourceCandidates({
     agentDir: effectiveAgentDir,
     env: owner.env,
   });
-  const identity = readDatabasePathIdentitySync(databaseTarget.path);
   let durableReceipt: InlineAuthFailureReceipt | undefined;
   let failure: { error: unknown } | undefined;
   let hasCredentials: boolean | undefined;
   const assertCurrent = () => {
     execution.assertCurrent();
-    if (identity.key.startsWith("file:")) {
-      assertExistingDatabaseIdentity(databaseTarget.path, identity.key);
-    } else if (
-      readDatabasePathIdentitySync(databaseTarget.path).canonicalPath !== identity.canonicalPath
-    ) {
-      throw new Error("Auth database path changed before inline-failure admission");
-    }
     if (
       resolveSharedAuthStorePath(owner.env) !== owner.sharedDatabasePath ||
       resolveSharedAuthStoreOwnership(owner.env).location !== owner.location
@@ -180,10 +187,7 @@ async function persistPreparedInlineAuthFailure(
                 try {
                   await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
                 } catch (error) {
-                  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-                    owner.databasePath,
-                    effectiveAgentDir,
-                  );
+                  invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
                   reportCommittedInlineAuthFailure(
                     "auth usage committed but publication failed",
                     error,
@@ -225,14 +229,8 @@ async function persistPreparedInlineAuthFailure(
       );
     } catch (error) {
       if (durableReceipt) {
-        try {
-          clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(owner.databasePath, effectiveAgentDir);
-        } catch (invalidationError) {
-          reportCommittedInlineAuthFailure(
-            "auth usage snapshot invalidation failed",
-            invalidationError,
-          );
-        }
+        // Retirement cannot prevent invalidation of a completed write's derived views.
+        invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
         reportCommittedInlineAuthFailure(
           "auth usage committed before publication or cleanup failed",
           error,

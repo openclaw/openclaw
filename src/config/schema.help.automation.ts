@@ -70,7 +70,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.threadBindings.spawnSessions":
     "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
-    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester chat or "isolated" for a clean child. Default: "fork".',
   "session.sharing":
     "Controls which collaboration modes session owners and administrators may select. Omitted booleans default to enabled; set a mode false to remove it from the picker and reject new selections.",
   "session.sharing.readOnly":
@@ -84,11 +84,11 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.mode":
     'Determines whether pruning and disk-budget policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds. Cold storage has its own explicit enabled setting.',
   "session.maintenance.coldStorage":
-    "Moves inactive transcripts into compressed JSONL archives while retaining session metadata. Archive files become required history and must be included in backups. Changes apply without restarting the Gateway.",
+    "Moves inactive chats into compressed JSONL archives while retaining session metadata. Archive files become required history and must be included in backups. Changes apply without restarting the Gateway.",
   "session.maintenance.coldStorage.enabled":
-    "Enables background transcript archival (default false). A worker checks for eligible transcripts every minute. This explicit archive policy is separate from deletion and disk-budget cleanup.",
+    "Enables background chat archival (default false). A worker checks for eligible chats every minute. This explicit archive policy is separate from deletion and disk-budget cleanup.",
   "session.maintenance.coldStorage.afterDays":
-    "Archive transcripts after this many inactive days (positive integer, default 30). Active work is protected; changing the cutoff takes effect on the next worker pass without a Gateway restart.",
+    "Archive chats after this many inactive days (positive integer, default 30). Active work is protected; changing the cutoff takes effect on the next worker pass without a Gateway restart.",
   "session.maintenance.pruneAfter":
     "Archives eligible durable conversations and removes disposable automation entries older than this duration (default `30d`; for example `12h`). Archived conversations retain their history and can be restored; protected or routable conversations remain active.",
   "session.maintenance.archiveDashboardAfter":
@@ -98,7 +98,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.preserveRecent":
     "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
-    "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
+    "Age-based retention for archived chats (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
     'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, app-session, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":

@@ -3,6 +3,7 @@ import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { consumeSelectedSystemEventEntries } from "../../infra/system-events.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
   claimSessionEventOccurrenceInput,
@@ -60,8 +61,8 @@ export function enqueueBatchedSessionEventForHost(
   options: SessionEventOptions,
 ): SessionEventReceipt {
   const target = options.expectedTarget;
-  // Cron-run completions keep their acceptance-time origin check; they never wait here.
-  if (!target || options.occurrences || options.assertAcceptanceCurrent) {
+  // A cron run ends with its executor; a completion held here past that end would be refused.
+  if (!target || options.occurrences || isCronRunSessionKey(options.sessionKey)) {
     return enqueueSessionEventForHost(text, options);
   }
   const key = JSON.stringify([options.agentId, options.sessionKey]);

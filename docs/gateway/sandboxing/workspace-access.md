@@ -374,8 +374,12 @@ Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
 immutable result owns the source bytes, staged-file materialization, Git patch
 preparation, and temporary-file cleanup run with the guest resumed. Imports pause
 again before confirming the target and applying changes; edits made during
-preparation cause a visible conflict and remain saved. Pending base refreshes
-retain their pause until both workspaces accept the transfer.
+preparation cause a visible conflict and remain saved. Base refreshes also prepare
+canonical merge trees, temporary checkouts, and patches with the guest running.
+The target is checked again under pause before application; concurrent guest
+writes are preserved as conflicts. Successful two-sided transfers resume before
+temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutations
+still keeps the guest paused until both workspaces accept the transfer.
 
 GitHub PR preparation and base refresh download commit history and missing objects
 with the guest running. After those downloads finish, OpenClaw checks the guest's
@@ -401,6 +405,14 @@ each runtime's live authority is still checked immediately before pausing.
 runtime and cannot measure the earlier owner's interval; `durationScope=owner`
 covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
 removed runtime. Failed resumes retain custody and do not log a successful release.
+Workspace mutations above 1 MiB use the existing compressed worker transport when
+it reduces their size; persisted checkpoint and rollback-journal bytes do not change.
+The `agents/worktrees` warning `Local workspace oversized mutation` samples at most
+once per minute per process. It reports serialized and wire bytes, top-level field
+bytes, fingerprint blob count and bytes, and journal entry/directory counts and tree
+reference bytes. Field string sizes are UTF-8 bytes; fingerprint bytes count the
+base64 strings. It contains no paths, identifiers, or document contents. Prepared
+mutations report their already-compressed wire size and available publication fields.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner

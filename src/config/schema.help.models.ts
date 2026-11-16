@@ -222,9 +222,9 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.coldStart":
     'Controls whether this agent\'s memory index opens at Gateway boot without waiting for the first search or turn: "demand" (default) keeps cold starts light and opens the index on first use, while "eager" indexes memory files and session transcripts right after startup so recall is fresh immediately, at the cost of extra workers and higher startup memory. First use still opens the index under "demand", and any service or config reload resumes indexing for agents already in use.',
   "memory.search.rememberAcrossConversations":
-    'Use relevant context from this agent\'s other private conversations through protected transcript recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
+    'Use relevant context from this agent\'s other private conversations through protected chat recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
   "memory.search.sources":
-    'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
+    'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes chat history. Keep ["memory"] unless you need recall from prior chats.',
   "memory.search.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Entries may be path strings or objects with a root-relative glob pattern. When multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
   "memory.search.extraPaths.*.path":
@@ -242,7 +242,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.multimodal.maxFileBytes":
     "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
   "memory.search.experimental.sessionMemory":
-    "Indexes session transcripts into memory search. Keep this advanced override when root and per-agent recall inheritance differ.",
+    "Indexes chat history into memory search. Keep this advanced override when root and per-agent recall inheritance differ.",
   "memory.search.provider":
     'Selects the embedding backend used to build/query memory vectors. Defaults to "openai"; set "openai-compatible", "gemini", "voyage", "mistral", "bedrock", "deepinfra", "github-copilot", "lmstudio", "ollama", or "local" when you want a different backend.',
   "memory.search.model":
