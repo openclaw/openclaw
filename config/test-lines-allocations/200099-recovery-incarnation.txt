@@ -1,0 +1,2 @@
+# Exact incremental net test growth for queued results rejected when recovery acquires authority after delete/recreate; existing edit cases now rotate transcript IDs rather than lifecycle revisions; registry fixture returns current identity with its policy.
+50

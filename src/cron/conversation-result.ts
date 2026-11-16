@@ -26,7 +26,6 @@ export async function commitCronConversationResult(
   const committed = await commitBackgroundPayloadsToSession({
     agentId: params.agentId,
     sessionKey: params.conversation.sessionKey,
-    expectedLifecycleRevision: params.conversation.lifecycleRevision,
     payloads: params.payloads,
     idempotencyKey: `cron-current-completion:${runId}`,
     provenance: { kind: "cron", jobId: params.jobId, runId },

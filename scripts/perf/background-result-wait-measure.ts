@@ -87,7 +87,6 @@ const result = (
   background.commitBackgroundResultToSession({
     agentId: scope.agentId,
     sessionKey: scope.sessionKey,
-    expectedLifecycleRevision: "synthetic-revision",
     text: `Synthetic result ${key}`,
     idempotencyKey: key,
     provenance: { kind: "cron", jobId: "synthetic-job", runId: key },

@@ -335,8 +335,8 @@ export async function prepareSessionEventTargetForHost(
         storePath: target.storePath,
         sessionKey: target.sessionKey,
         sessionId: target.sessionId || null,
-        exactTranscript: true,
-        lifecycleRevision: target.lifecycleRevision ?? null,
+        // Deferred results follow the key; reply admission pins the current transcript.
+        lifecycleRevision: null,
         env,
       });
       prepared?.assertCurrent();
@@ -346,6 +346,11 @@ export async function prepareSessionEventTargetForHost(
     }
     assertAcceptance();
     lease.assertCurrent();
+    const current = lease.readSessionSettings();
+    if (current) {
+      target.sessionId = current.sessionId;
+      target.lifecycleRevision = current.lifecycleRevision;
+    }
     const retained = lease;
     const assertTargetCurrent = () => {
       assertSessionEventTargetCurrent(target);

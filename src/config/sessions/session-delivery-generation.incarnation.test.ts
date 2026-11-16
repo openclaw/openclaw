@@ -3,6 +3,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import {
   isSessionDeliveryGenerationRevokedError,
   prepareSessionGenerationFacts,
@@ -45,3 +46,36 @@ it.each([
     });
   },
 );
+
+it("keeps key-bound results across rewind but not deletion and recreation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    openOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
+    const target = { agentId: "main", sessionKey: "agent:main:key-bound", storePath };
+    const entry = { sessionId: "original", lifecycleRevision: "original", updatedAt: 1 };
+    replaceSessionEntrySync(target, entry);
+    const lease = await prepareSessionGenerationFacts({
+      ...target,
+      sessionId: entry.sessionId,
+      lifecycleRevision: null,
+    });
+    try {
+      replaceSessionEntrySync(target, {
+        ...entry,
+        sessionId: "rewound",
+        lifecycleRevision: "rewound",
+      });
+      expect(lease.assertCurrent).not.toThrow();
+      await deleteSessionEntryLifecycle({
+        ...target,
+        target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      replaceSessionEntrySync(target, entry);
+      expect(lease.assertCurrent).toThrow();
+    } finally {
+      lease.release();
+    }
+  });
+});

@@ -283,15 +283,15 @@ describe("Goal continuation eligibility", () => {
       ).resolves.toBe(expected);
     },
   );
-  it("checks current Goal, incarnation, stop and runtime facts before continuing", () => {
+  it("checks current Goal, stop and runtime facts before continuing", () => {
     const current = entry();
     expect(isGoalContinuationCurrent(identity, undefined)).toBe(false);
     for (const [patch, expected, continuation] of [
       [{}, true],
       [{ goal: undefined }, false],
       [{ goal: { ...current.goal!, status: "paused" } }, false],
-      [{ sessionId: "replacement" }, false],
-      [{ lifecycleRevision: "revision-3" }, false],
+      [{ sessionId: "replacement" }, true],
+      [{ lifecycleRevision: "revision-3" }, true],
       [{ abortedLastRun: true }, false],
       [{ agentHarnessId: "codex" }, false],
       [{ agentHarnessId: "codex" }, true, { localCodexGoal: true }],
@@ -810,7 +810,6 @@ describe("Goal return from committed child custody", () => {
     ),
     { change: "cleared", patch: { goal: undefined } },
     { change: "replaced", patch: { goal: { ...entry().goal!, id: "new-goal" } } },
-    { change: "reset", patch: { lifecycleRevision: "new-revision" } },
     { change: "stopped", patch: { abortedLastRun: true } },
   ])("rechecks $change after the command final and batch commit", async ({ patch }) => {
     const f = retainedGoal();

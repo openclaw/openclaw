@@ -355,7 +355,7 @@ export async function dispatchCronDelivery(
               requestKey: sessionGeneration.sessionKey,
               mainKey: params.cfgWithAgentDefaults.session?.mainKey,
             })
-            ? params.sourceSessionGeneration
+            ? { sessionKey: params.resolvedDelivery.sessionRoute.sessionKey }
             : undefined,
         onTranscriptDiagnostic: (message) => {
           diagnostics = mergeCronRunDiagnostics(

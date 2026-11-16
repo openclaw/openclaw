@@ -1,4 +1,4 @@
-// Commits detached background results into an existing conversation generation.
+// Commits detached background results into an existing conversation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -34,12 +34,8 @@ export type BackgroundSessionResultProvenance =
 /** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
+  /** The result follows the key to the conversation's current transcript. */
   sessionKey: string;
-  /**
-   * Ends delivery when the conversation was reset or recreated. The result follows message
-   * edits and branch switches to the current transcript; undefined follows the key alone.
-   */
-  expectedLifecycleRevision?: string;
   text: string;
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
@@ -60,7 +56,6 @@ export async function commitBackgroundResultToSession(params: {
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const expectedLifecycleRevision = normalizeOptionalString(params.expectedLifecycleRevision);
 
   params.assertCurrent?.();
   return await runSessionMutation({
@@ -92,12 +87,8 @@ export async function commitBackgroundResultToSession(params: {
             throw read.error;
           }
           const current = read.value;
-          if (
-            !current?.sessionId ||
-            (expectedLifecycleRevision !== undefined &&
-              normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision)
-          ) {
-            return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
+          if (!current?.sessionId) {
+            return { ok: false, reason: `session deleted for sessionKey: ${sessionKey}` };
           }
           const sessionId = current.sessionId;
           const unavailable = resolveSessionWorkStartError(sessionKey, current, {

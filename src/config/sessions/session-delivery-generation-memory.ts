@@ -107,7 +107,14 @@ export async function prepareMemorySessionGeneration(
     },
     readSessionSettings() {
       const entry = readCurrent();
-      return { permissionMode: entry?.permissionMode, toolOverrides: entry?.toolOverrides };
+      return (
+        entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          permissionMode: entry.permissionMode,
+          toolOverrides: entry.toolOverrides,
+        }
+      );
     },
     prepareRead: () => undefined,
     release() {

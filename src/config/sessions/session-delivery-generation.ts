@@ -29,10 +29,7 @@ import {
   projectSessionSharingEntry,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
-import type {
-  SessionEntryCreationOperation,
-  SessionSharingEntry,
-} from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
@@ -84,9 +81,7 @@ async function prepareSessionGenerationLease(
 ): Promise<{
   assertCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
-  readSessionSettings: () =>
-    | Readonly<Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">>
-    | undefined;
+  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
   prepareRead: () => Promise<void> | undefined;
   release: () => void;
   bindCreation: (
@@ -305,6 +300,7 @@ async function prepareSessionGenerationLease(
             databaseIdentity: source.identity.key,
             sessionKey: generation.sessionKey,
             entry: entry ? projectSessionSharingEntry(entry) : undefined,
+            followSessionKey: !generation.exactTranscript,
           });
           releases.push(prepared.release);
           const nativeOptions = { ...read!.database, path: source.path };

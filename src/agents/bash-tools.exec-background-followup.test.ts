@@ -646,3 +646,42 @@ test.for(["completed", "revoked", "missing"] as const)(
     }
   },
 );
+
+test.for(["edit", "rewind"] as const)(
+  "attaches a background exec result after a conversation %s",
+  async (change, { signal }) => {
+    const sessionKey = "agent:main:dashboard:background-" + change;
+    await seedOrigin(sessionKey);
+    const release = path.join(state.workspaceDir, "release-background-" + change);
+    const script =
+      'const fs = require("node:fs");' +
+      "const finish = () => { if (fs.existsSync(" +
+      JSON.stringify(release) +
+      ")) {" +
+      'watcher.close(); process.stdout.write("ATTACHED_RESULT"); } };' +
+      "const watcher = fs.watch(" +
+      JSON.stringify(state.workspaceDir) +
+      ", finish); finish();";
+    try {
+      runningSession(
+        (await backgroundExec(sessionKey, { agentId: "main" })(change, script)).details,
+      );
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "edited-" + change,
+          ...(change === "rewind" ? { lifecycleRevision: "rewound-revision" } : {}),
+        },
+      );
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
+      await completion(signal);
+      expect(model).toHaveBeenCalledOnce();
+      expect(model.mock.calls[0]?.[0].prompt).toContain("ATTACHED_RESULT");
+      expect(model.mock.calls[0]?.[0].sessionId).toBe("edited-" + change);
+    } finally {
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
+    }
+  },
+);

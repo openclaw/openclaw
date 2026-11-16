@@ -71,6 +71,8 @@ export type PreparedSessionSharingRead = {
   facts: CommittedSessionSharingFacts | undefined;
   acquisition?: SessionSharingAcquisition;
   generation?: {
+    /** Stored results follow edits, but a committed deletion permanently revokes custody. */
+    followSessionKey?: boolean;
     initiallyAbsent?: true;
     current:
       | Pick<
@@ -197,11 +199,13 @@ export function publishRetainedSessionGeneration(
     generation.current = undefined;
   } else if (
     !entry ||
-    generation.current.sessionId !== entry.sessionId ||
-    generation.current.lifecycleRevision !== entry.lifecycleRevision
+    (!generation.followSessionKey &&
+      (generation.current.sessionId !== entry.sessionId ||
+        generation.current.lifecycleRevision !== entry.lifecycleRevision))
   ) {
     generation.current = null;
   } else if (
+    generation.followSessionKey ||
     generation.current.permissionMode !== entry.permissionMode ||
     !isDeepStrictEqual(generation.current.toolOverrides, entry.toolOverrides)
   ) {

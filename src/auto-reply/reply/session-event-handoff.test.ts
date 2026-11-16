@@ -641,13 +641,14 @@ describe("session event target custody", () => {
   );
 
   it.for(["session reset", "lifecycle replacement"] as const)(
-    "rejects %s before dispatch",
+    "follows %s before admission without changing the captured route",
     async (change, { state: { env, storePath } }) => {
       const target = await captureTarget("main", sessionKey, { env });
+      const sessionId = change === "session reset" ? "replacement-session" : "original-session";
       replaceSessionEntrySync(
         { agentId: "main", storePath, sessionKey, env },
         {
-          sessionId: change === "session reset" ? "replacement-session" : "original-session",
+          sessionId,
           lifecycleRevision: "replacement-revision",
           updatedAt: 2,
           delivery: normalizeSessionDeliveryState({
@@ -655,10 +656,17 @@ describe("session event target custody", () => {
           }),
         },
       );
-      const receipt = enqueueCompletion(target);
-
-      await expectStopped(receipt, "failed", "original session generation");
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      const prepared = await prepareTarget(target);
+      try {
+        prepared.assertCurrent();
+        expect(target).toMatchObject({
+          sessionId,
+          lifecycleRevision: "replacement-revision",
+          deliveryContext: route,
+        });
+      } finally {
+        prepared.release();
+      }
     },
   );
 

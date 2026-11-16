@@ -199,8 +199,15 @@ export function createSubagentRegistryMockState() {
         assertCurrent,
         readSessionSettings: () => {
           assertCurrent();
-          const { permissionMode, toolOverrides } = mocks.entries[input.sessionKey] ?? {};
-          return { permissionMode, toolOverrides };
+          const entry = mocks.entries[input.sessionKey];
+          return (
+            entry && {
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+              permissionMode: entry.permissionMode,
+              toolOverrides: entry.toolOverrides,
+            }
+          );
         },
         bindCreation: () => {
           throw new Error("Registry fixtures do not supply committed session creation receipts.");

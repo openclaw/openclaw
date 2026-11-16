@@ -451,12 +451,11 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
-      // Pin history to the requester generation that spawned the child.
+      // Keep confirmed history on the requester conversation across transcript edits.
       ...(params.requesterSessionId
         ? {
             transcriptExpectedGeneration: {
               sessionKey: params.requesterSessionKey,
-              lifecycleRevision: params.requesterLifecycleRevision,
             },
           }
         : {}),
