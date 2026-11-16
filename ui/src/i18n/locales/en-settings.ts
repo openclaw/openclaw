@@ -2108,7 +2108,7 @@ const enSettings = {
     rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
     rawDraftUnverified: en.configView.rawDraftUnverified,
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
-    dismissWarning: "Don’t remind me again",
+    dismissWarning: "Dismiss warning",
     viewPendingChangesRaw: "View pending changes",
     hideEnvValues: "Hide environment values",
     revealEnvValues: "Reveal environment values",
