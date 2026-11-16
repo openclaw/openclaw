@@ -179,7 +179,10 @@ export function resolveCompatibilityHostVersion(
   }
   return resolveVersionFromRuntimeSources({
     env,
-    runtimeVersion: resolveUsableRuntimeVersion(VERSION),
+    // This release is the signed v2026.11.4 source baseline with an extended-stable
+    // package number. Keep its compatibility identity without changing the
+    // displayed version, lowering plugin floors, or guessing for other releases.
+    runtimeVersion: resolveUsableRuntimeVersion(VERSION === "2026.10.33" ? "2026.11.4" : VERSION),
     fallback,
     preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
   });
