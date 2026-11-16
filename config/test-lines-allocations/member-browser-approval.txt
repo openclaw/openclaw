@@ -2,4 +2,5 @@
 # Inbox navigation, original-deadline reload, and atomic SQLite persistence boundaries.
 # Separate ordering, bounded saturation/replay, and full-capacity restart regressions
 # prove contracts that UI mocks or pure metadata tests cannot replace.
-515
+# Local reader regression also proves notice transport cannot gate SAS denial.
+535

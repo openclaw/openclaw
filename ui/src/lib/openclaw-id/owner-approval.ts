@@ -478,21 +478,30 @@ export function createOwnerApproval(
       publish();
       try {
         if (!approve) {
-          if (a.start.member_account_id) {
-            await mail!.call("send", {
-              to: "gateway",
-              payload: {
-                kind: "member_browser_request",
-                action: "cancel",
-                request_id: id,
-                member_account_id: a.start.member_account_id,
-                label: a.start.label,
-                expires_at: a.expires,
-              },
-            });
-          }
-          await send(a, "abort", { reason: "sas_mismatch" });
           drop(id, true);
+          try {
+            await send(a, "abort", { reason: "sas_mismatch" });
+          } finally {
+            if (a.start.member_account_id) {
+              await mail!
+                .call("send", {
+                  to: "gateway",
+                  payload: {
+                    kind: "member_browser_request",
+                    action: "cancel",
+                    request_id: id,
+                    member_account_id: a.start.member_account_id,
+                    label: a.start.label,
+                    expires_at: a.expires,
+                  },
+                })
+                .catch(() => {
+                  console.warn(
+                    "The denied browser's Inbox notice could not be retired; it will expire.",
+                  );
+                });
+            }
+          }
           return;
         }
         if (!a.code || !a.secret || !a.transcript) {

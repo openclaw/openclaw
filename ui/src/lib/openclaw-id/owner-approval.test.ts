@@ -333,10 +333,30 @@ describe("local original-D SAS approval", () => {
     expect(f.operations).toEqual(["accept"]);
     expect(owner.read().requests[0]?.error).toContain("no longer available");
   });
+  it("retires a denied member request before a failed display-notice cleanup", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    const code = owner.read().requests[0]?.code;
+    const request = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (method, params) => {
+      if (params.operation === "send") {
+        const { payload } = JSON.parse(params.body as string);
+        if (payload.kind === "member_browser_request") {
+          expect(f.operations).toEqual(["accept", "abort"]);
+          throw new Error("notice transport failed");
+        }
+      }
+      return request(method, params);
+    });
+    await owner.decide(f.id, false);
+    expect(f.operations).toEqual(["accept", "abort"]);
+    expect(owner.read().requests).toEqual([]);
+    await owner.decide(f.id, true, null, code);
+    expect(f.read().submitted).toBeUndefined();
+  });
   it("denies a member request without a membership write", async () => {
     const f = await setup(false, undefined, undefined, "alice");
     await owner.decide(f.id, false);
-    expect(f.operations).toEqual(["accept", "notice:cancel", "abort"]);
+    expect(f.operations).toEqual(["accept", "abort", "notice:cancel"]);
     expect(f.read().submitted).toBeUndefined();
   });
   it("approves an app's node in the same change, bound by the compared number", async () => {
