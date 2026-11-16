@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -9,11 +10,13 @@ import { templatesHandlers } from "./templates.js";
 import type { RespondFn } from "./types.js";
 
 const listClawHubTemplates = vi.hoisted(() => vi.fn());
+const readClawHubTemplatesOverview = vi.hoisted(() => vi.fn());
 const readClawHubTemplateDetail = vi.hoisted(() => vi.fn());
 const readClawHubTemplatePreview = vi.hoisted(() => vi.fn());
 vi.mock("../../templates/clawhub-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../templates/clawhub-source.js")>()),
   listClawHubTemplates,
+  readClawHubTemplatesOverview,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
 }));
@@ -50,9 +53,34 @@ describe("ClawHub Template catalog Gateway methods", () => {
     expect(listClawHubTemplates).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "returns a bounded overview while Labs remains enabled (%s)",
+    async (complete) => {
+      const overview = { featured: [entry], sections: [] };
+      readClawHubTemplatesOverview.mockResolvedValue(complete ? overview : undefined);
+      expect(
+        (await catalogRequest("templates.catalog.search", { overview: true, limit: 8 }))[0]?.[1],
+      ).toEqual({
+        entries: [],
+        ...(complete ? { overview } : {}),
+      });
+      expect(listClawHubTemplates).not.toHaveBeenCalled();
+      const source = createDeferredCore<unknown>();
+      readClawHubTemplatesOverview.mockReturnValue(source.promise);
+      let labsEnabled = true;
+      const pending = catalogRequest("templates.catalog.search", { overview: true }, () =>
+        labsEnabled ? enabled : {},
+      );
+      labsEnabled = false;
+      source.resolve(overview);
+      expectError(await pending, "FORBIDDEN");
+    },
+  );
+
   it.each([
     ["templates.catalog.search", listClawHubTemplates, {}, "entries", [entry]],
     ["templates.catalog.detail", readClawHubTemplateDetail, release, "detail", release],
+    ["templates.catalog.detail", readClawHubTemplateDetail, entry, "detail", release],
     ["templates.catalog.preview", readClawHubTemplatePreview, previewParams, "preview", preview],
   ] as const)(
     "%s returns the requested result only while Labs remains enabled",
@@ -89,6 +117,22 @@ describe("ClawHub Template catalog Gateway methods", () => {
   it.each([
     [new ClawHubSourceError("unavailable", "Release is unavailable."), "Release is unavailable."],
     [new Error("upstream internal detail"), "ClawHub catalog is unavailable."],
+    [
+      new ClawHubRequestError({ path: "/api/v1/packages/missing", status: 404, body: "" }),
+      "This Template is not on ClawHub. Check the name or browse the catalog.",
+    ],
+    [
+      new ClawHubRequestError({
+        path: "/api/v1/packages/agent/versions/9.9.9",
+        status: 404,
+        body: "",
+      }),
+      "This Template version is not on ClawHub. Choose another version.",
+    ],
+    [
+      new ClawHubRequestError({ path: "/api/v1/packages/agent", status: 503, body: "" }),
+      "ClawHub catalog is unavailable.",
+    ],
   ])("preserves the public catalog failure for %s", async (failure, message) => {
     readClawHubTemplateDetail.mockRejectedValue(failure);
     expectError(await catalogRequest("templates.catalog.detail", release), "UNAVAILABLE", message);

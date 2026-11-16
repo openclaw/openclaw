@@ -5,6 +5,7 @@ import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   runModelProviderDefaultsMutation,
   modelProviderErrorMessage,
+  modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
   readModelBehaviorConfig,
 } from "./config-mutation.ts";
@@ -35,6 +36,22 @@ async function submitDefaults(defaults: DefaultsDraft) {
 }
 
 describe("model provider config patches", () => {
+  it("distinguishes disconnection, missing admin access, and unavailable config support", () => {
+    const harness = createHarness("main");
+    const context = harness.context;
+    Object.defineProperty(context.runtimeConfig, "canPatch", { value: false, configurable: true });
+    expect(modelProviderConfigMutationBlockedReason(context)).toBe(
+      "Couldn’t load model settings. Refresh and try again.",
+    );
+    context.gateway.snapshot.hello!.auth.scopes = ["operator.read"];
+    expect(modelProviderConfigMutationBlockedReason(context)).toBe(
+      "You can view Models, but only admins can change them.",
+    );
+    harness.publishPhase("offline");
+    expect(modelProviderConfigMutationBlockedReason(context)).toBe(
+      "Reconnect to change model settings.",
+    );
+  });
   it.each([
     "fixture/utility",
     { primary: "fixture/utility", fallbacks: ["fixture/backup", "fixture/last"] },
@@ -127,7 +144,7 @@ describe("model provider config patches", () => {
   });
   it("redacts secrets in displayed mutation failures", () => {
     expect(modelProviderErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
+      "Couldn’t complete the request. Try again. OPENAI_API_KEY=sk-123...cdef",
     );
   });
 

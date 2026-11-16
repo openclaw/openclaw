@@ -19,6 +19,7 @@ export function createProgressiveList<T>(
     }
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let batch = options.batch;
     // SAFETY: scheduler.yield is optional; WebKit uses the cancellable timer below.
     const browser = globalThis as typeof globalThis & {
       scheduler?: { yield?: () => Promise<void> };
@@ -32,7 +33,8 @@ export function createProgressiveList<T>(
         if (disposed) {
           return;
         }
-        const next = limit() + options.batch;
+        const next = limit() + batch;
+        batch *= 2;
         if (!enabled() || next >= source().length) {
           setLimit(Infinity);
           return;

@@ -1,4 +1,4 @@
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createFiniteRealtimeTranscriptionSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -136,8 +136,8 @@ function toElevenLabsRealtimeWsUrl(config: ReturnType<typeof normalizeProviderCo
 function createElevenLabsUtteranceSession(
   req: RealtimeTranscriptionSessionCreateRequest,
   config: ReturnType<typeof normalizeProviderConfig>,
-  apiKey: string,
-  createWebSocketSession: PluginCapabilityCatalogContext["createRealtimeTranscriptionWebSocketSession"],
+  headers: () => Promise<Record<string, string>>,
+  createWebSocketSession: PluginCapabilityCatalogHostContext["createRealtimeTranscriptionWebSocketSession"],
 ): RealtimeTranscriptionSession {
   const utterance = req.utterance;
   if (
@@ -173,7 +173,7 @@ function createElevenLabsUtteranceSession(
         callbacks,
         lifecycle: "utterance",
         url: () => toElevenLabsRealtimeWsUrl(finiteConfig),
-        headers: { "xi-api-key": apiKey },
+        headers,
         sendAudio: (audio, currentTransport) => {
           if (
             !currentTransport.sendJson({
@@ -244,9 +244,13 @@ function resolveElevenLabsRealtimeApiKey(
 
 export function buildElevenLabsRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync,
+  resolveProviderAuthProfileApiKey,
 }: Pick<
-  PluginCapabilityCatalogContext,
-  "createRealtimeTranscriptionWebSocketSession"
+  PluginCapabilityCatalogHostContext,
+  | "createRealtimeTranscriptionWebSocketSession"
+  | "isProviderAuthProfileConfiguredAsync"
+  | "resolveProviderAuthProfileApiKey"
 >): RealtimeTranscriptionProviderPlugin {
   const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
     providerConfig,
@@ -264,18 +268,39 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    // A key saved for ElevenLabs (the store voice notes read) counts when the Voice Call config
+    // and the environment have none, and only for the provider that config or the
+    // request names. Automatic selection ranks providers as it does without one.
+    isConfiguredAsync: async (ctx) =>
+      isConfigured(ctx) ||
+      (ctx.selectedExplicitly === true &&
+        (await isProviderAuthProfileConfiguredAsync({
+          provider: "elevenlabs",
+          cfg: ctx.cfg,
+          profileTypes: ["api_key"],
+        }))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = resolveElevenLabsRealtimeApiKey(config);
-      if (!apiKey) {
-        throw new Error("ElevenLabs API key missing");
-      }
+      const directApiKey = resolveElevenLabsRealtimeApiKey(config);
+      // createSession stays synchronous; the saved key is read for each (re)connect.
+      const headers = async (): Promise<Record<string, string>> => {
+        const apiKey =
+          directApiKey ||
+          (await resolveProviderAuthProfileApiKey({
+            provider: "elevenlabs",
+            cfg: req.cfg,
+            profileTypes: ["api_key"],
+          }));
+        if (!apiKey) {
+          throw new Error("ElevenLabs API key missing");
+        }
+        return { "xi-api-key": apiKey };
+      };
       if (req.utterance) {
         return createElevenLabsUtteranceSession(
           req,
           config,
-          apiKey,
+          headers,
           createRealtimeTranscriptionWebSocketSession,
         );
       }
@@ -287,7 +312,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
         providerId: "elevenlabs",
         callbacks: req,
         url: () => toElevenLabsRealtimeWsUrl(config),
-        headers: { "xi-api-key": apiKey },
+        headers,
         connectTimeoutMessage: "ElevenLabs realtime transcription connection timeout",
         reconnectLimitMessage: "ElevenLabs realtime transcription reconnect limit reached",
         sendAudio: (audio, transport) => {

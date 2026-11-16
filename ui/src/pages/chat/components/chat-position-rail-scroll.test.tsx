@@ -28,7 +28,7 @@ afterEach(resetTranscriptTestDom);
 it("follows native midpoint crossings and the final virtual range", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const flushFrame = stubAnimationFrames();
-  stubRailVisibility();
+  const publishVisibility = stubRailVisibility();
   transcriptDomState.measuredRowHeight = 120;
   const host = new RailScrollTestHost();
   const container = host.transcriptRoot;
@@ -118,6 +118,8 @@ it("follows native midpoint crossings and the final virtual range", async () => 
     await move(70);
     expectCurrent("row-3");
 
+    // Settle a nearby range so fast-jump overscan suppression cannot mask this boundary.
+    await move(4070, 2, true);
     // Native offsets must refresh the owner's precise end before range changes.
     await move(4198.5, 2, true);
     expect(recordViewport.mock.results.at(-1)?.value).toBe(false);
@@ -135,6 +137,26 @@ it("follows native midpoint crossings and the final virtual range", async () => 
     ).not.toBe(firstRowBefore);
     expect(container.querySelector('[data-virtual-row-key="row-35"]')).not.toBeNull();
     expectCurrent("row-39");
+    await move(70, 1, true);
+    // Intersection delivery order is independent of the transcript's message order.
+    for (const id of ["row-4", "row-2", "row-3"]) {
+      publishVisibility(container.querySelector<HTMLElement>(`[data-entry-id="${id}"]`)!);
+    }
+    await settle(true);
+    expectCurrent("row-3");
+
+    const readRailHeight = vi.fn(() => 240);
+    Object.defineProperty(marks, "clientHeight", { configurable: true, get: readRailHeight });
+    const readRailOffset = vi.fn(() => 400);
+    Object.defineProperty(marks, "scrollTop", { configurable: true, get: readRailOffset });
+    marks.dispatchEvent(new Event("scroll"));
+    marks.dispatchEvent(new Event("scroll"));
+    expect(readRailOffset).not.toHaveBeenCalled();
+    await settle(true);
+    expect(readRailOffset).toHaveBeenCalledTimes(1);
+    expect(readRailHeight).not.toHaveBeenCalled();
+    expect(marks.querySelector('[data-position-marker-id="row-35"]')).not.toBeNull();
+    expectCurrent("row-3");
   } finally {
     host.remove();
     vi.clearAllTimers();

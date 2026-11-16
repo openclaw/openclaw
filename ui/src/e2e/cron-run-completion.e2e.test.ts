@@ -114,9 +114,9 @@ suite.define(() => {
           expect
             .soft(titles, `${scope} completion labels`)
             .toEqual([
-              `${job.name} · OK · Error`,
-              `${job.name} · OK · Unknown`,
-              `${job.name} · OK`,
+              `${job.name} · Completed · Error`,
+              `${job.name} · Completed · Unknown`,
+              `${job.name} · Completed`,
             ]);
           expect(await runs.nth(0).textContent()).toContain(
             "Synthetic delivery target unavailable.",

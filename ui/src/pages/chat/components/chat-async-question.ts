@@ -8,6 +8,7 @@ import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../../lib/chat/composer-draft-store.runtime.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { showToast } from "../../../lib/toast.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
@@ -508,6 +509,7 @@ export function createAsyncQuestionPresentation(
         !current.resolved.has(itemId)
       ) {
         showToast({
+          severity: storageError() ? "error" : "success",
           message: storageError() ?? t("chat.asyncQuestions.dismissedNotice"),
           actionLabel: t("common.undo"),
           // History can advance while the toast remains visible. The latest
@@ -621,7 +623,7 @@ export function createAsyncQuestionPanelProps(
         draft.status = "submitted";
       } catch (error) {
         draft.status = undefined;
-        draft.error = error instanceof Error ? error.message : String(error);
+        draft.error = formatUiError(error);
         throw error;
       } finally {
         presentation.onChange();

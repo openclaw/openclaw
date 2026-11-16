@@ -1,7 +1,7 @@
 import "../../styles/skill-reader-dialog.css";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillsLibraryReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerSessionSkillLibraryEnglish } from "../../i18n/locales/en-session-skill-library.ts";
@@ -28,22 +28,9 @@ export function LibraryPinRead(props: {
       style={{ "--openclaw-modal-width": "960px" }}
       onModal-cancel={() => props.onClose()}
     >
-      <div class="exec-approval-card skill-reader-dialog">
-        <div class="exec-approval-header">
-          <strong class="exec-approval-title">{props.read.entry.slug}</strong>
-          <button
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("common.close")}
-            onClick={() => props.onClose()}
-          >
-            <Icon name="x" />
-          </button>
-        </div>
-        <div
-          class="skill-reader-dialog__body"
-          style={{ display: "grid", gap: "var(--space-4)", "min-width": "0" }}
-        >
+      <div class="oc-dialog skill-library-dialog">
+        <DialogHeader title={props.read.entry.slug} onClose={() => props.onClose()} />
+        <div class="oc-dialog__body">
           <p>
             {t("skillLibrary.ownerRevision", {
               owner: props.read.entry.ownerLabel,
@@ -71,18 +58,11 @@ export function LibraryPinRead(props: {
             <label class="field">
               <span>{props.file}</span>
               <textarea
-                class="settings-input"
+                class="settings-input skill-library-dialog__source"
                 readonly
                 spellcheck="false"
                 rows={16}
                 value={text() ?? ""}
-                style={{
-                  "font-family": "var(--mono)",
-                  "min-width": "0",
-                  "max-width": "100%",
-                  "box-sizing": "border-box",
-                  resize: "vertical",
-                }}
               />
             </label>
           </Show>

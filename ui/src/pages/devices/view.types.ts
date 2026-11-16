@@ -34,6 +34,7 @@ export type DevicesProps = Omit<
   canPairDevice: boolean;
   canManagePairing: boolean;
   canAdmin: boolean;
+  roleAllowsAdmin?: boolean;
   configForm: Record<string, unknown> | null;
   configLoading: boolean;
   configSaving: boolean;

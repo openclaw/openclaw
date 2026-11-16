@@ -3,6 +3,7 @@ import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { ConfigTierGroups } from "../../components/config-form.render.tsx";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import { humanize, localizedHintForPath } from "../../lib/config-form-utils.ts";
@@ -115,7 +116,9 @@ export function ChannelConfigFeedback(params: { channelId: string; props: Channe
           )}
         </Show>
         <Show when={blockedSetup()}>
-          <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
+          <InlineAlert tone="warning" role="none">
+            {t("channels.hub.saveBeforeSetup")}
+          </InlineAlert>
         </Show>
       </div>
     </Show>
@@ -155,7 +158,7 @@ export function ChannelConfigActions(params: { channelId: string; props: Channel
           class="btn btn--sm primary"
           type="submit"
           form={channelConfigFormId(params.channelId)}
-          disabled={!params.props.channels.connected || saving()}
+          disabled={!params.props.canAdmin || !params.props.channels.connected || saving()}
         >
           {saving() ? t("common.saving") : t("common.save")}
         </button>
@@ -177,13 +180,17 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
       edits() ?? [],
     ),
   );
-  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
+  // A field the form already edits isn't worth repeating as text below it.
+  const extraFields = () =>
+    EXTRA_CHANNEL_FIELDS.filter((field) => field in value() && !node()?.properties?.[field]);
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const saving = () =>
     params.props.savingChannel === params.channelId ||
     params.props.mutationBusy?.config ||
     params.props.config.configSaving;
-  const disabled = createMemo(() => saving() || params.props.config.configSchemaLoading);
+  const disabled = createMemo(
+    () => !params.props.canAdmin || saving() || params.props.config.configSchemaLoading,
+  );
   return (
     <Show
       when={!params.props.config.configSchemaLoading}
@@ -191,7 +198,7 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
     >
       <form
         id={channelConfigFormId(params.channelId)}
-        class="settings-row settings-row--stacked"
+        class="channels-detail__form"
         novalidate
         onSubmit={(event) => {
           event.preventDefault();
@@ -200,6 +207,9 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
           }
         }}
       >
+        <Show when={!params.props.canAdmin}>
+          <p class="settings-row__desc">{t("channels.hub.adminRequired")}</p>
+        </Show>
         <Show
           when={node()}
           fallback={

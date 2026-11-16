@@ -123,7 +123,7 @@ suite.define(() => {
       if (overflow) {
         expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
         expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
-        expect(geometry.maskSize.split(", ")).toContain("12px 100%");
+        expect(geometry.maskSize.split(", ")).toContain(`${width === 390 ? 8 : 12}px 100%`);
       }
 
       const rtlMaskPosition = await active.evaluate((row) => {

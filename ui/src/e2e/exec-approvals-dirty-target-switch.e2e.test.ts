@@ -33,6 +33,7 @@ function approvals(hash: string) {
 const execApprovalsNode = (nodeId: string, displayName: string) => ({
   nodeId,
   displayName,
+  connected: true,
   commands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
 });
 
@@ -67,14 +68,50 @@ async function openApprovals(page: Page) {
   });
   await page.goto(`${suite.server.baseUrl}nodes`);
   await gateway.waitForRequest("exec.approvals.get");
-  const section = page.locator(".settings-section", { hasText: "Exec approvals" });
-  return { gateway, section, hostSelect: section.getByRole("combobox", { name: "Host" }) };
+  const section = page.locator(".settings-section", { hasText: "Command approvals" });
+  return { gateway, section, hostSelect: section.getByRole("combobox", { name: "Device" }) };
 }
 
 const defaultsRow = (section: Locator) =>
   section.locator("summary").getByText("Defaults", { exact: true });
 
 suite.define(() => {
+  it.each(["defaults", "inherited", "temporary-pattern"] as const)(
+    "switches targets without discarding a reverted %s edit",
+    async (kind) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const { gateway, section, hostSelect } = await openApprovals(page);
+        if (kind === "defaults") {
+          await defaultsRow(section).click();
+        } else {
+          await section.locator("summary").getByText("Main", { exact: true }).click();
+        }
+        if (kind === "temporary-pattern") {
+          await section.getByRole("button", { name: "Add pattern", exact: true }).click();
+          await section.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/synthetic-tool");
+          await section.getByRole("button", { name: "Remove", exact: true }).click();
+        } else {
+          const security = section.getByRole("combobox", { name: "Security" }).first();
+          const original = kind === "defaults" ? "deny" : "__default__";
+          await expect.poll(() => security.inputValue()).toBe(original);
+          await security.selectOption("allowlist");
+          await security.selectOption(original);
+        }
+        await hostSelect.selectOption("node-alpha");
+        const discard = page.getByRole("button", { name: "Discard changes", exact: true });
+        await expect
+          .poll(
+            async () =>
+              (await gateway.getRequests("exec.approvals.node.get")).length > 0 ||
+              (await discard.isVisible()),
+          )
+          .toBe(true);
+        expect(await gateway.getRequests("exec.approvals.set")).toHaveLength(0);
+        expect(await discard.count()).toBe(0);
+        await expect.poll(() => hostSelect.inputValue()).toBe("node-alpha");
+      }),
+  );
+
   it("confirms before discarding a dirty draft and loads the next host", async () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway, section, hostSelect } = await openApprovals(page);
@@ -157,7 +194,7 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Node is offline",
       });
-      await section.getByText("Couldn't load approvals", { exact: true }).waitFor();
+      await section.getByText("Couldn’t load approvals. Try again.", { exact: true }).waitFor();
       await section.getByText("Node is offline").waitFor();
       expect(await page.locator(".callout.danger").count()).toBe(0);
       await section.getByRole("button", { name: "Retry", exact: true }).click();

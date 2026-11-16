@@ -73,7 +73,11 @@ export async function revealHeaderWorkspace(
     ...(agentId ? { agentId } : {}),
   });
   if (!result.ok) {
-    owner.publishHeaderError(result.error ?? "Failed to reveal session workspace.", outcomeOwner);
+    owner.publishHeaderError(
+      result.error ??
+        "Couldn’t show the session workspace. Open the folder manually on the Gateway device.",
+      outcomeOwner,
+    );
   }
 }
 

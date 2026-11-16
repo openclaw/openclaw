@@ -21,7 +21,10 @@ jobs:
   android:
     name: Critical Security (android)
     if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && github.event_name == 'schedule' &&
+          github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
+          'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - name: Checkout

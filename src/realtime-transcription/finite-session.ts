@@ -99,6 +99,7 @@ export function createFiniteRealtimeTranscriptionSession(
   function assertActive(): void {
     options.signal.throwIfAborted();
     owner?.assertCurrent();
+    options.callbacks.assertCurrent?.();
     if (failure) {
       throw failure;
     }
@@ -108,6 +109,7 @@ export function createFiniteRealtimeTranscriptionSession(
   }
 
   const backend = options.createSession({
+    assertCurrent: options.callbacks.assertCurrent,
     onPartial: (text) => {
       if (!failure && !finished) {
         options.callbacks.onPartial?.(text);

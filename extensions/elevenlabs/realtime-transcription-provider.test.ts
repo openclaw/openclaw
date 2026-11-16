@@ -17,8 +17,12 @@ vi.mock("./config-api.js", () => ({
 
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
+// The saved-key store is fixture-owned; no test reads real credentials.
+const savedKey = vi.fn<(lookup: object) => Promise<string | undefined>>();
 const provider = buildElevenLabsRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync: async (lookup) => (await savedKey(lookup)) !== undefined,
+  resolveProviderAuthProfileApiKey: savedKey,
 });
 
 const committed = { message_type: "committed_transcript", text: "yes" };
@@ -39,6 +43,7 @@ async function createSession(
   const server = createServer();
   const wss = new WebSocketServer({ server, maxPayload: 1024 * 1024 });
   const requests: URL[] = [];
+  const apiKeys: unknown[] = [];
   let connectionCount = 0;
   wss.on("connection", (ws, request) => {
     requests.push(new URL(request.url ?? "/", "http://127.0.0.1"));
@@ -50,6 +55,7 @@ async function createSession(
           : Buffer.from(data);
       onMessage?.(JSON.parse(buffer.toString()) as Record<string, unknown>, ws);
     });
+    apiKeys.push(request.headers["xi-api-key"]);
     for (const event of [initialEvent, ...(eventsByConnection[connectionCount++] ?? [])]) {
       ws.send(JSON.stringify(event));
     }
@@ -74,7 +80,7 @@ async function createSession(
     await promisify(wss.close.bind(wss))();
     await promisify(server.close.bind(server))();
   };
-  return { session, requests };
+  return { session, requests, apiKeys };
 }
 
 describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
@@ -83,6 +89,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     cleanup = undefined;
     vi.unstubAllEnvs();
     resolveApiKeyMock.mockReset();
+    savedKey.mockReset();
   });
 
   it("normalizes nested config and connects with the configured URL params", async () => {
@@ -177,57 +184,92 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     }
   });
 
-  it("rejects whitespace-only environment keys before session creation", async () => {
+  it.each([
+    ["a key saved for ElevenLabs", "", null, "", "saved-key"],
+    ["the Voice Call key before a saved one", "config-key", null, "", "config-key"],
+    ["ELEVENLABS_API_KEY before a saved one", "", "env-key", "", "env-key"],
+    ["XI_API_KEY before a saved one", "", null, "xi-key", "xi-key"],
+  ])("connects with %s", async (_name, apiKey, envKey, xiKey, expected) => {
+    resolveApiKeyMock.mockReturnValue(envKey);
+    vi.stubEnv("XI_API_KEY", xiKey);
+    savedKey.mockResolvedValue("saved-key");
+
+    const readiness = { cfg: {}, providerConfig: { apiKey } };
+    // Unnamed, as a candidate of automatic selection, the saved key does not count.
+    expect(await provider.isConfiguredAsync?.(readiness)).toBe(expected !== "saved-key");
+    expect(await provider.isConfiguredAsync?.({ ...readiness, selectedExplicitly: true })).toBe(
+      true,
+    );
+    const { session, apiKeys } = await createSession([], { cfg: {}, providerConfig: { apiKey } });
+    await session.connect();
+    expect(apiKeys).toEqual([expected]);
+    // Only a provider with no other key asks the store, and only for its own API key.
+    const lookup = { provider: "elevenlabs", cfg: {}, profileTypes: ["api_key"] };
+    expect(savedKey.mock.calls).toEqual(expected === "saved-key" ? [[lookup], [lookup]] : []);
+  });
+
+  it("rejects whitespace-only environment keys when connecting", async () => {
     resolveApiKeyMock.mockReturnValue(null);
     vi.stubEnv("ELEVENLABS_API_KEY", "");
     vi.stubEnv("XI_API_KEY", "   ");
 
     expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
-    expect(() => provider.createSession({ providerConfig: {} })).toThrow(
-      "ElevenLabs API key missing",
-    );
+    const session = provider.createSession({ providerConfig: {} });
+    await expect(session.connect()).rejects.toThrow("ElevenLabs API key missing");
+    session.close();
   });
 
-  it("transcribes finite PCM input with ordered manual segment acknowledgments", async () => {
-    const frames: Buffer[] = [];
-    const commits: number[] = [];
-    const { session, requests } = await createSession(
-      [[]],
-      {
-        utterance: {
-          format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
-          signal: new AbortController().signal,
+  it.each(["direct", "saved"])(
+    "transcribes finite PCM input with %s credentials",
+    async (credential) => {
+      vi.stubEnv("ELEVENLABS_API_KEY", "");
+      vi.stubEnv("XI_API_KEY", "");
+      savedKey.mockResolvedValue("saved-finite-key");
+      const frames: Buffer[] = [];
+      const commits: number[] = [];
+      const { session, requests, apiKeys } = await createSession(
+        [[]],
+        {
+          providerConfig: { apiKey: credential === "saved" ? "" : "fixture-value" },
+          utterance: {
+            format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
+            signal: new AbortController().signal,
+          },
         },
-      },
-      undefined,
-      (message, ws) => {
-        expect(message.sample_rate).toBe(16000);
-        if (message.commit === true) {
-          expect(message.audio_base_64).toBe("");
-          commits.push(Buffer.concat(frames).length);
-          ws.send(
-            JSON.stringify({ message_type: "committed_transcript", text: `part${commits.length}` }),
-          );
-        } else {
-          expect(message.commit).toBe(false);
-          const audio = Buffer.from(String(message.audio_base_64), "base64");
-          expect(audio.length).toBeLessThanOrEqual(32000);
-          frames.push(audio);
-        }
-      },
-    );
-    const input = Buffer.alloc(32000 * 40 + 40, 11);
-    await session.connect();
-    await session.writeAudio!(input);
-    await expect(session.finishInput!()).resolves.toEqual({
-      text: "part1 part2 part3 part4 part5 part6",
-    });
-    expect(Buffer.concat(frames).equals(input)).toBe(true);
-    expect(commits).toEqual([256000, 512000, 768000, 1024000, 1280000, 1280040]);
-    expect(requests[0]?.searchParams.get("audio_format")).toBe("pcm_16000");
-    expect(requests[0]?.searchParams.get("commit_strategy")).toBe("manual");
-    expect(requests[0]?.searchParams.get("include_timestamps")).toBe("false");
-  });
+        undefined,
+        (message, ws) => {
+          expect(message.sample_rate).toBe(16000);
+          if (message.commit === true) {
+            expect(message.audio_base_64).toBe("");
+            commits.push(Buffer.concat(frames).length);
+            ws.send(
+              JSON.stringify({
+                message_type: "committed_transcript",
+                text: `part${commits.length}`,
+              }),
+            );
+          } else {
+            expect(message.commit).toBe(false);
+            const audio = Buffer.from(String(message.audio_base_64), "base64");
+            expect(audio.length).toBeLessThanOrEqual(32000);
+            frames.push(audio);
+          }
+        },
+      );
+      const input = Buffer.alloc(32000 * 40 + 40, 11);
+      await session.connect();
+      await session.writeAudio!(input);
+      await expect(session.finishInput!()).resolves.toEqual({
+        text: "part1 part2 part3 part4 part5 part6",
+      });
+      expect(Buffer.concat(frames).equals(input)).toBe(true);
+      expect(commits).toEqual([256000, 512000, 768000, 1024000, 1280000, 1280040]);
+      expect(apiKeys).toEqual([credential === "saved" ? "saved-finite-key" : "fixture-value"]);
+      expect(requests[0]?.searchParams.get("audio_format")).toBe("pcm_16000");
+      expect(requests[0]?.searchParams.get("commit_strategy")).toBe("manual");
+      expect(requests[0]?.searchParams.get("include_timestamps")).toBe("false");
+    },
+  );
 
   it.each(["empty", "error", "disconnect"] as const)(
     "handles finite %s after the final commit",

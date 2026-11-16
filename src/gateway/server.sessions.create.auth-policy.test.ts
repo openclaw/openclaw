@@ -50,8 +50,8 @@ it("retains committed initial turns through fencing and denies inference after g
       const unlockStartupMethods = params.unlockStartupMethods;
       return startPostAttach({
         ...params,
-        unlockStartupMethods: () => {
-          unlockStartupMethods();
+        unlockStartupMethods: async () => {
+          await unlockStartupMethods();
           startupReady.resolve();
         },
       });

@@ -225,7 +225,7 @@ describe("stored secrets", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
       expectElement(
-        container.querySelector<HTMLButtonElement>('button[aria-label="Save: Bot Token"]'),
+        container.querySelector<HTMLButtonElement>('button[aria-label="Save: Bot token"]'),
         "save",
       ).click();
       await Promise.resolve();

@@ -220,6 +220,7 @@ export async function transcribeAudioStream(
       providerConfig,
       utterance: { format: params.format, signal },
       onError: rejectFailure,
+      assertCurrent,
     });
     if (!session.finishInput || !session.writeAudio) {
       throw new Error("Realtime provider advertised finalization without implementing it.");

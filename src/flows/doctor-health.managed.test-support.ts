@@ -68,8 +68,19 @@ type DoctorManagedRepairOutcome =
   | "restart-unhealthy"
   | "ancestor-blocked";
 
+function usesCurrentAgentSchema(outcome: DoctorManagedRepairOutcome) {
+  return (
+    outcome === "interactive-declined" ||
+    outcome.startsWith("clean-") ||
+    outcome.startsWith("update-") ||
+    outcome === "archive-verification"
+  );
+}
+
 export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManagedRepairOutcome[]) {
-  const fixture = useDoctorHealthFixture();
+  const fixture = useDoctorHealthFixture(
+    outcomes.some(usesCurrentAgentSchema) ? ["main", "research"] : [],
+  );
   it.each(outcomes)(
     "coordinates the matching managed writer through multi-agent repair: %s",
     (outcome) => runManagedRepair(outcome, fixture),
@@ -80,6 +91,7 @@ async function runManagedRepair(
   outcome: DoctorManagedRepairOutcome,
   {
     materializeSharedStateDatabase,
+    materializeCurrentAgentDatabases,
     openHistoricalAgentDatabase,
   }: ReturnType<typeof useDoctorHealthFixture>,
 ) {
@@ -92,7 +104,7 @@ async function runManagedRepair(
     const declined = outcome === "interactive-declined";
     const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
     const archiveVerification = is("archive-verification", "update-parent-stopped");
-    const current = clean || archiveVerification;
+    const current = usesCurrentAgentSchema(outcome);
     const inspectionOnly = outcome === "clean-force-inspect";
     const force = outcome.startsWith("clean-force-");
     const entries = {
@@ -131,6 +143,9 @@ async function runManagedRepair(
         path.join(state.workspaceDir, "openclaw-workspace-state.json"),
         JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
       );
+    }
+    if (current) {
+      materializeCurrentAgentDatabases(env);
     }
     const open = current ? openOpenClawAgentDatabase : openHistoricalAgentDatabase;
     const initial = open({ agentId: "main", env });
@@ -174,7 +189,7 @@ async function runManagedRepair(
       outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
     const inconclusiveActivation =
       outcome.startsWith("clean-stopped-") && outcome !== "clean-stopped-repair";
-    const linuxService = outcome === "clean-stopped-manager-unknown";
+    const linuxService = is("clean-stopped-manager-unknown", "ready");
     if (linuxService) {
       mockDoctorServicePlatform("linux");
     }
@@ -191,6 +206,7 @@ async function runManagedRepair(
       environment: {
         OPENCLAW_STATE_DIR: state.stateDir,
         OPENCLAW_CONFIG_PATH: state.configPath,
+        OPENCLAW_GATEWAY_TOKEN: "doctor-managed-test-token",
       },
     };
     const stop = vi.fn(async () => {
@@ -446,9 +462,6 @@ async function runManagedRepair(
         expectProcessOwnerReleased();
       } else if (outcome === "workspace-cleanup-failed") {
         await expect(run).rejects.toThrow(/workspace.*requires migration/);
-      } else if (approvalsBlocked) {
-        await expect(run).rejects.toThrow(ExecApprovalsMigrationRequiredError);
-        expectProcessOwnerReleased();
       } else if (outcome === "restart-unhealthy") {
         await expect(run).rejects.toThrow("managed Gateway did not become ready");
       } else {
@@ -472,6 +485,11 @@ async function runManagedRepair(
         expectUnchanged();
         return;
       }
+      if (outcome === "ready") {
+        expect(runtime.log).not.toHaveBeenCalledWith(
+          expect.stringContaining("Gateway maintenance drain deadline reached"),
+        );
+      }
       // Declined, update-owned and inconclusive activation cases returned above.
       expect(events).toEqual(
         inspectionOnly ? ["repair"] : [...(initiallyStopped ? [] : ["stop"]), "repair", "restart"],
@@ -492,9 +510,14 @@ async function runManagedRepair(
         );
       }
       if (approvalsCase) {
+        expectProcessOwnerReleased();
         if (approvalsBlocked) {
           expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsBefore);
-          expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          if (outcome === "approvals-malformed") {
+            expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          } else {
+            expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
+          }
         } else {
           expect(fs.existsSync(approvalsPath)).toBe(false);
           expect(loadExecApprovalsReadOnly().defaults?.security).toBe("full");
@@ -505,7 +528,7 @@ async function runManagedRepair(
           );
         }
       }
-      if (clean || is("ready", "interactive-ready", "archive-verification", "approvals-migrated")) {
+      if (clean || approvalsCase || is("ready", "interactive-ready", "archive-verification")) {
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       } else {
         expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");

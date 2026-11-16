@@ -1,2 +1,2 @@
-# Finite completion, real public runtime/provider flow, cancellation, admission, bounds, and plugin ownership regressions.
-1442
+# Finite completion, real runtime/provider flow, cancellation, admission, bounds, credential fallback, and live ownership regressions; excess above the 400-line allowance.
+1068

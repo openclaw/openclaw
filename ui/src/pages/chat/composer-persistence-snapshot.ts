@@ -25,7 +25,10 @@ export function captureChatComposerDraftSnapshot(
   // before an old pane can stamp its input with the replacement account.
   const replaced =
     previous?.owner.recoveryScope &&
-    !isChatComposerOwnerCurrent({ ...state, connected: false }, previous.owner);
+    !isChatComposerOwnerCurrent(
+      { settings: state.settings, client: state.client, connected: false },
+      previous.owner,
+    );
   const durableScope = replaced ? (previous.durable?.scope ?? null) : candidateDurableScope;
   const scope = resolveUiConversationIdentity(state, state.sessionKey);
   const text = normalizeChatComposerDraft(state.chatMessage);

@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
+import { normalizeTextScale, TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
@@ -8,9 +8,10 @@ import {
   resolveTypefaces,
   TYPEFACES,
 } from "../../app/typography.ts";
-import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import "../../components/select-picker.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -42,8 +43,7 @@ export function TextSection(
       labelStyle: `font-family: ${metadata.stack}`,
     })),
   );
-  // The value binding rewrites the DOM whenever it reruns. Track only the stored
-  // family so unrelated settings refreshes keep an uncommitted draft.
+  // Isolate committed values from unrelated settings and translation refreshes.
   const terminalFontFamily = createMemo(() => props.terminalFontFamily ?? "");
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
@@ -54,27 +54,18 @@ export function TextSection(
           <SettingsRow
             title={t("configView.appearance.textSize")}
             description={t("quickSettings.personal.browserOnly")}
-            stacked={true}
+            stackedOnNarrow={true}
             control={
-              <div class="settings-text-scale">
-                <div class="settings-text-scale__options">
-                  <For each={TEXT_SCALE_STOPS}>
-                    {(stop) => (
-                      <button
-                        type="button"
-                        class={["settings-text-scale__btn", { active: stop === props.textScale }]}
-                        aria-pressed={stop === props.textScale ? "true" : "false"}
-                        onClick={() => props.setTextScale(stop)}
-                      >
-                        <span class="settings-text-scale__sample">
-                          {t(TEXT_SCALE_LABELS[stop])}
-                        </span>
-                        <span class="settings-text-scale__label">{stop}%</span>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
+              <SettingsSegmented
+                value={String(props.textScale)}
+                ariaLabel={t("configView.appearance.textSize")}
+                options={TEXT_SCALE_STOPS.map((stop) => ({
+                  value: String(stop),
+                  label: `${stop}%`,
+                  title: t(TEXT_SCALE_LABELS[stop]),
+                }))}
+                onChange={(value) => props.setTextScale(normalizeTextScale(Number(value)))}
+              />
             }
           />
         </div>
@@ -104,7 +95,10 @@ export function TextSection(
                           label: t("configView.appearance.fonts.themeDefault"),
                           description: t("configView.appearance.fonts.themeFace", {
                             theme: props.presentedTheme.label,
-                            face: TYPEFACES[face()].label,
+                            face:
+                              face() === "system"
+                                ? t("configView.appearance.fonts.system")
+                                : TYPEFACES[face()].label,
                           }),
                           labelStyle: `font-family: ${TYPEFACES[face()].stack}`,
                         },
@@ -131,7 +125,7 @@ export function TextSection(
               {t("quickSettings.personal.browserOnly")}
             </>
           }
-          stacked={true}
+          stackedOnNarrow={true}
           control={
             <>
               <input
@@ -141,7 +135,7 @@ export function TextSection(
                 placeholder={t("configView.appearance.fonts.terminalDefault")}
                 maxlength={100}
                 spellcheck="false"
-                value={terminalFontFamily()}
+                ref={liveValue(terminalFontFamily)}
                 onInput={(event) => event.currentTarget.setCustomValidity("")}
                 onChange={(event) => {
                   const input = event.currentTarget;

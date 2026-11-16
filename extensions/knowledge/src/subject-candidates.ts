@@ -237,7 +237,7 @@ export function nameCandidates(text: string): NameCandidate[] {
   }
   for (const m of text.matchAll(CAP_RUN_RE)) {
     const surface = m[0];
-    consider(surface, !atSentenceStart(text, m.index ?? 0));
+    consider(surface, !atSentenceStart(text, m.index));
     // "Did Atlas" glues an auxiliary onto the name; also consider the name alone.
     const tokens = surface.split(/\s+/u);
     let first = 0;

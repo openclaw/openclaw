@@ -54,6 +54,7 @@ export function createTelegramTextSender(config: {
   ) => Promise<void>;
   singleUseReplyTo: boolean;
   buildThreadParams: (includeReplyTo: boolean) => Record<string, unknown>;
+  pendingMessageEffectParams: () => Record<string, unknown> | undefined;
   sender: TelegramPreparedSender;
   textMode: "markdown" | "html";
   tableMode: MarkdownTableMode;
@@ -71,6 +72,7 @@ export function createTelegramTextSender(config: {
     recordDeliveredPromptContext,
     singleUseReplyTo,
     buildThreadParams,
+    pendingMessageEffectParams,
     sender,
     textMode,
     tableMode,
@@ -242,6 +244,7 @@ export function createTelegramTextSender(config: {
               index === pages.length - 1 && (!fallback || fallback.index === fallback.count - 1);
             return {
               ...buildThreadParams(includeReply),
+              ...pendingMessageEffectParams(),
               ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}),
               ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
               ...(opts.silent === true ? { disable_notification: true } : {}),

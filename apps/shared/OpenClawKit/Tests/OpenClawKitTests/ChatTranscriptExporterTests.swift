@@ -275,6 +275,14 @@ struct ChatTranscriptExporterTests {
         #expect(emojiFilename.hasSuffix(".md"))
     }
 
+    @Test func `uses chat for untitled export fallbacks`() {
+        #expect(ChatTranscriptExporter.filename(sessionTitle: nil, sessionKey: "") == "chat.md")
+        #expect(ChatTranscriptExporter.markdown(
+            sessionTitle: nil,
+            sessionKey: "",
+            messages: []) == "# Chat\n")
+    }
+
     @Test func `empty transcript contains header only`() {
         #expect(
             ChatTranscriptExporter.markdown(

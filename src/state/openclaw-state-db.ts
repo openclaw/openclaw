@@ -16,7 +16,7 @@ import {
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   getAdmittedSqliteSchemaFacts,
   invalidateSqliteSchemaFacts,
@@ -126,7 +126,7 @@ export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db
 
 const deferredStateDatabases = new WeakSet<EngineConnection>();
 
-type StateSchemaRepairResult = { changes: string[]; warnings: string[] };
+type StateSchemaRepairResult = { changes: string[]; warnings: string[]; failure?: unknown };
 
 export function repairOpenClawStateDatabaseSchema(
   options: OpenClawStateDatabaseOptions & {
@@ -173,10 +173,7 @@ export async function prepareOpenClawStateDatabaseSchema(
     legacyCronDefaultStoreKey?: string;
   } = {},
   mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
-): Promise<{
-  changes: string[];
-  warnings: string[];
-}> {
+): Promise<StateSchemaRepairResult> {
   if (isStatePostgres()) {
     await openOpenClawStateDatabaseForDoctor(options);
     return { changes: [], warnings: [] };

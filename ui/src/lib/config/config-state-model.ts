@@ -13,6 +13,7 @@ export type ConfigAutoSaveStatus =
   | "idle"
   | "saving"
   | "saved"
+  | "deferred"
   | "rejected"
   | "error"
   | "conflict"
@@ -94,13 +95,15 @@ export function markConfigAwaitingApply(state: RuntimeConfigState) {
 const requestVersionsByState = new WeakMap<RuntimeConfigState, number>();
 const connectionEpochsByState = new WeakMap<object, number>();
 const staleConfigSnapshots = new WeakSet<object>();
+export type ConfigReadResult = Result<void, string> & { denied?: boolean };
+
 export type ConfigRead = {
   version: number;
   client: GatewayBrowserClient;
   connectionEpoch: number;
-  completion: Deferred<Result<void, string>>;
-  invalidated: Deferred<Result<void, string>>;
-  settled: Promise<Result<void, string>>;
+  completion: Deferred<ConfigReadResult>;
+  invalidated: Deferred<ConfigReadResult>;
+  settled: Promise<ConfigReadResult>;
 };
 const configReadsByState = new WeakMap<object, ConfigRead>();
 
@@ -118,8 +121,8 @@ export function beginConfigRead(
   state: RuntimeConfigState,
   client: GatewayBrowserClient,
 ): ConfigRead {
-  const completion = createDeferredCore<Result<void, string>>();
-  const invalidated = createDeferredCore<Result<void, string>>();
+  const completion = createDeferredCore<ConfigReadResult>();
+  const invalidated = createDeferredCore<ConfigReadResult>();
   const read: ConfigRead = {
     version: nextRequestVersion(state),
     client,

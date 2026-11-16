@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,12 +8,53 @@ import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-supp
 import { resolveLaunchAgentPlistPath } from "../daemon/launchd-service-files.js";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { withGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as exec from "../process/exec.js";
 import { assertGatewayServiceSchemaMigrationAllowed } from "../state/openclaw-state-service-installation.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { cliServiceInspectionImportEntrypoint } from "./cli-entrypoint.test-support.js";
+import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { inspectCliGatewayServiceInstallation } from "./run-main-service-installation.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const inspectionEntry = resolveRuntimeWorkerUrl(cliServiceInspectionImportEntrypoint);
+
+it("inspects a service without loading service mutation or database ownership", async () => {
+  const root = dirs.make("service-inspection-import-");
+  const nodeExecutable = resolveTestNodeExecPath();
+  const result = await runCliProcessChild({
+    nodeExecutable,
+    nodeArgs: [
+      ...resolveRuntimeWorkerArgv(inspectionEntry, nodeExecutable).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      `
+        import assert from "node:assert/strict";
+        import { registerHooks } from "node:module";
+        let loadedOwner = false;
+        const hooks = registerHooks({ load(url, context, next) {
+          if (/\\/(?:daemon\\/service|state\\/openclaw-state-db)\\.(?:ts|js)(?:[?#].*)?$/.test(url)) loadedOwner = true;
+          return next(url, context);
+        }});
+        const { inspectCliGatewayServiceInstallation } = await import(${JSON.stringify(inspectionEntry.href)});
+        Object.defineProperty(process, "platform", { value: "aix" });
+        assert.equal(await inspectCliGatewayServiceInstallation({ HOME: ${JSON.stringify(root)} }), undefined);
+        assert.equal(loadedOwner, false, "read-only inspection loaded a mutation owner");
+        hooks.deregister();
+      `,
+    ],
+    env: { PATH: process.env.PATH, HOME: root, OPENCLAW_STATE_DIR: root },
+  });
+  expect(
+    result,
+    formatCliProcessFailure({ reason: "service inspection imports", ...result }),
+  ).toMatchObject({
+    code: 0,
+    signal: null,
+  });
+});
+
 const nativePlutil = process.platform === "darwin";
 afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {

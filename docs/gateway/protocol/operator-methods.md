@@ -215,7 +215,10 @@ An unchanged catalog renewal emits `chat.metadata.changed` with
 `modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
 refreshes only cached receipts that still contain `pendingProviders`; settled
 catalogs remain reusable. Inventory, availability, and account changes still
-invalidate affected catalogs.
+invalidate affected catalogs. Agent-specific metadata publications include
+`agentId`, so other agents retain their catalog and auth receipts. Configuration,
+plugin, and owner replacement changes still invalidate all agents. Discovery
+settlements can accompany scoped changes as a separate pending-only notification.
 
 The Control UI shares the initial `models.snapshot` with matching configured
 catalog readers. If bootstrap does not deliver it within one second, readers
@@ -246,7 +249,14 @@ an in-flight metadata read.
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
 locator. The `provider-config` view remains shared authored inventory and omits
-account selection. `refreshFailed: true` reports a failed acquisition while
+account selection. `refreshFailures` identifies failed discovery scopes with
+`acquisition: "provider" | "native"` and an optional `provider` identifier. The
+provider is omitted when the acquisition scope is unknown or outside the requested
+catalog view. These diagnostics never include raw errors, endpoints, credentials,
+or account/profile identifiers and do not replace authentication outcomes. Clients
+should retain usable model choices and distinguish a partially available catalog
+from an empty one; older responses may have `refreshFailed` without diagnostics.
+`refreshFailed: true` reports a failed acquisition while
 compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 

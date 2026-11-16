@@ -43,18 +43,16 @@ export function SensitiveToggleButton(props: {
   return (
     <>
       {props.state.canReveal && props.onToggleSensitivePath && (
-        <openclaw-tooltip prop:content={label()}>
-          <button
-            type="button"
-            class="settings-secret__toggle"
-            aria-label={label()}
-            aria-pressed={props.state.isRevealed ? "true" : "false"}
-            disabled={props.disabled}
-            onClick={() => props.onToggleSensitivePath?.(props.path)}
-          >
-            <Icon name={props.state.isRevealed ? "eye" : "eyeOff"} />
-          </button>
-        </openclaw-tooltip>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label={label()}
+          aria-pressed={props.state.isRevealed ? "true" : "false"}
+          disabled={props.disabled}
+          onClick={() => props.onToggleSensitivePath?.(props.path)}
+        >
+          <Icon name={props.state.isRevealed ? "eye" : "eyeOff"} />
+        </button>
       )}
     </>
   );
@@ -148,7 +146,10 @@ function ConfigUnsupportedNote(props: { message: string; onOpenRaw?: () => void 
   const parts = () => props.message.split(t("configView.raw"));
   return (
     <span class="settings-row__desc">
-      <Show when={props.onOpenRaw && parts().length === 2} fallback={props.message}>
+      <Show
+        when={props.onOpenRaw && parts().length === 2}
+        fallback={props.onOpenRaw ? props.message : t("configForm.editInAdvancedRaw")}
+      >
         {parts()[0]}
         <button type="button" class="config-field__raw-link" onClick={() => props.onOpenRaw?.()}>
           {t("configView.raw")}
@@ -163,6 +164,8 @@ export function FieldRow(props: {
   label: string;
   path?: Array<string | number>;
   help?: string;
+  /** What the row shows when its heading already names part of the label. */
+  title?: JSX.Element;
   helpId?: string;
   helpContext?: readonly string[];
   defaultValue?: string;
@@ -170,6 +173,9 @@ export function FieldRow(props: {
   required?: boolean;
   control: JSX.Element;
   stacked?: boolean;
+  usingDefault?: boolean;
+  /** Field controls share the form's control column; a stepper hugs the edge like a toggle. */
+  placement?: "column";
   error?: JSX.Element;
   unsupported?: string;
   onOpenRaw?: () => void;
@@ -194,13 +200,19 @@ export function FieldRow(props: {
   );
   return (
     <div
-      class={props.stacked || !hasText() ? "settings-row settings-row--stacked" : "settings-row"}
+      class={[
+        "settings-row",
+        {
+          "settings-row--stacked": props.stacked || !hasText(),
+          "settings-row--field": props.placement === "column",
+        },
+      ]}
     >
       {hasText() && (
         <div class="settings-row__text">
           {props.showLabel && (
             <span class="settings-row__title">
-              {props.label}
+              {props.title ?? props.label}
               {props.required && (
                 <span class="settings-row__desc" aria-hidden="true">
                   {" · "}
@@ -234,7 +246,7 @@ export function FieldRow(props: {
         </div>
       )}
       {props.control != null && (
-        <div class="settings-row__control">
+        <div class={["settings-row__control", { "cfg-default-control": props.usingDefault }]}>
           {!props.showLabel && props.required && (
             <span class="settings-row__desc" aria-hidden="true">
               {t("configForm.required")}
@@ -298,19 +310,17 @@ export function CollectionRemoveButton(props: {
   let button!: HTMLButtonElement;
   onSettled(() => props.focus.register(button));
   return (
-    <openclaw-tooltip prop:content={props.label}>
-      <button
-        ref={(element) => (button = element)}
-        type="button"
-        class="btn btn--icon"
-        style={{ width: "28px", height: "28px", padding: "0" }}
-        aria-label={props.label}
-        disabled={props.disabled}
-        onClick={(event) => removeCollectionRow(event, props.remove, props.focus.destinations())}
-      >
-        <Icon name="trash" />
-      </button>
-    </openclaw-tooltip>
+    <button
+      ref={(element) => (button = element)}
+      type="button"
+      class="btn btn--icon"
+      style={{ width: "28px", height: "28px", padding: "0" }}
+      aria-label={props.label}
+      disabled={props.disabled}
+      onClick={(event) => removeCollectionRow(event, props.remove, props.focus.destinations())}
+    >
+      <Icon name="trash" />
+    </button>
   );
 }
 
@@ -346,6 +356,7 @@ export function schemaDefaultValueText(schema: JsonSchema): string | undefined {
 export function SegmentedControl(props: {
   options: unknown[];
   resolvedValue: unknown;
+  usingDefault?: boolean;
   disabled: boolean;
   required?: boolean;
   ariaLabel: string;
@@ -362,6 +373,12 @@ export function SegmentedControl(props: {
       label: configEnumOptionLabel(option, props.options),
     }));
   });
+  const select = (index: string) => {
+    const option = props.options[Number(index)];
+    if (option !== undefined) {
+      return props.onSelect(option);
+    }
+  };
   return (
     <SettingsSegmented
       value={selectedIndex() < 0 ? "" : String(selectedIndex())}
@@ -370,12 +387,8 @@ export function SegmentedControl(props: {
       ariaRequired={props.required}
       ariaLabel={props.ariaLabel}
       descriptionId={props.descriptionId}
-      onChange={(index: string) => {
-        const option = props.options[Number(index)];
-        if (option !== undefined) {
-          return props.onSelect(option);
-        }
-      }}
+      onChange={select}
+      onReselect={props.usingDefault && !props.disabled ? select : undefined}
     />
   );
 }

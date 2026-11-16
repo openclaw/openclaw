@@ -16,7 +16,9 @@ enum VoicePermissionSupport {
         let status = SFSpeechRecognizer.authorizationStatus()
         guard status == .notDetermined else { return status == .authorized }
         return await PermissionRequestBridge.awaitRequest { completion in
-            SFSpeechRecognizer.requestAuthorization { authStatus in
+            // TCC calls this on a background queue. Without @Sendable the literal inherits the
+            // bridge's main-actor isolation and the runtime isolation check traps.
+            SFSpeechRecognizer.requestAuthorization { @Sendable authStatus in
                 completion(authStatus == .authorized)
             }
         }

@@ -7,6 +7,7 @@ import {
   type AgentRunTimeoutPhase,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
 import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
@@ -41,14 +42,29 @@ export const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
 const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
-export function createAgentRunDirectAbortError(): Error {
+export function createAgentRunDirectAbortError(userInitiated?: boolean): Error {
   return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
     code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
+    ...(userInitiated ? { userInitiated: true } : {}),
   });
 }
 
 export function isAgentRunDirectAbortReason(value: unknown): boolean {
   return hasAgentRunAbortCode(value, AGENT_RUN_DIRECT_ABORT_ERROR_CODE);
+}
+
+/** Presentation fact from an explicit Stop; it never grants cancellation authority. */
+export function isUserInitiatedAgentRunAbortReason(value: unknown): boolean {
+  return isAgentRunDirectAbortReason(value) && asOptionalRecord(value)?.userInitiated === true;
+}
+
+function directAbortStopReason(value: unknown): "stop" | "auth-revoked" | "aborted" {
+  const reason = asOptionalRecord(value)?.gatewayStopReason;
+  return reason === "auth-revoked"
+    ? "auth-revoked"
+    : reason === "rpc" || reason === "stop" || isUserInitiatedAgentRunAbortReason(value)
+      ? "stop"
+      : "aborted";
 }
 
 export function createAgentRunRestartAbortError(): Error {
@@ -102,6 +118,8 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
     | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
+    | "stop"
+    | "auth-revoked"
     | "timeout";
 } {
   if (!signal?.aborted) {
@@ -114,7 +132,9 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
         ? AGENT_RUN_SUPERSEDED_STOP_REASON
         : isSignalTimeoutReason(signal.reason)
           ? "timeout"
-          : AGENT_RUN_ABORTED_STOP_REASON;
+          : isAgentRunDirectAbortReason(signal.reason)
+            ? directAbortStopReason(signal.reason)
+            : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
@@ -166,7 +186,7 @@ export function resolveAgentRunErrorLifecycleFields(
   }
   // A run-owned controller can stop work without aborting its caller's signal.
   if (isAgentRunDirectAbortReason(error)) {
-    return { aborted: true, stopReason: "aborted" };
+    return { aborted: true, stopReason: directAbortStopReason(error) };
   }
   if (isAgentRunRestartAbortReason(error)) {
     return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };

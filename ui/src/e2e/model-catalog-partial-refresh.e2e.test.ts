@@ -127,12 +127,12 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
-        .toContain("Some models could not be refreshed");
+        .toContain("Couldn’t refresh some models");
       await page.keyboard.press("Escape");
       const retryAfter = await gateway.deferNext("models.list");
       await composer.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: retryAfter });
-      await composer.locator("[data-chat-model-refresh]").waitFor({ state: "visible" });
+      expect(await composer.locator("[data-chat-model-refresh]").count()).toBe(0);
       expect(await effort.isVisible()).toBe(true);
       await expectUnreserved(effortPicker);
       await effort.click();
@@ -143,7 +143,7 @@ suite.define(() => {
       await gateway.resolveDeferred("models.list");
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
-        .toContain("Some models could not be refreshed");
+        .toContain("Couldn’t refresh some models");
       await expect.poll(() => effort.isVisible()).toBe(true);
       await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
       await expectUnreserved(effortPicker);

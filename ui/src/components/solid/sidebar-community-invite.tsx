@@ -58,7 +58,7 @@ export function SidebarCommunityInvite(props: { onDismiss: () => void; mode: "li
     setEligible(false);
     props.onDismiss();
     if (!result.ok) {
-      showToast({ message: t("communityInvite.dismissFailed") });
+      showToast({ severity: "error", message: t("communityInvite.dismissFailed") });
     }
   };
   return (

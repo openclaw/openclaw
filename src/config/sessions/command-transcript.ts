@@ -102,6 +102,7 @@ type CommandExchangeParams = Pick<
   | "config"
   | "assertCurrent"
   | "beforeMessageWrite"
+  | "contextFreeCommand"
 > & {
   commandText: string;
   replyText: string;

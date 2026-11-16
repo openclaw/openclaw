@@ -120,7 +120,7 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
             run(true, async ({ client: storage, vaultId }, guarded) => {
               if (request.sources && !request.sources.includes("memory")) {
                 throw new Error(
-                  "Knowledge does not search session transcripts; use conversation-history tools.",
+                  "Knowledge does not search chat history; use conversation-history tools.",
                 );
               }
               if (request.activeProjectKeys?.length) {
@@ -201,7 +201,7 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                           { id: h.record.id, revision: h.citation.revision, hash: h.citation.hash },
                           vaultId,
                         ),
-                        excerpt: `${h.record.title}\n${attribution(h.assertionOrigin, h.attribution)}\n${h.snippet.matchLocated === false ? "Opening excerpt (not the match location):\n" : ""}${h.snippet.text}`,
+                        excerpt: `${h.record.title}\n${h.via ? `Replaces ${h.via.title} (${h.via.id} revision ${h.via.revision}), which matched the query.\n` : ""}${attribution(h.assertionOrigin, h.attribution)}\n${h.snippet.matchLocated === false ? "Opening excerpt (not the match location):\n" : ""}${h.snippet.text}`,
                       },
                       h.score === null ? {} : { score: h.score },
                       {
@@ -222,7 +222,7 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                   result.coverage.complete && !nextCursor && !omittedSessions
                     ? ("complete" as const)
                     : ("partial" as const),
-                warning: `${result.coverage.message}${omittedSessions ? " Session transcripts were not searched." : ""}`,
+                warning: `${result.coverage.message}${omittedSessions ? " Chat history was not searched." : ""}`,
               };
             }),
           get: (request) =>

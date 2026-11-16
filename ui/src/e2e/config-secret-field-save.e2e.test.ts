@@ -50,13 +50,11 @@ const storedSnapshot = {
 };
 // What the Gateway sends when the file holds "Bearer ${TOKEN}": redacted like plaintext, no text.
 const templateSnapshot = { ...storedSnapshot, raw: null };
-const includeSnapshot = {
-  ...storedSnapshot,
-  parsed: { logging: { $include: "./logging.json5" } },
-  raw: JSON.stringify({ logging: { $include: "./logging.json5" } }),
-};
+const include = { logging: { $include: "./logging.json5" } };
+const includeSnapshot = { ...storedSnapshot, parsed: include, raw: JSON.stringify(include) };
 
 async function openForm(page: Page, current: Record<string, unknown> = snapshot) {
+  await page.clock.install();
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "config.patch", "config.set"],
     methodResponses: {
@@ -67,7 +65,7 @@ async function openForm(page: Page, current: Record<string, unknown> = snapshot)
     },
   });
   await page.goto(`${suite.server.baseUrl}settings/advanced?section=logging`);
-  const token = page.getByRole("textbox", { name: "Api Token", exact: true });
+  const token = page.getByRole("textbox", { name: "API token", exact: true });
   await token.waitFor();
   return { gateway, token };
 }
@@ -76,8 +74,8 @@ suite.define(() => {
   it("holds a secret field while the field beside it keeps autosaving", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, token } = await openForm(page);
-      const save = page.getByRole("button", { name: "Save: Api Token", exact: true });
-      const cancel = page.getByRole("button", { name: "Cancel: Api Token", exact: true });
+      const save = page.getByRole("button", { name: "Save: API token", exact: true });
+      const cancel = page.getByRole("button", { name: "Cancel: API token", exact: true });
       const row = page.locator(".settings-row").filter({ has: token }).last();
       const rowBefore = await row.boundingBox();
       const fieldBefore = await token.boundingBox();
@@ -95,10 +93,11 @@ suite.define(() => {
       const saveBox = (await save.boundingBox())!;
       expect(saveBox.x).toBeGreaterThanOrEqual(field.x + field.width);
       expect(saveBox.height).toBe(field.height);
-      await page.waitForTimeout(1500);
+      await page.clock.runFor(1500);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
+      await page.clock.resume();
       const level = page.getByRole("textbox", { name: "Level", exact: true });
       await level.fill("debug");
       await gateway.waitForRequest("config.set");
@@ -138,7 +137,7 @@ suite.define(() => {
   it("replaces a stored secret on Save, and leaves it alone on Cancel", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, token } = await openForm(page, storedSnapshot);
-      const save = page.getByRole("button", { name: "Save: Api Token", exact: true });
+      const save = page.getByRole("button", { name: "Save: API token", exact: true });
       expect(await token.inputValue()).toBe("");
       expect(await token.getAttribute("readonly")).toBeNull();
       expect(await token.getAttribute("placeholder")).toBe("••••••••");
@@ -150,21 +149,24 @@ suite.define(() => {
       await reveal.click();
       expect(await token.getAttribute("type")).toBe("text");
       expect(await token.inputValue()).toBe(PARTIAL);
-      await page.getByRole("button", { name: "Cancel: Api Token", exact: true }).click();
+      await page.getByRole("button", { name: "Cancel: API token", exact: true }).click();
       await expect.poll(() => reveal.count()).toBe(0);
       await token.fill(PARTIAL);
       expect(await token.getAttribute("type")).toBe("password");
-      await page.getByRole("button", { name: "Cancel: Api Token", exact: true }).click();
+      await page.getByRole("button", { name: "Cancel: API token", exact: true }).click();
       await expect.poll(() => save.count()).toBe(0);
       expect(await token.inputValue()).toBe("");
       await token.fill(PARTIAL);
       await token.fill("");
       await expect.poll(() => save.count()).toBe(0);
-      await page.waitForTimeout(1200);
+      await page.clock.runFor(1200);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await token.fill(PARTIAL);
+      const ime = await page.context().newCDPSession(page);
+      await ime.send("Input.imeSetComposition", { text: "x", selectionStart: 1, selectionEnd: 1 });
+      await token.press("Enter");
+      await ime.send("Input.insertText", { text: PARTIAL });
       await gateway.deferNext("config.patch");
       await save.click();
       const request = await gateway.waitForRequest("config.patch");
@@ -191,8 +193,8 @@ suite.define(() => {
         await page.keyboard.type(PARTIAL);
         await page.keyboard.press("Enter");
         expect(await token.inputValue()).toBe("");
-        expect(await page.getByRole("button", { name: "Save: Api Token" }).count()).toBe(0);
-        await page.waitForTimeout(1200);
+        expect(await page.getByRole("button", { name: "Save: API token" }).count()).toBe(0);
+        await page.clock.runFor(1200);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
       });
@@ -202,7 +204,7 @@ suite.define(() => {
   it("keeps the edit when Save is refused, and when leaving the page", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, token } = await openForm(page);
-      const save = page.getByRole("button", { name: "Save: Api Token", exact: true });
+      const save = page.getByRole("button", { name: "Save: API token", exact: true });
 
       await token.fill(PARTIAL);
       await gateway.deferNext("config.patch");

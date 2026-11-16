@@ -54,6 +54,7 @@ import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { hasInboundMedia } from "./inbound-media.js";
+import { projectTelegramCurrentMessageCarrier } from "./inbound-meta.current-message.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -218,11 +219,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const groupIntro = isGroupChat
     ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
     : "";
-  const terminalReplyExpectation = resolveSourceReplyExpectation({
-    ctx: promptSessionCtx,
-    cfg,
-    scheduledAutomation: opts?.scheduledAutomation !== undefined,
-  });
+  const terminalReplyExpectation =
+    opts?.replyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: promptSessionCtx,
+      cfg,
+      scheduledAutomation: opts?.scheduledAutomation !== undefined,
+    });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
     if (replyOperationRunState) {
@@ -591,7 +594,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     const fragments: RuntimeContextFragment[] = [
       ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
       ...(normalizedInboundUserContext
-        ? [{ kind: "conversation-data" as const, text: normalizedInboundUserContext }]
+        ? [
+            {
+              kind: "conversation-data" as const,
+              text: projectTelegramCurrentMessageCarrier(normalizedInboundUserContext, sessionCtx),
+            },
+          ]
         : []),
       ...(deliveryDirective
         ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]

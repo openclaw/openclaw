@@ -18,7 +18,6 @@ import {
 import {
   bindActiveCronCreatorAuthorityResolver,
   runWithCronCreatorAuthorityCapabilityResolver,
-  type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
@@ -72,6 +71,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
@@ -162,6 +162,7 @@ const mockState = vi.hoisted(() => {
     lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
     lastDispatchImageOrder: undefined as string[] | undefined,
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
+    lastDispatchNormalizeThinking: undefined as boolean | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
     lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
     lastMessageInjectionDisposition: undefined as GetReplyOptions["messageInjectionDisposition"],
@@ -332,6 +333,7 @@ dispatchInboundMessageMock.mockImplementation(
     mockState.lastDispatchImages = params.replyOptions?.images;
     mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
     mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+    mockState.lastDispatchNormalizeThinking = params.replyOptions?.normalizeThinkingLevelOverride;
     mockState.lastDispatchOriginatingLeafEntryId =
       params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
     mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
@@ -1237,7 +1239,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it.each(["copied-leaf", null])(
+  // A branch switch keeps the transcript identity, so the session id no longer
+  // fences a stale pane. The fence is the appended `leaf` control: a pane that
+  // still displays the pre-switch leaf, or claims the empty root, is refused even
+  // though it names the session's current id.
+  it.each(["active-sibling", null])(
     "rejects leaf %s from before a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
@@ -1269,7 +1275,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         env: suiteFixtureEnv,
         path: suiteDatabasePath,
       });
-      const staleSessionId = mockState.sessionId;
+      const preSwitchSessionId = mockState.sessionId;
       const switched = await switchSessionBranch({
         agentId: "main",
         env: suiteFixtureEnv,
@@ -1281,7 +1287,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       if (switched.status !== "created") {
         throw new Error("expected branch switch test invariant");
       }
-      expect(switched.entry.sessionId).not.toBe(staleSessionId);
+      // The in-place switch keeps the id the stale pane is still holding.
+      expect(switched.entry.sessionId).toBe(preSwitchSessionId);
       mockState.sessionId = switched.entry.sessionId;
       const before = loadTranscriptEventsSync(transcriptScope());
       expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
@@ -1290,7 +1297,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-rotated-exact-leaf",
         requestParams: {
           expectedLeafEntryId,
-          sessionId: staleSessionId,
+          sessionId: preSwitchSessionId,
         },
         waitFor: "none",
       });
@@ -2882,13 +2889,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     "delivers a settled fallback only while its writer remains current (replaced=%s)",
     async (replaced) => {
       await createTranscriptFixture("openclaw-chat-send-settled-fallback-");
-      const idempotencyKey = "run-settled:settled-finalization-fallback";
+      const idempotencyKey = `${mockState.agentRunId}:settled-finalization-fallback`;
       const text =
         "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
       await appendSourceReplyMirrorEntry({ idempotencyKey, text });
       mockState.sessionEntry = {
         lifecycleRevision: "revision-a",
-        activeWriterRunId: "run-settled",
+        activeWriterRunId: mockState.agentRunId,
       };
       await seedSqliteSessionEntry(mockState.sessionEntry);
       if (replaced) {
@@ -2911,14 +2918,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           agentId: "main",
           expectedLifecycleRevision: "revision-a",
           expectedSessionId: mockState.sessionId,
-          expectedWriterRunId: "run-settled",
+          expectedWriterRunId: mockState.agentRunId,
           sessionKey: "main",
           storePath: mockState.storePath,
         },
       });
       setAgentRunReplies([reply]);
       const { context, send } = createChatRequestFixture();
-      await send({ idempotencyKey: "idem-settled-fallback", waitFor: "dedupe" });
+      await send({ idempotencyKey: mockState.agentRunId, waitFor: "dedupe" });
       if (replaced) {
         expect(context.broadcast).not.toHaveBeenCalled();
         expect(context.nodeSendToSession).not.toHaveBeenCalled();
@@ -3964,6 +3971,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       | undefined;
     expect(userTurnInput?.content).toBe("hello from phone");
     expect(mockState.lastDispatchThinkingLevelOverride).toBe("low");
+    expect(mockState.lastDispatchNormalizeThinking).toBe(false);
   });
 
   it.each([
@@ -4309,10 +4317,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("leaves ACP bridge user persistence to the agent runtime", async () => {
+  it("persists ACP bridge photos as durable user-turn media", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-acp-images-");
     mockState.triggerAgentRunStart = true;
-    setSavedMediaResults(["/tmp/should-not-be-used.png", "image/png"]);
+    setSavedMediaResults(["/tmp/acp.png", "image/png", "acp.png"]);
     await createChatRequestFixture().send({
       idempotencyKey: "idem-user-transcript-acp-images",
       message: "bridge image",
@@ -4332,16 +4340,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
+    // The bridge defers its commit to the agent runtime, so the resolved user turn is
+    // the durable record the Control UI reloads. Only the managed claim survives there:
+    // the staged path and the uploaded bytes stay out, and the model still receives the
+    // photo exactly once, from the inline prompt image.
     await waitForAssertion(() => {
-      expect(mockState.savedMediaCalls).toStrictEqual([]);
-      expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual(
-        createExpectedAcpUserTurn({
-          content: "bridge image",
-          idempotencyKey: "idem-user-transcript-acp-images:user",
-          provenance: { kind: "external_user" },
-        }),
-      );
+      const userTurn = mockState.lastDispatchUserTurnInput as { content?: unknown } | undefined;
+      const claim = [expect.objectContaining({ url: "media://inbound/acp.png", kind: "image" })];
+      expect(mockState.savedMediaCalls).toHaveLength(1);
+      expect(mockState.lastDispatchImages).toHaveLength(1);
+      expect(userTurn?.content).toBe("bridge image");
+      expectClaimOnlyTranscriptMedia(userTurn, claim, ["/tmp/acp.png"]);
     });
   });
 
@@ -4926,13 +4935,6 @@ describe("chat.send local operator client sender context", () => {
       name: "spawned lineage",
       client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
       sessionEntry: { spawnedBy: "agent:main:parent" },
-    },
-    {
-      name: "synthetic cron continuation",
-      client: {
-        internal: { isLocalClient: true, cronRunContinuation: true },
-        scopes: ["operator.admin"],
-      },
     },
     {
       name: "persisted cron continuation",

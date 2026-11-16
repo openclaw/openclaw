@@ -1,4 +1,61 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { normalizeThemePalette } from "../../app/theme-palette.ts";
+import { i18n } from "../../i18n/index.ts";
+
+it("localizes a palette failure captured before Settings opens", async () => {
+  let failure: unknown;
+  try {
+    normalizeThemePalette("light", {}, undefined);
+  } catch (error) {
+    failure = error;
+  }
+  const original = i18n.t.bind(i18n);
+  const translate = vi
+    .spyOn(i18n, "t")
+    .mockImplementation((key, params) =>
+      key === "configView.appearance.themeImport.missingToken"
+        ? "Localized missing " + params?.token
+        : original(key, params),
+    );
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    themeCatalog: { themes: [], error: failure instanceof Error ? failure : String(failure) },
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await vi.waitFor(() => expect(container.textContent).toContain("Localized missing background"));
+});
+
+it("localizes unnamed themes and the system typeface inside the default option", async () => {
+  const original = i18n.t.bind(i18n);
+  const translate = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (key === "configView.appearance.customTheme") {
+      return "Localized unnamed theme";
+    }
+    if (key === "configView.appearance.fonts.system") {
+      return "Localized system font";
+    }
+    return original(key, params);
+  });
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    theme: "custom",
+    hasCustomTheme: true,
+    customThemeLabel: "",
+    fontUi: undefined,
+    fontChat: undefined,
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await updatePickers(container);
+  expect(container.textContent).toContain("Localized unnamed theme");
+  const fontRow = settingsRow(container, original("configView.appearance.fonts.ui"));
+  await openPicker(required(fontRow, "openclaw-select-picker", HTMLElement) as SelectPicker);
+  expect(translate).toHaveBeenCalledWith("configView.appearance.fonts.themeFace", {
+    theme: "Localized unnamed theme",
+    face: "Localized system font",
+  });
+});
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
@@ -229,6 +286,8 @@ describe("config appearance preferences", () => {
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const shortcutRow = settingsRow(container, "Send shortcut");
 
@@ -236,12 +295,12 @@ describe("config appearance preferences", () => {
     expect(shortcutRow.textContent).toContain(
       "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
     );
-    const shortcut = required(shortcutRow, "select", HTMLSelectElement);
-    expect(shortcut.value).toBe("enter");
-    expect(shortcut.disabled).toBe(false);
+    const enter = required(shortcutRow, 'input[value="enter"]', HTMLInputElement);
+    const modifier = required(shortcutRow, 'input[value="modifier-enter"]', HTMLInputElement);
+    expect(enter.checked).toBe(true);
+    expect(modifier.disabled).toBe(false);
     expect(props.onAppearanceChange).not.toHaveBeenCalled();
-    shortcut.value = "modifier-enter";
-    shortcut.dispatchEvent(new Event("change", { bubbles: true }));
+    modifier.click();
     expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
       chatSendShortcut: "modifier-enter",
     });
@@ -291,9 +350,9 @@ describe("config appearance preferences", () => {
     );
     const followUpRow = settingsRow(container, "Follow-ups while the agent is working");
 
-    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
+    expect(themeDescription.textContent).toContain("Waiting to sync.");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
-    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
+    expect(followUpRow?.textContent).toContain("Waiting to sync.");
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
   });
 
@@ -310,8 +369,12 @@ describe("config appearance preferences", () => {
       composerHoldToRecord: true,
     });
 
-    const shortcutSelect = required(container, "[data-settings-send-shortcut]", HTMLSelectElement);
-    expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const shortcutGroup = required(
+      settingsRow(container, "Send shortcut"),
+      '[role="radiogroup"]',
+      HTMLElement,
+    );
+    expect(shortcutGroup.getAttribute("aria-label")).toBe("Send shortcut");
     const followUpSelect = required(container, "[data-settings-follow-up-mode]", HTMLSelectElement);
     expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
     expect(followUpSelect.value).toBe("server");

@@ -5,7 +5,7 @@ import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -128,25 +128,17 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
     </SidebarPanelHeader>
   );
 }
-export function renderSessionMutationError(host: Pick<SessionListHost, "sessionData">) {
-  return host.sessionData.sessionMutationError ? (
-    <div
-      class="sidebar-session-error callout danger callout--dismissible"
-      role="alert"
+export function renderSessionListError(host: Pick<SessionListHost, "sessionData">) {
+  return host.sessionData.sessionListError ? (
+    <InlineAlert
+      tone="danger"
+      class="sidebar-session-error"
       data-sidebar-session-error=""
+      onDismiss={() => host.sessionData.dismissSessionListError()}
+      dismissLabel={t("chat.actions.dismissError")}
     >
-      <span class="callout__content">{host.sessionData.sessionMutationError}</span>
-      <openclaw-tooltip prop:content={t("chat.actions.dismissError")}>
-        <button
-          class="callout__dismiss"
-          type="button"
-          onClick={() => host.sessionData.dismissSessionMutationError()}
-          aria-label={t("chat.actions.dismissError")}
-        >
-          <Icon name="x" />
-        </button>
-      </openclaw-tooltip>
-    </div>
+      {host.sessionData.sessionListError}
+    </InlineAlert>
   ) : undefined;
 }
 

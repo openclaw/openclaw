@@ -239,7 +239,8 @@ function buildQueryTokens(queryLower: string): string[] {
     ...new Set(
       queryLower
         .split(/[^\p{L}\p{N}\p{M}@._-]+/u)
-        .map((token) => token.trim())
+        // Dots inside a term (`config.yaml`) are kept; a sentence-final period is not part of it.
+        .map((token) => token.replace(/\.+$/u, ""))
         .filter((token) => token.length >= 2),
     ),
   ];

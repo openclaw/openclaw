@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as activity from "../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
@@ -28,9 +29,10 @@ afterEach(() => {
 async function withMediaSession(
   run: (fixture: Awaited<ReturnType<typeof createMediaFixture>>) => Promise<void>,
   channel: "discord" | "webchat" = "discord",
+  options: { originatingTurn?: boolean } = {},
 ) {
   await withOpenClawTestState({ prefix: "media-queue-binding-" }, async (state) => {
-    const fixture = await createMediaFixture(state, channel);
+    const fixture = await createMediaFixture(state, channel, options);
     try {
       await run(fixture);
     } finally {
@@ -39,7 +41,11 @@ async function withMediaSession(
   });
 }
 
-async function createMediaFixture(state: OpenClawTestState, channel: "discord" | "webchat") {
+async function createMediaFixture(
+  state: OpenClawTestState,
+  channel: "discord" | "webchat",
+  options: { originatingTurn?: boolean },
+) {
   const config = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
   await state.writeConfig(config);
   await captureRuntimeConfigAsyncReader()();
@@ -54,6 +60,14 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
   };
   const binding = { ...scope, ...original };
   await replaceSessionEntry(scope, { ...original, updatedAt: 1 });
+  const acquire = () =>
+    beginSessionEffect({
+      scope: scope.storePath,
+      identities: [scope.sessionKey, "original-requester"],
+      assertAllowed: () => {},
+    });
+  // The tool runs inside the turn that requested it.
+  const originatingTurn = options.originatingTurn ? await acquire() : undefined;
   const lifecycle = background.createMediaGenerationTaskLifecycle("image");
   const handle = await lifecycle.createTaskRun({
     sessionKey: scope.sessionKey,
@@ -114,7 +128,10 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
   };
   return {
     state,
-    dispose: () => lifecycle.failTaskRun({ handle }),
+    dispose: () => {
+      originatingTurn?.release();
+      lifecycle.failTaskRun({ handle });
+    },
     scope,
     binding,
     original,
@@ -127,12 +144,8 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
     generate,
     wake,
     schedule,
-    acquire: () =>
-      beginSessionEffect({
-        scope: scope.storePath,
-        identities: [scope.sessionKey, "original-requester"],
-        assertAllowed: () => {},
-      }),
+    acquire,
+    originatingTurn,
     events: () => loadTranscriptEvents({ ...scope, sessionId: "original-requester" }),
     pending: () => queue.loadPendingSessionDeliveries(queueContext),
     operation: () => activity.findMediaGenerationOperation(handle.runId),
@@ -212,4 +225,43 @@ describe("original requester media handoff", () => {
       );
     }),
   );
+
+  it("sends produced media to an external route while a later unrelated turn holds the session", () =>
+    withMediaSession(async ({ wake, acquire, pending, drain, send }) => {
+      const laterTurn = await acquire();
+      try {
+        expect(await wake()).toEqual({ status: "queued" });
+        const [entry] = await pending();
+        assert(entry, "Expected queued media completion");
+        await drain(entry.id);
+        expect(send).toHaveBeenCalledOnce();
+        expect(await pending()).toEqual([]);
+      } finally {
+        laterTurn.release();
+      }
+    }));
+
+  it("keeps media queued while the originating turn is still settling", () =>
+    withMediaSession(
+      async ({ wake, originatingTurn, pending, drain, send }) => {
+        assert(originatingTurn, "Expected originating turn");
+        let settled = false;
+        const woken = wake().finally(() => {
+          settled = true;
+        });
+        for (let tick = 0; tick < 5; tick += 1) {
+          await nextMacrotask();
+        }
+        expect(settled).toBe(false);
+        expect(await pending()).toEqual([]);
+        originatingTurn.release();
+        expect(await woken).toEqual({ status: "queued" });
+        const [entry] = await pending();
+        assert(entry, "Expected queued media completion");
+        await drain(entry.id);
+        expect(send).toHaveBeenCalledOnce();
+      },
+      "discord",
+      { originatingTurn: true },
+    ));
 });

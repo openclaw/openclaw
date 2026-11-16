@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { ExecToolDetails } from "../../agents/bash-tools.js";
+import type { ExecToolDetails } from "../../agents/bash-tools.exec-result.types.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type {

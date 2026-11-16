@@ -8,22 +8,27 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { SandboxPersistentExecWorkspaceBinding } from "./persistent-exec-store.types.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
+import type { SandboxStateOwnerPath } from "./state-owner-path.js";
 
 export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
 export type SandboxRegistryPrune = { now: number; idleHours: number; maxAgeDays: number };
 export type SandboxRegistryCleanupOperations = {
   "sandboxRegistry.finishRemoval": { input: SandboxRegistryEntry; output: void };
 };
+type SandboxStatePathGuard = { stateOwnerPath?: SandboxStateOwnerPath };
 export type SandboxRegistryOperations = {
-  "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
-  "sandboxRegistry.reserve": { input: SandboxRegistryEntry; output: SandboxRegistryEntry };
+  "sandboxRegistry.write": { input: SandboxRegistryWrite & SandboxStatePathGuard; output: void };
+  "sandboxRegistry.reserve": {
+    input: SandboxRegistryEntry & SandboxStatePathGuard;
+    output: SandboxRegistryEntry;
+  };
   "sandboxRegistry.beginRemoval": {
     input: {
       entry: SandboxRegistryEntry;
       reserveRuntime?: boolean;
       prune?: SandboxRegistryPrune;
       preservePersistentExecs?: boolean;
-    };
+    } & SandboxStatePathGuard;
     output: SandboxRegistryEntry | null;
   };
 };
@@ -495,30 +500,34 @@ function readSandboxRegistryRowInDatabase(
   );
 }
 
-export function readSandboxRegistryInDatabase(
-  db: EngineConnection,
-  workspaceDir?: string,
-): SandboxRegistryEntry[] {
-  return readRegistryRows(db, "container")
-    .map((row) => rowToContainerEntry(row, workspaceDir))
-    .filter((entry): entry is SandboxRegistryEntry => entry !== null);
-}
-
-export function readSandboxRuntimeIdsInDatabase(
-  db: EngineConnection,
-  filter: { backendId: string; scopeKey: string },
-): string[] {
-  return readRegistryRows(db, "container", filter)
-    .map((row) => rowToContainerEntry(row))
-    .filter((entry): entry is SandboxRegistryEntry => entry !== null)
-    .map((entry) => entry.containerName);
-}
-
-export function readSandboxBrowserRegistryInDatabase(
-  db: EngineConnection,
-  workspaceDir?: string,
-): SandboxBrowserRegistryEntry[] {
-  return readRegistryRows(db, "browser")
-    .map((row) => rowToBrowserEntry(row, workspaceDir))
-    .filter((entry): entry is SandboxBrowserRegistryEntry => entry !== null);
-}
+export const sandboxRegistryReadOperations = {
+  "sandboxRegistry.list": ({ workspaceDir }: { workspaceDir?: string }, db: EngineConnection) => ({
+    type: "sandboxRegistry.list" as const,
+    entries: readRegistryRows(db, "container")
+      .map((row) => rowToContainerEntry(row, workspaceDir))
+      .filter((entry): entry is SandboxRegistryEntry => entry !== null),
+  }),
+  "sandboxRegistry.get": ({ containerName }: { containerName: string }, db: EngineConnection) => ({
+    type: "sandboxRegistry.get" as const,
+    entry: readSandboxRegistryEntryInDatabase(db, containerName),
+  }),
+  "sandboxRegistry.runtimeIds": (
+    filter: { backendId: string; scopeKey: string },
+    db: EngineConnection,
+  ) => ({
+    type: "sandboxRegistry.runtimeIds" as const,
+    runtimeIds: readRegistryRows(db, "container", filter)
+      .map((row) => rowToContainerEntry(row))
+      .filter((entry): entry is SandboxRegistryEntry => entry !== null)
+      .map((entry) => entry.containerName),
+  }),
+  "sandboxRegistry.browsers": (
+    { workspaceDir }: { workspaceDir?: string },
+    db: EngineConnection,
+  ) => ({
+    type: "sandboxRegistry.browsers" as const,
+    entries: readRegistryRows(db, "browser")
+      .map((row) => rowToBrowserEntry(row, workspaceDir))
+      .filter((entry): entry is SandboxBrowserRegistryEntry => entry !== null),
+  }),
+};

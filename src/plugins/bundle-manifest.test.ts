@@ -349,15 +349,11 @@ describe("OpenAI packaged onboarding skill", () => {
 
 describe("bundle recommended prompt presentation", () => {
   it.each(["codex", "agent"] as const)(
-    "reads %s author prompts without rewriting whitespace or loading runtime",
+    "normalizes %s author prompts without loading runtime",
     (bundleFormat) => {
       const presentation = {
         interface: {
-          defaultPrompt: [
-            "  Plan  my week.\nThen prioritize.  ",
-            "Compare options.",
-            "x".repeat(2048),
-          ],
+          defaultPrompt: ["  Plan  my week.\nPrioritize.  ", "Compare.", "😀".repeat(128)],
         },
       };
       const rootDir = fixture({
@@ -370,18 +366,16 @@ describe("bundle recommended prompt presentation", () => {
             : presentation),
         },
       });
-      expect(expectLoadedManifest(rootDir, bundleFormat).recommendedPrompts).toEqual([
-        "Plan  my week.\nThen prioritize.",
-        "Compare options.",
-        "x".repeat(2048),
-      ]);
+      const expected = ["Plan my week. Prioritize.", "Compare.", "😀".repeat(128)];
+      expect(expectLoadedManifest(rootDir, bundleFormat).recommendedPrompts).toEqual(expected);
     },
   );
 
   it.each([
-    ["  Plan  my week.  ", ["Plan  my week."]],
+    ["  Plan  my week.  ", ["Plan my week."]],
     [["one", "two", "three", "four"], undefined],
     [["valid", " "], undefined],
+    [["valid", "😀".repeat(129)], undefined],
   ])(
     "adapts legacy Codex prompt strings and ignores invalid lists whole: %j",
     (defaultPrompt, expected) => {

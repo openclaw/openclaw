@@ -146,16 +146,16 @@ it("does not report unknown or failed mobile queries as empty and preserves the 
     onRetry,
   });
   expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
-  expect(view.container.textContent).not.toContain("No earlier versions");
+  expect(view.container.textContent).not.toContain("No earlier versions yet.");
   view.update({
     query: { status: "error", message: "Connection lost. Retry when connected." },
   });
   expect(view.container.querySelector('[role="alert"]')?.textContent).toContain("Connection lost");
-  expect(view.container.textContent).not.toContain("No earlier versions");
+  expect(view.container.textContent).not.toContain("No earlier versions yet.");
   view.container.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
   expect(onRetry).toHaveBeenCalledOnce();
   view.update({ query: { status: "ready" } });
-  expect(view.container.textContent).toContain("No earlier versions");
+  expect(view.container.textContent).toContain("No earlier versions yet.");
   view.update({
     branches: [branch("earlier", "Earlier idea")],
     branchSwitchDisabledReason: "Administrator access is required to switch versions.",

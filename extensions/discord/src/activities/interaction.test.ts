@@ -172,7 +172,7 @@ const context: WidgetPresenterContext = {
   nativeChannelId: "987654321",
   accountId: "default",
 };
-const document = { kind: "html" as const, html: "<p>Canonical</p>" };
+const document = { kind: "html" as const, html: "<p>Canonical</p>", source: "<p>Canonical</p>" };
 const storedWidget = {
   html: document.html,
   title: "Existing",
@@ -195,7 +195,7 @@ describe("Discord Activity presenter", () => {
   let presenter: WidgetPresenter;
   const latestWidget = () => store.latestPostedWidgetForChannel("default", "987654321");
   const present = (route = context, title = "Status") =>
-    presenter.present({ context: route, document, title });
+    presenter.present({ context: route, document, title, name: "status" });
   beforeEach(() => {
     vi.stubEnv("DISCORD_CLIENT_SECRET", "");
     ({

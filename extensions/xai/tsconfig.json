@@ -986,6 +986,12 @@
       ],
       "openclaw/plugin-sdk/skill-authoring-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-authoring-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/skill-workshop-host-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-workshop-host-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/skill-workshop-host-cli": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-workshop-host-cli.d.ts"
       ]
     }
   }

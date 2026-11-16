@@ -163,6 +163,8 @@ LAN can use the returned URL without configuring ingress. The published address
 stays fixed for the portal's lifetime; reopen the portal after a network change.
 If no private LAN address is available, wildcard listeners publish a loopback URL.
 A loopback URL works on the Gateway host, not on an unrelated remote browser.
+For this delivery check, names ending in `.localhost` also identify the local
+machine. This does not expand which origins may receive stored Gateway credentials.
 Direct TLS listeners reuse the Gateway certificate. The service prefers a
 certificate-valid hostname from `gateway.publicOrigin` or the configured Control
 UI origins, then a certificate-valid bind address, then a concrete DNS name from

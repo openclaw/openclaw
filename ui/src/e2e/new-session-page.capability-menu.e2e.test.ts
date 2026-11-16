@@ -51,8 +51,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__composer");
       const menu = composer.locator(".agent-chat__capability-menu");
-      const draft = menu.getByRole("menuitemcheckbox", { name: "Draft" });
-      await composer.getByRole("button", { name: "Add attachment" }).click();
+      const draft = page.getByRole("switch", { name: /^Draft:/ });
+      await draft.waitFor({ state: "visible" });
       if (atomic) {
         await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
         await draft.focus();
@@ -66,6 +66,7 @@ suite.define(() => {
         expect(await toggle.isVisible()).toBe(true);
         return;
       }
+      await composer.getByRole("button", { name: "Add attachment" }).click();
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const release = menu.getByRole("menuitemcheckbox", { name: "Release" });
       await release.click();

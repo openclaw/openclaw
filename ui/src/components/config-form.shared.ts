@@ -14,6 +14,8 @@ export type ConfigFormProps = {
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
   rawAvailable?: boolean;
+  /** Names already on screen, such as the active tab; a heading they open with is dropped. */
+  repeatedHeadings?: ReadonlyArray<string | undefined>;
   /** Switches this page to its Raw tab; absent where the page has none. */
   onOpenRaw?: () => void;
   disabled?: boolean;
@@ -27,6 +29,8 @@ export type ConfigFormProps = {
   onHideAdvanced?: () => void;
   sectionActions?: JSX.Element;
   showSectionDocs?: boolean;
+  /** Replaces the section's own heading and description. */
+  sectionTitle?: string;
   sectionPrelude?: JSX.Element;
   /**
    * Sections a curated page has already explained: its own title, no tier split, and

@@ -1,10 +1,12 @@
 import { detectMime } from "@openclaw/media-core/mime";
+import { resolveScratchFilePath, ScratchFileExpiredError } from "../../infra/scratch-expiry.js";
+import { isWorkspaceScratchPath } from "../../shared/scratch-expiry.js";
 import { canCreateArtifactDownload, createArtifactDownload } from "../artifact-download-grants.js";
 import { resolveByteResponse } from "../http-byte-range.js";
 import { WORKSPACE_DOWNLOAD_CHUNK_BYTES } from "../workspace-file-limits.js";
 import { readSessionFileDownloadWindow } from "./session-file-download.js";
 import type { createSessionFileReadAuthority } from "./session-file-read-authority.js";
-import { sessionFilesError } from "./session-files-errors.js";
+import { respondSessionFileNotFound, sessionFilesError } from "./session-files-errors.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   downloadRepositoryArtifact,
@@ -70,10 +72,12 @@ export async function respondSessionFileDownload(params: {
   const initial = await prepare();
   assertCurrent();
   if (initial.status === "missing") {
-    respond(
-      false,
-      undefined,
-      sessionFilesError("session_file_not_found", "session file not found", { path: params.path }),
+    respondSessionFileNotFound(
+      respond,
+      params.path,
+      "reason" in initial && initial.reason === "outside_session_boundary"
+        ? "outside_session_boundary"
+        : undefined,
     );
     return;
   }
@@ -97,6 +101,13 @@ export async function respondSessionFileDownload(params: {
       read: async (request) => {
         const current = await prepare();
         assertCurrent();
+        if (
+          current.status === "missing" &&
+          !("reason" in current && current.reason === "outside_session_boundary") &&
+          (isWorkspaceScratchPath(params.path) || resolveScratchFilePath(params.path))
+        ) {
+          throw new ScratchFileExpiredError();
+        }
         if (current.status !== "ok" || current.identity !== request.expectedDigest) {
           return undefined;
         }

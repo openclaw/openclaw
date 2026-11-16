@@ -19,6 +19,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -250,7 +251,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       return available;
     });
     const selectedProvider = () =>
-      captureStatus()?.providers.find((item) => item.providerId === editedProviderId());
+      knownCaptureStatus()?.providers.find((item) => item.providerId === editedProviderId());
     const fields = () =>
       [
         "title",
@@ -284,8 +285,10 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 />
               }
             />
-            {editedProviderId() && !supportsAutoStartSetup(selectedProvider()) ? (
-              <SettingsEmpty message={t("meetingCapture.autoStartUnavailable")} />
+            {editedProviderId() &&
+            knownCaptureStatus() &&
+            !supportsAutoStartSetup(selectedProvider()) ? (
+              <SettingsUnavailable message={t("meetingCapture.autoStartUnavailable")} />
             ) : undefined}
             <For each={fields()}>
               {(key) => (
@@ -531,7 +534,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 </Loading>
               </Errored>
               {!hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null) ? (
-                <SettingsEmpty message={t("configView.adminRequired")} />
+                <SettingsUnavailable message={t("configView.adminRequired")} />
               ) : undefined}
               {rawDraftPending() ? (
                 <SettingsEmpty message={t("meetingCapture.rawDraftPending")} />

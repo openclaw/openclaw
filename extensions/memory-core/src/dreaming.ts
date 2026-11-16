@@ -22,7 +22,7 @@ import {
   formatRecallRepairDetails,
   includesSystemEventToken,
 } from "./dreaming-shared.js";
-import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
+import { resolveMemoryPromotionFileMaxChars } from "./memory-budget-config.js";
 import type { PromotionRejectionCategory } from "./short-term-promotion-types.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;

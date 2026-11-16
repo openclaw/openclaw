@@ -804,3 +804,114 @@ describe("pending Stop admission", () => {
       }
     }));
 });
+
+describe("guest dictation request boundary", () => {
+  it("binds transcription audio and close to the owned session and connection", () =>
+    withState(async () => {
+      const { client, context } = ownerFixture("dictation-owner");
+      client.connId = "guest-dictation-owner";
+      await upsertSessionEntryCore(scope, ownedEntry(client, "dictation-session"));
+      const config = await import("./talk/session-config.js");
+      const { talkSessionHandlers } = await import("./talk/handlers/session.js");
+      const sttSession = {
+        connect: vi.fn(async () => {}),
+        sendAudio: vi.fn(),
+        close: vi.fn(),
+        isConnected: () => true,
+      };
+      vi.spyOn(config, "buildTalkTranscriptionConfig").mockResolvedValue({
+        provider: "test",
+        providers: {},
+        model: undefined,
+        file: undefined,
+      });
+      let transcript: ((text: string) => void) | undefined;
+      vi.spyOn(config, "resolveConfiguredRealtimeTranscriptionProvider").mockResolvedValue({
+        provider: {
+          id: "test",
+          label: "Test",
+          isConfigured: () => true,
+          createSession: (request) => {
+            transcript = request.onTranscript;
+            return sttSession;
+          },
+        },
+        providerConfig: {},
+      });
+      const request = (method: string, params: unknown, requester = client) =>
+        dispatchAuthorizationRequest(method, params, {
+          client: requester,
+          context,
+          extraHandlers: talkSessionHandlers,
+        });
+      const created = await request("talk.session.create", {
+        sessionKey: key,
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+      });
+      expect(created).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          mode: "transcription",
+          brain: "none",
+        }),
+        undefined,
+      );
+      const session = created.mock.calls.at(-1)?.[1] as { sessionId: string };
+      expect(session.sessionId).toBeTruthy();
+      const other = roleClient("view", "dictation-other");
+      other.connId = "guest-dictation-other";
+      other.connect.scopes = ["operator.sessions.write"];
+      const denied = await request(
+        "talk.session.appendAudio",
+        {
+          sessionId: session.sessionId,
+          audioBase64: "AAA=",
+        },
+        other,
+      );
+      expect(denied.mock.calls.at(-1)?.[0]).toBe(false);
+      const appended = await request("talk.session.appendAudio", {
+        sessionId: session.sessionId,
+        audioBase64: "AAA=",
+      });
+      expect(appended.mock.calls.at(-1)?.[0]).toBe(true);
+      expect(sttSession.sendAudio).toHaveBeenCalled();
+      expectDefined(transcript, "transcription callback")("dictation result");
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "talk.event",
+        expect.objectContaining({ text: "dictation result", final: true }),
+        new Set([client.connId]),
+        expect.anything(),
+      );
+      const closed = await request("talk.session.close", {
+        sessionId: session.sessionId,
+      });
+      expect(closed.mock.calls.at(-1)?.[0]).toBe(true);
+      expect(sttSession.close).toHaveBeenCalled();
+      expect(
+        (await request("talk.session.create", { sessionKey: key, mode: "realtime" })).mock.calls.at(
+          -1,
+        )?.[0],
+      ).toBe(false);
+      const reopened = await request("talk.session.create", {
+        sessionKey: key,
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+      });
+      expect(reopened.mock.calls.at(-1)?.[0]).toBe(true);
+      const broadcast = vi.mocked(context.broadcastToConnIds);
+      broadcast.mockClear();
+      client.invalidated = true;
+      expectDefined(transcript, "transcription callback")("revoked recording text");
+      expect(broadcast).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ text: "revoked recording text" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sttSession.close).toHaveBeenCalledTimes(2);
+    }));
+});

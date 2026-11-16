@@ -1645,18 +1645,20 @@ describe("anthropic transport stream", () => {
     responseModel?: string;
   }>([
     {
-      name: "does not infer adaptive thinking from forward-compatible effort maps",
+      // Unknown Claude ids take the strict contract: manual budgets are rejected by every
+      // Claude model released since Opus 5, so a new model starts on adaptive thinking.
+      name: "uses adaptive thinking for an unknown Claude model",
       model: {
-        id: "claude-future",
+        id: "claude-zzz-9-9",
         name: "Future Claude",
         provider: "github-copilot",
         reasoning: true,
         thinkingLevelMap: { xhigh: null, max: "max" },
       },
       message: "Think as much as supported.",
-      options: { apiKey: "copilot-token", reasoning: "max" },
-      expected: { thinking: { type: "enabled", budget_tokens: 7168 } },
-      absent: ["output_config"],
+      options: { apiKey: "copilot-token", reasoning: "max", temperature: 0.2 },
+      expected: { thinking: { type: "adaptive" }, output_config: { effort: "max" } },
+      absent: ["temperature"],
     },
     {
       name: "resolves thinking as disabled when the legacy budget is positive but sub-minimum",

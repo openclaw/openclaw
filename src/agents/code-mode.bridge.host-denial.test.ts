@@ -373,10 +373,7 @@ describe("Code Mode subscribed host denial", () => {
         await mutated.promise;
       }
     });
-    const harness = createHostHarness({
-      // The late sibling is released only after this budget forces the cell to park.
-      timeoutMs: order === "late-settlement" ? 1_500 : undefined,
-    });
+    const harness = createHostHarness();
     const mutation = pluginToolWithExecute("record_mutation", "Append marker", async () => {
       if (order === "late-settlement") {
         await releaseLateMutation.promise;
@@ -400,15 +397,11 @@ describe("Code Mode subscribed host denial", () => {
           : `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`;
       let details = await harness.run(code);
       if (order === "late-settlement") {
-        expect(details.status).toBe("waiting");
+        // Rejection settles the cell without replaying or draining its late sibling.
+        expect(details.status).toBe("failed");
         await expect(fs.readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         releaseLateMutation.resolve();
         await lateMutationFinished.promise;
-        details = resultDetails(
-          await harness.waitTool.execute("settle-late", {
-            runId: details.runId,
-          }),
-        );
         await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
       }
       details = await harness.complete(details);

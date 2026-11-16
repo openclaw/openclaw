@@ -176,7 +176,7 @@ Remove the runtime ID from `agents.entries.<agentId>.nativeRuntimeConsent` to
 revoke remembered consent. Disabling and re-enabling the app does not erase it.
 
 For a runtime configured manually without remembered consent, the Control UI
-still offers **Continue for this chat** to an administrator when selecting the
+still offers **Continue for this session** to an administrator when selecting the
 runtime or sending a message with that selection. This fallback changes only
 that chat's permissions.
 

@@ -64,11 +64,15 @@ export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
   return listWhatsAppAuthDirs(cfg).some((authDir) => hasWebCredsSync(authDir));
 }
 
-function resolveDefaultAuthDir(accountId: string): string {
-  return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
+function resolveDefaultAuthDir(accountId: string, env?: NodeJS.ProcessEnv): string {
+  return path.join(resolveOAuthDir(env), "whatsapp", normalizeAccountId(accountId));
 }
 
-export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {
+export function resolveWhatsAppAuthDir(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): {
   authDir: string;
   isLegacy: boolean;
 } {
@@ -76,10 +80,10 @@ export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId:
   const account = resolveMergedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
   const configured = account?.authDir?.trim();
   if (configured) {
-    return { authDir: resolveUserPath(configured), isLegacy: false };
+    return { authDir: resolveUserPath(configured, params.env), isLegacy: false };
   }
 
-  return { authDir: resolveDefaultAuthDir(accountId), isLegacy: false };
+  return { authDir: resolveDefaultAuthDir(accountId, params.env), isLegacy: false };
 }
 
 export function resolveWhatsAppAccount(params: {
