@@ -323,6 +323,14 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     replaying a request after output or tool work has started. Azure and custom
     endpoint storage policies are unchanged.
 
+    On the native OpenAI endpoint, replayed reasoning that carries encrypted
+    content is sent without its item ID, and the message and tool-call IDs that
+    depend on it are omitted too. A turn
+    sent with `store: false` (for example, one that carries a compaction
+    checkpoint) returns item IDs that name no stored record. A later stored
+    request records that reasoning under its ID, and the next stored request fails
+    with `item_conflict` after output has started. Prompt caching is unchanged.
+
     If the server rejects saved items with `item_conflict` before output starts,
     OpenClaw automatically retries once using saved conversation text and tool
     results, without the rejected item IDs, reasoning, or compaction checkpoint.
