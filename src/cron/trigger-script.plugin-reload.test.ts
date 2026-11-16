@@ -1,10 +1,21 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { jsonResult } from "../agents/tools/common.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { addTestHook } from "../plugins/hooks.test-helpers.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import {
+  isPluginRegistryRecordSetAdmitting,
+  isPluginRegistryRetired,
+  markPluginRegistryRetired,
+} from "../plugins/registry-lifecycle.js";
+import {
+  commitStagedPluginRegistry,
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
@@ -100,6 +111,37 @@ it.each(["registry", "hook plugin"] as const)(
     expect(guarded).toEqual(retired === "hook plugin" ? [1, 2] : []);
   },
 );
+
+it("refreshes a cached runtime when a publication grows the plugin inventory", async () => {
+  const first = preparePluginRuntime(1);
+  const second = preparePluginRuntime(2);
+  second.registry.plugins.push(createPluginRecord({ id: "extra" }));
+  let prepares = 0;
+  const disposed: number[] = [];
+  const prepareRuntime = async () => {
+    const current = ++prepares;
+    const prepared = current === 1 ? first.prepared : second.prepared;
+    return { ...prepared, [Symbol.dispose]: () => disposed.push(current) };
+  };
+  const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
+  onTestFinished(() => resetPluginRuntimeStateForTest());
+  // The Gateway owns the startup generation that the first preparation retains.
+  setActivePluginRegistry(first.registry);
+  createPluginRegistryOwner(first.registry);
+  await expectGeneration(runtime, 1);
+  await expectGeneration(runtime, 1);
+  expect(prepares).toBe(1);
+  // Enabling another plugin publishes a successor while the owner still holds
+  // the retained registry: it stays unretired and admitting, but the active
+  // version moves on.
+  stageActivePluginRegistry(second.registry, null, "default");
+  commitStagedPluginRegistry(first.registry, second.registry);
+  expect(isPluginRegistryRetired(first.registry)).toBe(false);
+  expect(isPluginRegistryRecordSetAdmitting(first.registry)).toBe(true);
+  await expectGeneration(runtime, 2);
+  expect(disposed).toEqual([1]);
+  expect(prepares).toBe(2);
+});
 
 it("never replays a script that fails after a tool effect and plugin retirement", async () => {
   let effects = 0;

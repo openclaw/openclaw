@@ -67,6 +67,7 @@ import {
   isPluginRegistryRecordSetAdmitting,
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -447,6 +448,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     if (cancelSignal?.aborted) {
       cancelPreparation();
     }
+    const preparedRegistryVersion = getActivePluginRegistryVersion();
     const promise = prepareRuntime({ ...request, signal: preparation.signal }).then((runtime) => {
       entry.lifetime.publish(runtime);
       const registry = runtime.pluginRegistry;
@@ -456,9 +458,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         ...runtime,
         // Per-plugin replacement disposes one instance without retiring this
         // retained registry; its stale hooks would fail every later tool call.
+        // Enabling a plugin publishes a new inventory without retiring it too.
         isCurrent: () =>
-          !registry ||
-          (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
+          getActivePluginRegistryVersion() === preparedRegistryVersion &&
+          (!registry ||
+            (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry))),
       };
     });
     const entry: TriggerRuntimeCacheEntry = {
