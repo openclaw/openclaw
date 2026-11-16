@@ -177,6 +177,7 @@ import {
   buildWhatsAppBroadcastReply,
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
+  countCurrentToolOutputs,
   countImageInputs,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
@@ -1956,7 +1957,10 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     }
     const inflightRequestId = nextInflightRequestId++;
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
-    const uxStream = resolveQaUxStream(splitMockConversationContext(prompt).current);
+    const uxStream = resolveQaUxStream(
+      splitMockConversationContext(prompt).current,
+      countCurrentToolOutputs(input),
+    );
     let events: StreamEvent[];
     let injectedFailure: QaMockProviderDispatchResult["failure"];
     try {

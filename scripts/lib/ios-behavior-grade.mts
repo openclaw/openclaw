@@ -100,15 +100,63 @@ function visibleShift(before: Edges, after: Edges, visibleBottom: number) {
   return undefined;
 }
 
+/** A small row move held no longer than this, then restored, is a layout pass, not a drawn frame. */
+const SPIKE_MS = 100;
+/** Larger moves always count: the real ~80 ms flash to top in `stream-follow` moves thousands. */
+const SPIKE_PT = 50;
+
+/**
+ * Probe frames where a row sits up to `SPIKE_PT` away from the position it had just before and has
+ * again right after, held for at most `SPIKE_MS`, replaced by that position. The `List` transcript
+ * (#192232) reports such intermediate cell layouts while a reply grows: in one `stream-turn` run
+ * the probe read 29 moves of 5–37 pt that reverted 17–82 ms later, while the reply's top edge sat
+ * on the same pixel row in all 502 native frames of the simulator recording of that stream.
+ */
+export function dropLayoutSpikes(frames: ProbeFrame[]) {
+  let dropped = 0;
+  const out = frames.map((frame) => ({ t: frame.t, f: { ...frame.f } }));
+  for (let index = 1; index < out.length - 1; index += 1) {
+    const before = out[index - 1];
+    const frame = out[index];
+    const after = frames[index + 1];
+    if (!before || !frame || !after || after.t - frame.t > SPIKE_MS) {
+      continue;
+    }
+    for (const [key, edges] of Object.entries(frame.f)) {
+      const prior = before.f[key];
+      const next = after.f[key];
+      if (
+        prior &&
+        next &&
+        Math.abs(prior[0] - next[0]) <= STILL_PT &&
+        Math.abs(edges[0] - prior[0]) > STILL_PT &&
+        Math.abs(edges[0] - prior[0]) <= SPIKE_PT
+      ) {
+        frame.f[key] = [prior[0], edges[1] - edges[0] + prior[0]];
+        dropped += 1;
+      }
+    }
+  }
+  return { frames: out, dropped };
+}
+
 /**
  * How tagged rows moved between consecutive recorded frames. Any downward step counts as backward
  * motion. A key in `aliases` continues the key it maps to (the final message row replacing the
  * live bubble); in the frame where both exist, the outgoing one is already leaving and is ignored.
+ * One-frame layout spikes are dropped first (`dropLayoutSpikes`) and counted in `layoutSpikes`.
  */
 export function motion(
-  frames: ProbeFrame[],
+  recorded: ProbeFrame[],
   options: { aliases?: Record<string, string> } = {},
-): { teleports: number; backwardPt: number; largestStepPt: number; maxDriftPt: number } {
+): {
+  teleports: number;
+  backwardPt: number;
+  largestStepPt: number;
+  maxDriftPt: number;
+  layoutSpikes: number;
+} {
+  const { frames, dropped } = dropLayoutSpikes(recorded);
   const aliases = options.aliases ?? {};
   const rows = (frame: ProbeFrame) => {
     const edges = new Map<string, Edges>();
@@ -172,6 +220,7 @@ export function motion(
     backwardPt: round(backwardPt),
     largestStepPt: round(largestStepPt),
     maxDriftPt: round(maxDriftPt),
+    layoutSpikes: dropped,
   };
 }
 
@@ -238,6 +287,31 @@ export function hiddenBelowComposer(frame: ProbeFrame | undefined) {
     .filter(([key]) => isRow(key))
     .map(([, [, maxY]]) => maxY);
   return bottoms.length > 0 ? round(Math.max(0, Math.max(...bottoms) - composer[0])) : undefined;
+}
+
+/** One line of text recognized on a screenshot; box normalized to the image, origin top left. */
+export type ScreenLine = { text: string; x: number; y: number; w: number; h: number };
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/**
+ * Text drawn inside the transcript: recognized lines whose center lies in `transcript` (points)
+ * and outside every `exclude` rect (progress card, run footer: chrome that stays drawn while the
+ * messages are gone). This is the screen oracle: it judges pixels, not the view or accessibility
+ * tree, which both still listed content while a real iPhone showed a blank chat (#191478).
+ */
+export function transcriptText(
+  lines: ScreenLine[],
+  screen: { width: number; height: number },
+  transcript: Rect,
+  exclude: Rect[] = [],
+) {
+  const inside = (x: number, y: number, rect: Rect) =>
+    x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+  return lines.filter((line) => {
+    const x = (line.x + line.w / 2) * screen.width;
+    const y = (line.y + line.h / 2) * screen.height;
+    return inside(x, y, transcript) && !exclude.some((rect) => inside(x, y, rect));
+  });
 }
 
 export function lastFrameBefore(frames: ProbeFrame[], t: number) {

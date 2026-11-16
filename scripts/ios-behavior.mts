@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Measures chat UX on the iOS simulator against an isolated Gateway whose model is the scripted
-// QA mock: streaming follow, reading position while scrolled up, keyboard, and relaunch.
+// QA mock: streaming follow, reading position while scrolled up, keyboard, relaunch, and a blank
+// transcript judged from screenshots (keyboard, chat length and agent turns, chat switches).
 // Usage: pnpm ios:behavior [--setup] [--profile ios-ux] [--cases a,b] [--samples 3] [--app <app>]
 // --setup writes the profile (Gateway stopped): loopback port, token auth, mock model.
 // Then run the mock and the Gateway (see .agents/skills/ios-e2e/BEHAVIOR.md) and this script.
 // IOS_SIM reuses a paired simulator; otherwise a fresh one is paired and deleted afterwards.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -14,6 +15,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
   type ProbeLog,
+  type Rect,
+  type ScreenLine,
   bodyCounts,
   composerGap,
   hiddenBelowComposer,
@@ -24,6 +27,7 @@ import {
   parseProbeLog,
   percentile,
   remounts,
+  transcriptText,
   window,
 } from "./lib/ios-behavior-grade.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -35,9 +39,28 @@ const { values } = parseArgs({
     profile: { type: "string", default: "ios-ux" },
     port: { type: "string", default: "19061" },
     "mock-url": { type: "string", default: "http://127.0.0.1:44180/v1" },
-    cases: { type: "string", default: "stream-turn,stream-follow,scrolled-up,keyboard,relaunch" },
+    cases: {
+      type: "string",
+      default: [
+        "stream-turn",
+        "stream-follow",
+        "scrolled-up",
+        "keyboard",
+        "relaunch",
+        "switch-session",
+        ...["up", "down"].flatMap((keyboard) =>
+          ["short", "long"].flatMap((length) =>
+            ["plain", "agent"].map((content) => `blank-${keyboard}-${length}-${content}`),
+          ),
+        ),
+      ].join(","),
+    },
     samples: { type: "string", default: "3" },
     out: { type: "string" },
+    // Existing chats (session keys, `agent:main:` omitted) for the cases that need history, in
+    // place of seeding mock turns: point --profile at a scratch copy of a real profile to judge
+    // real transcripts. Never commit such profiles or their screenshots.
+    sessions: { type: "string" },
     app: {
       type: "string",
       default: path.join(
@@ -50,6 +73,25 @@ const { values } = parseArgs({
 const profile = values.profile;
 const END_MARKER = "UX-STREAM-END";
 const MOCK_MODEL = "mock-openai/gpt-5.6-luna";
+// Prompts for the blank-transcript cases. The defaults drive the QA mock; `UXAGENT` is an agent
+// turn (commentary, tool calls, progress card, then a long reply). A profile with a real model
+// passes its own prompts through these variables.
+const SEED_PROMPT = process.env.IOS_BEHAVIOR_SEED_PROMPT ?? "UXSTREAM chunks=150 interval=0";
+const REPLY_PROMPT = process.env.IOS_BEHAVIOR_REPLY_PROMPT ?? "UXSTREAM chunks=300 interval=20";
+const SHORT_PROMPT = process.env.IOS_BEHAVIOR_SHORT_PROMPT ?? "UXSTREAM chunks=4 interval=0";
+const AGENT_SEED_PROMPT =
+  process.env.IOS_BEHAVIOR_AGENT_SEED_PROMPT ?? "UXAGENT steps=4 chunks=150 interval=0";
+const AGENT_REPLY_PROMPT =
+  process.env.IOS_BEHAVIOR_AGENT_REPLY_PROMPT ?? "UXAGENT steps=4 chunks=300 interval=20";
+const replaySessions = values.sessions
+  ?.split(",")
+  .map((key) => key.trim())
+  .filter(Boolean);
+if (replaySessions && replaySessions.length < 2) {
+  console.error("ios:behavior: --sessions needs at least two chats.");
+  process.exit(1);
+}
+let replayIndex = 0;
 
 // Set once this run creates a simulator, so every exit path deletes it.
 const owned: { simulator?: string } = {};
@@ -191,13 +233,16 @@ for (const key of ["HardwareKeyboardLastSeen", "AutomaticMinimizationEnabled"]) 
 }
 run("xcrun", ["simctl", "boot", sim]);
 run("xcrun", ["simctl", "bootstatus", sim, "-b"]);
-// bootstatus returns before app launches are accepted; the first launch can fail silently.
-for (let attempt = 1; ; attempt += 1) {
-  if (run("xcrun", ["simctl", "launch", sim, bundleId], { allowFailure: true }).ok) {
+// bootstatus returns before app launches are accepted; the first launches can fail. On a loaded
+// Mac that took longer than the old 20 s, so wait by time and report the last error.
+const launchDeadline = Date.now() + 90_000;
+for (;;) {
+  const launched = spawnSync("xcrun", ["simctl", "launch", sim, bundleId], { encoding: "utf8" });
+  if (launched.status === 0) {
     break;
   }
-  if (attempt === 10) {
-    fail("the app would not launch on the rebooted simulator.");
+  if (Date.now() > launchDeadline) {
+    fail(`the app would not launch on the rebooted simulator:\n${launched.stderr}`);
   }
   await delay(2000);
 }
@@ -325,6 +370,185 @@ async function readProbe(file: string): Promise<ProbeLog> {
   const text = readFileSync(path.join(container, "Library/Caches/behavior-probe.jsonl"), "utf8");
   writeFileSync(file, text);
   return parseProbeLog(text);
+}
+
+/** A chat with history: the next --sessions chat, or `session` after a seeded mock turn. */
+async function longChat(session: string, seedPrompt: string) {
+  if (replaySessions) {
+    replayIndex += 1;
+    return replaySessions[replayIndex % replaySessions.length] ?? session;
+  }
+  await agentTurn(session, seedPrompt);
+  return session;
+}
+
+function runAsync(command: string, args: string[]) {
+  return new Promise<string>((resolve) => {
+    const child = spawn(command, args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.on("error", (error) => fail(`${command} failed: ${error.message}`));
+    child.on("close", (code) =>
+      code === 0
+        ? resolve(stdout)
+        : fail(`${command} ${args.slice(0, 3).join(" ")} failed:\n${stderr || stdout}`),
+    );
+  });
+}
+
+// One agent turn in `session` through the Gateway CLI; settles when the run finishes. Seeds chat
+// history without driving the app, so turns for several chats can run at once.
+const agentTurn = (session: string, message: string) =>
+  runAsync("node", [
+    "openclaw.mjs",
+    "--profile",
+    profile,
+    "agent",
+    "--agent",
+    "main",
+    "--session-key",
+    `agent:main:${session}`,
+    "--message",
+    message,
+    "--json",
+  ]);
+
+// Screen oracle. Each sample is a screenshot plus the accessibility geometry nearest in time
+// (where the transcript and composer are, and the chrome to ignore); text recognition runs over a
+// batch of screenshots afterwards. The view tree and accessibility both kept listing content while
+// a real iPhone showed a blank chat (#191478); recognized pixels do not.
+type ScreenSample = {
+  png: string;
+  screen: { width: number; height: number };
+  transcript?: Rect;
+  exclude: Rect[];
+};
+let screenCount = 0;
+const screensDir = path.join(outDir, "screens");
+mkdirSync(screensDir, { recursive: true });
+
+// Compiled once per run: the Vision CLI takes ~0.2 s per screenshot in batch.
+const screenTextTool = path.join(outDir, "ios-screen-text");
+run("xcrun", [
+  "swiftc",
+  "-O",
+  "-o",
+  screenTextTool,
+  path.join(repoRoot, "scripts/ios-screen-text.swift"),
+]);
+
+type Layout = Omit<ScreenSample, "png">;
+
+function readLayout(roots: AxNode[]): Layout {
+  let transcript: Rect | undefined;
+  let composerTop = Infinity;
+  const exclude: Rect[] = [];
+  const walk = (node: AxNode) => {
+    const id = node.AXUniqueId ?? "";
+    const text = node.AXLabel ?? "";
+    if (node.frame) {
+      if (id === "chat-transcript" && (!transcript || node.frame.height > transcript.height)) {
+        transcript = node.frame;
+      }
+      if (id === "chat-composer-surface" || id === "chat-message-input") {
+        composerTop = Math.min(composerTop, node.frame.y);
+      }
+      // Chrome that stays drawn while the messages are gone: the progress card and run footer.
+      if (id.startsWith("chat-progress-card") || /^(Plan, |Done in )/.test(text)) {
+        exclude.push(node.frame);
+      }
+    }
+    node.children?.forEach(walk);
+  };
+  roots.forEach(walk);
+  const screen = roots[0]?.frame ?? { width: 0, height: 0 };
+  if (transcript) {
+    const bottom = Math.min(transcript.y + transcript.height, composerTop);
+    transcript = { ...transcript, height: Math.max(0, bottom - transcript.y) };
+  }
+  return { screen, transcript, exclude };
+}
+
+/**
+ * Screenshots back to back for `ms`, each paired with the accessibility read nearest in time. A
+ * screenshot takes ~0.4 s and `describe-ui` ~1.9 s, so the reads run in their own loop: one read
+ * per screenshot left 2.5-6 s between samples, enough to miss a blank users see. The rects only
+ * move with the keyboard, navigation or a progress card; a read ~1 s off the screenshot is
+ * accepted.
+ */
+async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
+  const until = Date.now() + ms;
+  const timed = async <T,>(work: Promise<T>) => {
+    const start = Date.now();
+    const value = await work;
+    return { t: (start + Date.now()) / 2, value };
+  };
+  const layouts: { t: number; layout: Layout }[] = [];
+  const shots: { t: number; png: string }[] = [];
+  await Promise.all([
+    (async () => {
+      do {
+        const { t, value } = await timed(runAsync(axe, ["describe-ui", "--udid", sim]));
+        layouts.push({ t, layout: readLayout(JSON.parse(value) as AxNode[]) });
+      } while (Date.now() < until);
+    })(),
+    (async () => {
+      do {
+        screenCount += 1;
+        const png = path.join(screensDir, `${String(screenCount).padStart(4, "0")}-${label}.png`);
+        const { t } = await timed(runAsync("xcrun", ["simctl", "io", sim, "screenshot", png]));
+        shots.push({ t, png });
+      } while (Date.now() < until);
+    })(),
+  ]);
+  return shots.map(({ t, png }) => {
+    const { layout } = layouts.reduce((best, entry) =>
+      Math.abs(entry.t - t) < Math.abs(best.t - t) ? entry : best,
+    );
+    return { png, screen: layout.screen, transcript: layout.transcript, exclude: layout.exclude };
+  });
+}
+
+/** Lines of transcript text per sample; -1 where no transcript was on screen to judge. */
+function readScreens(watched: ScreenSample[]) {
+  const lines = new Map<string, ScreenLine[]>();
+  for (let start = 0; start < watched.length; start += 50) {
+    const batch = watched.slice(start, start + 50).map((entry) => entry.png);
+    for (const record of run(screenTextTool, batch).stdout.trim().split("\n")) {
+      if (record) {
+        const parsed = JSON.parse(record) as { image: string; lines: ScreenLine[] };
+        lines.set(parsed.image, parsed.lines);
+      }
+    }
+  }
+  return watched.map((entry) => ({
+    png: entry.png,
+    lines: entry.transcript
+      ? transcriptText(lines.get(entry.png) ?? [], entry.screen, entry.transcript, entry.exclude)
+          .length
+      : -1,
+  }));
+}
+
+function screenGates(read: { png: string; lines: number }[], when: string): Result {
+  const judged = read.filter((entry) => entry.lines >= 0);
+  const blank = judged.filter((entry) => entry.lines === 0);
+  for (const entry of blank) {
+    console.log(`ios:behavior: blank transcript on screen: ${entry.png}`);
+  }
+  return {
+    metrics: {
+      screenSamples: judged.length,
+      blankSamples: blank.length,
+      minTextLines: judged.length > 0 ? Math.min(...judged.map((entry) => entry.lines)) : undefined,
+    },
+    gates: {
+      "transcript on screen to judge (setup)": judged.length >= 3,
+      [`transcript text on screen ${when}`]: blank.length === 0,
+    },
+  };
 }
 
 type Metrics = Record<string, number | undefined>;
@@ -461,16 +685,25 @@ const cases: Record<string, Case> = {
       await delay(2000);
       // An interactive swipe would also dismiss the keyboard and move every row; settle it first.
       await hideKeyboard();
-      ui([
+      // By coordinates inside the transcript's frame: the iOS transcript is a `List`, which the
+      // UI driver does not offer as a scroll container (#192232).
+      const area =
+        axFrame((node) => node.AXUniqueId === "chat-transcript") ?? fail("no transcript.");
+      const x = String(Math.round(area.x + area.width / 2));
+      run(axe, [
         "swipe",
-        "--within-element-ref",
-        ref(/chat-transcript/),
-        "--direction",
-        "down",
-        "--distance",
-        "0.5",
+        "--start-x",
+        x,
+        "--start-y",
+        String(Math.round(area.y + area.height * 0.25)),
+        "--end-x",
+        x,
+        "--end-y",
+        String(Math.round(area.y + area.height * 0.75)),
         "--duration",
         "0.3",
+        "--udid",
+        sim,
       ]);
       await delay(1500);
       const holdFrom = Date.now();
@@ -593,7 +826,84 @@ const cases: Record<string, Case> = {
       };
     },
   },
+  // Opening an existing chat from the sidebar (#191478, trigger A): the transcript shows text in
+  // every screen sample after the switch, without a swipe. Switches go between long agent chats
+  // and a short one, as in the report.
+  "switch-session": {
+    kind: "guard",
+    async run(session) {
+      const short = `${session}-short`;
+      const long = replaySessions?.[0] ?? `${session}-long`;
+      const long2 = replaySessions?.[1] ?? `${session}-long2`;
+      await Promise.all([
+        ...(replaySessions
+          ? []
+          : [agentTurn(long, AGENT_SEED_PROMPT), agentTurn(long2, AGENT_SEED_PROMPT)]),
+        agentTurn(short, SHORT_PROMPT).then(() => agentTurn(short, SHORT_PROMPT)),
+      ]);
+      const chats = [long, short, long2] as const;
+      launch(long);
+      await delay(3000);
+      const watched: ScreenSample[] = [];
+      for (const chat of [chats[1], chats[0], chats[1], chats[2], chats[0], chats[2]]) {
+        tap(/RootTabs\.Sidebar\.Show/);
+        await delay(800);
+        tap(new RegExp(`\\|${chat.replace(/-/g, "\\-")}, `));
+        watched.push(...(await watchScreen(`switch-${chat}`, 3000)));
+      }
+      return screenGates(readScreens(watched), "after every switch");
+    },
+  },
+  ...blankMatrix(),
 };
+
+// Every combination of keyboard up/down, short/long chat and plain/agent content, each judged by
+// the screen oracle from composer focus until after the reply ends. The harness missed #191478
+// because its only keyboard-up sends were in short plain chats; `blank-up-long-agent` is that bug.
+function blankMatrix(): Record<string, Case> {
+  const matrix: Record<string, Case> = {};
+  for (const keyboard of ["up", "down"] as const) {
+    for (const length of ["short", "long"] as const) {
+      for (const content of ["plain", "agent"] as const) {
+        matrix[`blank-${keyboard}-${length}-${content}`] = {
+          kind: "guard",
+          async run(session) {
+            const prompt = content === "agent" ? AGENT_REPLY_PROMPT : REPLY_PROMPT;
+            const chat =
+              length === "long"
+                ? await longChat(session, content === "agent" ? AGENT_SEED_PROMPT : SEED_PROMPT)
+                : session;
+            launch(chat);
+            await delay(2000);
+            await enterText(prompt);
+            if (keyboard === "down") {
+              await hideKeyboard();
+            }
+            const keyboardAtSend = keyboardShown();
+            const focused = await watchScreen("focus", 3000);
+            tap(/chat-send-message/);
+            const sent: ScreenSample[] = [];
+            const until = Date.now() + 90_000;
+            while (Date.now() < until) {
+              sent.push(...(await watchScreen("send", 2000)));
+              if (ui(["snapshot-ui", "--style", "minimal"]).stdout.includes("Done in")) {
+                break;
+              }
+            }
+            sent.push(...(await watchScreen("done", 3000)));
+            // A new chat has no text before the send; judge it from the send on.
+            const judged = length === "short" ? sent : [...focused, ...sent];
+            const result = screenGates(readScreens(judged), "from focus to after the reply");
+            result.gates[`keyboard ${keyboard} at send (setup)`] =
+              keyboardAtSend === (keyboard === "up");
+            return result;
+          },
+        };
+      }
+    }
+  }
+  return matrix;
+}
 
 const selected = caseNames.map((name) => ({
   name,
@@ -614,7 +924,27 @@ try {
     for (let sample = 1; sample <= samples; sample += 1) {
       const session = `ux-${name}-${stamp}-${sample}`.toLowerCase();
       const file = path.join(outDir, `${name}-${sample}.jsonl`);
+      // Every case is recorded for review and ends with a screen check, so cases that gate on
+      // motion are also judged on what is drawn.
+      const video = spawn(
+        "xcrun",
+        ["simctl", "io", sim, "recordVideo", "--force", path.join(outDir, `${name}-${sample}.mp4`)],
+        { stdio: "ignore" },
+      );
       const result = await testCase.run(session, file);
+      const settled = screenGates(
+        readScreens(await watchScreen(`${name}-end`, 1500)),
+        "at the end",
+      );
+      result.gates["transcript text on screen at the end"] =
+        settled.gates["transcript text on screen at the end"] ?? false;
+      result.metrics.endTextLines = settled.metrics.minTextLines;
+      video.kill("SIGINT");
+      if (video.exitCode === null) {
+        await new Promise((resolve) => {
+          video.once("exit", resolve);
+        });
+      }
       results.push(result);
       console.log(`ios:behavior: ${name} #${sample} ${JSON.stringify(result.metrics)}`);
     }

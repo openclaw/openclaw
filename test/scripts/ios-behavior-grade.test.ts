@@ -4,6 +4,7 @@ import {
   type ProbeLog,
   motion,
   remounts,
+  transcriptText,
   window,
 } from "../../scripts/lib/ios-behavior-grade.mts";
 
@@ -113,5 +114,58 @@ describe("remounts", () => {
     ];
     expect(remounts(events, 10, 20)).toBe(1);
     expect(remounts(events, 0, 5)).toBe(0);
+  });
+});
+
+describe("transcriptText", () => {
+  // Recognized lines from two simulator screenshots of the same keyboard-up chat (402×874 pt):
+  // the blank one from #191478 keeps only the progress card, run footer and composer.
+  const screen = { width: 402, height: 874 };
+  const transcript = { x: 0, y: 122, width: 402, height: 300 };
+  const card = { x: 10, y: 355, width: 382, height: 55 };
+  const chrome = [
+    { text: "v Run echo done", x: 0.057, y: 0.421, w: 0.24, h: 0.01 },
+    { text: "4/4", x: 0.804, y: 0.422, w: 0.05, h: 0.012 },
+    { text: "Done in 3 seconds", x: 0.123, y: 0.459, w: 0.442, h: 0.013 },
+    { text: "Message main...", x: 0.052, y: 0.51, w: 0.278, h: 0.028 },
+  ];
+
+  it("finds no transcript text on a blank chat whose card and composer are still drawn", () => {
+    expect(transcriptText(chrome, screen, transcript, [card])).toEqual([]);
+  });
+
+  it("keeps message text and drops the excluded card", () => {
+    const messages = [
+      { text: "Reply with one short sentence.", x: 0.401, y: 0.185, w: 0.514, h: 0.018 },
+      { text: "The 40 river facts and the four", x: 0.079, y: 0.275, w: 0.795, h: 0.016 },
+    ];
+    expect(
+      transcriptText([...messages, ...chrome], screen, transcript, [card]).map((line) => line.text),
+    ).toEqual(messages.map((line) => line.text));
+  });
+});
+
+describe("layout spikes", () => {
+  it("drops a one-frame move that snaps back but keeps a jump that lasts", () => {
+    const spike = motion([
+      frame(0, { live: 212 }),
+      frame(17, { live: 175 }),
+      frame(34, { live: 212 }),
+    ]);
+    expect(spike).toMatchObject({ maxDriftPt: 0, layoutSpikes: 1 });
+    const held = motion([
+      frame(0, { live: 212 }),
+      frame(17, { live: 175 }),
+      frame(34, { live: 175 }),
+      frame(200, { live: 212 }),
+    ]);
+    expect(held).toMatchObject({ maxDriftPt: 37, layoutSpikes: 0 });
+    // A flash to the top snaps back just as fast, but moves far more than any layout pass.
+    const flash = motion([
+      frame(0, { live: 700 }),
+      frame(17, { live: 120 }),
+      frame(97, { live: 700 }),
+    ]);
+    expect(flash).toMatchObject({ layoutSpikes: 0, maxDriftPt: 580 });
   });
 });
