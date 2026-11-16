@@ -202,6 +202,9 @@ Selection reads window metadata and transcript endpoints. The worker checks even
 only when preparation reaches that window within the pass's byte budget, outside the
 batch selection transaction. Commit protection reads selected window owners and
 cross-generation references; unrelated canonical entries stay encoded.
+Cross-generation references are the previous session and compaction checkpoints.
+Usage-family lineage only groups usage reports, which read cold history, so idle
+past runs of an active rotating session (such as a frequent cron job) can cool.
 
 Before building an archive, the worker checks the largest original event. An event above
 64 MiB skips envelope preparation and leaves the transcript in SQLite, while
