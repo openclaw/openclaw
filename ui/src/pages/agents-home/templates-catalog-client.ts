@@ -1,9 +1,4 @@
 import type {
-  TemplatePluginAcknowledgement,
-  TemplateSkillAcknowledgement,
-  TemplateLifecyclePlanResult,
-} from "../../../../packages/gateway-protocol/src/schema/templates.js";
-import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
   ClawHubTemplateCatalogPreview,
@@ -14,7 +9,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 export type TemplateCatalogEntry = ClawHubTemplateCatalogEntry;
 export type TemplateCatalogDetail = ClawHubTemplateCatalogDetail;
 export type TemplateCatalogSource = { packageName: string; version: string };
-export type TemplateAddReviewPlan = TemplateLifecyclePlanResult;
 
 export type TemplateAddApplyResult = {
   agentId: string;
@@ -81,6 +75,7 @@ export async function readTemplateDetail(
     !isPublicEntry(detail) ||
     detail.packageName !== source.packageName ||
     (source.version !== undefined && detail.version !== source.version) ||
+    !detail.agentId ||
     !detail.contents ||
     !Array.isArray(detail.contents.instructions) ||
     !Array.isArray(detail.contents.skills) ||
@@ -104,70 +99,29 @@ export async function readTemplatePreview(
   return result.preview;
 }
 
-export async function readTemplateAddReviewPlan(
-  client: GatewayBrowserClient,
-  source: TemplateCatalogSource,
-): Promise<TemplateAddReviewPlan> {
-  const plan = await client.request<TemplateLifecyclePlanResult>("templates.add.plan", { source });
-  if (plan.operation !== "add" || !plan.planIntegrity || !plan.target?.agentId) {
-    throw new Error("ClawHub did not return a valid Add review.");
-  }
-  return plan;
-}
-
+/**
+ * Chat-based Add: the Gateway creates the agent without a reviewed plan and the
+ * agent's own conversation continues setup. `agentId` is the id this client
+ * wants; the result names the unused id the Gateway chose. An error response
+ * means no agent or chat was kept.
+ */
 export async function applyTemplateAdd(
   client: GatewayBrowserClient,
   source: TemplateCatalogSource,
   options: {
+    agentId: string;
     acknowledgeClawHubRisk?: boolean;
-    reviewPlan?: TemplateAddReviewPlan;
     onSent?: (requestId: string) => void;
-  } = {},
+  },
 ): Promise<TemplateAddApplyResult> {
-  const plan = options.reviewPlan;
   return await client.request<TemplateAddApplyResult>(
     "templates.add.apply",
     {
+      mode: "chat",
       source,
+      agentId: options.agentId,
       ...(options.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      ...(plan
-        ? {
-            agentId: plan.target.agentId,
-            planIntegrity: plan.planIntegrity,
-            acknowledgeCapabilities: plan.pluginReviews
-              .filter((review) => review.ownerAction === "install")
-              .map((review): TemplatePluginAcknowledgement => ({
-                actionId: review.actionId,
-                pluginId: review.pluginId,
-                reviewToken: review.reviewToken,
-                capabilityGrants: review.capabilityGrants,
-                capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
-                acknowledgeRiskWarning: review.riskWarning ? true : undefined,
-              })),
-            acknowledgeSkillWarnings: plan.skillReviews.map(
-              (review): TemplateSkillAcknowledgement =>
-                "path" in review
-                  ? {
-                      actionId: review.actionId,
-                      source: "bundled",
-                      path: review.path,
-                      digest: review.digest,
-                      reviewToken: review.reviewToken,
-                      acknowledgeRiskWarning: true,
-                    }
-                  : {
-                      actionId: review.actionId,
-                      source: "clawhub",
-                      ref: review.ref,
-                      reviewToken: review.reviewToken,
-                      acknowledgeRiskWarning: true,
-                    },
-            ),
-          }
-        : {}),
     },
-    {
-      onSent: options.onSent,
-    },
+    { onSent: options.onSent },
   );
 }

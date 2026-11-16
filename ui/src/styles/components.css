@@ -981,7 +981,8 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   border-color: transparent;
 }
 
-.btn:is(:disabled, [aria-disabled="true"]) {
+/* Busy feedback stays readable; the disabled attribute still blocks activation. */
+.btn:is(:disabled, [aria-disabled="true"]):not([aria-busy="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }
