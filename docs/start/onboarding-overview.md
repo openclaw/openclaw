@@ -21,7 +21,7 @@ The terminal flow also offers the full classic wizard for detailed setup.
 | **Interface**  | Terminal or guided setup               | Automatic first run with guided fallback            | Native desktop setup                      |
 | **Gateway**    | Local or remote                        | Local, direct remote, or SSH                        | Local, direct remote, or SSH              |
 | **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                           | Linux desktop, visual setup               |
-| **Automation** | `--non-interactive` for scripts        | Automatic for fresh local installs                  | Manual only                               |
+| **Automation** | `--non-interactive` for scripts        | Runtime preparation; explicit AI choice             | Manual only                               |
 | **Start**      | `openclaw onboard`                     | [Download the macOS app](/platforms/macos#download) | [Install the Linux app](/platforms/linux) |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
@@ -77,18 +77,26 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 ## macOS app onboarding
 
 [Download the macOS app](/platforms/macos#download), then open it. On a fresh
-install with no existing connection or configuration, a progress window shows the
-app preparing its local runtime, starting its own Gateway, and opening guided
-onboarding in the dashboard. **Set up manually** opens native setup instead.
-It does not automatically connect to a discovered Gateway. Existing local and
-remote setups keep their connection and native onboarding behavior.
+install with no existing connection or configuration, the app prepares its local
+runtime and starts its own Gateway, then opens **Get OpenClaw thinking** with two
+choices: **Connect an AI account** or **Use a local model**. It does not select an
+AI connection or join a discovered Gateway automatically. **Set up manually**
+opens the other native setup steps. Existing local and remote setups keep their
+connection and native onboarding behavior.
 
-The dashboard shows **Connecting your AI…** while automatic setup runs, then a
-summary of the selected provider, model, and Gateway. You can select another
-available provider, use a different Gateway, or review device permissions. If
-sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
-If automatic setup is unavailable, the summary explains the failed attempts and
-offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+The account path reuses detected access or offers provider sign-in and explicit
+API-key entry. **Check again** refreshes discovery after an external CLI login.
+The local path reuses an available model service or opens hardware-aware managed
+setup. Review the recommendation and download size before approving downloads.
+Setup verifies the selected connection before opening guided dashboard onboarding
+for optional features. See [macOS onboarding](/start/onboarding).
+
+### Dashboard automatic AI setup
+
+The dashboard also provides automatic setup when explicitly entered there. Its
+**Connecting your AI…** card shows the selected provider, model, and Gateway,
+with alternatives and inline sign-in when needed. This is separate from the
+native app's explicit connection choice.
 
 Automatic setup keeps an existing configured model. Otherwise it tries usable
 connections in this order:

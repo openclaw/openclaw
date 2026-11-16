@@ -245,6 +245,8 @@ struct OnboardingAISetupView: View {
                     self.manualSection
                 }
             }
+            Button("Check again") { self.model.retryFromScratch() }
+                .disabled(self.model.isBusy)
         }
     }
 

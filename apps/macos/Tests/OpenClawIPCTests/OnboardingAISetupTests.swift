@@ -1028,7 +1028,7 @@ struct OnboardingAISetupTests {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "ThinkingOnboarding"))
         let harness = try AISetupHarness(
             url: #require(URL(string: "ws://example.invalid")),
-            handler: { _, request, _ in
+            handler: { _, request, recorder in
                 guard request.method == "openclaw.setup.detect" else {
                     Issue.record("Navigation unexpectedly requested \(request.method)")
                     return unavailableGatewayResponse(id: request.id)
@@ -1040,6 +1040,15 @@ struct OnboardingAISetupTests {
                 var payload = try #require(envelope["payload"] as? [String: Any])
                 if !hasLocalModel {
                     payload["candidates"] = []
+                }
+                let detections = await recorder.snapshot().methods.filter { $0 == "openclaw.setup.detect" }.count
+                if detections > 1 {
+                    var candidates = payload["candidates"] as? [[String: Any]] ?? []
+                    candidates.append([
+                        "kind": "claude-cli", "label": "New CLI login", "detail": "fixture refreshed login",
+                        "modelRef": "claude-cli/fixture-model", "recommended": false, "credentials": true,
+                    ])
+                    payload["candidates"] = candidates
                 }
                 payload["authOptions"] = [[
                     "id": "openai-token-sharing", "brandId": "openai",
@@ -1153,6 +1162,13 @@ struct OnboardingAISetupTests {
             }
             try await capture("account-api-key-entry")
             #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect"])
+            try await pressOnboardingEntryButton("Check again", in: hosting)
+            try await TestWait.state("externally signed-in account appears after explicit refresh") {
+                try await inspectAISetupAccessibility(hosting).labels.contains { $0.contains("New CLI login") }
+            }
+            #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect", "openclaw.setup.detect"])
+            try await capture("account-refreshed")
+
         } catch {
             await harness.gateway.shutdown()
             throw error
@@ -3647,6 +3663,10 @@ struct OnboardingAISetupTests {
                     #expect(events.persistenceCalls == 3)
                 } else {
                     try await harness.recorder.waitForMethod("openclaw.setup.detect")
+                    try await TestWait.state("manual AI setup paths") {
+                        try await inspectAISetupAccessibility(hosting).actions["Connect an AI account"] == true
+                    }
+                    try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return ax.actions["Finish"] == false &&
@@ -6565,6 +6585,12 @@ struct OnboardingAISetupTests {
 
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
+                try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
+                try await TestWait.state("recovered account controls") {
+                    try await inspectAISetupAccessibility(hosting).actions.contains {
+                        $0.key.contains("API Keys") && $0.value
+                    }
+                }
                 let surface = try await inspectAISetupAccessibility(hosting)
                 #expect(surface.actions.contains { $0.key.contains("Test AI") && $0.value })
                 #expect(surface.actions.contains { $0.key.contains("API Keys") && $0.value })

@@ -58,26 +58,27 @@ has no macOS app asset, use the newest one that does, or build from source with
 
 Install and launch **OpenClaw.app**. On a fresh installation with no saved Gateway
 or configuration, a progress window appears while the app prepares its bundled
-runtime, starts a Gateway on **This Mac**, and opens the dashboard's onboarding conversation. It never joins
-a discovered Gateway automatically. The window shows the current step and closes
-once the dashboard is ready. Reconnecting the dashboard during this handoff keeps setup in the same
-window, and **Review permissions** continues in the dashboard. Choose **Set up manually** to use native
-setup instead.
+runtime and starts a Gateway on **This Mac**. It then opens **Get OpenClaw thinking**:
+choose **Connect an AI account** or **Use a local model**. It never joins a
+discovered Gateway or chooses an AI connection automatically. Choose **Set up
+manually** during runtime preparation to use the other native setup steps.
 
-The dashboard connects your AI, shows what it selected, and offers alternatives.
-You can choose another Gateway or review this Mac's permissions from the setup
-card. OpenClaw then guides the remaining setup (memory import, channels, and
-permissions) in the same conversation. Grant macOS permissions any time from
-**Dashboard → Settings → This Mac → Permissions**.
+Reuse detected access, sign in, or explicitly reveal API-key entry on the account
+path. Choose **Check again** after signing into a CLI outside OpenClaw. The local
+path offers existing model services and hardware-aware managed setup, with the
+recommendation and download size shown before model download consent. These
+operations run on the Gateway host; existing model services may be remote.
 
-If runtime preparation, Gateway startup or authentication, or dashboard loading
-fails, the same window switches to the relevant native setup step with the error. An
-older Gateway without automatic AI setup opens the native AI picker instead.
-Native setup remains available from the menu for manual recovery: choose
-**This Mac** or enter an existing Gateway's address, prepare the local runtime
-when needed, then select an AI connection to run its live model check.
-Native setup keeps the current page visible when runtime readiness removes the
-installation step from the flow.
+After the selected connection passes its live check, the app opens guided
+dashboard onboarding for optional memory import, channels, and permissions.
+Grant macOS permissions any time from **Dashboard → Settings → This Mac →
+Permissions**.
+
+If runtime preparation, Gateway startup, or AI setup fails, native setup keeps the
+error visible at the relevant step. Native setup remains available from the menu
+for recovery: choose **This Mac** or enter an existing Gateway's address, prepare
+the local runtime when needed, then choose an AI connection. It keeps the current
+page visible when runtime readiness removes the installation step from the flow.
 
 Existing installations and remote connections keep their saved setup. Native AI
 detection only presents available connections; it checks and activates one after
