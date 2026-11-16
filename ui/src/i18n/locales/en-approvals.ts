@@ -86,7 +86,7 @@ const enApprovals = {
     allowedOnceDescription: "The operation was approved for this request only.",
     allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
     deniedDescription: "The operation was denied and will not continue.",
-    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    expiredDescription: "This approval request expired without a recorded decision.",
     cancelledDescription: "This approval request was canceled and can no longer be used.",
     summaryLabel: "Summary",
     commandLabel: "Command",
@@ -96,7 +96,7 @@ const enApprovals = {
     resolvedLabel: "Resolved",
     actionsLabel: "Approval decisions",
     resolvingDecision: "Recording {decision}…",
-    safeToClose: "The decision is recorded. You can close this page.",
+    safeToClose: "You can close this page.",
     openControlUi: "Open OpenClaw",
   },
   standingGrants: {

@@ -483,6 +483,9 @@ export async function buildTemplateAddPlan(params: {
           )
         : undefined;
     if (diagnostic) {
+      if (!preflight.ok && preflight.allowlistPluginId) {
+        diagnostic.allowlistPluginId = preflight.allowlistPluginId;
+      }
       blockers.push(diagnostic);
     }
     if (preflight.ok && preflight.requirements) {
