@@ -157,7 +157,6 @@ export function resolveScopeDecision(params: {
   const channel = normalizeOptionalLowercaseString(params.ctx.Surface ?? params.ctx.Provider);
   const chatType = normalizeChatType(params.ctx.ChatType);
   const sessionKey = normalizeOptionalLowercaseString(params.ctx.SessionKey) ?? "";
-  const requestSessionKey = toAgentRequestSessionKey(sessionKey) ?? "";
 
   for (const rule of scope.rules ?? []) {
     // Rules are first-match-wins so operators can place specific denials before
@@ -180,7 +179,7 @@ export function resolveScopeDecision(params: {
     if (
       matchPrefix &&
       !sessionKey.startsWith(matchPrefix) &&
-      !requestSessionKey.startsWith(matchPrefix)
+      !toAgentRequestSessionKey(sessionKey)?.startsWith(matchPrefix)
     ) {
       continue;
     }

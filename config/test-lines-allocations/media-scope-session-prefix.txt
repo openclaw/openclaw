@@ -1,2 +1,0 @@
-26
-# Audio processing and link-fetch scope regressions for issue #190480.

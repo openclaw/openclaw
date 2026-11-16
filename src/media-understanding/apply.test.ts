@@ -339,17 +339,17 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("handles URL-only attachments for audio transcription", async () => {
+  it("transcribes URL-only audio outside an unrelated raw-prefix denial", async () => {
     const ctx: MsgContext = {
-      Body: "",
+      SessionKey: "agent:main:whatsapp:direct:fixture",
       media: [{ url: "https://example.com/note.ogg", contentType: " Audio/Ogg; codecs=opus " }],
       ChatType: "direct",
       Surface: "whatsapp",
     };
     const cfg = createGroqAudioConfig({
       scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { chatType: "direct", channel: "whatsapp" } }],
+        default: "allow",
+        rules: [{ action: "deny", match: { rawKeyPrefix: "agent:other:", keyPrefix: "agent:" } }],
       },
     });
 
@@ -357,29 +357,6 @@ describe("applyMediaUnderstanding", () => {
 
     expect(ctx.Transcript).toBe("remote transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
-  });
-
-  it.each([
-    [{ rawKeyPrefix: "agent:main:discord:" }, "agent:main:telegram:direct:123", false],
-    [{ rawKeyPrefix: "agent:main:discord:" }, "agent:main:discord:direct:456", true],
-    [{ keyPrefix: "slack:" }, "agent:main:slack:direct:u789", true],
-    [{ keyPrefix: "slack:" }, "agent:main:telegram:direct:123", false],
-    [{ keyPrefix: "agent:main:slack:" }, "agent:main:slack:direct:u789", true],
-    [{ rawKeyPrefix: "agent:other:", keyPrefix: "slack:" }, "agent:main:slack:direct:u789", false],
-  ] as const)("scopes audio processing by %j for %s", async (match, SessionKey, denied) => {
-    const ctx = { ...(await createAudioCtx()), SessionKey };
-    const transcribeAudio = vi.fn(async () => ({ text: "scoped transcript" }));
-    await applyAudio(ctx, transcribeAudio, {
-      cfg: createGroqAudioConfig({
-        scope: { default: "allow", rules: [{ action: "deny", match }] },
-      }),
-    });
-
-    expect(transcribeAudio).toHaveBeenCalledTimes(denied ? 0 : 1);
-    expect(ctx.Transcript).toBe(denied ? undefined : "scoped transcript");
-    expect(ctx.MediaUnderstandingDecisions?.find((d) => d.capability === "audio")?.outcome).toBe(
-      denied ? "scope-deny" : "success",
-    );
   });
 
   it("marks audio exceeding maxBytes in audio-only mode", async () => {

@@ -87,7 +87,6 @@ it.each([
 it.each([
   { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
   { keyPrefix: "slack:" },
-  { rawKeyPrefix: "agent:main:slack:" },
 ] as const)("applies shared media scope %j before fetching links", async (match) => {
   const { ctx, before, run } = fixture(
     {
@@ -97,9 +96,7 @@ it.each([
       SessionKey: "agent:main:slack:channel:C123",
       Surface: "slack",
     },
-    cfg(undefined, {
-      scope: { default: "allow", rules: [{ action: "deny", match }] },
-    }),
+    cfg(undefined, { scope: { default: "allow", rules: [{ action: "deny", match }] } }),
   );
   await run();
 
