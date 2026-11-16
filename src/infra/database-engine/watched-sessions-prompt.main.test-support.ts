@@ -24,7 +24,7 @@ import {
 } from "./admission-scope.js";
 
 // The restriction checks threadId, so a Worker would silently bypass this proof.
-process.once("message", async ({ stateDir }: { stateDir: string }) => {
+async function probeMain({ stateDir }: { stateDir: string }) {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const statements = channel("openclaw.database.statement");
@@ -93,4 +93,8 @@ process.once("message", async ({ stateDir }: { stateDir: string }) => {
   }
   process.send?.(result);
   process.disconnect?.();
+}
+
+process.once("message", (input: { stateDir: string }) => {
+  void probeMain(input);
 });
