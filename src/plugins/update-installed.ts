@@ -655,6 +655,7 @@ async function runInstalledPluginUpdate(
         gitUrl: gitResult.git.url,
         gitRef: gitResult.git.ref,
         gitCommit: gitResult.git.commit,
+        gitDirectory: gitResult.git.directory,
       };
     } else {
       const marketplaceResult = result as MarketplacePluginUpdateSuccess;

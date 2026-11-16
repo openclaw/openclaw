@@ -82,7 +82,7 @@ export type ManagedPluginSourceInstallRequest =
       archivePath: string;
       mode: "install" | "update";
     }
-  | { source: "git"; spec: string; mode: "install" | "update" }
+  | { source: "git"; spec: string; directory?: string; mode: "install" | "update" }
   | {
       source: "marketplace";
       marketplace: string;
@@ -611,7 +611,12 @@ async function installResolvedManagedPluginSource(
 
   if (request.source === "git") {
     return await complete(
-      installPluginFromGitSpec({ ...common, spec: request.spec, mode: request.mode }),
+      installPluginFromGitSpec({
+        ...common,
+        spec: request.spec,
+        directory: request.directory,
+        mode: request.mode,
+      }),
       {
         install: (result) => ({
           source: "git",
@@ -622,6 +627,7 @@ async function installResolvedManagedPluginSource(
           gitUrl: result.git.url,
           gitRef: result.git.ref,
           gitCommit: result.git.commit,
+          gitDirectory: result.git.directory,
         }),
       },
     );

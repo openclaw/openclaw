@@ -48,6 +48,7 @@ openclaw plugins install npm:<package>                       # npm only
 openclaw plugins install npm-pack:<path.tgz>                 # local npm-pack tarball
 openclaw plugins install git:github.com/<owner>/<repo>       # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
+openclaw plugins install git:owner/repo@main --directory plugins/demo --force
 openclaw plugins install <path>                              # local path or archive
 openclaw plugins install -l <path>                           # link instead of copy
 openclaw plugins install <plugin>@<marketplace>              # marketplace shorthand
@@ -243,7 +244,9 @@ for example `npm:@scope/diffs`.
 
 Use `git:<repo>` to install directly from a git repository. Supported forms: `git:github.com/owner/repo`, `git:owner/repo`, full `https://`, `ssh://`, `git://`, `file://`, and `git@host:owner/repo.git` clone URLs. Add `@<ref>` or `#<ref>` to check out a branch, tag, or commit before install.
 
-Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer, so manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
+Git installs clone and check out the requested ref when present, then use the normal plugin directory installer, so manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
+
+Use `--directory <path>` to select a plugin package inside the checked-out repository, for example `git:owner/repo@main --directory plugins/demo`. The directory must exist inside that repository; absolute paths, traversal, and symlinks escaping the checkout are rejected. Package validation, dependency installation, and capability consent apply to the selected package. The selected directory is recorded with the Git source and reused by `openclaw plugins update <id>`. Separate directory selections in one repository receive independent managed checkouts. Omitting `--directory` keeps repository-root behavior. This option is supported only for `git:` installs, not ClawHub, npm, local paths/archives, or marketplaces.
 
 Reinstalling the same Git source and ref without `--force` refuses an existing managed checkout, even if the repository now declares a different plugin id. Use `openclaw plugins update <id>` for a tracked upgrade, or `openclaw plugins install git:<repo>@<ref> --force` to intentionally reinstall the same plugin id. `--force` does not migrate an existing install record to a different plugin id.
 

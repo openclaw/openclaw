@@ -106,6 +106,18 @@ describe("plugin lifecycle protocol validators", () => {
       install.rejects({ ...request, ...trust });
     }
   });
+  it("accepts a directory only on Git install requests", () => {
+    const git = { source: "git", spec: "git:github.com/acme/repo@main" };
+    install.accepts(git, { ...git, directory: "plugins/demo", acknowledgeCapabilities: consent });
+    install.rejects(
+      { ...git, directory: "" },
+      { ...git, directory: 42 },
+      { source: "npm", spec: "demo", directory: "plugins/demo" },
+      { ...official, directory: "plugins/demo" },
+      { ...clawhub, directory: "plugins/demo" },
+    );
+  });
+
   it("exports install policy warning details from the package root", () => {
     const details: p.InstallPolicyWarningErrorDetails = {
       installPolicyCode: p.INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,

@@ -116,6 +116,51 @@ describe("git install target ownership", () => {
     },
   );
 
+  it("installs a nested package and keeps selections in separate managed checkouts", async () => {
+    const nestedDir = path.join(sourceDir, "plugins", "nested");
+    const commit = await commitPlugin("nested", "2.0.0", nestedDir);
+    const installed = await install({ directory: "plugins/nested", expectedPluginId: "nested" });
+    expect(installed).toMatchObject({
+      version: "2.0.0",
+      git: { commit, directory: "plugins/nested" },
+    });
+    expect(installed.targetDir).toMatch(/plugins[/\\]nested$/);
+    await expect(read(installed.targetDir, "index.js")).resolves.toBe('export default "2.0.0";\n');
+    const root = await install();
+    expect(root.pluginId).toBe("demo");
+    expect(root.targetDir).not.toBe(installed.targetDir);
+  });
+
+  it("rejects invalid or absent package selectors without publishing a checkout", async () => {
+    for (const directory of [
+      "../escape",
+      "plugins/../../escape",
+      "/absolute",
+      "C:/absolute",
+      "plugins\\escape",
+      "",
+      "missing",
+      "index.js",
+    ]) {
+      expect(await installPluginFromGitSpec({ spec, directory, dryRun: true })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Git source directory"),
+      });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a selected symlink outside the fetched Git repository",
+    async () => {
+      await fs.symlink(sourceSeed, path.join(sourceDir, "escape"), "dir");
+      await git(sourceDir, "add", ".");
+      await git(sourceDir, "-c", "commit.gpgsign=false", "commit", "-m", "escaping selector");
+      expect(
+        await installPluginFromGitSpec({ spec, directory: "escape", dryRun: true }),
+      ).toMatchObject({ ok: false, error: expect.stringContaining("escapes the repository") });
+    },
+  );
+
   it("installs a local-path source without sharing its Git object files", async () => {
     const commit = await head();
     const objectPath = path.join("objects", commit.slice(0, 2), commit.slice(2));

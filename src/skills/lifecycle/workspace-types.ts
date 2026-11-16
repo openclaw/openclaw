@@ -168,6 +168,7 @@ export type SkillSourceOrigin = {
     url: string;
     ref?: string;
     commit?: string;
+    directory?: string;
     resolvedAt: string;
   };
 };

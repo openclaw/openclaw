@@ -224,6 +224,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
+    .option("--directory <path>", "Install a package directory inside a Git repository")
     .addHelpText(
       "after",
       "\nExamples:\n  openclaw skills install @owner/weather\n  openclaw skills install skills-sh:owner/repo/weather\n",
@@ -239,10 +240,16 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
           global?: boolean;
           agent?: string;
           as?: string;
+          directory?: string;
         },
         command: Command,
       ) => {
         try {
+          if (opts.directory !== undefined && !slug.trim().toLowerCase().startsWith("git:")) {
+            defaultRuntime.error("--directory is only supported for git skill installs.");
+            defaultRuntime.exit(1);
+            return;
+          }
           const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
@@ -268,6 +275,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             const result = await installSkillFromSource({
               workspaceDir,
               spec: slug,
+              directory: opts.directory,
               slug: opts.as,
               force: Boolean(opts.force),
               config,

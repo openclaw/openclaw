@@ -154,6 +154,7 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option("--directory <path>", "Install a package directory inside a Git repository")
     .option("--no-enable", "Preserve existing plugin enablement, allowlists, and denylists")
     .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .option(

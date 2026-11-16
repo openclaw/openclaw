@@ -6,11 +6,15 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  normalizeGitSourceDirectory,
+  resolveContainedGitSourceDirectory,
+} from "../../infra/git-source-directory.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../infra/git-source-spec.js";
 import { acquireGitSource } from "../../infra/git-source.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withInstallWorkspace } from "../../infra/install-source-utils.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -32,6 +36,7 @@ type Logger = {
 type SkillSourceInstallParams = {
   workspaceDir: string;
   spec: string;
+  directory?: string;
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
@@ -169,6 +174,7 @@ async function installGitSkill(params: SkillSourceInstallParams): Promise<Instal
     throw new Error(`Unsupported git skill spec: ${params.spec}`);
   }
 
+  const directory = normalizeGitSourceDirectory(params.directory);
   return await withInstallWorkspace("openclaw-git-skill-", async (tmpDir) => {
     const repoDir = path.join(tmpDir, "repo");
     const exportDir = path.join(tmpDir, "export");
@@ -192,14 +198,16 @@ async function installGitSkill(params: SkillSourceInstallParams): Promise<Instal
       throw new Error(acquired.error);
     }
 
+    const sourceDir = await resolveContainedGitSourceDirectory(repoDir, directory);
     const git = {
       url: redactSensitiveUrlLikeString(parsed.url),
       ...(parsed.ref ? { ref: parsed.ref } : {}),
       commit: acquired.commit,
+      ...(directory !== undefined ? { directory } : {}),
       resolvedAt: new Date().toISOString(),
     };
     try {
-      await fs.cp(repoDir, exportDir, {
+      await fs.cp(sourceDir, exportDir, {
         recursive: true,
         filter: (source) => !path.relative(repoDir, source).split(path.sep).includes(".git"),
       });
@@ -212,7 +220,7 @@ async function installGitSkill(params: SkillSourceInstallParams): Promise<Instal
       sourceDir: exportDir,
       sourceSpec: redactSensitiveUrlLikeString(parsed.normalizedSpec),
       source: "git",
-      fallbackLabel: path.basename(parsed.label),
+      fallbackLabel: path.basename(directory && directory !== "." ? directory : parsed.label),
       git,
     });
   });
@@ -235,6 +243,9 @@ export async function installSkillFromSource(
   const spec = params.spec.trim();
   if (spec.toLowerCase().startsWith("git:")) {
     return await installGitSkill({ ...params, spec });
+  }
+  if (params.directory !== undefined) {
+    throw new Error("--directory is only supported for git skill installs.");
   }
   const sourceDir = resolveUserPath(spec);
   let stat;

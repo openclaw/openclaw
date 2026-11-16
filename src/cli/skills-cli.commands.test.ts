@@ -244,6 +244,14 @@ describe("skills cli commands", () => {
       "skills-sh:openclaw/skills/weather --version 1.2.3",
       "--version is not supported for skills-sh references.",
     ],
+    [
+      "@owner/tools --directory skills/tools",
+      "--directory is only supported for git skill installs.",
+    ],
+    [
+      "./local-skill --directory skills/tools",
+      "--directory is only supported for git skill installs.",
+    ],
     ["git:owner/tools --version 1.2.3", "--version is only supported for ClawHub skill installs."],
     [
       "./local-skill --force-install",
@@ -260,10 +268,13 @@ describe("skills cli commands", () => {
       source: "git",
       targetDir: "/tmp/workspace/skills/tools",
     });
-    await run("install git:owner/tools --as tools --acknowledge-install-policy-warning");
+    await run(
+      "install git:owner/tools --directory skills/tools --as tools --acknowledge-install-policy-warning",
+    );
     expectOptions(mocks.sourceInstall, {
       workspaceDir: "/tmp/workspace",
       spec: "git:owner/tools",
+      directory: "skills/tools",
       slug: "tools",
       force: false,
       onInstallPolicyWarning: expect.any(Function),

@@ -19,6 +19,7 @@ import {
 } from "./installed-plugin-index-records.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import { expectOutcome, expectRecordFields } from "./test-helpers/update-assertions.js";
 
 const APP_ROOT = "/app";
 
@@ -519,19 +520,6 @@ function gitInstallCall(index = 0): Record<string, unknown> | undefined {
 function npmViewCall(): [unknown, Record<string, unknown>] | undefined {
   const calls = runCommandWithTimeoutMock.mock.calls as [unknown, Record<string, unknown>][];
   return calls.find(([argv]) => Array.isArray(argv) && npmCommandArgs(argv)?.[0] === "view");
-}
-
-function expectRecordFields(
-  actual: Record<string, unknown> | undefined,
-  expected: Record<string, unknown>,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual?.[key]).toEqual(value);
-  }
-}
-
-function expectOutcome(result: { outcomes: unknown[] }, expected: Record<string, unknown>) {
-  expect(result.outcomes).toEqual([expected]);
 }
 
 function expectNpmUpdateCall(params: {
@@ -2804,6 +2792,7 @@ describe("updateNpmInstalledPlugins", () => {
         url: "https://github.com/acme/demo.git",
         ref: "main",
         commit: "def456",
+        directory: "plugins/demo",
         resolvedAt: "2026-04-30T00:00:00.000Z",
       };
       (git ? installPluginFromGitSpecMock : installPluginFromMarketplaceMock).mockResolvedValue({
@@ -2820,7 +2809,7 @@ describe("updateNpmInstalledPlugins", () => {
           [pluginId]: {
             source,
             installPath,
-            ...(git ? { spec, gitCommit: "abc123" } : marketplace),
+            ...(git ? { spec, gitCommit: "abc123", gitDirectory: "plugins/demo" } : marketplace),
           },
         }),
         pluginId,
@@ -2836,11 +2825,13 @@ describe("updateNpmInstalledPlugins", () => {
               gitUrl: gitMetadata.url,
               gitRef: gitMetadata.ref,
               gitCommit: gitMetadata.commit,
+              gitDirectory: "plugins/demo",
             }
           : marketplace),
       });
       if (git) {
         expect(gitInstallCall()?.spec).toBe(spec);
+        expect(gitInstallCall()?.directory).toBe("plugins/demo");
         expect(gitInstallCall()?.expectedPluginId).toBe("demo");
         expect(gitInstallCall()?.mode).toBe("update");
         expectOutcome(result, {

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isMissingPathError } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeGitSourceDirectory } from "../infra/git-source-directory.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
@@ -287,6 +288,24 @@ function resolveGitManagedInstall(params: {
     return null;
   }
 
+  let repoPath = installPath;
+  if (params.installRecord.gitDirectory !== undefined) {
+    let directory: string | undefined;
+    try {
+      directory = normalizeGitSourceDirectory(params.installRecord.gitDirectory);
+    } catch {
+      return null;
+    }
+    if (directory && directory !== ".") {
+      repoPath = path.resolve(installPath, ...directory.split("/").map(() => ".."));
+      if (
+        path.resolve(installPath) !== path.join(repoPath, directory) ||
+        path.basename(repoPath) !== "repo"
+      ) {
+        return null;
+      }
+    }
+  }
   const gitRoots = new Set<string>();
   if (params.extensionsDir) {
     gitRoots.add(path.join(path.dirname(path.resolve(params.extensionsDir)), "git"));
@@ -295,10 +314,10 @@ function resolveGitManagedInstall(params: {
 
   for (const gitRoot of gitRoots) {
     if (
-      isUninstallPathInsideOrEqual(gitRoot, installPath) &&
-      resolveComparableUninstallPath(gitRoot) !== resolveComparableUninstallPath(installPath)
+      isUninstallPathInsideOrEqual(gitRoot, repoPath) &&
+      resolveComparableUninstallPath(gitRoot) !== resolveComparableUninstallPath(repoPath)
     ) {
-      return { installPath, parentDir: path.dirname(installPath) };
+      return { installPath: repoPath, parentDir: path.dirname(repoPath) };
     }
   }
   return null;

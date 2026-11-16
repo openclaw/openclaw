@@ -31,6 +31,7 @@ const NORMALIZED_STRING_FIELDS = [
   "gitUrl",
   "gitRef",
   "gitCommit",
+  "gitDirectory",
   "marketplaceName",
   "marketplaceSource",
   "marketplacePlugin",

@@ -36,6 +36,7 @@ openclaw skills install @owner/<slug> --version <version>
 openclaw skills install skills-sh:<owner>/<repo>/<slug>
 openclaw skills install git:owner/repo
 openclaw skills install git:owner/repo@main
+openclaw skills install git:owner/repo@main --directory skills/weather
 openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install @owner/<slug> --force
 openclaw skills install @owner/<slug> --force-install
@@ -85,6 +86,15 @@ ClawHub to resolve an external listing to its exact synchronized GitHub commit;
 OpenClaw does not download from skills.sh. These entries are shown as
 **Not scanned by ClawHub**, and that trust state is preserved through updates
 and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
+Use `--directory <path>` with a `git:` install to select a skill inside the
+repository, for example `git:owner/repo@main --directory skills/weather`.
+The directory is relative to the checked-out repository at that ref; it must
+exist, stay inside that repository (including through symlinks), and contain a
+loadable `SKILL.md`. The recorded source retains the URL, requested ref,
+resolved commit, and selected directory. Without `--directory`, installation
+still uses the repository root. This option is not supported for ClawHub or
+local-path installs.
+
 `install git:owner/repo[@ref]` clones an unmanaged Git skill, and `install
 ./path` copies a local skill directory. Both fail before copying when the root
 `SKILL.md` is not loadable under the same content rules: frontmatter with a

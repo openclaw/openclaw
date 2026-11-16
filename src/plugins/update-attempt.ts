@@ -360,6 +360,7 @@ export async function runPluginUpdateAttempt(params: {
         : params.record.source === "git"
           ? await installPluginFromGitSpec({
               spec: params.effectiveSpec!,
+              directory: params.record.gitDirectory,
               ...commonInstallOptions,
             })
           : await installPluginFromMarketplace({
