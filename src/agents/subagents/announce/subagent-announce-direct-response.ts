@@ -178,6 +178,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         delivered: false,
         path: "direct",
         error: directDeliveryFailure,
+        // The answer exists but did not reach the requester's channel.
+        finalAssistantVisibleText: "",
         ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };
     }

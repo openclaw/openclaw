@@ -514,6 +514,37 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       path: "direct",
     });
   });
+  it("keeps an answer that missed its channel failed, without replaying the committed result", async () => {
+    setChildren();
+    const failure = {
+      delivered: false,
+      path: "direct",
+      error: "channel send failed",
+      finalAssistantVisibleText: "parent answer",
+    } as const;
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await input.onTranscriptCommitted!("requester-continuation");
+      return { ...failure };
+    });
+    const recordRequesterDelivery: Parameters<typeof wake>[0]["recordRequesterDelivery"] = async (
+      batch,
+      fact,
+    ) => {
+      for (const entry of batch) {
+        entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+      }
+    };
+    expect(await wake({ recordRequesterDelivery })).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-a", "run-b"],
+      undefined,
+      failure,
+    );
+    expect(await wake({ recordRequesterDelivery })).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+  });
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({

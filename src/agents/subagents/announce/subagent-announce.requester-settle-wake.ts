@@ -15,7 +15,10 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
-import { resolveRequesterDeliveryOutcome } from "../registry/subagent-delivery-state.js";
+import {
+  hasConsumedRequesterInput,
+  resolveRequesterDeliveryOutcome,
+} from "../registry/subagent-delivery-state.js";
 import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
@@ -631,11 +634,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (delivery.disposition !== "session_queued") {
       retireUnadoptedInput();
     }
-    // Results committed to the requester transcript are delivered, whatever the turn did next.
-    delivery = resolveRequesterDeliveryOutcome(readCurrentBatch() ?? settledBatch, delivery)!;
-    if (delivery.delivered) {
+    // Results committed to the requester transcript are never replayed: settle what the turn did.
+    const currentBatch = readCurrentBatch() ?? settledBatch;
+    delivery = resolveRequesterDeliveryOutcome(currentBatch, delivery)!;
+    if (delivery.delivered || currentBatch.every(hasConsumedRequesterInput)) {
       await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
-      return true;
+      return delivery.delivered;
     }
     // The controller mailbox owns a queued handoff and settles it itself.
     if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {

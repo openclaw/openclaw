@@ -228,17 +228,19 @@ export function recordRequesterDelivery(
   }
 }
 
-/** A result committed to the requester transcript is delivered; a later turn failure cannot unconsume it. */
+/** A result committed to the requester transcript is never replayed. */
 export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
+/** A committed result is delivered, whatever the turn did next; an answer that missed its channel is not. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
   outcome: SubagentAnnounceDeliveryResult | undefined,
 ): SubagentAnnounceDeliveryResult | undefined {
   return outcome &&
     !outcome.delivered &&
+    outcome.finalAssistantVisibleText === undefined &&
     entries.length > 0 &&
     entries.every(hasConsumedRequesterInput)
     ? { delivered: true, path: "direct" }
