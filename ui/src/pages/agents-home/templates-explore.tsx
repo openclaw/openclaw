@@ -137,11 +137,16 @@ function TemplateCard(
   );
 }
 
+// Placeholder bars are drawn inline: the Control UI stylesheet is at its size ceiling.
+const placeholderBar = (width: string) => ({
+  background: `linear-gradient(var(--bg-accent), var(--bg-accent)) 0 / ${width} 12px no-repeat`,
+});
+
 /** Mirrors the loaded sections and cards so content arrives in place. */
 function TemplateCatalogSkeleton(props: { overview: boolean }) {
   return (
     <div
-      class="agents-home__template-loading"
+      class="plugin-catalog-results__body"
       role="status"
       aria-label={t("templatesCatalog.loading")}
     >
@@ -155,20 +160,25 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
             aria-hidden="true"
           >
             <header class="plugin-catalog-section__header">
-              <h2>{"\u00a0"}</h2>
+              <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
             </header>
             <div class="plugin-catalog-grid">
               <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
                 {() => (
-                  <div class="agents-home__template-card agents-home__template-card--loading oc-card">
+                  <div class="agents-home__template-card oc-card" data-templates-placeholder>
                     <div class="agents-home__template-head">
                       <span class="agents-home__template-art" />
                       <div class="agents-home__template-identity">
-                        <h3>{"\u00a0"}</h3>
-                        <span>{"\u00a0"}</span>
+                        <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
+                        <span style={placeholderBar("40%")}>{"\u00a0"}</span>
                       </div>
                     </div>
-                    <p class="agents-home__template-summary" />
+                    <p class="agents-home__template-summary">
+                      <span style={{ display: "block", ...placeholderBar("100%") }}>
+                        {"\u00a0"}
+                      </span>
+                      <span style={{ display: "block", ...placeholderBar("60%") }}>{"\u00a0"}</span>
+                    </p>
                   </div>
                 )}
               </Repeat>

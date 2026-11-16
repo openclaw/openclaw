@@ -629,7 +629,7 @@ it.each(["decoded", "failed"] as const)(
     expect(preloaded.referrerPolicy).toBe("no-referrer");
     await nextTurn();
     expect(page.querySelector("[data-templates-entry]")).toBeNull();
-    expect(page.querySelectorAll(".agents-home__template-card--loading")).not.toHaveLength(0);
+    expect(page.querySelectorAll("[data-templates-placeholder]")).not.toHaveLength(0);
 
     if (outcome === "decoded") {
       artwork.resolve();
@@ -637,7 +637,7 @@ it.each(["decoded", "failed"] as const)(
       artwork.reject(new Error("decode failed"));
     }
     await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
-    expect(page.querySelector(".agents-home__template-card--loading")).toBeNull();
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
     expect(page.querySelector(".agents-home__template-art img")?.getAttribute("src")).toBe(
       templateIconUrl,
     );

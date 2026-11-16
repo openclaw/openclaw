@@ -255,7 +255,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       .first()
       .evaluate(rect);
     const placeholderCard = await loading
-      .locator(".agents-home__template-card--loading")
+      .locator("[data-templates-placeholder]")
       .first()
       .evaluate(rect);
     await gateway.resolveDeferred("templates.catalog.search");

@@ -671,46 +671,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   pointer-events: none;
 }
 
-/* Same grid and gap as the loaded results body, so sections keep their place. */
-.agents-home__template-loading {
-  display: grid;
-  gap: var(--space-6);
-  min-width: 0;
-}
-
-.agents-home__template-loading h2,
-.agents-home__template-card--loading h3,
-.agents-home__template-card--loading .agents-home__template-identity span,
-.agents-home__template-card--loading .agents-home__template-summary {
-  background: linear-gradient(var(--bg-accent), var(--bg-accent)) no-repeat;
-}
-
 /* Featured, search results and loading placeholders have no "View all" action;
    keep their header as tall as the shelves that do. */
 .agents-home__explore .plugin-catalog-section__header {
   min-height: 28px;
-}
-
-.agents-home__template-loading h2 {
-  width: 120px;
-  background-position: 0 50%;
-  background-size: 100% 16px;
-}
-
-.agents-home__template-card--loading h3 {
-  background-position: 0 50%;
-  background-size: 70% 14px;
-}
-
-.agents-home__template-card--loading .agents-home__template-identity span {
-  background-position: 0 50%;
-  background-size: 40% 10px;
-}
-
-.agents-home__template-card--loading .agents-home__template-summary {
-  background:
-    linear-gradient(var(--bg-accent), var(--bg-accent)) 0 4px / 100% 10px no-repeat,
-    linear-gradient(var(--bg-accent), var(--bg-accent)) 0 22px / 60% 10px no-repeat;
 }
 
 .agents-home__template-empty {
