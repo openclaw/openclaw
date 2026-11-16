@@ -449,26 +449,16 @@ log.follow'*)
     [ -n "$missing" ] || return 0
     # Serialize across linked worktrees, then inspect the objects under the lock:
     # overlapping callers fetch only the part not already supplied by the leader.
-    lock=$common/openclaw-history-blobs.lock
-    attempts=0
-    until mkdir "$lock" 2>/dev/null; do
-      attempts=$((attempts + 1))
-      [ "$attempts" -lt 300 ] || return 0
-      # A large live batch may exceed thirty seconds; do not start lazy fetches
-      # beside it. An ownerless lock stops waiting after thirty seconds.
-      if read -r owner 2>/dev/null < "$lock/pid"; then
-        if kill -0 "$owner" 2>/dev/null; then
-          attempts=0
-        else
-          rm -f "$lock/pid"
-          rmdir "$lock" 2>/dev/null && continue
-        fi
-      fi
-      sleep 0.1
-    done
-    trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' 0
-    trap 'exit 1' HUP INT TERM
-    echo $$ > "$lock/pid"
+    # The lock is a kernel lock on a file this shim never unlinks: flock(1) and
+    # lockf(1) both lock an open descriptor, and the kernel drops it when this
+    # subshell exits, so there is no reclaim step and no interval in which two
+    # callers both believe they own it.
+    lock=$common/openclaw-history-blobs.lock.kernel
+    exec 9>>"$lock" || return 0
+    case $(uname -s) in
+      Linux) flock -x 9 || return 0 ;;
+      *) lockf -s 9 || return 0 ;;
+    esac
     missing=$(query_repository missing_blobs "$@")
     [ -n "$missing" ] || return 0
     query_repository fetch_blobs "$@" 2>/dev/null || :

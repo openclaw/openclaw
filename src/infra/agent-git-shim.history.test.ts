@@ -437,3 +437,71 @@ it.skipIf(process.platform === "win32")("prepares every parent of a combined mer
     }
   }),
 );
+
+it.skipIf(process.platform === "win32")(
+  "admits one history prefetch at a time across racing linked worktrees",
+  () =>
+    withHistoryFixture(async ({ root, origin, file, git, reader }) => {
+      const { base, linked, invoke } = await reader();
+      // The lock lives in the shared common directory, so the racers must be
+      // linked worktrees of one repository rather than separate clones.
+      const peers = [linked];
+      while (peers.length < 6) {
+        const peer = path.join(root, `race peer ${peers.length}`);
+        git(base, ["worktree", "add", "--detach", peer]);
+        peers.push(peer);
+      }
+      // A git wrapper on PATH journals every fetch boundary and holds the fetch
+      // open long enough that an overlap cannot hide inside a few milliseconds.
+      const wrapper = path.join(root, "wrapper");
+      const journal = path.join(root, "lock.journal");
+      await fs.mkdir(wrapper);
+      await fs.writeFile(
+        path.join(wrapper, "git"),
+        [
+          "#!/bin/sh",
+          'case " $* " in',
+          '  *" fetch "*)',
+          '    echo enter >> "$OPENCLAW_LOCK_JOURNAL"',
+          "    sleep 0.6",
+          '    "$OPENCLAW_LOCK_GIT" "$@"',
+          "    status=$?",
+          '    echo leave >> "$OPENCLAW_LOCK_JOURNAL"',
+          '    exit "$status" ;;',
+          "esac",
+          'exec "$OPENCLAW_LOCK_GIT" "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+      const env = {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_LOCK_GIT: realGit,
+        OPENCLAW_LOCK_JOURNAL: journal,
+      };
+      const history = ["log", "--stat", "--", file];
+      const unrelated = ["log", "--stat", "--", "other.txt"];
+      const results = await Promise.all(
+        peers.map((peer, index) => invoke(index % 2 === 0 ? history : unrelated, peer, env)),
+      );
+      for (const [index, result] of results.entries()) {
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe(git(origin, index % 2 === 0 ? history : unrelated));
+      }
+      const events = (await fs.readFile(journal, "utf8")).trim().split("\n");
+      // The two object sets are disjoint, so each group fetches once. Two enters
+      // with no leave between them are the overlap the kernel lock must forbid.
+      expect(events.filter((event) => event === "enter")).toHaveLength(2);
+      expect(events.filter((event) => event === "leave")).toHaveLength(2);
+      let inside = false;
+      for (const event of events) {
+        expect(event, events.join(",")).toBe(inside ? "leave" : "enter");
+        inside = !inside;
+      }
+      expect(inside).toBe(false);
+      expect(
+        (await fs.stat(path.join(base, ".git", "openclaw-history-blobs.lock.kernel"))).isFile(),
+      ).toBe(true);
+    }),
+);
