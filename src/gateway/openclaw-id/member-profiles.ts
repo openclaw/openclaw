@@ -1,3 +1,4 @@
+import type { linkCanonicalOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.js";
 // Member display belongs to the Gateway's canonical profile owner, not expiring invitations.
 import type { StoredClaw } from "./claw-store.js";
 
@@ -12,10 +13,24 @@ export type OpenClawIdMemberProfiles = {
     email?: string | null;
   }) => Promise<unknown>;
   read: (accountIds: readonly string[]) => Promise<Record<string, MemberProfileDisplay>>;
+  inviteProfiles: () => Promise<Array<{ id: string; displayName: string | null }>>;
+  link: (
+    input: Parameters<typeof linkCanonicalOpenClawIdUserProfile>[0],
+  ) => ReturnType<typeof linkCanonicalOpenClawIdUserProfile>;
 };
 
 /** Routes profile persistence and reads through the existing shared-state worker. */
 export const canonicalMemberProfiles: OpenClawIdMemberProfiles = {
+  async inviteProfiles() {
+    const { readOpenClawIdInviteProfiles } =
+      await import("../../state/user-profile-openclaw-id.js");
+    return readOpenClawIdInviteProfiles();
+  },
+  async link(input) {
+    const { linkCanonicalOpenClawIdUserProfile } =
+      await import("../../state/user-profile-openclaw-id.js");
+    return linkCanonicalOpenClawIdUserProfile(input);
+  },
   async save(input) {
     const { ensureCanonicalUserProfileForOpenClawIdIdentity } =
       await import("../../state/user-profile-openclaw-id.js");
@@ -46,7 +61,10 @@ export async function retainMemberProfiles(
   const needsReports = reports.some(
     ([id, entry]) =>
       !hasInvite(id) ||
-      (entry.resolution === "approved" && (entry.email !== null || entry.display_name !== null)),
+      (entry.resolution === "approved" &&
+        (entry.email !== null ||
+          entry.display_name !== null ||
+          (entry.existingProfile && previous?.invite_reports?.[id]?.resolution !== "approved"))),
   );
   if (
     !needsReports &&
@@ -62,7 +80,7 @@ export async function retainMemberProfiles(
     const currentApproval = approval(next, accountId);
     const known = currentApproval === undefined ? approval(previous, accountId) : currentApproval;
     const existingMember = Object.hasOwn(previous?.authority?.members ?? {}, accountId);
-    const report = source
+    const approved = source
       .filter(
         ([inviteId, entry]) =>
           entry.account_id === accountId &&
@@ -70,9 +88,38 @@ export async function retainMemberProfiles(
           ((existingMember && known === undefined) ||
             previous?.invite_reports?.[inviteId]?.resolution !== "approved"),
       )
-      .map(([, entry]) => entry)
-      .toSorted((a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0))[0];
-    if (known === undefined || report?.email || report?.display_name) {
+      .toSorted(([, a], [, b]) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0))[0];
+    const report = approved?.[1];
+    if (approved && report?.existingProfile) {
+      const linked = await profiles.link({
+        profileId: report.existingProfile.id,
+        accountId,
+        email: report.email,
+      });
+      if (!linked.ok) {
+        const reasons = {
+          owner_profile:
+            "The selected profile is the shared owner. The member joined with their OpenClaw ID profile instead.",
+          profile_changed:
+            "The selected profile was removed or merged. The member joined with their OpenClaw ID profile instead.",
+          linked_elsewhere:
+            "This OpenClaw ID account already belongs to another profile. The member kept that profile instead.",
+          profile_linked:
+            "The selected profile is now linked to another OpenClaw ID account. The member joined with their OpenClaw ID profile instead.",
+        };
+        const index = reports.findIndex(([id]) => id === approved[0]);
+        if (index !== -1) {
+          reports[index] = [
+            approved[0],
+            {
+              ...report,
+              existingProfile: { ...report.existingProfile, fallbackReason: reasons[linked.code] },
+            },
+          ];
+        }
+      }
+    }
+    if (known === undefined || report?.existingProfile || report?.email || report?.display_name) {
       // Profile creation never grants membership; only the subsequent claw commit may do that.
       // A failed profile write preserves the previous record, including its source report.
       await profiles.save({

@@ -131,9 +131,11 @@ export function attachProgressNarratorToReplyOptions(params: {
       return;
     }
     lastText = "";
-    void Promise.resolve(onUpdate({ text: "" })).catch((err: unknown) => {
-      logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
-    });
+    void Promise.resolve()
+      .then(() => onUpdate({ text: "" }))
+      .catch((err: unknown) => {
+        logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
+      });
   }
 
   const generate = async (input: ProgressNarrationInput, turnSignal: AbortSignal) => {
@@ -229,11 +231,9 @@ export function attachProgressNarratorToReplyOptions(params: {
     try {
       visible = isProgressDraftVisible?.();
     } catch (err) {
-      // Retry timers outlive the channel's plugin invocation scope; a closed
-      // scope throws here, and an escape from this timer crashes the Gateway.
-      disabled = true;
-      clearRetryTimer();
-      logVerbose(`progress-narrator: visibility check failed: ${String(err)}`);
+      // Deferred wakeups may outlive the plugin scope that owns this callback.
+      stopTurn();
+      narratorLog.warn(`narration stopped after visibility check failed: ${String(err)}`);
       return;
     }
     if (visible === false) {

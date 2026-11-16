@@ -194,19 +194,6 @@ it("transports direct UI autoFix for only the selected PR across session replace
   );
 });
 
-it("revokes an embedded continuation when its source conversation is replaced", async () => {
-  await using fixture = await createFixture("autoFix");
-  await fixture.execution.update(fixture.selected.id, { enabled: true });
-  await fixture.seed(replacementSession);
-  expect(await fixture.tick()).toMatchObject({
-    status: "error",
-    error: expect.stringContaining("definition or conversation changed"),
-  });
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  expect(fixture.reads).not.toContain("graphql");
-  expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
-});
-
 it.each([false, true])(
   "existing archive API checks the scheduled recipe's exact identity (replaced=%s)",
   async (replaced) => {

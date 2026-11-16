@@ -38,6 +38,7 @@ export type MemberDevice = {
 export type Member = {
   accountId: string;
   role: string;
+  roleDefined?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -49,6 +50,9 @@ export type Member = {
 /** What an accepted removal cut (`openclawId.authority` submit result `removal`). */
 export type RemovalSummary = { devices: number; connectionsClosed: number; runsCancelled: number };
 
+/** A local personal profile with no OpenClaw ID linked yet. */
+export type ExistingProfile = { id: string; displayName: string | null };
+
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {
   inviteId: string;
@@ -58,6 +62,8 @@ export type Invite = {
   createdAt: number;
   expiresAt: number;
   status: "open" | "pending" | "approved" | "denied" | "expired";
+  /** Local invite selection and its approval outcome; never part of the signed cap. */
+  existingProfile?: ExistingProfile & { fallbackReason?: string };
   pending?: {
     accountId: string;
     devicePub: string;
@@ -71,6 +77,16 @@ export type Invite = {
   };
 };
 
+/** Small public role summary, not the full permission definition. */
+export type Role = { name: string; requiresSandbox: boolean } & (
+  | { defined: false }
+  | {
+      defined: true;
+      sessions: "none" | "view" | "suggest" | "write";
+      admin: boolean;
+    }
+);
+
 /**
  * The claw's link state: `openclawId.status` returns only linked, clawId, hostname and
  * rootPub; `openclawId.people` (owner only) returns all of it.
@@ -83,7 +99,11 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
+  roles?: Role[];
+  /** Default engine liveness; null means this backend is not probed here. */
+  sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];
+  existingProfiles?: ExistingProfile[];
   nodes?: NodeRecord[];
   nodeInvites?: NodeInvite[];
   publication?:
@@ -102,6 +122,7 @@ export type StatusResult = {
   channel: "local_operator" | "tunnel" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
+  connection?: { kind: "member"; role: MemberRole } | { kind: "owner" | "local" | "none" };
 };
 
 /** Owner-only public node projection; never contains the invitation proof key. */

@@ -75,6 +75,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     gatewayLog,
     () => foregroundUpdateClosed,
     () => (runtimeResourcesRetained = true),
+    () => finishLoop(1),
   );
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let startupWork: Promise<unknown> | undefined;
@@ -714,8 +715,8 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
             if (
               !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
               !(await eagerLifecycleRuntime.requestManagedServiceUpdateHandoffPark(owner)) ||
-              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
-              !eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
+              !(await eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)) ||
+              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner)
             ) {
               throw new Error("managed update helper lost exact ownership during service parking");
             }
@@ -1245,9 +1246,6 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         });
       }
       await cleanup.waitForCleanup();
-      if (cleanup.failed) {
-        finishLoop(1);
-      }
     }
   } catch (error) {
     loopFailure = { error };

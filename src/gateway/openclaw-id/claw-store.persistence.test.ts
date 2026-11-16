@@ -17,7 +17,8 @@ import { createOpenClawIdAuthority } from "./authority.js";
 import { readStoredClaw, writeStoredClaw } from "./claw-store.js";
 import { fullClaw } from "./claw-store.test-support.js";
 import { stageGatewayKey } from "./gateway-key.js";
-import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
+import { applyMailboxMessage } from "./mailbox-reader.js";
+import { linkedClaw, ownerInvite, redemptionMail, serviceFor } from "./openclaw-id.test-support.js";
 import { ed25519PublicKeyHex, loadOrCreateEndpointKey } from "./tunnel-child/keyfile.js";
 import * as tunnelRuntime from "./tunnel-runtime.js";
 
@@ -127,13 +128,90 @@ it("settles a durably committed removal after its write acknowledgement is lost"
   expect((await readStoredClaw())?.authority?.members).not.toHaveProperty("member");
 });
 
+it("restores approved invite replays after reopening and keeps pre-upgrade consumed invites refused", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+  const approve = async (email: string, accountId: string) => {
+    const invite = await ownerInvite(claw, { email });
+    expect(
+      await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel"),
+    ).toMatchObject({ ok: true });
+    const mail = await redemptionMail({
+      clawId: claw.clawId,
+      inviteId: invite.inviteId,
+      proofKey: invite.proofKey,
+      accountId,
+      email,
+    });
+    expect(
+      await applyMailboxMessage(mail.message, {
+        submit: (statement) => claw.authority.submit(statement, "mailbox"),
+        redeem: (redemption, sender) => claw.authority.redeem(redemption, sender),
+        redeemNode: (redemption) => claw.authority.redeemNode(redemption),
+      }),
+    ).toMatchObject([{ ok: true, status: "pending" }]);
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: accountId,
+          role: "operator",
+          peer_keys: [mail.peerKey],
+          invite_id: invite.inviteId,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    return { inviteId: invite.inviteId, mail };
+  };
+  const current = await approve("bob@example.test", "acct-bob");
+  const legacy = await approve("carol@example.test", "acct-carol");
+  // A consumed invite stored before approval identities were retained has no approved field.
+  const stored = (await readStoredClaw())!;
+  const { approved: _dropped, ...legacyInvite } = stored.authority!.invites[legacy.inviteId]!;
+  await writeStoredClaw({
+    ...stored,
+    authority: {
+      ...stored.authority!,
+      invites: { ...stored.authority!.invites, [legacy.inviteId]: legacyInvite },
+    },
+  });
+  await closeOpenClawStateDatabaseAsync();
+
+  const reopened = (await readStoredClaw())!;
+  expect(reopened.authority!.invites[current.inviteId]).toMatchObject({
+    status: "consumed",
+    approved: { account_id: "acct-bob", peer_key: current.mail.peerKey },
+  });
+  expect(reopened.authority!.invites[legacy.inviteId]).not.toHaveProperty("approved");
+  const authority = createOpenClawIdAuthority();
+  await authority.load();
+  const before = authority.current();
+  const sink = {
+    submit: (statement: unknown) => authority.submit(statement, "mailbox"),
+    redeem: (redemption: unknown, sender: Parameters<typeof authority.redeem>[1]) =>
+      authority.redeem(redemption, sender),
+    redeemNode: (redemption: unknown) => authority.redeemNode(redemption),
+  };
+  expect(await applyMailboxMessage(current.mail.message, sink)).toMatchObject([{ ok: true }]);
+  expect(await applyMailboxMessage(legacy.mail.message, sink)).toMatchObject([
+    { ok: false, code: "invite_used" },
+  ]);
+  expect(authority.current()).toBe(before);
+  expect(await authority.resolvePeer(current.mail.peerKey)).toBeDefined();
+  expect(await authority.resolvePeer(legacy.mail.peerKey)).toBeDefined();
+  expect(await readStoredClaw()).toEqual(reopened);
+});
+
 for (const end of ["disable", "stop"] as const) {
   it(`refuses a verified rebind held at real storage admission after ${end}`, async ({ state }) => {
     state.applyEnv();
     const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
     const directory = path.join(claw.stateDir, "openclaw-id");
     const endpointFile = path.join(directory, "endpoint.key");
-    const { key: endpoint } = loadOrCreateEndpointKey(endpointFile);
+    const { key: endpoint } = await loadOrCreateEndpointKey(endpointFile);
     const record = (await readStoredClaw())!;
     // Bootstrap a signed fixture whose two active key files match its binding.
     await writeStoredClaw({
@@ -157,14 +235,17 @@ for (const end of ["disable", "stop"] as const) {
       ["gateway.key", "endpoint.key"].map((file) => fs.readFileSync(path.join(directory, file)));
     const beforeKeys = activeKeys();
     const nextEndpoint = formatIrohEndpointKey(
-      Buffer.from(ed25519PublicKeyHex(loadOrCreateEndpointKey(`${endpointFile}.next`).key), "hex"),
+      Buffer.from(
+        ed25519PublicKeyHex((await loadOrCreateEndpointKey(`${endpointFile}.next`)).key),
+        "hex",
+      ),
     );
     vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
     const binding = await signStatement(
       "ServerBinding",
       {
         ...before!.binding!.body,
-        k_gw: stageGatewayKey(claw.stateDir),
+        k_gw: await stageGatewayKey(claw.stateDir),
         k_srv: nextEndpoint,
         binding_seq: 2,
       },

@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { canAccess } from "../../infra/path-existence.js";
 import type { ModelRequestHeaders } from "../../llm/types.js";
 import { mergeProviderModels, type ProviderModelCatalog } from "../models-config.merge.js";
 import { loadPersistedPluginModelCatalogs } from "../plugin-model-catalog-execution.js";
@@ -46,6 +46,20 @@ export function cloneMapValues<T extends object>(source: ReadonlyMap<string, T>)
   return new Map([...source].map(([key, value]) => [key, { ...value }]));
 }
 
+export function storeModelHeaders(
+  target: Map<string, Record<string, string>>,
+  providerName: string,
+  modelId: string,
+  headers?: Record<string, string>,
+): void {
+  const key = JSON.stringify([providerName, modelId]);
+  if (!headers || Object.keys(headers).length === 0) {
+    target.delete(key);
+    return;
+  }
+  target.set(key, headers);
+}
+
 function mergeCompat(
   baseCompat: ProviderModelCatalog["compat"],
   overrideCompat: ProviderModelCatalog["compat"],
@@ -70,7 +84,7 @@ export async function readModelRegistryPluginCatalogs(
   if (
     options.config?.models?.mode === "replace" ||
     options.modelsJsonContents === null ||
-    (options.modelsJsonContents === undefined && !existsSync(modelsJsonPath))
+    (options.modelsJsonContents === undefined && !(await canAccess(modelsJsonPath)))
   ) {
     return { catalogs: [] };
   }

@@ -85,7 +85,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     search: "?section=session",
     hash: `#${SESSION_STORAGE_SETTINGS_TARGET_ID}`,
     searchKeys: ["configView.sessionStorage.automatic", "configView.sessionStorage.afterDays"],
-    aliases: "database disk size transcripts storage cleanup archive compression retention",
+    aliases:
+      "database disk size chats chat history transcripts storage cleanup archive compression retention",
   },
   meetingCapture: {
     routeId: "communications",
@@ -341,13 +342,7 @@ export const SETTINGS_SEARCH_TARGETS = {
   appearanceTabIcon: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.tabIcon),
     labelKey: "configView.appearance.tabIcon.title",
-    searchKeys: [
-      "configView.appearance.tabIcon.agent",
-      "configView.appearance.tabIcon.square",
-      "configView.appearance.tabIcon.rounded",
-      "configView.appearance.tabIcon.circle",
-      "configView.appearance.tabIcon.lobsterdex",
-    ],
+    searchKeys: ["configView.appearance.tabIcon.agent", "configView.appearance.tabIcon.lobsterdex"],
     aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {

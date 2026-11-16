@@ -78,12 +78,24 @@ composer; unarchive the session to continue the conversation.
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
 
-Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Activity summaries stay
-dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
-screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
-and outcomes available. Completed group summaries retain their operation counts.
+Tool activity names the recorded action and its target, such as a file, command,
+or conversation. Consecutive eligible actions share a factual summary such as
+**Read files, ran commands**. Expand the group to inspect individual inputs,
+outputs, and outcomes. Narration and events with their own placement separate
+activity groups.
+
+Recorded actions inside Code Mode follow the same presentation rules. Their
+execution title and source remain available in the call details. An execution
+without representative child actions keeps its descriptive title in the activity
+row, including when it fails. Starting another Code Mode execution does not by
+itself start another visual group. Activity
+summaries stay dimmed until hover or keyboard focus brightens their text, without
+an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
+header shows elapsed time without adding a tool-call counter when expanded.
+When a run finishes while you are reading earlier work, that work stays open
+and your reading position is preserved. If you are following the end of the
+conversation, completed work folds above the answer. Opening saved history keeps
+completed work folded until you expand it.
 The **Worked for** summary and reply metadata use the same saved elapsed time,
 from the initiating message to the last recorded output for that run. This includes
 request preparation and waiting, not just model execution. Starting another turn
@@ -190,7 +202,16 @@ same block, with one footer at the end. Below a spoken acknowledgment, a thin
 select it to see the children it waited on and their current status. Until the
 chat's own subagent list has loaded, the rule shows the wait time alone. Tool activity that
 resumes with nothing written in between joins the activity row from before the
-handoff. In dashboard sessions, tool activity recorded after the resumed
+handoff, unless a **Resumed** rule marks the resume.
+
+Work the agent picks up again on its own continues the block it belongs to, with
+or without a handoff: when a background command finishes, when the Gateway
+restarts during a run, or when a subagent of this session finishes. A thin rule
+such as **Resumed · 3m later · Background command finished** marks each place it
+picked up again; the other labels are **Gateway restarted** and **Agent
+finished**. An answer the agent already gave stays in place above the rule. A
+heartbeat, a scheduled automation, or a message from another person or session
+still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
 so the answer stays last; a step that failed there stays where it happened. The
 working indicator
@@ -203,12 +224,14 @@ block, for example when the request is older than the loaded history, both
 lines describe the resumed run alone. A message you send after the handoff
 starts a block of its own, with that run's own clock and closing line.
 
-In the tool activity, a subagent's launch row shows the label its launch gave
-it, when it gave one, rather than its instructions, followed by **running**
-while it works and by its duration once it has finished. A subagent that failed
-or timed out reads **failed** instead, and one that was stopped reads
-**stopped**. Selecting the name opens that subagent in the **Subagents** panel;
-the rest of the row still expands the launch's details. The panel labels elapsed
+In the tool activity, a subagent's launch row records the launch itself, such
+as **Launched Atlas**, using the label its launch gave it rather than its
+instructions. Consecutive launches share one row. A later row reports how each
+subagent ended: **Atlas finished**, **Atlas timed out**, **Atlas failed** or
+**Atlas stopped**, placed when that result arrived. Stopping a subagent and
+listing subagents read **Stopped** and **Listed subagents**. Selecting a name
+opens that subagent in the **Subagents** panel; the rest of the row still
+expands the call's details. The panel labels elapsed
 work as **Duration** and shows **No subagents yet.** before any are listed. Collapsed activity counts subagents on
 their own, such as **1 other operation · 3 subagents**. A launch that was
 refused started no subagent and is counted with the other operations. While the
@@ -296,6 +319,9 @@ view and reports an error. Turn the option off and back on to retry.
 Type `/` to open the command menu. `/steer` guides the agent’s current reply;
 `/redirect` restarts the agent’s reply with a new message. `/clear` clears the
 conversation. The `/help` result uses the heading **Available commands**.
+
+While `/steer` or `/redirect` is in progress, the status reads **Steering…** or
+**Redirecting…**. A finished action shows **Steered.** or **Redirected.**
 
 Command failures explain what could not be done and what to try next. For example,
 `/model` shows “Couldn’t load model details. Try again.” when model details cannot
@@ -563,9 +589,12 @@ an invalid source folder.
 
 ## Mobile composer
 
-On phones, tapping the compact composer focuses the text field and opens the
-keyboard in the same gesture. The expanded editor keeps your draft and selection
-while you use its controls.
+Only phone-sized layouts collapse an empty, unfocused composer to one line.
+Wider windows keep the editor and its controls expanded, even when navigation
+uses a drawer. Clicking or focusing the compact composer expands it; on phones,
+tapping also opens the keyboard in the same gesture. The expanded editor keeps
+your draft and selection while you use its controls, and stays open when you
+leave a typed draft.
 
 ## Composer predictions
 
@@ -580,9 +609,10 @@ It does not predict on every keystroke. Each active browser tab can make its own
 prediction request. Read-only, imported, and incognito conversations do not show
 predictions.
 
-Press **Tab** or select **Use suggestion** to copy the suggestion into your draft.
-This never sends it: you can edit or undo it before sending normally. **Escape**,
-**Dismiss suggestion**, or typing your own message dismisses it. Suggestions are
+The small **Tab to complete** badge follows the suggestion without wrapping within the badge.
+Press **Tab** to copy the suggestion into your draft.
+This never sends it: you can edit or undo it before sending normally. **Escape**
+or typing your own message dismisses it. Suggestions are
 not saved as messages or collaborator drafts until you accept them. Switching
 conversations, hiding the page, or starting another turn discards pending results.
 
@@ -594,9 +624,10 @@ The Labs model selector offers:
 - **Default model**: use the agent's configured default model, ignoring the
   conversation's model override.
 
-Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. Tool calls and results are skipped, and long messages keep
-their endings. They cannot run tools, retrieve memory, or send messages. An
+Predictions use your recent messages in the current conversation (up to 16) and
+the assistant's final reply, in an isolated, tool-free request with low
+reasoning. Tool calls, tool results and the assistant's progress updates are
+skipped, and long messages keep their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.
@@ -1146,6 +1177,23 @@ reply to the current Control UI conversation. ClawHub supplies the official
 designation, and the Gateway checks installation status; the agent cannot assign
 those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
+
+When the agent already knows the exact plugin, for example one that a Template
+declares, it names the ClawHub package instead of searching:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "plugin": "@expediagroup/expedia-openclaw" }
+}
+```
+
+`plugin` is the exact package name and cannot be combined with `query` or
+`kind`. The chat shows only that plugin's card, never a similar search result.
+A community plugin is shown without the official badge, and its button reads
+**View details** instead of **Install**; install it from the plugin overview.
+A name that ClawHub does not know, or that is not a plugin, shows no card and
+returns an explanation. Searches still return official plugins and skills only.
 
 ### Source previews and copying code
 

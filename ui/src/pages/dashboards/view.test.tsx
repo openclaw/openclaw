@@ -123,7 +123,7 @@ it.each([
   });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your sessions appear here.",
+      "Ask your agent to make a dashboard in any conversation.",
     );
   }
   if (outcome === "error") {

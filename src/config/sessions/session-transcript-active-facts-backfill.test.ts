@@ -27,6 +27,7 @@ import {
 import {
   backfillTranscriptActiveFactsBatchInTransaction as backfill,
   discoverTranscriptActiveFactsBackfillSessions as discover,
+  probeTranscriptActiveFactsBackfill as probe,
 } from "./session-transcript-active-facts-backfill.worker.js";
 import { createSessionTranscriptFactsBackfill } from "./session-transcript-facts-backfill.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -113,13 +114,17 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(first.done).toBe(false);
     // Losing the process cursor starts an index-only coverage scan, not another payload fill.
     const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
+    // Discovery during Gateway startup waits behind worker boot and IO before its reply lands.
+    let chargedMs = 27_000;
     const open = vi
       .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation((options, authority, publication) =>
         openStore(options, authority, {
           ...publication,
-          observeWriteExecution: (elapsedMs) =>
-            publication.observeWriteExecution?.(Math.max(100, elapsedMs)),
+          observeWriteExecution: (elapsedMs) => {
+            publication.observeWriteExecution?.(Math.max(chargedMs, elapsedMs));
+            chargedMs = 100;
+          },
         }),
       );
     const resume = createSessionTranscriptFactsBackfill({
@@ -129,7 +134,8 @@ it("fills historical active facts exactly and resumes without rereading covered 
       log: { info() {}, warn() {} },
     });
     try {
-      await resume.runBatch(); // Index-only discovery has its own yield.
+      // A contended discovery yields a bounded pause, not 20x its charge.
+      expect((await resume.runBatch()).delayMs).toBe(30_000);
       // A short native transaction still charges the writer's preparation/reply occupancy.
       expect((await resume.runBatch()).delayMs).toBeGreaterThanOrEqual(2_000);
       while (!(await resume.runBatch()).complete) {
@@ -150,6 +156,79 @@ it("fills historical active facts exactly and resumes without rereading covered 
     );
     expect(readRecentSessionTranscriptActiveEvents(f.scope, 40)).toEqual(before);
     expect(f.drain()).toMatchObject({ done: true, rowsFilled: 0, bytesRead: 0 });
+  }));
+
+it("probes covered windows without a writer and stops at the first uncovered row", () =>
+  withState({ label: "active-facts-probe", scenario: "minimal" }, async ({ env }) => {
+    const f = fixture(env);
+    await replaceTranscriptEvents(f.scope, f.events);
+    const cursor = { sessionId: f.scope.sessionId, afterPosition: -1 };
+    const position = (seq: number) =>
+      (
+        f
+          .db()
+          .prepare(
+            "SELECT active_position FROM session_transcript_active_events WHERE session_id = ? AND event_seq = ?",
+          )
+          .get(f.scope.sessionId, seq) as { active_position: number }
+      ).active_position;
+    // Ordinary writers already filled every fact: one probe retires the session.
+    expect(probe(f.db(), cursor)).toMatchObject({ done: true, uncovered: false });
+    f.write(({ db }) =>
+      db
+        .prepare(
+          "DELETE FROM session_transcript_active_event_facts WHERE session_id = ? AND seq >= 25",
+        )
+        .run(f.scope.sessionId),
+    );
+    expect(probe(f.db(), cursor)).toEqual(
+      expect.objectContaining({ done: false, uncovered: true, afterPosition: position(24) }),
+    );
+    // The write batch picks up exactly where the probe stopped.
+    const filled = f.drain(position(24));
+    expect(filled).toMatchObject({ done: true, rowsFilled: 15 });
+    expect(probe(f.db(), cursor)).toMatchObject({ done: true, uncovered: false });
+  }));
+
+it("restarts over covered sessions without write batches", ({ signal }) =>
+  withState({ label: "active-facts-restart", scenario: "minimal" }, async ({ env }) => {
+    const f = fixture(env);
+    for (const sessionId of ["covered-a", "covered-b", "covered-c"]) {
+      await replaceTranscriptEvents(
+        { ...f.scope, sessionId, sessionKey: `agent:main:${sessionId}` },
+        f.events,
+      );
+    }
+    const commands: string[] = [];
+    const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
+    const open = vi
+      .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
+      .mockImplementation(async (options, authority, publication) => {
+        const store = await openStore(options, authority, publication);
+        const execute = store.execute.bind(store);
+        store.execute = ((command, ...rest) => {
+          commands.push(command.type);
+          return execute(command, ...rest);
+        }) as typeof store.execute;
+        return store;
+      });
+    const resume = createSessionTranscriptFactsBackfill({
+      database: f.scope,
+      assertCurrent: () => signal.throwIfAborted(),
+      signal,
+      log: { info() {}, warn() {} },
+    });
+    try {
+      let result;
+      do {
+        signal.throwIfAborted();
+        result = await resume.runBatch();
+      } while (!result.complete);
+    } finally {
+      await resume.close();
+      open.mockRestore();
+    }
+    expect(commands).toEqual(["discover", "probe", "probe", "probe"]);
   }));
 
 it("prioritizes recent active paths by size before larger inactive paths", () =>

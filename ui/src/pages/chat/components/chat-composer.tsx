@@ -120,7 +120,6 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   const prediction = createComposerPrediction(readPredictionSource);
   const questionPanel = createComposerQuestionPanel(
     () => props.questions,
-    composition,
     () => props.getTranscriptElement,
   );
   const streaming = createMemo(() => currentProps.stream !== null);
@@ -176,7 +175,6 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         directory: current.mentionDirectory,
         host:
           current.mentionDirectory &&
-          current.showComposer &&
           !state.composerComposing &&
           !state.dictation?.locksComposer &&
           state.composerTextarea?.isConnected
@@ -207,7 +205,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       runStatusAnnouncement: current.runStatusAnnouncement,
       cancellationCaveat: current.cancellationCaveat,
       sendShortcut: current.sendShortcut,
-      showComposer: current.showComposer,
+      showComposerProgress: current.showComposerProgress,
       draftKey: current.draftKey,
       mentionError: current.mentionError,
     };

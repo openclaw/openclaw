@@ -4,7 +4,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type { ComposerDictationSession } from "./composer-dictation-session.ts";
-import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -58,8 +58,6 @@ export function insertComposerDictation(
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
   private readonly playback = new GatewaySpeechPlayback();
-  // Live microphone level for the listening meter; owned here so views only subscribe.
-  private readonly level = new RealtimeTalkLevelSignal();
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
   private pointerTarget: HTMLElement | null = null;
@@ -103,8 +101,8 @@ export class ComposerDictationOwner extends EventTarget {
     return this.phase !== "idle";
   }
 
-  get inputLevel(): RealtimeTalkLevelSignal {
-    return this.level;
+  get inputLevel(): RealtimeTalkLevelSignal | undefined {
+    return this.session?.inputLevel;
   }
 
   get transcript(): string {
@@ -278,14 +276,17 @@ export class ComposerDictationOwner extends EventTarget {
     void this.stop({ commit: false });
   };
 
-  private readonly handleVisibilityChange = (): void => {
-    if (document.visibilityState === "hidden") {
-      this.handleWindowBlur();
+  // Leaving the window interrupts capture but keeps dictated text in the draft.
+  // The browser's microphone permission prompt (Safari, Chrome) blurs the window
+  // while the microphone is still opening, so a blur waits until listening: Allow
+  // then starts listening and a denial reports its error. A hidden page still ends
+  // dictation at any point.
+  private readonly handleWindowLeave = (event: Event): void => {
+    if (
+      event.type === "visibilitychange" ? document.visibilityState !== "hidden" : this.connecting
+    ) {
+      return;
     }
-  };
-
-  // Losing the window interrupts capture but keeps dictated text in the draft.
-  private readonly handleWindowBlur = (): void => {
     this.clearClickSuppression();
     void this.finishActive();
   };
@@ -358,11 +359,6 @@ export class ComposerDictationOwner extends EventTarget {
               }
             }
           },
-          onLevel: (level) => {
-            if (this.session === session) {
-              this.level.set(level);
-            }
-          },
           onTranscriptChange: () => this.dispatchEvent(new Event("change")),
           onReady: () => {
             if (this.session === session && this.phase === "connecting") {
@@ -392,7 +388,6 @@ export class ComposerDictationOwner extends EventTarget {
       return Promise.resolve(false);
     }
     const wasActive = this.active;
-    this.level.set(0);
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
@@ -495,8 +490,8 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancellationListeners = new AbortController();
       const options = { signal: this.cancellationListeners.signal };
       listen(document, "keydown", this.handleDocumentKeyDown, options);
-      listen(document, "visibilitychange", this.handleVisibilityChange, options);
-      listen(window, "blur", this.handleWindowBlur, options);
+      listen(document, "visibilitychange", this.handleWindowLeave, options);
+      listen(window, "blur", this.handleWindowLeave, options);
     } else {
       this.cancellationListeners?.abort();
       this.cancellationListeners = null;

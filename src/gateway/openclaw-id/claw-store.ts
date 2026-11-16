@@ -65,6 +65,8 @@ export type InviteReport = {
   location_hint: string | null;
   resolution?: "approved" | "denied" | "expired";
   resolved_at?: number;
+  /** Owner-selected local profile; never part of a signed cap or Discovery publication. */
+  existingProfile?: { id: string; displayName: string | null; fallbackReason?: string };
 };
 
 /** Refuses recovery if an awaited lookup belongs to a root or binding that has since changed. */

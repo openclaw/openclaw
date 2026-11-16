@@ -627,7 +627,8 @@ native namespace member advances a counter, forwarded through the existing worke
 task channel at most once per second unless the active plugin changes. The parent allows admission
 to continue while that counter advances. After 180 seconds without progress, it
 records a failure naming the plugin and native reference verification stage and
-closes the worker without automatically recapturing that inventory. Reload the
+closes the worker without automatically recapturing that inventory. Time the host
+spends asleep or stopped does not count toward those 180 seconds. Reload the
 plugin or restart the Gateway to retry. Parent probes and queued requests remain
 bounded; provider discovery starts its own 180-second deadline after admission.
 Inventory retirement and shutdown still close the worker.
@@ -688,9 +689,12 @@ or a later dynamic import.
 Dynamic TypeScript imports preserve asynchronous CommonJS execution, including
 top-level await and `module.exports`, while source loaded from native JavaScript
 follows Node's module format. The first evaluation fixes that mode for the
-instance; resolving a module alone does not evaluate it. Compiler outputs are
-allocated on first resolution, not for every captured TypeScript file. A
-resolve-only call returns a stable existing path without compiling the module.
+instance; resolving a module alone does not evaluate it. The capture producer
+prepares real execution paths for admitted TypeScript sources. A resolve-only call
+returns one of these stable existing paths without compiling the module.
+Capture retains verified source text for these files. The compiler consumes that
+text and supplies its output directly to Node's load hook on first execution,
+without reopening captured sources or creating temporary compiler output files.
 Jiti-backed modules use Jiti's transformed runtime bindings for loader helpers,
 without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,

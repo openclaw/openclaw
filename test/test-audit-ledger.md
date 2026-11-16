@@ -812,6 +812,248 @@ byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
 changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
 took 17.87 seconds, so these timings do not establish a speed improvement.
 
+### Managed proxy CA cleanup continuation
+
+At `7e69bf4c26b3cd00789f55ee4f6185af8aa2dbf3`, the shared proxy CA fixture
+spliced every directory from its local list before removal. A removal failure
+aborted cleanup of later directories and dropped their ownership. It now uses
+the canonical auto-cleanup tracker. The synchronous writer, filename, contents,
+and omitted-content missing-file fixture remain unchanged. Test support changes
+by +4/-10 lines; production and the shared tracker are unchanged.
+
+All 22 declarations / 31 cases across managed-proxy-undici, proxy-validation and
+proxy-lifecycle remain. Baseline and candidate pass all 31 cases. The existing
+temp-dir helper suite passes its three portable cases; the Windows-only case
+is skipped on macOS. The combined command took 8.32 seconds on the baseline and
+6.21 seconds on the warm candidate; this is not a speed comparison.
+
+A temporary helper-boundary probe captures the actual registered cleanup hook
+and injects a removal failure for the first of two real directories. The baseline
+reports the error but neither removes the second directory nor retries the first
+on the next cleanup call. The candidate preserves the same error, removes the
+second directory and successfully retries the first after removal is restored.
+Both keep normal CA bytes and missing-file behavior. Probe files were removed and
+instrumentation restored byte for byte. Independent review preserves all coverage;
+the lifecycle credential-redaction substring assertion remains a separate
+source-only follow-up, with no production leak claimed.
+
+### Managed proxy credential-redaction proof
+
+At `7ebb510477ac76cb8f0224dd964c775c29625d37`, the startup redaction case
+rejected only the combined username/password substring. It now uses distinct
+fixture credentials and checks each across every logged message, retaining the
+positive proxy-origin assertion. All 12 declarations / 13 cases remain. Test
+code changes by +8/-9 lines; production is unchanged.
+
+The baseline passes all 13 cases, including when the real startup owner is
+temporarily changed to log just the username or just the password in an extra
+message. The repair rejects each mutation in the intended redaction case while
+the other 12 pass. Restored production passes all 13 cases; temporary mutations
+were restored byte for byte. Independent preservation review retains startup,
+CA loading, inherited routing, loopback policy, environment restoration,
+overlapping ownership and shutdown proof. This closes the earlier source-only
+redaction assertion follow-up; no existing production leak is claimed.
+
+### External proxy loopback response proof
+
+At `08ae8c62b83ede02db3a8d2bc3ce36206008d253`, the external-proxy child-process
+case checks four response statuses but only one shared response-body substring.
+Each response now has a complete status/body assertion. Both declarations and
+expanded cases remain, including WebSocket bypass, exact CONNECT targets and
+the separate target-TLS-hostname proof. Test code changes by +6/-5 lines;
+production and shared support are unchanged.
+
+The baseline passes both cases even when the loopback server returns a corrupted
+body for one request pathname at a time: Undici fetch, global fetch, Node HTTP
+and the explicit HTTP agent. The repair rejects all four controls at the
+corresponding payload assertion while the TLS case passes. The restored candidate
+passes both cases. All temporary fixture mutations were restored byte for byte;
+production was never mutated. The cold baseline command took 474.76 seconds
+including builds; the warm candidate took 73.55 seconds, with 31.04 seconds
+reported by Vitest, mostly transformation. These are not speed-comparison data.
+
+Independent source review retains the realtime provider's two admission/refusal
+rows and the bare-WebSocket mock that exposes its Bun transport regression.
+Its sequential cleanup can skip remaining closers after an earlier failure;
+that is a separate source-only follow-up, not a measured leak or applied repair.
+
+### Realtime proxy fixture cleanup
+
+At `98556d69bfb13ac141ba4db884cbc92ab727b7ed`, the realtime proxy fixture
+forgets its remaining closers when an earlier reverse-order cleanup throws.
+The fixture now uses the existing shared cleanup runner, which attempts all
+closers and preserves single or multiple failures. Both admission/refusal rows,
+their assertions and the runtime WebSocket mock remain: one declaration, two
+expanded cases. Test code changes by +4/-5 lines; production and shared support
+are unchanged.
+
+With an injected error after the real bridge closes, the baseline leaves its
+managed proxy registered and both network listeners open in both rows. The
+candidate clears the registration and closes both listeners in reverse order,
+preserving the original error. A second injected failure after proxy shutdown
+preserves both errors in an aggregate without skipping either listener.
+Environment restoration passes throughout. Observations precede emergency
+cleanup, and every temporary probe was restored byte for byte.
+
+The clean baseline passes both cases in 163.76 seconds wall time, including cold
+worker compilation. The warm candidate passes both in 22.06 seconds wall time
+(16.29 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation review found no lost contract. This closes the earlier
+source-only realtime cleanup follow-up; no production change is claimed.
+
+### Secrets CLI plan fixture setup custody
+
+At `69c3acaca6854826a03e7e6ee2a1cf0334959282`, `withPlanFile` writes its
+temporary plan before entering its cleanup block. A partial write followed by
+failure therefore leaves the file behind. Move that write into the existing
+`try`; retain the callback, contents, error propagation and removal operation.
+All 22 declarations / 23 expanded cases remain, including malformed UTF-8,
+literal replacement characters, size limits, FIFO rejection and error causes.
+Test code changes by +1/-1 line; production and shared support are unchanged.
+
+With a real partial write followed by injected `ENOSPC` inside the existing
+valid-Unicode Vitest case, the baseline leaves the file present. The candidate
+removes it, preserves the exact write error and never invokes the apply handler.
+Both observations precede emergency cleanup. Temporary instrumentation was
+restored byte for byte. A separate direct invocation of the unchanged helper
+body confirms the same result and that baseline removal was never called.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+54.35 seconds including cold worker compilation; the warm candidate took 6.71
+seconds (4.47 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation and local ClawSweeper review found no lost contract
+or actionable finding. Source-only follow-ups remain for FIFO setup cleanup,
+failed MCP temporary-directory removal and environment restoration after
+channel/model fixture removal errors.
+
+### Secrets CLI FIFO fixture setup custody
+
+At `d32ac41084fcaef1099ecdbfeb1cfa81da532642`, the FIFO rejection case
+allocates its directory before running `mkfifo`, outside the cleanup scope.
+Use the existing automatic temporary-directory tracker so failed setup also
+releases that directory. Retain the positive regular-file preflight, real FIFO
+creation, CLI rejection assertions, timeout, recovery writer and awaited parse
+settlement. All 22 declarations / 23 expanded cases remain; one fixture is
+repaired and no coverage is removed. Test code changes by +4/-3 lines;
+production and shared helper code are unchanged.
+
+A direct execution of the existing setup block with `mkfifo` unavailable
+reproduces `ENOENT` and leaves the allocated directory present while preserving
+the original setup error. The same fault inside the existing Vitest case leaves
+the directory present on the baseline and removes it with the candidate. Both
+preserve the exact setup error and never invoke the apply handler. Observations
+precede emergency cleanup; temporary instrumentation was restored byte for byte.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+65.27 seconds including cold worker compilation; the warm candidate took 10.93
+seconds (7.58 seconds reported by Vitest). These are not speed-comparison data.
+The shared temporary-directory helper passes 11 cases with its Windows-only
+case skipped on macOS. Independent preservation and local ClawSweeper review
+found no lost contract or actionable finding. This closes the earlier FIFO
+setup cleanup follow-up; no production change is claimed.
+
+### MCP CLI workspace cleanup custody
+
+At `a56ba88e924fad822fd8f447f1b67e82c13c6f42`, the MCP CLI harness empties
+its directory tracker before asynchronous removal succeeds. A failed removal
+leaves the directory untracked and unavailable to a later cleanup attempt.
+Delegate removal to the existing shared cleanup helper; preserve allocation,
+explicit caller-owned teardown, mock restoration and exit-code restoration.
+All five consumer suites remain: 46 declarations / 57 expanded cases. Test
+support changes by +2/-3 lines; production and shared helper code are unchanged.
+
+Direct execution of the baseline cleanup body with an injected removal failure
+leaves the failed directory present and untracked after both cleanup attempts.
+The other directory is removed and the exact error and exit code are preserved.
+The same fault in an existing Vitest consumer case confirms that the candidate
+retains the failed path and removes it on the second cleanup call. Both versions
+remove the healthy workspace and restore the temporary home, environment, cwd
+and exit code. Observations precede emergency cleanup; temporary instrumentation
+was restored byte for byte.
+
+All five consumer suites pass on both versions: 56 cases pass and the one
+Windows-only case is skipped on macOS. Baseline wall time was 106.39 seconds;
+the candidate took 138.65 seconds (121.87 seconds reported by Vitest). These are
+qualification observations, not speed-comparison data. The unchanged shared
+helper passes 11 cases with its Windows-only case skipped. Independent
+preservation and full local ClawSweeper review found no actionable issue.
+This closes the earlier MCP temporary-directory removal follow-up.
+
+### Channel and model fixture environment restoration
+
+At `ea8bbbb3b672b7df04d3747941d75cf7345a37fc`, the channel catalog-row
+and model-status cold-import fixtures remove their suite roots before restoring
+stubbed environment variables. A removal error skips that restoration. Keep each
+existing suite-lifetime root and put environment restoration in `finally`.
+All three declarations / four expanded cases remain, including both channel
+account shapes, missing-owner repair hints and all three model-status routes.
+Test code changes by +10/-4 lines; production and shared support are unchanged.
+
+Direct execution of both original teardown bodies with an injected removal
+failure preserves the exact error but skips environment restoration. The same
+fault in each actual Vitest afterAll hook confirms that the baseline leaves all
+three fixture environment variables stubbed, while the candidate restores all
+three. Both preserve the exact removal error and report the expected teardown
+failure. Observations precede emergency cleanup; temporary instrumentation was
+restored byte for byte.
+
+The clean baseline and candidate each pass all four cases. Baseline wall time
+was 73.44 seconds including cold worker compilation; the warm candidate took
+11.33 seconds (8.19 seconds reported by Vitest). These are qualification
+observations, not speed-comparison data. Independent preservation and full local
+ClawSweeper review found no actionable issue. This closes the earlier channel
+and model fixture environment-restoration follow-up.
+
+### Startup fixture cleanup custody
+
+At `5dc8071931853986c9a924c2e99996b8b5753a71`, the startup metadata and
+command-timing fixtures empty their directory trackers before removal succeeds.
+A failed removal leaves the root untracked and unavailable to a later cleanup
+attempt. Delegate both hooks to the existing shared cleanup owner. Keep the
+timing fixture's synchronous timeline flush immediately before removal.
+All four declarations / four expanded cases remain; production and shared
+helper code are unchanged.
+
+Direct execution and actual Vitest `afterEach` fault/retry probes reproduce
+both original hooks forgetting the failed root. Neither retries it; metadata
+also leaves the healthy sibling behind. The candidate hooks preserve the exact
+error, remove the healthy sibling, retain the failed root, and remove it when
+the same hook runs again without the fault. Timing flush precedes both removal
+attempts. Each fault run intentionally reports two failed / two passed cases;
+all original case assertions execute. Temporary instrumentation was restored
+byte-for-byte.
+
+Clean baseline and candidate runs pass all four cases (5.66 s and 3.28 s wall
+time; Vitest durations 2.40 s and 0.779 s). These are qualification observations,
+not a performance comparison. Scoped CLI-test typecheck, lint, formatting,
+line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
+and local ClawSweeper report no actionable findings. The shared cleanup helper
+is unchanged and retains its prior 11-pass / one-Windows-skip proof.
+
+### Agent startup fixture cleanup custody
+
+At `33d26e441f91c3d2534071a8d36e8aa9d146d07f`, the agent startup timing fixture clears
+its directory tracker before asynchronous removal succeeds. A failed removal
+therefore leaves the root untracked. Delegate cleanup to the existing shared
+owner, preserving the order: flush timeline, restore stubbed environment, remove
+tracked roots. The single declaration / expanded case and all timeline-content
+assertions remain; production and shared-helper code are unchanged.
+
+Direct execution and an actual Vitest `afterEach` fault/retry probe reproduce
+the original hook forgetting its failed root. The candidate preserves the exact
+error, removes a healthy sibling, retains the failed root, and removes it when
+the same hook runs again without the fault. Both versions flush and restore the
+two diagnostics environment variables before removal. Each fault run reports
+one intentional teardown failure after the original assertions execute.
+Temporary instrumentation was restored byte-for-byte.
+
+The clean baseline and candidate each pass the single case (11.64 s and 6.21 s
+wall time; Vitest durations 3.67 s and 1.78 s). These are qualification
+observations, not a performance comparison. Scoped agent-test typecheck, lint,
+formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independent
+preservation and local ClawSweeper review found no actionable issue. The shared
+cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
