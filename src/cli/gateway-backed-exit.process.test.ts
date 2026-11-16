@@ -1,11 +1,18 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
+import { sendMinimalGatewayResponse } from "../gateway/minimal-gateway.test-helpers.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
   runIsolatedGatewayCli,
@@ -21,6 +28,7 @@ import {
   startAgentTurnGateway,
   startCliReadGateway,
   startCronLookupMissGateway,
+  startGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
 } from "./gateway-backed-exit.test-helpers.js";
@@ -89,6 +97,69 @@ it("lists nodes with an explicit positive timeout", async () => {
     paired: [],
   });
   expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
+});
+
+it.skipIf(process.platform === "win32").each([
+  { command: ["camera", "list"], method: "node.list" },
+  { command: ["location", "get"], method: "node.pair.list" },
+])("cancels nodes $command while awaiting $method", async ({ command, method }) => {
+  const lookup = createDeferredCore<{ socket: WebSocket; id: string }>();
+  const gateway = await startGateway(
+    (socket, frame) => {
+      if (frame.method === "node.list" && method === "node.pair.list") {
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "unknown method: node.list" },
+          }),
+        );
+      } else if (frame.method === method) {
+        lookup.resolve({ socket, id: frame.id });
+      }
+    },
+    (frame) => {
+      expect(frame.params?.auth?.token).toBe(TEST_TOKEN);
+      return { methods: ["node.list", "node.pair.list", "node.invoke"] };
+    },
+  );
+  const fixture = await remoteFixture(tempDirs.make("openclaw-node-lookup-cancel-"), {
+    url: gateway.url,
+    token: TEST_TOKEN,
+  });
+  let releasedResponse = false;
+  const result = await runIsolatedGatewayCli({
+    ...fixture,
+    args: ["nodes", ...command, "--node", "fixture", "--timeout", "30000", "--json"],
+    interact: async (child) => {
+      child.stdin.end();
+      const { socket, id } = await lookup.promise;
+      const interrupted = waitForCliProcessStderrMarker(child, "Command interrupted by SIGINT");
+      expect(child.kill("SIGINT")).toBe(true);
+      await interrupted;
+      try {
+        if (socket.readyState !== WebSocket.CLOSED) {
+          await once(socket, "close", { signal: AbortSignal.timeout(ONE_SHOT_EXIT_BUDGET_MS) });
+        }
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== "AbortError") {
+          throw error;
+        }
+        // Let a broken client unwind cleanly; needing this reply is the failed invariant.
+        releasedResponse = true;
+        sendMinimalGatewayResponse(socket, id, { nodes: [], pending: [], paired: [] });
+      }
+    },
+  });
+  expect(releasedResponse, "Ctrl+C must close node lookup without waiting for its response").toBe(
+    false,
+  );
+  expect(result).toMatchObject({ code: 130, signal: null, stdout: "" });
+  expect(result.stderr).toContain("Command interrupted by SIGINT");
+  expect(gateway.calls).toEqual(
+    method === "node.list" ? ["node.list"] : ["node.list", "node.pair.list"],
+  );
 });
 
 it.each([

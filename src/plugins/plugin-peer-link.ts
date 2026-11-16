@@ -1,4 +1,4 @@
-import { lstatSync, symlinkSync, unlinkSync, type Stats } from "node:fs";
+import fsSync, { lstatSync, type Stats } from "node:fs";
 // Owns installed plugin host links and standalone build identity admission.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -351,7 +351,7 @@ async function linkOpenClawPeerDependency(params: {
     params.beforePersistentApply?.();
     try {
       if (existing.isSymbolicLink()) {
-        unlinkSync(linkPath);
+        fsSync.unlinkSync(linkPath);
       } else {
         await fs.rm(linkPath, { recursive: true, force: true });
       }
@@ -362,7 +362,7 @@ async function linkOpenClawPeerDependency(params: {
   await params.beforePersistentEffect?.();
   params.beforePersistentApply?.();
   try {
-    symlinkSync(params.hostRoot, linkPath, "junction");
+    fsSync.symlinkSync(params.hostRoot, linkPath, "junction");
     if (previousTarget) {
       params.logger.warn?.(
         `Repaired OpenClaw host link at ${linkPath}: ${previousTarget} -> ${expectedTarget}`,

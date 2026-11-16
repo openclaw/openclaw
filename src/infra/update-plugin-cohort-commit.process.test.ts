@@ -9,7 +9,7 @@ import { resolveSqliteSchemaAssetInputs } from "../../scripts/lib/sqlite-schema-
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { useExecutorFixture } from "../cli/update-cli/update-command-executor.test-support.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readPackageVersion } from "./package-json.js";
@@ -35,26 +35,23 @@ it.each([false, true])(
     // The prepared generation deliberately is not an installation root. Copy its
     // actual graph and build metadata together so checkout dist cannot supply the
     // expected identity while a different compiled generation executes the guard.
-    const runtimeRoot = createCompiledSdkHost(
-      [
-        runtimeProcessEntrypoints.updateMigratedFinalize,
-        runtimeProcessEntrypoints.workerNativeLifecycle,
-        // Native lifecycle selects this through the manifest, outside literal imports.
-        runtimeProcessEntrypoints.spawnBroker,
-        runtimeProcessEntrypoints.sqliteWriterAdmission,
-        runtimeProcessEntrypoints.sqliteStore,
-        runtimeProcessEntrypoints.sqliteIntegrity,
-        runtimeProcessEntrypoints.sqliteReadOnly,
-        runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
-        runtimeProcessEntrypoints.sqliteSnapshotStaging,
-        runtimeProcessEntrypoints.sqliteSourceRevision,
-        runtimeProcessEntrypoints.sharedStateStore,
-        runtimeProcessEntrypoints.stateOwnership,
-        runtimeProcessEntrypoints.stateLeaseHeartbeat,
-        runtimeProcessEntrypoints.stateRead,
-      ],
-      (prefix) => fs.mkdtempSync(path.join(installKey, prefix)),
-    );
+    const runtimeRoot = prepareCompiledSdkHost([
+      runtimeProcessEntrypoints.updateMigratedFinalize,
+      runtimeProcessEntrypoints.workerNativeLifecycle,
+      // Native lifecycle selects this through the manifest, outside literal imports.
+      runtimeProcessEntrypoints.spawnBroker,
+      runtimeProcessEntrypoints.sqliteWriterAdmission,
+      runtimeProcessEntrypoints.sqliteStore,
+      runtimeProcessEntrypoints.sqliteIntegrity,
+      runtimeProcessEntrypoints.sqliteReadOnly,
+      runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+      runtimeProcessEntrypoints.sqliteSnapshotStaging,
+      runtimeProcessEntrypoints.sqliteSourceRevision,
+      runtimeProcessEntrypoints.sharedStateStore,
+      runtimeProcessEntrypoints.stateOwnership,
+      runtimeProcessEntrypoints.stateLeaseHeartbeat,
+      runtimeProcessEntrypoints.stateRead,
+    ])((prefix) => fs.mkdtempSync(path.join(installKey, prefix)));
     if (!runtimeRoot) {
       throw new Error("Commit worker fixture requires the repository's compiled worker generation");
     }

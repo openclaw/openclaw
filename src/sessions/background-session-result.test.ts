@@ -16,6 +16,7 @@ import {
   testModel,
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
@@ -27,6 +28,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { reportGitHubPublicationTranscript } from "../gateway/github-publication-transcript.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -79,7 +81,7 @@ async function createTarget() {
     commitBackgroundResultToSession({
       agentId: "main",
       sessionKey,
-      expectedGeneration: generation,
+      expectedLifecycleRevision: generation.lifecycleRevision,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -222,6 +224,68 @@ it("deduplicates background output without breaking live or replayed tool result
     finishTool.resolve();
     await turn;
   }
+});
+
+it("places a GitHub publication receipt that lands during a tool call after the tool result", async () => {
+  const target = await createTarget();
+  // The receipt writer resolves its session store through the runtime config.
+  setRuntimeConfigSnapshot(target.config);
+  const manager = await SessionManager.openAsync(target.scope);
+  const requests: Message[][] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(structuredClone(context.messages));
+    return createAssistantResultStream(
+      requests.length === 1
+        ? createAssistant(
+            model,
+            [{ type: "toolCall", id: "lookup-call", name: "lookup", arguments: {} }],
+            "toolUse",
+          )
+        : createAssistant(model, "Lookup completed"),
+    );
+  });
+  const { session } = await createTestSession({
+    sessionManager: manager,
+    customTools: [
+      {
+        name: "lookup",
+        label: "Lookup",
+        description: "Synthetic lookup",
+        parameters: Type.Object({}),
+        execute: async () => {
+          await reportGitHubPublicationTranscript(
+            () => import("../gateway/session-utils.js"),
+            {
+              markReportedAsync: async () => {},
+              readReportLifecycleAsync: async () => target.generation.lifecycleRevision,
+            },
+            {
+              agentId: "main",
+              sessionKey: target.sessionKey,
+              sessionId: target.sessionId,
+              result: {
+                requestId: "publication-during-tool",
+                status: "published",
+                repository: "example/repository",
+                branch: "publication",
+                url: "https://github.com/example/repository/pull/1",
+                headCommit: "a".repeat(40),
+              },
+            },
+          );
+          return {
+            content: [{ type: "text" as const, text: "Actual lookup result" }],
+            details: {},
+          };
+        },
+      },
+    ],
+  });
+  await withSessionTurn(target, () => session.prompt("Run lookup"));
+  const receipt = { role: "assistant", responseId: "github-publication:publication-during-tool" };
+  expect(requests[1]).toMatchObject([{ role: "user" }, lookupCall, lookupResult, receipt]);
+  const replay = (await SessionManager.openAsync(target.scope)).buildSessionContext().messages;
+  expect(JSON.stringify(replay.slice(0, requests[1]!.length))).toBe(JSON.stringify(requests[1]));
 });
 
 it.each(["tool", "stream"])(
@@ -607,7 +671,6 @@ it("does not commit when cancelled during display preparation", async () => {
 
 it.each<[string, Partial<SessionEntry>, string]>([
   ["archived conversation", { archivedAt: 2 }, "archived"],
-  ["session-id replacement", { sessionId: "replacement-session" }, "session rebound"],
   [
     "same-id lifecycle replacement",
     { lifecycleRevision: "replacement-revision" },
@@ -622,33 +685,33 @@ it.each<[string, Partial<SessionEntry>, string]>([
     reason: expect.stringContaining(reason),
   });
 
-  await expect(
-    loadTranscriptEvents({
-      ...target.scope,
-      sessionId: replacement.sessionId ?? target.sessionId,
-    }),
-  ).resolves.toEqual([]);
+  await expect(loadTranscriptEvents(target.scope)).resolves.toEqual([]);
 });
 
-it("treats a missing lifecycle revision as exact generation state", async () => {
+it("follows a message edit to the conversation's current transcript", async () => {
   const target = await createTarget();
-  const generation = { sessionId: target.sessionId, lifecycleRevision: undefined };
-  await target.replace({ lifecycleRevision: undefined });
+  // Rewind and branch switch rotate the transcript id inside the same incarnation.
+  await target.replace({ sessionId: "edited-session" });
+
+  await expect(target.commit()).resolves.toMatchObject({ ok: true });
+
+  expect(await loadTranscriptEvents(target.scope)).toEqual([]);
+  expect(
+    (await loadTranscriptEvents({ ...target.scope, sessionId: "edited-session" })).map(
+      (event) => (event as { message?: { model?: string } }).message?.model,
+    ),
+  ).toContain(automationResult.model);
+});
+
+it("follows the conversation key through a reset when no revision is pinned", async () => {
+  const target = await createTarget();
+  await target.replace({ lifecycleRevision: "reset-revision" });
 
   await expect(
     target.commit({
-      expectedGeneration: generation,
-      idempotencyKey: "cron-current-completion:cron:job-legacy:4000",
-      provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:4000" },
+      expectedLifecycleRevision: undefined,
+      idempotencyKey: "cron-current-completion:cron:job-key:5000",
+      provenance: { kind: "cron", jobId: "job-key", runId: "cron:job-key:5000" },
     }),
   ).resolves.toMatchObject({ ok: true });
-
-  await target.replace({ lifecycleRevision: "materialized-revision", updatedAt: 3 });
-  await expect(
-    target.commit({
-      expectedGeneration: generation,
-      idempotencyKey: "cron-current-completion:cron:job-legacy:5000",
-      provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:5000" },
-    }),
-  ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("session rebound") });
 });

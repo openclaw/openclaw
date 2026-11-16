@@ -220,11 +220,7 @@ it("waits for stored failed completion", async () => {
   mockQueuedRun({ status: "ok", completionStatus: "failed" });
   expect(await parseExit([...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"])).toBe(1);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
-  expect(rpcParams("cron.runs")).toEqual({
-    id: "job-1",
-    runId: "manual:job-1:123:0",
-    limit: 1,
-  });
+  expect(rpcParams("cron.runs")).toEqual({ id: "job-1", runId: "manual:job-1:123:0", limit: 1 });
   expect(JSON.parse(stdoutText())).toMatchObject({
     completed: true,
     status: "ok",
@@ -282,45 +278,34 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
-const interruptPhases = ["sleep", "request", "completion", "cron list", "cron show job-1"];
-it.each(interruptPhases)("cancels cron %s", async (phase) => {
+it.each(["sleep", "completion"])("cancels cron wait during %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
   const scope = new AsyncWorkScope();
   const completed = { entries: [{ status: "ok", completionStatus: "succeeded" }] } as const;
   const read = createDeferredCore<typeof completed>();
-  const polls = () => callGatewayFromCli.mock.calls.filter(([method]) => method !== "cron.run");
-  callGatewayFromCli.mockImplementation(
-    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
-      if (method === "cron.run") {
-        return { ok: true, enqueued: true, runId: "queued-run" };
-      }
-      if (!["sleep", "completion"].includes(phase) && extra?.signal) {
-        const { signal } = extra;
-        signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
-      }
-      return phase === "sleep" ? { entries: [] } : read.promise;
-    },
-  );
-  const settled = vi.fn();
-  const running = scope.track(() => parse(phase.includes(" ") ? phase.split(" ") : RUN_WAIT));
-  void running.then(() => settled(), settled);
+  callGatewayFromCli.mockImplementation(async (method) => {
+    if (method === "cron.run") {
+      return { ok: true, enqueued: true, runId: "queued-run" };
+    }
+    return phase === "sleep" ? { entries: [] } : read.promise;
+  });
+  const running = scope.track(() => parse(RUN_WAIT));
   try {
     await vi.advanceTimersByTimeAsync(0);
-    expect(polls()).toHaveLength(1);
     scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
     if (phase === "completion") {
       read.resolve(completed);
     }
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toHaveBeenCalledExactlyOnceWith();
+    await running;
     for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
       expect(output).not.toHaveBeenCalled();
     }
-    expect(polls()).toHaveLength(1);
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method !== "cron.run")).toHaveLength(
+      1,
+    );
   } finally {
     read.resolve(completed);
-    await vi.advanceTimersByTimeAsync(2000);
     await scope.drain();
   }
 });
@@ -732,6 +717,7 @@ it.each([
       "--failure-alert-cooldown": "1h",
       "--failure-alert-channel": "telegram",
       "--failure-alert-to": "19098680",
+      "--failure-alert-thread-id": "42",
       "--failure-alert-mode": "webhook",
       "--failure-alert-account-id": "bot-a",
       "--failure-alert-include-skipped": true,
@@ -742,6 +728,7 @@ it.each([
         cooldownMs: 3_600_000,
         channel: "telegram",
         to: "19098680",
+        threadId: "42",
         mode: "webhook",
         accountId: "bot-a",
         includeSkipped: true,

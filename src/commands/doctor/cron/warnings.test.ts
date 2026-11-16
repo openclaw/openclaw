@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
@@ -24,9 +26,10 @@ afterEach(() => vi.clearAllMocks());
 async function advisory(
   jobs: Array<Record<string, unknown>>,
   channels: string[] = [],
+  cfg: OpenClawConfig = {},
 ): Promise<string | null> {
   mocks.plugins.mockReturnValue(channels.map((id) => ({ id })));
-  await noteCronDeliveryTargetAdvisory({ cfg: {}, jobs });
+  await noteCronDeliveryTargetAdvisory({ cfg, jobs });
   return mocks.note.mock.calls.at(-1)?.[0] ?? null;
 }
 
@@ -51,6 +54,40 @@ it("treats a channel alias as active when its canonical id is available", async 
   ).toBeNull();
 });
 
+it("reports configured default destinations on unavailable channels", async () => {
+  const cfg: OpenClawConfig = {
+    cron: {
+      delivery: { channel: "ghost", to: "1" },
+      failureAlert: { channel: "telegram", to: "1" },
+      agents: { ops: { delivery: { channel: "last", to: "1" } } },
+      creators: {
+        alice: {
+          failureAlert: { channel: "missing-channel", to: "1" },
+          delivery: { channel: "gchat", to: "spaces/a" },
+        },
+      },
+    },
+  };
+  const message = await advisory(
+    [{ id: "routeless", delivery: { mode: "announce" } }],
+    ["googlechat", "telegram"],
+    cfg,
+  );
+  expect(message?.split("\n")).toEqual([
+    "Automation delivery targets unavailable channels.",
+    "- Default destinations on a channel whose plugin is not active: cron.delivery.channel -> ghost, cron.creators.alice.failureAlert.channel -> missing-channel; automations that fall back to them will fail to deliver",
+    expect.stringContaining("or the listed `cron` default after reviewing"),
+  ]);
+});
+
+it("stays quiet when every default destination channel is available", async () => {
+  expect(
+    await advisory([{ id: "routeless", delivery: { mode: "announce" } }], ["telegram"], {
+      cron: { delivery: { channel: "telegram", to: "1" } },
+    }),
+  ).toBeNull();
+});
+
 it("bounds the best-effort crontab read", async () => {
   mocks.runExec.mockRejectedValueOnce(new Error("crontab timed out"));
 
@@ -61,6 +98,29 @@ it("bounds the best-effort crontab read", async () => {
     logOutput: false,
     timeoutMs: 5_000,
   });
+});
+
+it.each([
+  ["update Doctor", { OPENCLAW_UPDATE_IN_PROGRESS: "1" }],
+  [
+    "update rehearsal",
+    {
+      ...buildUpdateRehearsalPathEnv("/rehearsal"),
+      OPENCLAW_UPDATE_IN_PROGRESS: "0",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+    },
+  ],
+])("does not spawn setgid crontab from an %s run", async (_label, env) => {
+  const readCrontab = vi.fn(async () => ({
+    stdout: "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh\n",
+  }));
+
+  await expect(
+    collectLegacyWhatsAppCrontabHealthWarning({ platform: "linux", readCrontab, env }),
+  ).resolves.toBeNull();
+  expect(readCrontab).not.toHaveBeenCalled();
 });
 
 it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {

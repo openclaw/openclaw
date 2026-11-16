@@ -4,7 +4,6 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/us
 import type { OpenClawConfig } from "../../config/config.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
 const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
@@ -25,7 +24,7 @@ export function buildReplyUsageState(
     "resolvedRef" | "requested" | "turnUsd" | "identity" | "usage" | "lastUsage"
   > & {
     config: OpenClawConfig;
-    agentDir: string;
+    turnUsd?: number;
     agentId: string;
     sessionId: string;
     fallbackExhausted?: boolean;
@@ -57,13 +56,7 @@ export function buildReplyUsageState(
       params.requestedProvider && params.requestedModel
         ? `${params.requestedProvider}/${params.requestedModel}`
         : undefined,
-    turnUsd: estimateAggregateUsageCost({
-      usage: params.usage,
-      provider: params.provider,
-      model: params.model,
-      config: params.config,
-      agentDir: params.agentDir,
-    }),
+    turnUsd: params.turnUsd,
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),
     compactionCount: params.compactionCount,

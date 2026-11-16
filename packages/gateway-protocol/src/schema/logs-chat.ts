@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_APP_CONTEXT_LIMITS } from "../chat-app-context.js";
 import { CHAT_WORK_CONTEXT_DETAIL_LIMITS, CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
@@ -88,6 +89,12 @@ export const ChatPendingInputsPageSchema = closedObject({
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
       cancelledByUser: Type.Optional(Type.Literal(true)),
+      steerNow: Type.Optional(
+        closedObject({
+          status: Type.Enum(["available", "blocked"]),
+          tools: Type.Array(NonEmptyString),
+        }),
+      ),
     }),
     { maxItems: 20 },
   ),
@@ -263,6 +270,22 @@ export const ChatPendingInputsDismissResultSchema = closedObject({
 });
 
 export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+
+/** Interrupt only the tools delaying one already accepted steering input. */
+export const ChatSteerNowParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+});
+
+export const ChatSteerNowResultSchema = closedObject({
+  status: Type.Enum(["interrupted", "idle", "blocked", "settled", "unavailable"]),
+  tools: Type.Array(NonEmptyString),
+});
+
+export type ChatSteerNowParams = Static<typeof ChatSteerNowParamsSchema>;
+export type ChatSteerNowResult = Static<typeof ChatSteerNowResultSchema>;
 export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
 export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
 export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
@@ -384,6 +407,17 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  appContext: Type.Optional(
+    Type.Array(
+      closedObject({
+        title: Type.String({ minLength: 1, maxLength: CHAT_APP_CONTEXT_LIMITS.title }),
+        uri: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.uri })),
+        icon: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.icon })),
+        description: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.description })),
+      }),
+      { minItems: 1, maxItems: CHAT_APP_CONTEXT_LIMITS.items },
+    ),
+  ),
   workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),

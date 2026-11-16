@@ -4,19 +4,21 @@ import { LruCache } from "../infra/lru-cache.js";
 import { buildLexicalIndex, readParameterText, tokenizeDocument } from "./tool-search-ranking.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 
+type TextLexicalIndex = ReturnType<typeof buildLexicalIndex<number>> & { bytes: number };
+
 // Content is the revision: rebuilt tools, agents, and sessions share only lexical
 // data. Positions are rebound to the caller's current, policy-filtered inventory.
 // Entry text, indexes and document terms share one byte budget. Exact text owns tokenization;
 // effective population and order still own each index's BM25 statistics.
 const lexicalData = new LruCache<
   { bytes: number } & (
-    | { kind: "index"; index: ReturnType<typeof buildLexicalIndex<number>> }
-    | { kind: "document"; terms: string[] }
+    | { kind: "index"; index: TextLexicalIndex }
+    | { kind: "document"; terms: Map<string, number> }
     | { kind: "entry"; text: string }
   )
 >(1024, { maxBytes: 8 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
 // Eviction retires idle retention, never an index still held by an admitted view.
-const active = new Map<string, WeakRef<ReturnType<typeof buildLexicalIndex<number>>>>();
+const active = new Map<string, WeakRef<TextLexicalIndex>>();
 const retired = new FinalizationRegistry<string>((revision) => {
   if (!active.get(revision)?.deref()) {
     active.delete(revision);
@@ -33,40 +35,45 @@ export function prepareTextLexicalDocument(text: string) {
 
 export function getTextLexicalIndex(
   documents: readonly string[] | readonly ReturnType<typeof prepareTextLexicalDocument>[],
+  current?: { revision?: string; index?: TextLexicalIndex },
 ) {
   const prepared = typeof documents[0] === "object";
-  const revision = createHash("sha256")
-    .update(prepared ? "prepared:" : "")
-    .update(
-      JSON.stringify(
-        prepared
-          ? documents.map((document) =>
-              typeof document === "string" ? document : document.revision,
-            )
-          : documents,
-      ),
-    )
-    .digest("hex");
+  const revision = prepared
+    ? `prepared:${prepareTextLexicalDocument(JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))).revision}`
+    : createHash("sha256").update(JSON.stringify(documents)).digest("hex");
+  if (current?.revision === revision && current.index) {
+    return current.index;
+  }
   const retained = lexicalData.get(revision);
   const cached = retained?.kind === "index" ? retained.index : active.get(revision)?.deref();
   if (cached) {
+    if (current) {
+      Object.assign(current, { revision, index: cached });
+    }
     return cached;
   }
   let bytes = 0;
-  const index = buildLexicalIndex(
+  let retainedBytes = 128 + documents.length * 64;
+  const indexed = buildLexicalIndex(
     documents.map((document, value) => {
       const text = typeof document === "string" ? document : document.text;
+      retainedBytes += text.length * 2;
       // Index keys are SHA-256 hex; the prefix keeps raw text in a separate namespace.
       const key = `text:${text}`;
       let tokenized = lexicalData.get(key);
       if (tokenized?.kind !== "document") {
-        const terms = tokenizeDocument(text);
+        const terms = new Map<string, number>();
+        for (const term of tokenizeDocument(text)) {
+          terms.set(term, (terms.get(term) ?? 0) + 1);
+        }
         tokenized = {
           kind: "document",
           terms,
-          // Token slices can retain the full source; count repeated terms conservatively.
+          // Retain frequencies, not one string and array slot per occurrence.
           bytes:
-            text.length * 2 + 64 + terms.reduce((size, term) => size + 64 + term.length * 2, 0),
+            text.length * 2 +
+            64 +
+            Array.from(terms.keys()).reduce((size, term) => size + 96 + term.length * 2, 0),
         };
         lexicalData.set(key, tokenized);
       }
@@ -74,9 +81,17 @@ export function getTextLexicalIndex(
       return { value, terms: tokenized.terms };
     }),
   );
+  // Charge backing strings, document/map overhead and spare postings capacity.
+  for (const [term, matches] of indexed.postings) {
+    retainedBytes += 128 + term.length * 2 + matches.length * 16;
+  }
+  const index = { ...indexed, bytes: retainedBytes };
   lexicalData.set(revision, { kind: "index", index, bytes });
   active.set(revision, new WeakRef(index));
   retired.register(index, revision);
+  if (current) {
+    Object.assign(current, { revision, index });
+  }
   return index;
 }
 
@@ -148,10 +163,9 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
   if (cached && cached.kind === "entry") {
     return cached.text;
   }
-  // Only first-party schemas are walked. MCP and client parameters are untrusted
-  // and deliberately never traversed: compactToolSearchCatalogEntry reports them
-  // as "unknown" for the same reason, and a client may hand us a lazy object that
-  // throws on property access.
+  // Only first-party schemas are walked for ranking. MCP and client parameter
+  // names and descriptions are untrusted and must not steer which tools a query
+  // returns; a client may also hand us a lazy object that throws on property access.
   const parameters = entry.source === "openclaw" ? readParameterText(entry.parameters) : "";
   const text = [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)

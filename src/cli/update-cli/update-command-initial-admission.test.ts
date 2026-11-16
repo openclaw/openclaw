@@ -38,12 +38,9 @@ beforeEach(() => {
     runtimeInspected: true,
     running: false,
   });
-  mocks.validateCanary.mockResolvedValue({
+  mocks.checkCandidate.mockResolvedValue({
     status: "ok",
-    phase: "readiness",
     steps: [],
-    durationMs: 1,
-    logTail: [],
     doctorConfigWrites: true,
   });
 });

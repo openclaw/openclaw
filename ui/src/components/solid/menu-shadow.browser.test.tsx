@@ -46,6 +46,12 @@ it.each(["open", "closed"] as const)("navigates menus inside a %s shadow root", 
     await phase(surface, "open");
     expect(getComputedStyle(surface).position).toBe("fixed");
     expect(getComputedStyle(surface).display).toBe("flex");
+    expect(getComputedStyle(surface).scrollbarWidth).toBe("auto");
+    expect(getComputedStyle(surface, "::-webkit-scrollbar").width).toBe("8px");
+    expect(getComputedStyle(surface, "::-webkit-scrollbar-thumb").borderLeftWidth).toBe("2px");
+    expect(getComputedStyle(surface, "::-webkit-scrollbar-track").backgroundColor).toBe(
+      "rgba(0, 0, 0, 0)",
+    );
     expect(surface.getBoundingClientRect().width).toBeGreaterThan(0);
     expect(surface.getBoundingClientRect().height).toBeGreaterThan(0);
     await userEvent.keyboard("{End}");

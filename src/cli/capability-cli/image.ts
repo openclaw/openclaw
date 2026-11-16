@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
@@ -76,7 +77,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const { parseAspectRatioValue } =
             await import("../../../packages/media-generation-core/src/normalization.js");
           if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
-            throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
+            throwExpectedCliError(
+              "--aspect-ratio must be a W:H ratio of positive numbers, like 16:9",
+            );
           }
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
@@ -108,13 +111,16 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             targetIds: getModelsCommandSecretTargetIds(),
             agent,
           });
-          const { readFile } = await import("node:fs/promises");
+          const { realpath } = await import("node:fs/promises");
           const inputImages =
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
                     const resolvedPath = path.resolve(filePath);
-                    const buffer = await readFile(resolvedPath);
+                    const { readRegularFile } = await import("../../infra/fs-safe.js");
+                    const { buffer } = await readRegularFile({
+                      filePath: await realpath(resolvedPath),
+                    });
                     return {
                       buffer,
                       fileName: path.basename(resolvedPath),
@@ -214,6 +220,10 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             requireProviderModelOverride,
             resolveLocalCapabilityAgent,
           } = await import("./shared.js");
+          const signal = getAsyncWorkSignal();
+          const execution = signal
+            ? { signal, assertCurrent: () => signal.throwIfAborted() }
+            : undefined;
           const capability: "image.describe" | "image.describe-many" = `image.${commandName}`;
           const files = multiple ? (opts.file as string[]) : [String(opts.file)];
           const requestedModel = opts.model as string | undefined;
@@ -241,29 +251,36 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
               const resolvedPath = /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
               const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
               const preparedImage = activeModel
-                ? await prepareImageDescriptionInput({
-                    filePath: resolvedPath,
-                    ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-                    cfg,
-                    timeoutMs,
-                  })
+                ? await prepareImageDescriptionInput(
+                    {
+                      filePath: resolvedPath,
+                      ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                      cfg,
+                      timeoutMs,
+                    },
+                    execution,
+                  )
                 : undefined;
               const result =
                 activeModel && preparedImage
                   ? await runWithImageModelFallback({
                       cfg,
                       modelOverride: `${activeModel.provider}/${activeModel.model}`,
+                      abortSignal: signal,
                       run: async (provider, model) => {
-                        const described = await describePreparedImageWithModel({
-                          image: preparedImage,
-                          cfg,
-                          agentId,
-                          agentDir,
-                          provider,
-                          model,
-                          prompt: prompt ?? "Describe the image.",
-                          timeoutMs,
-                        });
+                        const described = await describePreparedImageWithModel(
+                          {
+                            image: preparedImage,
+                            cfg,
+                            agentId,
+                            agentDir,
+                            provider,
+                            model,
+                            prompt: prompt ?? "Describe the image.",
+                            timeoutMs,
+                          },
+                          execution,
+                        );
                         if (!described.text?.trim()) {
                           throw new Error(`No description returned for image: ${resolvedPath}`);
                         }
@@ -271,15 +288,18 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
                       },
                     })
                   : {
-                      result: await describeImageFile({
-                        filePath: resolvedPath,
-                        ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-                        cfg,
-                        agentId,
-                        agentDir,
-                        prompt,
-                        timeoutMs,
-                      }),
+                      result: await describeImageFile(
+                        {
+                          filePath: resolvedPath,
+                          ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                          cfg,
+                          agentId,
+                          agentDir,
+                          prompt,
+                          timeoutMs,
+                        },
+                        execution,
+                      ),
                       provider: undefined,
                       model: undefined,
                       attempts: [],

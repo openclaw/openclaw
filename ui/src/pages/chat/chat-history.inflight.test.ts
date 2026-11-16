@@ -161,6 +161,19 @@ it("restores cleared activity alongside an owned run's current text", async () =
   });
 });
 
+it("retains unchanged stream segments when history replaces the live text", async () => {
+  const snapshot = activeSnapshot("run-live", "Before refresh.");
+  const state = createState(snapshot);
+  await loadChatHistory(state);
+  const segments = state.chatStreamSegments;
+  snapshot.inFlightRun!.text = "After refresh.";
+
+  await loadChatHistory(state);
+
+  expect(state.chatStream).toBe("After refresh.");
+  expect(state.chatStreamSegments).toBe(segments);
+});
+
 it("keeps live tool authority until history records its outcome, not just its call", async () => {
   const runId = "run-live";
   const toolCallId = "build";

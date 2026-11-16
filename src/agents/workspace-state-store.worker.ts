@@ -8,9 +8,15 @@ import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
-import { createWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import { assertSandboxStateOwnerPathCurrent } from "./sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "./workspace-state-guard.js";
+import {
+  createWorkspaceStateAliases,
+  createWorkspaceStateIdentity,
+} from "./workspace-state-identity.js";
 import {
   captureWorkspaceStateReceipt,
   workspaceStatePublication,
@@ -25,20 +31,54 @@ import {
   hasRecentWorkspaceSetupState,
   recentWorkspaceAttestation,
   replaceWorkspaceAttestationInDatabase,
-  type WorkspaceAttestationInput,
+  type WorkspacePathFacts,
   type WorkspaceStateDatabase,
   type WorkspaceStateDatabaseHandle,
 } from "./workspace-state-store.kernel.js";
 import type {
   WorkspaceStateDeletionPlan,
   WorkspaceStateDeletionReceipt,
-  WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
 import {
   WORKSPACE_SETUP_STATE_VERSION,
   type WorkspaceSetupState,
 } from "./workspace-state-types.js";
+
+type WorkspaceOperationInput =
+  WorkspaceStateWorkerOperations["workspace.snapshotAndRegister"]["input"];
+
+function observeWorkspaceOperation(input: WorkspaceOperationInput): WorkspacePathFacts {
+  for (const evidence of input.filesystem ?? []) {
+    assertWorkspaceFilesystemEvidence(evidence);
+  }
+  if (input.stateOwnerPath) {
+    assertSandboxStateOwnerPathCurrent(input.stateOwnerPath);
+  }
+  const evidence = input.filesystem?.findLast((entry) => entry.workspaceDir === input.workspaceDir);
+  if (!evidence) {
+    throw new Error("Workspace state operation requires its captured filesystem evidence");
+  }
+  return {
+    aliases: createWorkspaceStateAliases(input.workspaceDir, evidence.canonical),
+    pathEntryExisted: evidence.root[0] !== undefined,
+  };
+}
+
+function admitWorkspaceOperation(
+  input: WorkspaceOperationInput,
+  stage: "transaction" | "commit",
+  result?: string | false,
+): WorkspacePathFacts {
+  // Physical lookup may block. Obtain live logical authority only after it completes;
+  // SQL consumes this observed target without resolving a possibly retargeted alias again.
+  const pathFacts = observeWorkspaceOperation(input);
+  requestSqliteWorkerOperationAdmission({
+    stage,
+    facts: { filesystem: input.filesystem?.map(({ root }) => ({ root })), result },
+  });
+  return pathFacts;
+}
 
 function deleteWorkspace(
   database: WorkspaceStateDatabaseHandle,
@@ -94,6 +134,7 @@ export function mergeWorkspaceSetupStateInDatabase(
   workspaceDir: string,
   next: Partial<Omit<WorkspaceSetupState, "version">>,
   nowMs: number,
+  pathFacts?: WorkspacePathFacts,
 ): WorkspaceSetupState {
   assertCanonicalIntegerTimestamp(nowMs, "setup update");
   if (next.bootstrapSeededAt) {
@@ -102,7 +143,8 @@ export function mergeWorkspaceSetupStateInDatabase(
   if (next.setupCompletedAt) {
     assertCanonicalTimestamp(next.setupCompletedAt, "setup completed");
   }
-  const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
+  ensureColumn(database.db, "workspace_setup_state", "bootstrap_deferred INTEGER");
+  const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database, pathFacts });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
   const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
@@ -111,12 +153,16 @@ export function mergeWorkspaceSetupStateInDatabase(
     version: WORKSPACE_SETUP_STATE_VERSION,
     ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}),
     ...(setupCompletedAt ? { setupCompletedAt } : {}),
+    ...((next.bootstrapDeferred ?? snapshot.setup.bootstrapDeferred)
+      ? { bootstrapDeferred: true }
+      : {}),
   };
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
   const values = {
     workspace_path: identity.workspacePath,
     version: WORKSPACE_SETUP_STATE_VERSION,
     bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
+    bootstrap_deferred: merged.bootstrapDeferred ? 1 : null,
     setup_completed_at: merged.setupCompletedAt ?? null,
     updated_at: nowMs,
   };
@@ -139,13 +185,44 @@ export function mergeWorkspaceSetupStateInDatabase(
   return merged;
 }
 
+export function rollbackWorkspaceBootstrapSeedInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+  pathFacts?: WorkspacePathFacts,
+): void {
+  assertCanonicalTimestamp(bootstrapSeededAt, "bootstrap rollback");
+  const { identity } = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database, pathFacts });
+  const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
+  if (snapshot.setup.bootstrapSeededAt !== bootstrapSeededAt || snapshot.setup.setupCompletedAt) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<WorkspaceStateDatabase>(database.db)
+      .updateTable("workspace_setup_state")
+      .set({ bootstrap_seeded_at: null })
+      .where("workspace_key", "=", identity.workspaceKey),
+  );
+  workspaceStatePublication.stagePostimages(database.db, [
+    {
+      ...snapshot,
+      setup: {
+        version: WORKSPACE_SETUP_STATE_VERSION,
+        ...(snapshot.setup.bootstrapDeferred ? { bootstrapDeferred: true } : {}),
+      },
+    },
+  ]);
+}
+
 function expire(
   database: WorkspaceStateDatabaseHandle,
   workspaceDir: string,
   nowMs: number,
+  pathFacts: WorkspacePathFacts,
 ): string | false {
   assertCanonicalIntegerTimestamp(nowMs, "workspace expiry check");
-  const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
+  const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database, pathFacts });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
   if (
@@ -195,6 +272,7 @@ export const workspaceStateOperations = {
     input: WorkspaceStateWorkerOperations["workspace.snapshotAndRegister"]["input"],
     context: WorkerWriteOperationContext,
   ) => {
+    const pathFacts = observeWorkspaceOperation(input);
     const database = context.open();
     const initial = withSqlitePostCommitPublications(database.db, () =>
       runSqliteReadSnapshotSync(database.db, () =>
@@ -203,6 +281,7 @@ export const workspaceStateOperations = {
           const resolution = resolveWorkspaceIdentityFromDatabase({
             workspaceDir: input.workspaceDir,
             database,
+            pathFacts,
           });
           return {
             resolution,
@@ -222,10 +301,11 @@ export const workspaceStateOperations = {
     }
     return context.write((writer) =>
       captureWorkspaceStateReceipt(writer.db, () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const currentPathFacts = admitWorkspaceOperation(input, "transaction");
         const resolution = resolveWorkspaceIdentityFromDatabase({
           workspaceDir: input.workspaceDir,
           database: writer,
+          pathFacts: currentPathFacts,
         });
         if (resolution.identity.workspaceKey !== initial.resolution.identity.workspaceKey) {
           throw new Error("Workspace state identity changed before alias registration");
@@ -242,8 +322,8 @@ export const workspaceStateOperations = {
             updatedAtMs: Date.now(),
           });
         }
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
+        admitWorkspaceOperation(input, "commit");
         return snapshot;
       }),
     );
@@ -254,16 +334,34 @@ export const workspaceStateOperations = {
   ) =>
     context.write((writer) =>
       captureWorkspaceStateReceipt(writer.db, () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const pathFacts = admitWorkspaceOperation(input, "transaction");
         const result = mergeWorkspaceSetupStateInDatabase(
           writer,
           input.workspaceDir,
           input.next,
           input.nowMs,
+          pathFacts,
         );
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
+        admitWorkspaceOperation(input, "commit");
         return result;
+      }),
+    ),
+  "workspace.rollbackBootstrapSeed": (
+    input: WorkspaceStateWorkerOperations["workspace.rollbackBootstrapSeed"]["input"],
+    context: WorkerWriteOperationContext,
+  ) =>
+    context.write((writer) =>
+      captureWorkspaceStateReceipt(writer.db, () => {
+        const pathFacts = admitWorkspaceOperation(input, "transaction");
+        rollbackWorkspaceBootstrapSeedInDatabase(
+          writer,
+          input.workspaceDir,
+          input.bootstrapSeededAt,
+          pathFacts,
+        );
+        assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
+        admitWorkspaceOperation(input, "commit");
       }),
     ),
   "workspace.expire": (
@@ -272,23 +370,23 @@ export const workspaceStateOperations = {
   ) =>
     context.write((writer) =>
       captureWorkspaceStateReceipt(writer.db, () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = expire(writer, input.workspaceDir, input.nowMs);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: result });
+        const pathFacts = admitWorkspaceOperation(input, "transaction");
+        const result = expire(writer, input.workspaceDir, input.nowMs, pathFacts);
         assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
+        admitWorkspaceOperation(input, "commit", result);
         return result;
       }),
     ),
   "workspace.replaceAttestation": (
-    input: WorkspaceAttestationInput & Pick<WorkspaceStateGuard, "recoveryHoldPredicate">,
+    input: WorkspaceStateWorkerOperations["workspace.replaceAttestation"]["input"],
     context: WorkerWriteOperationContext,
   ) =>
     context.write((writer) =>
       captureWorkspaceStateReceipt(writer.db, () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = replaceWorkspaceAttestationInDatabase(writer, input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        const pathFacts = admitWorkspaceOperation(input, "transaction");
+        const result = replaceWorkspaceAttestationInDatabase(writer, input, pathFacts);
         assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
+        admitWorkspaceOperation(input, "commit");
         return result;
       }),
     ),

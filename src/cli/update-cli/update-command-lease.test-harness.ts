@@ -10,7 +10,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createOpenClawTestState,
@@ -170,26 +170,26 @@ export async function cleanupUpdateLeaseHarness(): Promise<void> {
   await state.cleanup();
 }
 
+let preparedHost: ReturnType<typeof prepareCompiledSdkHost> | undefined;
+
 async function prepareCandidateDoctorRuntime(): Promise<void> {
-  const installed = createCompiledSdkHost(
-    [
-      runtimeProcessEntrypoints.updateMigratedFinalize,
-      runtimeProcessEntrypoints.workerNativeLifecycle,
-      runtimeProcessEntrypoints.spawnBroker,
-      runtimeProcessEntrypoints.sqliteWriterAdmission,
-      runtimeProcessEntrypoints.sqliteStore,
-      runtimeProcessEntrypoints.sqliteIntegrity,
-      runtimeProcessEntrypoints.sqliteReadOnly,
-      runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
-      runtimeProcessEntrypoints.sqliteSnapshotStaging,
-      runtimeProcessEntrypoints.sqliteSourceRevision,
-      runtimeProcessEntrypoints.sharedStateStore,
-      runtimeProcessEntrypoints.stateOwnership,
-      runtimeProcessEntrypoints.stateLeaseHeartbeat,
-      runtimeProcessEntrypoints.stateRead,
-    ],
-    () => state.root,
-  );
+  preparedHost ??= prepareCompiledSdkHost([
+    runtimeProcessEntrypoints.updateMigratedFinalize,
+    runtimeProcessEntrypoints.workerNativeLifecycle,
+    runtimeProcessEntrypoints.spawnBroker,
+    runtimeProcessEntrypoints.sqliteWriterAdmission,
+    runtimeProcessEntrypoints.sqliteStore,
+    runtimeProcessEntrypoints.sqliteIntegrity,
+    runtimeProcessEntrypoints.sqliteReadOnly,
+    runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+    runtimeProcessEntrypoints.sqliteSnapshotStaging,
+    runtimeProcessEntrypoints.sqliteSourceRevision,
+    runtimeProcessEntrypoints.sharedStateStore,
+    runtimeProcessEntrypoints.stateOwnership,
+    runtimeProcessEntrypoints.stateLeaseHeartbeat,
+    runtimeProcessEntrypoints.stateRead,
+  ]);
+  const installed = preparedHost(() => state.root);
   if (!installed) {
     throw new Error("The candidate lease fixture requires the prepared compiled worker graph.");
   }
@@ -220,9 +220,9 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
   await fs.writeFile(
     worker,
     `
-    import {registerHooks} from 'node:module';
+    import nodeModule from 'node:module';
     const health = new URL('../../legacy-finalizer/src/flows/doctor-health.js',import.meta.url).href;
-    registerHooks({load(url,context,nextLoad) {
+    nodeModule.registerHooks({load(url,context,nextLoad) {
       return url !== health ? nextLoad(url,context) : {
         format:'module',shortCircuit:true,source:
           'export * from '+JSON.stringify(url+'?fixture-original')+';\\n'+

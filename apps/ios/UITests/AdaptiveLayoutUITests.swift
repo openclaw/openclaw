@@ -3,6 +3,59 @@ import XCTest
 
 @MainActor
 final class AdaptiveLayoutUITests: XCTestCase {
+    func testNewSessionOptionsRemainReachableAtAccessibilitySize() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--openclaw-initial-tab", "chat",
+            "--openclaw-initial-destination", "chat",
+            "--openclaw-screenshot-mode",
+            "--openclaw-ui-test-readiness",
+            "--openclaw-appearance", "light",
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+        ]
+        app.launch()
+        defer { app.terminate() }
+
+        let actions = app.buttons["Chat actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 30))
+        actions.tap()
+        let options = app.buttons["New session options…"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.tap()
+
+        let title = app.staticTexts["New Thread"]
+        let cancel = app.buttons["Cancel"]
+        let create = app.buttons["Create Thread"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(cancel.exists)
+        XCTAssertTrue(create.exists)
+        let window = app.windows.firstMatch.frame
+        let observation = XCTAttachment(string: [
+            "window=\(window)",
+            "title=\(title.frame)",
+            "cancel=\(cancel.frame); hittable=\(cancel.isHittable)",
+            "create=\(create.frame)",
+        ].joined(separator: "\n"))
+        observation.name = "new-session-accessibility-baseline"
+        observation.lifetime = .keepAlways
+        add(observation)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "new-session-accessibility-baseline"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        XCTAssertTrue(window.contains(title.frame), "New Thread title is clipped")
+        XCTAssertTrue(title.isHittable, "New Thread title is not visible")
+        for _ in 0..<3 where !cancel.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(window.contains(cancel.frame), "Cancel remains clipped after scrolling")
+        XCTAssertTrue(window.contains(create.frame), "Create Thread remains clipped after scrolling")
+        XCTAssertTrue(cancel.isHittable, "Cancel must be reachable")
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+    }
+
     func testChatToolbarFitsCurrentWindow() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -24,6 +77,8 @@ final class AdaptiveLayoutUITests: XCTestCase {
             geometry.lifetime = .keepAlways
             add(geometry)
             XCTAssertTrue(control.isHittable)
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
             XCTAssertTrue(app.windows.firstMatch.frame.contains(control.frame))
         }
         self.capture("chat-toolbar-current-window", in: app)

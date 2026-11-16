@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
@@ -191,21 +192,20 @@ vi.mock("./doctor-config-preflight.js", async (importOriginal) => {
         input.preflightMode === "fast" ? [] : findDoctorLegacyConfigIssues(parsed, parsed);
       return {
         snapshot: {
+          ...createSnapshot({
+            path: input.path,
+            raw,
+            hash: hashConfigRaw(raw),
+            parsed,
+            sourceConfig: config,
+          }),
           exists: input.exists,
-          path: input.path,
-          raw,
-          hash: hashConfigRaw(raw),
-          parsed,
           agentRosterIncludeOwned: input.agentRosterIncludeOwned === true,
           ...(input.includeProvenance ? { includeProvenance: input.includeProvenance } : {}),
           sourceConfigBeforeMigrations: structuredClone(
             input.sourceConfigBeforeMigrations ?? config,
           ),
-          config,
-          runtimeConfig: config,
-          sourceConfig: config,
           valid: legacyIssues.length === 0,
-          warnings: [],
           legacyIssues,
         },
         baseConfig: config,
@@ -230,7 +230,16 @@ async function inspectConfig(...params: Parameters<typeof runConfig>) {
 }
 
 function repairResult(state: unknown, overrides: Record<string, unknown> = {}) {
-  return { state, changeNotes: [], warningNotes: [], authProfilesRepaired: false, ...overrides };
+  return {
+    state,
+    changeNotes: [],
+    warningNotes: [],
+    repairWarningNotes: overrides.warningNotes ?? [],
+    advisoryNotes: [],
+    modelRetirementBlockers: [],
+    authProfilesRepaired: false,
+    ...overrides,
+  };
 }
 
 function mockRepair(overrides: Record<string, unknown> = {}) {
@@ -743,17 +752,13 @@ describe("doctor config flow", () => {
   it("surfaces include confinement hint for escaped include paths", () => {
     noteDoctorConfigPreflightIssues(
       {
-        path: "/tmp/openclaw-config/openclaw.json",
-        exists: true,
-        raw: '{"$include":"/etc/passwd"}',
-        parsed: { $include: "/etc/passwd" },
-        sourceConfig: {},
-        resolved: {},
-        runtimeConfig: {},
-        config: {},
+        ...createSnapshot({
+          path: "/tmp/openclaw-config/openclaw.json",
+          raw: '{"$include":"/etc/passwd"}',
+          parsed: { $include: "/etc/passwd" },
+          sourceConfig: {},
+        }),
         valid: false,
-        warnings: [],
-        legacyIssues: [],
         issues: [
           {
             path: "$include",
@@ -791,13 +796,13 @@ describe("doctor config flow", () => {
     plannedActions,
   });
 
-  it.each<[string, Partial<DoctorConfigPreflightResult>, boolean, boolean?]>([
-    ["settled retirement", {}, true],
-    ["missing config", {}, false, false],
-    ["another config repair", { configChanged: true }, false],
-    ["unfinished state migration", { stateMigrationUnsettled: true }, false],
-    ["unbound discovery", { postSessionPluginMigrationPlanBound: false }, false],
-    ["bound absent plan", { postSessionPluginMigration: undefined }, true],
+  it.each<[string, Partial<DoctorConfigPreflightResult>, string | undefined, boolean?]>([
+    ["settled retirement", {}, undefined],
+    ["missing config", {}, "config-missing", false],
+    ["another config repair", { configChanged: true }, "preflight-config-changed"],
+    ["unfinished state migration", { stateMigrationUnsettled: true }, "state-migration-unsettled"],
+    ["unbound discovery", { postSessionPluginMigrationPlanBound: false }, "session-plan-unbound"],
+    ["bound absent plan", { postSessionPluginMigration: undefined }, undefined],
     [
       "conditional session work",
       {
@@ -806,7 +811,7 @@ describe("doctor config flow", () => {
           [{ pluginId: "example", id: "session-repair" }],
         ),
       },
-      true,
+      undefined,
     ],
     [
       "refused session plan",
@@ -817,10 +822,14 @@ describe("doctor config flow", () => {
           refusal: { code: "step-refused", message: "Incomplete session discovery" },
         }),
       },
-      false,
+      "session-plan-refused",
     ],
-    ["unsettled preflight", { preflightLegacyStateConfig: undefined }, false],
-    ["repair warning", { warnings: ["Unfinished repair"] }, false],
+    ["unsettled preflight", { preflightLegacyStateConfig: undefined }, "preflight-unsettled"],
+    [
+      "all config blockers",
+      { configChanged: true, stateMigrationUnsettled: true, warnings: ["Unfinished repair"] },
+      "preflight-config-changed,state-migration-unsettled,repair-warning",
+    ],
   ])(
     "admits retirement with bound session work: %s",
     async (_name, facts, expected, exists = true) => {
@@ -834,9 +843,19 @@ describe("doctor config flow", () => {
         postSessionPluginMigration: sessionPlan(),
         ...facts,
       };
-      mockRepair({ modelRetirementRepairRan: true, modelRetirementOnly: true });
+      const advisory = "Custom Codex app-server command bypasses the managed binary.";
+      mockRepair({
+        modelRetirementRepairRan: true,
+        warningNotes: [advisory],
+        repairWarningNotes: [],
+        advisoryNotes: [advisory],
+      });
       await using result = await runConfig({ config, exists, repair: true });
-      expect(result.retirementOnly).toBe(expected);
+      expect([result.retirementOnly, result.retirementOnlyBlockers.join(",") || undefined]).toEqual(
+        [!expected, expected],
+      );
+      expect(result.warnings).toContain(advisory);
+      expect(noteText("Doctor warnings")).toContain(advisory);
     },
   );
 });

@@ -1,4 +1,4 @@
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
 import {
   isSessionRouteId,
   pluginSlugCandidate,
@@ -302,7 +302,15 @@ export class ShellNavigationOwner {
       this.host.ensureAgentsList(context.gateway.snapshot);
     }
     this.synchronizeSessionUrl();
-    if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
+    if (
+      routeState.routeId &&
+      !isSettingsTakeover(
+        routeState.routeId,
+        context?.gateway.snapshot.hello?.controlUiTabs,
+        routeState.location,
+        context?.basePath,
+      )
+    ) {
       // The embedded list is this search's home, so its results survive Back.
       if (routeState.routeId !== "settings") {
         this.host.settingsSearchQuery = "";

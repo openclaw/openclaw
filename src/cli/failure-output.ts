@@ -5,7 +5,7 @@ import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
-import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
@@ -24,6 +24,20 @@ import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
 export { ExpectedCliError } from "./expected-cli-error.js";
+
+/** A command already emitted its human diagnostic; retain its original JSON failure. */
+export class ReportedCliCommandError extends ExpectedCliError {
+  constructor(error: unknown) {
+    const message = formatCliOperatorError(error);
+    super({
+      message,
+      humanOutput: message,
+      humanOutputWritten: true,
+      machineOutput: message,
+      cause: error,
+    });
+  }
+}
 
 export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
   if (isUncaughtExceptionHandled(error)) {
@@ -182,6 +196,9 @@ export function formatCliJsonFailure(
   error: unknown,
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
+  if (error instanceof ReportedCliCommandError) {
+    return formatCliJsonFailure(error.cause, options);
+  }
   const message = isExpectedCliError(error)
     ? formatErrorMessage(resolveExpectedCliOutput(error).machineOutput.trimEnd())
     : formatCliOperatorError(error, options);
@@ -294,12 +311,18 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     if (stateRefusal) {
       return [`[openclaw] ${options.title}`, reason(stateRefusal)];
     }
+    // Engine selection throws config read failures unprinted; Doctor cannot read the file either.
+    if (extractErrorCode(options.error) === "CONFIG_READ_FAILED") {
+      return [`[openclaw] ${options.title}`, reason(options.error)];
+    }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
       : isUpdateCommand ||
         isPluginUpdateCommand ||
+        (options.error instanceof Error && options.error.name === "GatewayClientRequestError") ||
         isNodeRunCommand ||
+        commandPath[0] === "connect" ||
         isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,

@@ -132,9 +132,7 @@ struct ControlUIHubScreen: View {
                         AuthenticatedControlUI.basicProxyCredential(config: config)
                     },
                     accessCookie: accessCookieAdmission.cookie,
-                    accessAdmissionIsCurrent: authorization.map { authorization in
-                        { authorization.isCurrent() }
-                    },
+                    accessAdmissionIsCurrent: authorization?.isCurrent,
                     accessResponseCheck: authorization?.checkResponse,
                     onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.

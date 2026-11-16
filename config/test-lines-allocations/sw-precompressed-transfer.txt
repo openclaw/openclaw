@@ -1,2 +1,0 @@
-49
-# Worker content negotiation/revalidation and identity-refresh sidecar correctness.

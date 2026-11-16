@@ -165,6 +165,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.22.1)
@@ -912,17 +913,20 @@ install_node() {
     link_node_runtime_paths "$system_node" "$system_npm"
     installed_version="$("$(node_bin)" -v)"
     emit_json step name node status ok method system version "$installed_version"
+    warn_node_security_patch "$installed_version"
     return
   fi
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
     install_alpine_node
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
   if linked_node_is_usable; then
     ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
@@ -969,6 +973,7 @@ install_node() {
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
+  warn_node_security_patch "$("$(node_bin)" -v)"
 }
 
 ensure_pnpm() {
@@ -1298,6 +1303,10 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  # Node-only recovery ignores the method; normal installs validate before any writes.
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
+    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
+  fi
   # Reject unsupported source installs before changing runtime links or checkouts.
   # Node-only recovery owns its separate platform refusal and ignores the method.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
@@ -1331,7 +1340,7 @@ main() {
   install_node "$(os_detect)" "$(arch_detect)"
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
-  elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+  else
     if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
       ensure_git
     fi
@@ -1339,8 +1348,6 @@ main() {
       fix_npm_prefix_if_needed
     fi
     install_openclaw
-  else
-    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
 
   local installed_version

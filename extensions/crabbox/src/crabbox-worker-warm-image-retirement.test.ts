@@ -430,7 +430,7 @@ it("normalizes diagnostics without migrating v3 records", async () => {
   });
   const recipePreparation = {
     source: "detected" as const,
-    phaseDurationsMs: { detectedInstall: 20 },
+    phaseDurationsMs: { detectedInstall: 20, retainedManifest: 31, seedVerification: 17 },
     failure: { reason: "install failed", outputTail: "☃".repeat(6000) },
   };
   fixture.register("oversized", warmRecord({ recipePreparation }));
@@ -439,7 +439,11 @@ it("normalizes diagnostics without migrating v3 records", async () => {
   expect((await store.lookup("malformed"))?.recipePreparation).toBeUndefined();
   const diagnostics = (await store.entries()).find(({ key }) => key === "oversized")?.value
     .recipePreparation;
-  expect(diagnostics?.phaseDurationsMs).toEqual({ detectedInstall: 20 });
+  expect(diagnostics?.phaseDurationsMs).toEqual({
+    detectedInstall: 20,
+    retainedManifest: 31,
+    seedVerification: 17,
+  });
   expect(Buffer.byteLength(diagnostics?.failure?.outputTail ?? "")).toBeLessThanOrEqual(16_384);
   expect(diagnostics?.failure?.outputTail).toMatch(/☃$/u);
 });

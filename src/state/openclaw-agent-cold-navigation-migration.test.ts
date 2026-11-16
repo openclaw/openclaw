@@ -222,7 +222,7 @@ it("restores the scoped predecessor without discarding unrelated later writes", 
   );
 });
 
-it("checks only schema facts before the v39 crossing", async () => {
+it("checks only schema facts before crossing from v38 to the current schema", async () => {
   await withFixture("integrity-scope.sqlite", async ({ database }) => {
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {

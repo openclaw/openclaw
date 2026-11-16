@@ -23,6 +23,8 @@ export type CronAddOptions = {
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
   streamSandbox?: CronStoredJob["streamSandbox"];
+  /** Fresh native process grant captured only at an existing stream-exec authorization edge. */
+  streamOperatorSource?: CronStoredJob["streamOperatorSource"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;

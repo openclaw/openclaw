@@ -608,7 +608,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     const runId = "runtime-loss-after-commentary";
     const error = "codex app-server client closed before turn completed";
     const warning =
-      "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+      "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the OpenClaw app before trying again.";
     const terminalStates = trackChatTerminalStates(socket, runId);
     const commentaryPersisted = createDeferred();
     const dispatchRelease = createDeferred();

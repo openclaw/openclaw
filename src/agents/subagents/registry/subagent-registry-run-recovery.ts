@@ -11,6 +11,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { moveRunningSessionsToRun } from "../../bash-process-registry.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
@@ -222,6 +223,13 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
       return false;
     }
+    let refreshCompletionAuthority: true | undefined;
+    try {
+      // A surviving requester owns the whole cohort, including this successor.
+      subagentRuns.runWithCompletionAuthority(paused, () => undefined);
+    } catch {
+      refreshCompletionAuthority = true;
+    }
     return this.replaceSubagentRunAfterSteer({
       assertCurrent: params.assertCurrent,
       retainAdmission: params.retainAdmission,
@@ -233,7 +241,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
-      refreshCompletionAuthority: true,
+      refreshCompletionAuthority,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
@@ -491,6 +499,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             accumulatedRuntimeMs,
             endedReason: undefined,
             pauseReason: undefined,
+            waitForMessage: undefined,
             endedHookEmittedAt: undefined,
             browserCleanupDispatchedAt: undefined,
             deleteCleanupDispatchedAt: undefined,
@@ -559,7 +568,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           } else if (previousRunId !== nextRunId) {
             postimages.set(previousRunId, null);
           }
-          return { value: { source, next }, postimages };
+          return { value: { source, next }, postimages, removalReason: "superseded" };
         },
         {
           runs: this.options.runs,
@@ -603,6 +612,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 requesterRunInstance?.runId === next.requesterTurnRunId
                   ? requesterRunInstance
                   : undefined,
+                sameRequesterTask ? subagentRuns.getRequesterCompletion(next) : undefined,
               );
               custodyTransferred = true;
             }
@@ -613,6 +623,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             if (!preserveCompletedRun && previousRunId !== nextRunId) {
               // Remapped cohorts must not queue behind their replaced input.
               retireSubagentControllerInputs(value.source);
+              if (value.source.pauseReason === "sessions_yield") {
+                // An exit wake continues the task only for the run the task row carries.
+                moveRunningSessionsToRun(previousRunId, nextRunId);
+              }
             }
             replaceParams.onPublished?.(next);
           },

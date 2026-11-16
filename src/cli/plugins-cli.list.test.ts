@@ -1,7 +1,9 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
+import * as lifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryStatusReport, PluginStatusReport } from "../plugins/status.js";
@@ -359,15 +361,15 @@ describe("plugins cli list", () => {
     "reports persisted replacement differences after stale refresh (json=%s)",
     async (json) => {
       refreshRegistry.mockResolvedValue({ plugins: [] });
-      const differences = mockRegistryInspection(
-        "/plugins/demo/index.js",
-        "/plugins/demo/dist/index.js",
-      );
+      const differences = mockRegistryInspection("/plugins/demo/old.js", "/plugins/demo/new.js");
       const command = plugins("registry", "--refresh", ...(json ? ["--json"] : []));
       if (!json) {
-        await expect(command).rejects.toThrow(
-          /demo: record changed; persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
-        );
+        await expect(command).rejects.toMatchObject({
+          name: "ExpectedCliError",
+          humanOutput: expect.stringMatching(
+            /demo: record changed; persisted \/plugins\/demo\/old\.js; derived \/plugins\/demo\/new\.js.*openclaw plugins registry --refresh/su,
+          ),
+        });
         return;
       }
       await expect(command).rejects.toThrow();
@@ -402,9 +404,10 @@ describe("plugins cli list", () => {
     });
   });
 
-  it("serializes registry rebuilds with other plugin lifecycle mutations", async () => {
+  it("serializes registry rebuilds with other plugin lifecycle mutations", async ({ signal }) => {
     const firstEntered = createDeferredCore();
     const releaseFirst = createDeferredCore();
+    const secondStarted = createDeferredCore();
     const entries: number[] = [];
     refreshRegistry.mockImplementation(async () => {
       const entry = entries.length + 1;
@@ -417,15 +420,35 @@ describe("plugins cli list", () => {
     });
 
     const first = plugins("registry", "--refresh", "--json");
-    await firstEntered.promise;
-    const second = plugins("registry", "--refresh", "--json");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    expect(entries).toEqual([1]);
-
-    releaseFirst.resolve();
-    await Promise.all([first, second]);
+    const commands = [first];
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(firstEntered.promise, first, "First refresh did not enter"),
+        signal,
+      );
+      const acquire = lifecycleLease.withPluginLifecycleLease;
+      using admission = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
+      admission.mockImplementation((options, run) => {
+        const pending = acquire(options, run);
+        secondStarted.resolve();
+        return pending;
+      });
+      const second = plugins("registry", "--refresh", "--json");
+      commands.push(second);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          secondStarted.promise,
+          second,
+          "Second refresh skipped its lease",
+        ),
+        signal,
+      );
+      expect(lifecycleLease.hasPluginLifecycleLeaseDemand()).toBe(true);
+      expect(entries).toEqual([1]);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.all(commands);
+    }
     expect(entries).toEqual([1, 2]);
   });
 });

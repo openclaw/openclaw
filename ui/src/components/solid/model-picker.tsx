@@ -1,15 +1,18 @@
 import { createMemo, For, Show } from "solid-js";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
-import { providerDisplayLabel } from "../provider-icon-data.ts";
 import { Picker, type PickerParams } from "../select-picker.ts";
-import { ProviderBrandIcon } from "./provider-icon.tsx";
 
 export type { ModelPickerOption, ModelPickerParams } from "../model-picker-options.ts";
 
 type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
 export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const options = createMemo(() => props.options);
   const selectedValue = createMemo(() => props.value);
   const customLabel = createMemo(() => props.custom?.label);
@@ -29,7 +32,7 @@ export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
     }
   };
   const providerIcon = (provider: string) => (
-    <ProviderBrandIcon provider={provider} class="model-picker__provider-icon" />
+    <ModelProviderIcon provider={provider} class="model-picker__provider-icon" />
   );
   const renderWindowSizer = (visible: readonly ModelSelectOption[]) => {
     const groups = new Map<

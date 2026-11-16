@@ -58,7 +58,7 @@ suite.define(() => {
     { state: "open sidebar", collapseSidebar: false, nativeWebChrome: false },
     { state: "closed sidebar", collapseSidebar: true, nativeWebChrome: false },
     { state: "native web chrome", collapseSidebar: false, nativeWebChrome: true },
-  ])("keeps Inbox out of Settings after $state", async (testCase) => {
+  ])("keeps Inbox in the navigation rail in Settings after $state", async (testCase) => {
     if (testCase.nativeWebChrome) {
       await installNativeWebChrome(page);
     }
@@ -72,8 +72,9 @@ suite.define(() => {
     const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");
     await chatInbox.waitFor({ state: "visible" });
 
-    await openSettings();
-    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+    const { sidebar: settingsSidebar } = await openSettings();
+    await chatInbox.waitFor({ state: "visible" });
+    expect(await settingsSidebar.locator(".sidebar-issues-button").count()).toBe(0);
   });
 
   it.each([

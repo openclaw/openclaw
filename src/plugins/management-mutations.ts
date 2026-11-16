@@ -148,6 +148,11 @@ export async function installManagedPlugin(
         officialCatalog.entries,
         clawhubUrl,
       );
+      if (request.source === "local" && params.localArtifact) {
+        request.recordPath = params.localArtifact.sourcePath;
+        request.expectedIntegrity = params.localArtifact.integrity;
+        request.policySource = params.localArtifact.policySource;
+      }
       // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import type { Worker } from "node:worker_threads";
@@ -7,6 +8,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { VaultAccess } from "./access.js";
+import type { LiveState } from "./live-state.js";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
 import { KnowledgeRestartError } from "./restart-error.js";
@@ -18,6 +20,9 @@ type Input<Op extends keyof StorageOperations> = Parameters<StorageOperations[Op
 const storageEntrypoint = createPluginRuntimeProcessEntrypoint("knowledgeStorage", import.meta.url);
 type Call = {
   access: VaultAccess;
+  /** Runs in the calling operation's async context. Worker replies arrive in the
+   * context of whichever call started the worker, which may be long retired. */
+  inCallerContext: <R>(run: () => R) => R;
   resolve(value: unknown): void;
   reject(error: unknown): void;
   revoked?: unknown;
@@ -58,7 +63,14 @@ export class StorageClient {
   private readonly signal = new Int32Array(new SharedArrayBuffer(8));
   private readonly calls = new Map<number, Call>();
   private nextId = 0;
-  constructor(readonly config: StoreConfig) {}
+  liveState: LiveState["state"] = "stopped";
+  constructor(
+    readonly config: StoreConfig,
+    private readonly changed?: () => void,
+  ) {}
+  invalidate() {
+    this.worker?.postMessage({ type: "invalidate" } satisfies HostMessage);
+  }
   call<Op extends keyof StorageOperations>(
     op: Op,
     access: VaultAccess,
@@ -68,8 +80,13 @@ export class StorageClient {
     const worker = this.start(),
       id = ++this.nextId;
     return new Promise<Output<Op>>((resolve, reject) => {
-      // SAFETY: each call resolves with the output type of the operation it sent.
-      this.calls.set(id, { access, resolve: resolve as (value: unknown) => void, reject });
+      this.calls.set(id, {
+        access,
+        inCallerContext: AsyncLocalStorage.snapshot(),
+        // SAFETY: each call resolves with the output type of the operation it sent.
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
       // Keep the process alive only while work is outstanding.
       worker.ref();
       worker.postMessage(
@@ -91,6 +108,7 @@ export class StorageClient {
   async close() {
     const worker = this.worker;
     this.worker = undefined;
+    this.liveState = "stopped";
     this.fail(
       new KnowledgeRestartError(
         "storage-stopped",
@@ -109,6 +127,7 @@ export class StorageClient {
         files: pluginFilesLocation(),
         config: this.config,
         signal: this.signal.buffer,
+        watch: Boolean(this.changed),
       },
     });
     worker.unref();
@@ -129,12 +148,20 @@ export class StorageClient {
     return worker;
   }
   private receive(message: WorkerMessage, worker: Worker) {
+    if (message.type === "changed") {
+      if (this.worker === worker) {
+        this.changed?.();
+      }
+      return;
+    }
     const call = this.calls.get(message.id);
     if (message.type === "assert") {
       // Answer through shared memory: the worker is blocked waiting for it.
       let current = false;
       try {
-        call?.access.assertCurrent();
+        if (call) {
+          call.inCallerContext(() => call.access.assertCurrent());
+        }
         current = Boolean(call);
       } catch (error) {
         if (call) {
@@ -154,6 +181,7 @@ export class StorageClient {
       worker.unref();
     }
     if (message.ok) {
+      this.liveState = message.live;
       call.resolve(message.value);
       return;
     }

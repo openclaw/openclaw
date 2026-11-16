@@ -38,7 +38,7 @@ import { readDatabaseIdentityBirthtime, resolveDatabasePathKey } from "./sqlite-
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "./update-doctor-migration-attribution.js";
+} from "./update-doctor-migration-context.js";
 export type {
   ClientTokenRecord,
   ClientSocketRecord,

@@ -1,6 +1,7 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -47,7 +48,7 @@ export async function prepareGatewayRunLoop(
   return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, startupBudget, lock };
 }
 
-export type GatewayRunLoopStartOptions = Pick<
+type GatewayRunLoopStartOptions = Pick<
   GatewayServerOptions,
   | "processStartedAt"
   | "startupStartedAt"
@@ -61,6 +62,25 @@ export type GatewayRestartStartupFailureHandler = (
   error: unknown,
   signal: AbortSignal,
 ) => Promise<"completed" | "failed" | void>;
+
+export type GatewayRunLoopParams = {
+  start: (
+    params?: GatewayRunLoopStartOptions,
+  ) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+  /** Grants this run loop authority over the process it exclusively owns. */
+  ownsProcessLifecycle?: boolean;
+  lockPort?: number;
+  lifecycleLockDeadlineMs?: number;
+  healthHost?: string;
+  beginBoot?: (
+    startedAtMs: number,
+    previousOwner?: { pid: number; heartbeatAt?: number },
+  ) => void | Promise<void>;
+  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void | Promise<void>;
+  /** Reports terminal cleanup disposition, never mere invocation or exit intent. */
+  onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
+  onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
+};
 
 export function createGatewayRestartRecovery(
   {

@@ -77,6 +77,7 @@ type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
     topP?: number;
+    seed?: number;
     toolChoice?:
       | "auto"
       | "none"
@@ -277,11 +278,10 @@ export function buildGoogleGenerativeAiParams(
     options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
     options?.maxTokens,
   );
-  if (typeof options?.temperature === "number") {
-    generationConfig.temperature = options.temperature;
-  }
-  if (typeof options?.topP === "number") {
-    generationConfig.topP = options.topP;
+  for (const key of ["temperature", "topP", "seed"] as const) {
+    if (typeof options?.[key] === "number") {
+      generationConfig[key] = options[key];
+    }
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;

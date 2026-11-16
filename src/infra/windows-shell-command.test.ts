@@ -24,11 +24,11 @@ describe("isWindowsPlatform", () => {
 });
 
 describe("analyzeWindowsShellCommand", () => {
-  it("defaults to process.platform when platform is omitted", () => {
+  it("defaults to process.platform when platform is omitted", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
-      const result = analyzeWindowsShellCommand({ command: "Get-Process" });
+      const result = await analyzeWindowsShellCommand({ command: "Get-Process" });
       expect(result.ok).toBe(true);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });

@@ -123,6 +123,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     },
   };
   // Each worker duplex owns a disposable native client, never a shared local process.
+  // Strict one-shot runs also need an attempt-owned process: a shared peer can legitimately
+  // keep the cached client alive after this run, which leaves its cleanup receipt unprovable.
   const workerHostedCloud =
     pluginConfig.appServer?.workerHostedCloud === true &&
     isCodexRemoteExecPlacementSandbox(sandbox);
@@ -137,7 +139,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           assertCurrent: () => assertCurrent(),
           workspaceReadiness: params.hostCapabilities.workspaceReadiness,
         })
-      : isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+      : isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) ||
+          (params.oneShotCliRun === true && params.cleanupBundleMcpOnRunEnd === true)
         ? createIsolatedCodexAppServerClient
         : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");
@@ -717,6 +720,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       mutable,
       initialStartupBindingHadInactiveThreadBootstrap,
       initialInactiveThreadBootstrapBindingForcedFreshStart,
+      // Prompt continuity must see a thread the token fuse rotated away above.
+      initialNativeThreadId: startupBindingBeforeRotation?.threadId,
     };
   } catch (error) {
     // The attempt owns this listener only after connection preparation returns.

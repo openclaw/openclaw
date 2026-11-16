@@ -56,7 +56,7 @@ describe("sidebar session preferences", () => {
     storeOwner(null, true, "profile-grace");
     expect(loadOwner()).toEqual(ownerFilter("profile-bob"));
     expect(loadOwner("profile-grace")).toEqual(ownerFilter(null, true));
-    expect(loadOwner("profile-ada", "wss://two.example/ws")).toEqual(ownerFilter("profile-ada"));
+    expect(loadOwner("profile-ada", "wss://two.example/ws")).toEqual(ownerFilter(null));
   });
 
   it("stores an explicit all-owner choice and rejects malformed stored values", () => {
@@ -78,11 +78,19 @@ describe("sidebar session preferences", () => {
       throw new Error("storage disabled");
     };
 
-    expect(loadOwner()).toEqual(ownerFilter("profile-ada"));
+    expect(loadOwner()).toEqual(ownerFilter(null));
     expect(() => storeOwner(null, true)).not.toThrow();
   });
 
+  it.each([null, "", "unexpected"])("defaults missing or invalid sort %s to updated", (stored) => {
+    if (stored !== null) {
+      localStorage.setItem("openclaw:sidebar:sessions:sort-mode", stored);
+    }
+    expect(loadStoredSidebarSessionSortMode()).toBe("updated");
+  });
+
   it.each([
+    ["created", undefined, "created"],
     ["updated", undefined, "updated"],
     ["people", true, "people"],
     ["people", false, "created"],

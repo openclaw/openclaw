@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import type { StreamOptions, UserMessage } from "@openclaw/llm-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -22,10 +23,8 @@ import {
 import { Agent, type AgentOptions } from "./agent.js";
 import {
   attachInternalSyncSteeringGetter,
-  attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
   getInternalToolTurnInputScope,
-  setInternalBeforeToolBatch,
   setInternalToolTurnCompletion,
   type InternalToolExecutionPreparation,
 } from "./internal-hooks.js";
@@ -79,15 +78,6 @@ function expectInjectedOnce(events: AgentEvent[], message: AgentMessage) {
 
 function expectHook(hook: unknown, args: object) {
   expect(hook).toHaveBeenCalledWith(expect.objectContaining(args), expect.any(AbortSignal));
-}
-
-function trackBatch(agent: Agent) {
-  const commitReadyCalls = vi.fn();
-  const releaseSkippedCalls = vi.fn();
-  setInternalBeforeToolBatch(agent, async () =>
-    attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
-  );
-  return { commitReadyCalls, releaseSkippedCalls };
 }
 
 async function steerDuring(
@@ -220,6 +210,27 @@ describe("agentLoop steering", () => {
     expect(agent.hasQueuedMessages()).toBe(false);
   });
 
+  it("continues one queued steer per request after committing the initial batch", async () => {
+    const { agent, requests } = makeAgent(
+      [],
+      { initialState: { messages: [makeAssistantMessage(text("ready"))] } },
+      [done, done],
+    );
+    const first = user("first steer", 2);
+    const second = user("second steer", 3);
+    agent.steer(first);
+    agent.steer(second);
+
+    await agent.continue();
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.at(-1)).toBe(first);
+    expect(requests[0]).not.toContain(second);
+    expect(requests[1]?.at(-1)).toBe(second);
+    expect(agent.state.messages.filter((message) => message === first)).toHaveLength(1);
+    expect(agent.state.messages.filter((message) => message === second)).toHaveLength(1);
+  });
+
   it("cancels a drained steering message and permits an explicit re-enqueue", async () => {
     const turn = gate();
     const { agent, requests } = makeAgent(
@@ -302,14 +313,11 @@ describe("agentLoop steering", () => {
       toolExecution: "sequential",
       afterToolOutcome,
     });
-    const { commitReadyCalls, releaseSkippedCalls } = trackBatch(agent);
     const steer = user("redirect", 2);
 
     await steerDuring(agent, preflight, steer);
 
     expect(execute).not.toHaveBeenCalled();
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([{ toolCallId: "first", args: {} }]);
-    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["delayed"]);
     expect(dispose).toHaveBeenCalledOnce();
     expect(requests[1]?.slice(-3)).toMatchObject([
       expectedToolResult("first", false),
@@ -335,13 +343,8 @@ describe("agentLoop steering", () => {
       afterToolCall,
       afterToolOutcome,
     });
-    const { commitReadyCalls } = trackBatch(agent);
-
     await agent.prompt("start");
 
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([
-      { toolCallId: "rewritten", args: finalArgs },
-    ]);
     expectHook(afterToolCall, { args: finalArgs });
     expectHook(afterToolOutcome, { args: finalArgs, executionStarted: true });
     expect(execute).toHaveBeenCalledOnce();
@@ -355,12 +358,17 @@ describe("agentLoop steering", () => {
   });
 
   it("disposes private preflight when the steering checkpoint throws", async () => {
-    const { tool, execute, dispose } = preparedTool("cleanup");
-    const getSteeringMessages = vi
-      .fn<() => Promise<AgentMessage[]>>()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockRejectedValueOnce(new Error("steering checkpoint failed"));
+    let prepared = false;
+    const { tool, execute, dispose } = preparedTool("cleanup", (args) => {
+      prepared = true;
+      return args;
+    });
+    const getSteeringMessages = async () => {
+      if (prepared) {
+        throw new Error("steering checkpoint failed");
+      }
+      return [];
+    };
 
     await expect(
       runLoop(
@@ -506,27 +514,11 @@ describe("agentLoop steering", () => {
           done,
         ],
       );
-      const commitReadyCalls = vi.fn();
-      const releaseSkippedCalls = vi.fn();
-      setInternalBeforeToolBatch(agent, async ({ calls }) => {
-        expect(calls.map((call) => call.toolCall.id)).toEqual(["invalid", "prepared", "tail"]);
-        return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
-      });
       const steer = user("before launch", 2);
 
       await steerDuring(agent, preparation, steer);
 
       expect(execute).toHaveBeenCalledTimes(toolExecution === "parallel" ? 2 : 1);
-      expect(commitReadyCalls.mock.calls.flatMap(([calls]) => calls)).toEqual([
-        { toolCallId: "invalid", args: {} },
-        { toolCallId: "prepared", args: {} },
-        ...(toolExecution === "parallel" ? [{ toolCallId: "tail", args: {} }] : []),
-      ]);
-      if (toolExecution === "parallel") {
-        expect(releaseSkippedCalls).not.toHaveBeenCalled();
-      } else {
-        expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["tail"]);
-      }
       expect(requests[1]?.slice(-5)).toMatchObject([
         { role: "assistant", stopReason: "toolUse" },
         expectedToolResult("invalid", true, { details: { observed: "pre-execution" } }),
@@ -908,4 +900,59 @@ it("does not submit input after abort wins an awaited conversion", async () => {
   await finish();
   expect(steer).not.toHaveBeenCalled();
   expect(agent.cancelSteeringMessage((message) => message === update)).toBe(update);
+});
+
+it("interrupts safe tools, waits for their cleanup, and continues with ordered steering", async () => {
+  const started = createDeferred();
+  const aborted = createDeferred();
+  const cleanup = createDeferred();
+  const observedSignals: AbortSignal[] = [];
+  const first = user("first correction", 2);
+  const second = user("second correction", 3);
+  const tool = makeTool("wait");
+  tool.interruptible = true;
+  tool.execute = async (_id, _args, signal) => {
+    const callSignal = expectDefined(signal, "tool cancellation signal");
+    observedSignals.push(callSignal);
+    if (observedSignals.length === 1) {
+      callSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+      started.resolve();
+      await aborted.promise;
+      await cleanup.promise;
+      throw callSignal.reason;
+    }
+    return emptyResult();
+  };
+  const { agent, requests, events } = makeAgent([tool], { steeringMode: "all" }, [
+    [makeCall("wait", "before")],
+    [makeCall("wait", "after")],
+    done,
+  ]);
+  const run = agent.prompt("start");
+  await started.promise;
+  agent.steer(first);
+  agent.steer(second);
+  expect(agent.hasPendingSteeringMessage((message) => message === second)).toBe(true);
+  expect(agent.interruptTools()).toEqual({
+    status: "interrupted",
+    tools: [{ toolCallId: "before", toolName: "wait" }],
+  });
+  await aborted.promise;
+  expect(agent.signal?.aborted).toBe(false);
+  expect(requests).toHaveLength(1);
+  expect(agent.hasPendingSteeringMessage((message) => message === first)).toBe(true);
+  cleanup.resolve();
+  await run;
+  expect(requests[1]?.slice(-2)).toEqual([first, second]);
+  expect(requests[1]?.[2]).toMatchObject(
+    expectedToolResult("before", true, {
+      content: text("Interrupted by the user to send a pending message."),
+    }),
+  );
+  expectInjectedOnce(events, first);
+  expectInjectedOnce(events, second);
+  expect(observedSignals.map((signal) => signal.aborted)).toEqual([true, false]);
+  expect(agent.hasPendingSteeringMessage((message) => message === first)).toBe(false);
+  expect(agent.interruptTools()).toEqual({ status: "idle", tools: [] });
+  expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", content: done });
 });

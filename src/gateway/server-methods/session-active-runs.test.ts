@@ -209,19 +209,18 @@ function resolveState(
   });
 }
 
-it("checks each source's Gateway scope once while preparing a page projector", () => {
+it("captures the page Gateway binding once while checking each source's live ownership", () => {
   rpcSourceTesting.clear();
+  const resolver = () => undefined;
   const runs = Array.from({ length: 34 }, (_, index) => {
     const run = makeRun(`page-scope-${index}`);
-    registerChatRun(run.sessionKey, run.sessionId, run.runId);
+    const registration = registerChatRun(run.sessionKey, run.sessionId, run.runId);
+    bindGatewayContextResolver(registration.entry!.input, resolver);
     return run;
   });
-  const projector = (() => {
-    using scopeReads = vi.spyOn(gatewayScope, "getGatewayContextResolver");
-    const project = createVisibleActiveSessionRunProjector();
-    expect(scopeReads).toHaveBeenCalledTimes(runs.length);
-    return project;
-  })();
+  using ownershipReads = vi.spyOn(gatewayScope, "hasGatewayContextOwner");
+  using bindingReads = vi.spyOn(gatewayScope, "getCanonicalGatewayContextResolver");
+  const projector = createVisibleActiveSessionRunProjector(undefined, undefined, resolver);
   for (const run of runs) {
     expect(
       projector({
@@ -233,6 +232,8 @@ it("checks each source's Gateway scope once while preparing a page projector", (
       }),
     ).toEqual({ active: true, runIds: [run.runId], status: "queued" });
   }
+  expect(bindingReads).toHaveBeenCalledTimes(1);
+  expect(ownershipReads).toHaveBeenCalledTimes(runs.length);
 });
 
 it("projects an accepted source before its exact controller claim starts", async () => {
@@ -376,6 +377,10 @@ it.each(["rpc", "native"] as const)(
         active: false,
         runIds: [],
       });
+      if (operation) {
+        bindGatewayContextResolver(operation, () => undefined);
+        expect(project(selection)).toEqual({ active: false, runIds: [] });
+      }
     } finally {
       operation?.complete();
       rpcSourceTesting.clear();

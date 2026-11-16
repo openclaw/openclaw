@@ -12,7 +12,9 @@ import {
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { withConfiguredCatalogLoopback } from "../test-support/configured-catalog-loopback.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import { applyArceeConfig, applyArceeOpenRouterConfig } from "./api.js";
 import arceePlugin from "./index.js";
@@ -223,30 +225,33 @@ it("builds the direct Arcee AI model catalog", async () => {
   expect(release).toHaveBeenCalledOnce();
 });
 
-it("keeps the configured OpenRouter catalog when both credentials exist", async () => {
-  const provider = await registerSingleProviderPlugin(arceePlugin);
-  const result = await provider.catalog?.run({
-    config: {
-      models: { providers: { arcee: { baseUrl: routerUrl, models: [] } } },
-    },
-    env: {},
-    resolveProviderApiKey: (id) => ({
-      apiKey: id === "openrouter" ? "router-account-key" : "direct-account-key",
-    }),
-    resolveProviderAuth: () => ({
-      apiKey: "router-account-key",
-      mode: "api_key",
-      source: "profile",
-    }),
-  });
-  expect(result).toMatchObject({
-    provider: {
-      baseUrl: routerUrl,
-      apiKey: "router-account-key",
-      models: routerIds.map((id) => ({ id })),
-    },
-  });
-});
+it.each([routerUrl, "https://openrouter.ai/v1"])(
+  "keeps configured OpenRouter %s when both credentials exist",
+  async (baseUrl) => {
+    const provider = await registerSingleProviderPlugin(arceePlugin);
+    const result = await provider.catalog?.run({
+      config: {
+        models: { providers: { arcee: { baseUrl, models: [] } } },
+      },
+      env: {},
+      resolveProviderApiKey: (id) => ({
+        apiKey: id === "openrouter" ? "router-account-key" : "direct-account-key",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "router-account-key",
+        mode: "api_key",
+        source: "profile",
+      }),
+    });
+    expect(result).toMatchObject({
+      provider: {
+        baseUrl: routerUrl,
+        apiKey: "router-account-key",
+        models: routerIds.map((id) => ({ id })),
+      },
+    });
+  },
+);
 
 it("canonicalizes stale OpenRouter /v1 config and transport metadata", async () => {
   const provider = await registerSingleProviderPlugin(arceePlugin);
@@ -267,4 +272,120 @@ it("canonicalizes stale OpenRouter /v1 config and transport metadata", async () 
   } as never);
   expect(normalizedModel).toMatchObject({ id: routerIds[1], baseUrl: routerUrl });
   expect(provider.normalizeTransport?.(legacy as never)).toEqual(canonical);
+});
+
+it("uses the registered configured catalog and cancels only its consumer", async ({ signal }) => {
+  const provider = await registerSingleProviderPlugin(arceePlugin);
+  if (!provider.catalog) {
+    throw new Error("Missing registered catalog");
+  }
+  await withConfiguredCatalogLoopback(async (fixture) => {
+    const { origin, requests } = fixture;
+    const run = (path: string, key = "discovery-a", consumerSignal?: AbortSignal) => {
+      const auth = {
+        apiKey: `marker-${key}`,
+        discoveryApiKey: key,
+        profileId: "arcee:fixture",
+        mode: "api_key" as const,
+        source: "profile" as const,
+      };
+      const configured = {
+        baseUrl: ` ${origin}/${path} `,
+        models: [],
+        apiKey: "unselected-config-key",
+      };
+      return fixture.track(
+        provider.catalog!.run({
+          config: { models: { providers: { arcee: configured } } },
+          env: {},
+          signal: consumerSignal,
+          resolveProviderAuth: () => {
+            throw new Error("Do not reselect auth");
+          },
+          resolveProviderApiKey: () => auth,
+        }),
+      );
+    };
+    const expectCatalog = (result: unknown, path: string, key = "discovery-a") => {
+      const baseUrl = `${origin}/${path}`;
+      expect(result).toMatchObject({
+        provider: {
+          baseUrl,
+          apiKey: `marker-${key}`,
+          models: [expect.objectContaining({ id: "private/opaque-model" })],
+        },
+        outcomes: [
+          {
+            provider: "arcee",
+            profileId: "arcee:fixture",
+            status: "ready",
+            modelIdCatalog: { baseUrl, modelIds: ["private/opaque-model"] },
+          },
+        ],
+      });
+    };
+    expectCatalog(await run("a"), "a");
+    expectCatalog(await run("a"), "a");
+    expectCatalog(await run("a", "discovery-b"), "a", "discovery-b");
+    expectCatalog(await run("b"), "b");
+    expect(requests).toEqual([
+      ["/a/models", "GET", "Bearer discovery-a"],
+      ["/a/models", "GET", "Bearer discovery-b"],
+      ["/b/models", "GET", "Bearer discovery-a"],
+    ]);
+    const controller = new AbortController();
+    controller.abort(new Error("consumer already closed"));
+    for (const path of ["a", "cold"]) {
+      expect(await run(path, "discovery-a", controller.signal)).toMatchObject({
+        providers: {},
+        outcomes: [{ provider: "arcee", status: "unavailable" }],
+      });
+    }
+    expect(requests).toHaveLength(3);
+    const cancelled = new AbortController();
+    const first = run("held", "discovery-a", cancelled.signal);
+    const second = run("held");
+    let remainingSettled = false;
+    void fixture.track(
+      second.then(() => {
+        remainingSettled = true;
+      }),
+    );
+    await withinTest(fixture.firstChunk, signal);
+    cancelled.abort(new Error("first catalog consumer closed"));
+    expect(await withinTest(first, signal)).toMatchObject({
+      providers: {},
+      outcomes: [{ provider: "arcee", status: "unavailable" }],
+    });
+    expect(remainingSettled).toBe(false);
+    expect(fixture.heldPending).toBe(true);
+    expect(requests).toHaveLength(4);
+    fixture.finish();
+    expectCatalog(await withinTest(second, signal), "held");
+    await fixture.drain();
+    expect(fixture.calls).toBe(4);
+    expect(fixture.releases).toBe(4);
+    expect(fixture.bodies).toHaveLength(4);
+    expect(fixture.bodies.every((body) => !body.locked)).toBe(true);
+  }, signal);
+});
+
+it("does not borrow OpenRouter credentials for a configured direct Arcee base", async () => {
+  const provider = await registerSingleProviderPlugin(arceePlugin);
+  const resolveProviderApiKey = vi.fn((id?: string) => ({
+    apiKey: id === "openrouter" ? "router-key" : undefined,
+  }));
+  expect(
+    await provider.catalog!.run({
+      config: {
+        models: { providers: { arcee: { baseUrl: "https://private.example/v1", models: [] } } },
+      },
+      env: {},
+      resolveProviderApiKey,
+      resolveProviderAuth: () => {
+        throw new Error("Do not reselect auth");
+      },
+    }),
+  ).toBeNull();
+  expect(resolveProviderApiKey.mock.calls).toEqual([["arcee"]]);
 });
