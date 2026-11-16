@@ -155,3 +155,30 @@ it("preserves Anthropic compaction summaries and validates the attached route", 
   const result = sanitizeAssistant([], { providerReplay, ...anthropicRoute });
   expect(result).toHaveProperty("providerReplay", expected);
 });
+
+it.each([
+  { provider: "deepseek", api: "openai-responses", preserve: true },
+  { provider: "openai", api: "openai-responses", preserve: false },
+  { provider: "custom", api: "openai-responses", preserve: false },
+])("limits plaintext Responses replay storage to $provider/$api", ({ provider, api, preserve }) => {
+  const content = [{ type: "reasoning_text", text: "Synthetic required reasoning." }];
+  const signature = JSON.stringify({ type: "reasoning", id: "rs_probe", summary: [], content });
+  const result = sanitizeAssistant(
+    [{ type: "thinking", thinking: "", thinkingSignature: signature }],
+    { provider, api },
+  );
+  if (result.role !== "assistant") {
+    throw new Error("Expected assistant message");
+  }
+  const block = result.content[0];
+  expect(block).toHaveProperty("type", "thinking");
+  if (block?.type !== "thinking" || !block.thinkingSignature) {
+    throw new Error("Missing stored reasoning signature");
+  }
+  const stored = JSON.parse(block.thinkingSignature);
+  if (preserve) {
+    expect(stored.content).toEqual(content);
+  } else {
+    expect(stored).not.toHaveProperty("content");
+  }
+});
