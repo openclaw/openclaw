@@ -177,6 +177,67 @@ suite.define(() => {
             }
           },
         );
+        // Native retargeting must preserve the target mirror before server hydration.
+        await suite.withPage(
+          { colorScheme: "light", viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+          async ({ page }) => {
+            await page.addInitScript(
+              ({ url, scope }) => {
+                window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl: url, token: null };
+                const previous = `ws://${location.host}`;
+                localStorage.setItem(`openclaw.control.currentGateway.v1:${previous}`, previous);
+                localStorage.setItem(
+                  `openclaw.control.settings.v1:${previous}`,
+                  JSON.stringify({ gatewayUrl: previous, theme: "claw", themeMode: "system" }),
+                );
+                localStorage.setItem(
+                  `openclaw.control.settings.v1:${scope}`,
+                  JSON.stringify({ gatewayUrl: url, theme: "knot", themeMode: "dark" }),
+                );
+              },
+              { url: gatewayUrl.href, scope: gatewayOriginScope(gatewayUrl.href) },
+            );
+            let connect = () => {};
+            await page.routeWebSocket(gatewayUrl.href, (socket) => {
+              connect = () => {
+                socket.connectToServer();
+              };
+            });
+            await page.goto(new URL("settings/appearance", suite.server.baseUrl).href);
+            try {
+              await expect
+                .poll(() =>
+                  evaluateControlUiContext(page, (app) => app.gateway.connection.gatewayUrl),
+                )
+                .toBe(gatewayUrl.href);
+              const frame = await takeControlUiScreenshotFrame(
+                page,
+                page.locator("openclaw-app"),
+                [],
+                { animations: "disabled" },
+              );
+              await writeFile(
+                path.join(suite.artifactDir, "native-before-hydration.png"),
+                frame.png,
+              );
+              expect(
+                await page.evaluate(
+                  (scope) =>
+                    JSON.parse(
+                      localStorage.getItem(`openclaw.control.settings.v1:${scope}`) ?? "{}",
+                    ),
+                  gatewayOriginScope(gatewayUrl.href),
+                ),
+              ).toMatchObject({ theme: "knot", themeMode: "dark" });
+            } finally {
+              connect();
+            }
+            await waitForControlUiGatewayReady(page);
+            await expect
+              .poll(() => page.locator("html").getAttribute("data-theme"))
+              .toBe("openknot");
+          },
+        );
       },
       () => client?.stopAndWait(),
       () => proxy?.close(),
