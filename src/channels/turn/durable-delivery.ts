@@ -266,6 +266,13 @@ async function deliverAdmittedInboundReply(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
+    ...(params.info.startVisibleDeliveryTyping
+      ? {
+          onPlatformSendDispatch: async () => {
+            await params.info.startVisibleDeliveryTyping?.();
+          },
+        }
+      : {}),
     ...(requiredCapabilities.reconcileUnknownSend === true
       ? { requireUnknownSendReconciliation: true }
       : {}),

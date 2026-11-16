@@ -43,6 +43,7 @@ import {
   recoverAcpBlockText,
   shouldTreatDeliveredTextAsVisible,
 } from "./dispatch-acp-payload.js";
+import { createAcpReplyLifecycle } from "./dispatch-acp-reply-lifecycle.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import {
   resolveRoutedReplyDeliveryOutcome,
@@ -98,7 +99,6 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
       )
     : undefined;
   const state: AcpDispatchDeliveryState = {
-    startedReplyLifecycle: false,
     blockTexts: [],
     accumulatedBlockTtsText: "",
     accumulatedFinalText: "",
@@ -165,20 +165,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
     );
   };
 
-  const startReplyLifecycleOnce = async () => {
-    if (state.startedReplyLifecycle) {
-      return;
-    }
-    state.startedReplyLifecycle = true;
-    // Delivery and lifecycle suppression are separate: message-tool-only turns
-    // suppress automatic user delivery but still need typing/lifecycle signals.
-    if (params.suppressReplyLifecycle) {
-      return;
-    }
-    void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
-      logVerbose(`dispatch-acp: reply lifecycle start failed: ${formatErrorMessage(error)}`);
-    });
-  };
+  const { startReplyLifecycleOnce, startVisibleDeliveryOnce } = createAcpReplyLifecycle(params);
 
   const tryEditToolMessage = async (
     payload: ReplyPayload,
@@ -195,6 +182,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
 
     try {
       const { runMessageAction } = await messageActionRuntimeLoader.load();
+      await startVisibleDeliveryOnce();
       await runMessageAction({
         cfg: params.cfg,
         action: "edit",
@@ -490,6 +478,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
           mirror: false,
           replyKind: sendKind,
           runId: params.runId,
+          onVisibleDeliveryStart: startVisibleDeliveryOnce,
         });
         const outcome = resolveRoutedReplyDeliveryOutcome(result);
         const pending = outcome === "recovery-owned" || outcome === "failed-deliver";

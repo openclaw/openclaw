@@ -1,4 +1,5 @@
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
+import { withReplyDispatchTyping } from "../../plugins/reply-dispatch-typing.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
   admittedSessionSettingsRestrictRuntime,
@@ -42,7 +43,7 @@ export function runReplyDispatchHook(
               sessionTtsAuto: state.sessionTtsAuto,
               ttsChannel: state.deliveryChannel,
               suppressUserDelivery: state.suppressHookUserDelivery,
-              suppressReplyLifecycle: state.suppressHookReplyLifecycle,
+              suppressReplyLifecycle: state.suppressReplyDispatchLifecycle,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
               shouldRouteToOriginating: state.shouldRouteToOriginating,
               originatingChannel: state.routeReplyChannel,
@@ -57,26 +58,30 @@ export function runReplyDispatchHook(
               sendPolicy: state.sendPolicy,
               ...(options.isTailDispatch ? { isTailDispatch: true } : {}),
             }),
-            withClaimingHookAdmission(
-              {
-                cfg: state.cfg,
-                dispatchKind: state.dispatchKind,
-                dispatcher: state.dispatchHookDispatcher,
-                abortSignal: state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
-                onReplyStart: params.replyOptions?.onReplyStart,
-                onAgentRunStart: params.replyOptions?.onAgentRunStart,
-                onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
-                turnAdoption: state.turnAdoption,
-                userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
-                prepareAssistantTranscriptMessage:
-                  params.replyOptions?.prepareAssistantTranscriptMessage,
-                recordProcessed: state.recordProcessed,
-                markIdle: state.markIdle,
-              },
-              {
-                ...(!options.isTailDispatch ? { prepare: state.assertCurrentBindingRoute } : {}),
-                assertCurrent: state.turnAdoption?.assertCurrent,
-              },
+            withReplyDispatchTyping(
+              withClaimingHookAdmission(
+                {
+                  cfg: state.cfg,
+                  dispatchKind: state.dispatchKind,
+                  dispatcher: state.dispatchHookDispatcher,
+                  abortSignal:
+                    state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
+                  onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
+                  turnAdoption: state.turnAdoption,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
+                  prepareAssistantTranscriptMessage:
+                    params.replyOptions?.prepareAssistantTranscriptMessage,
+                  recordProcessed: state.recordProcessed,
+                  markIdle: state.markIdle,
+                },
+                {
+                  ...(!options.isTailDispatch ? { prepare: state.assertCurrentBindingRoute } : {}),
+                  assertCurrent: state.turnAdoption?.assertCurrent,
+                },
+              ),
+              state.replyDispatchVisibleDeliveryStart,
             ),
             (invoke) => runWithReplyNativeSubagents(state, invoke),
           );

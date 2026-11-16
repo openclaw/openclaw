@@ -53,6 +53,7 @@ export function createNativeSlashFixture(storePath: string, resolve: Resolve) {
   const typing: TypingController = {
     onReplyStart: async () => {},
     startTypingLoop: async () => {},
+    startTypingForVisibleDelivery: async () => {},
     startTypingOnText: async () => {},
     refreshTypingTtl: () => {},
     isActive: () => false,

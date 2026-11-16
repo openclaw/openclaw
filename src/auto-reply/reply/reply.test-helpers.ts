@@ -5,6 +5,7 @@ export function createMockTypingController() {
   return {
     onReplyStart: async () => undefined,
     startTypingLoop: async () => undefined,
+    startTypingForVisibleDelivery: async () => undefined,
     startTypingOnText: async () => undefined,
     refreshTypingTtl: () => undefined,
     isActive: () => false,

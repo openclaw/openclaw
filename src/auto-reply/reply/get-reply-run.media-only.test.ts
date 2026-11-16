@@ -62,6 +62,7 @@ import {
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
+import { registerEmptyInputTypingCases } from "./get-reply-run.empty-input.test-support.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
@@ -1133,31 +1134,7 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it("rejects blank pending inbound history", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      jsonContext("Chat history since last reply:", [
-        { sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "" },
-      ]),
-    );
-
-    const result = await runPrepared({
-      ...turn(
-        "",
-        { ChatType: "group", WasMentioned: true },
-        {
-          Provider: "feishu",
-          OriginatingChannel: "feishu",
-          OriginatingTo: "chat-1",
-          InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body: "\u0000  " }],
-        },
-      ),
-    });
-
-    expect(result).toEqual({
-      text: "I didn't receive any text in your message. Please resend or add a caption.",
-    });
-    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
-  });
+  registerEmptyInputTypingCases(runPrepared);
 
   it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(

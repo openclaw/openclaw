@@ -14,6 +14,7 @@ When `agents.defaults.typingMode` is **unset**:
 - **Direct chats**: typing starts immediately once the model loop begins.
 - **Group chats with a mention**: typing starts immediately.
 - **Group chats without a mention**: typing starts when the admitted run has user-visible activity, such as harness execution activity or message text.
+- **Automatic WhatsApp replies in groups without a mention**: typing waits until a visible reply is ready to send. Silent or suppressed replies do not start typing. Mentions and authorized commands keep the normal start behavior.
 - **Message-tool-only replies**: typing starts immediately, even in a group chat without a mention, so members can see the agent working when no automatic final reply is posted. This takes precedence over the group rules above; an explicit `typingMode` still wins over it.
 - **Session events**: background events suppress typing while their ordinary session turn runs.
 
@@ -27,6 +28,8 @@ Set `agents.defaults.typingMode` to one of:
 - `message` - start typing on the **first user-visible reply activity**, such as active harness execution or a non-silent text delta. Silent reply tokens such as `NO_REPLY` do not count as text activity.
 
 Order of "how early it fires": `never` -> `message`/`thinking` -> `instant`.
+
+An explicit `typingMode`, including an agent override, takes precedence over the WhatsApp default above. Other channels retain execution-activity typing during long-running tool work.
 
 ## Configuration
 

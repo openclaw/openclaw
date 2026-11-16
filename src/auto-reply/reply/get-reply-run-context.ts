@@ -197,6 +197,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     wasMentioned: ctx.WasMentioned === true,
     typingPolicy,
     suppressTyping,
+    typingStartPolicy: opts?.typingStartPolicy,
     sourceReplyDeliveryMode,
   });
   const shouldInjectGroupIntro = Boolean(
@@ -406,15 +407,20 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     hasCurrentReplyTargetContext;
   const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
-    // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
-    // otherwise channels that wire onReplyStart to typing indicators leak
-    // visible signals even though outbound delivery is suppressed.
-    if (!suppressTyping) {
+    // A visible-delivery policy defers typing until the fallback is accepted
+    // by its delivery owner, because source policy can still suppress it.
+    if (!suppressTyping && opts?.typingStartPolicy !== "visible_delivery") {
       await typing.onReplyStart();
     }
-    return finishReplyPreparation(typing, () => ({
-      text: "I didn't receive any text in your message. Please resend or add a caption.",
-    }));
+    if (opts?.typingStartPolicy === "visible_delivery") {
+      typing.markRunComplete();
+    } else {
+      typing.cleanup();
+    }
+    return {
+      kind: "reply",
+      reply: { text: "I didn't receive any text in your message. Please resend or add a caption." },
+    } as const;
   }
 
   const requestGitCredit = !isInternalEvent

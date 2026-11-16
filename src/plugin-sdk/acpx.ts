@@ -6,6 +6,7 @@ import {
   finalizeInboundContextForSdk,
   isFinalizedInboundContext,
 } from "../auto-reply/reply/inbound-context.js";
+import { readReplyDispatchTyping } from "../plugins/reply-dispatch-typing.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
   PluginHookReplyDispatchContext,
@@ -121,6 +122,7 @@ export async function tryDispatchAcpReplyHook(
         : legacyFullToolDetails === true,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
+    onVisibleDeliveryStart: readReplyDispatchTyping(ctx),
     onAgentRunStart: ctx.onAgentRunStart,
     onPreparedAgentRunStart: ctx.onPreparedAgentRunStart,
     turnAdoption: ctx.turnAdoption,

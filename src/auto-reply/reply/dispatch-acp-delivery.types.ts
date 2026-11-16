@@ -41,7 +41,6 @@ export type AcpBlockText = {
 };
 
 export type AcpDispatchDeliveryState = {
-  startedReplyLifecycle: boolean;
   blockTexts: AcpBlockText[];
   accumulatedBlockTtsText: string;
   accumulatedFinalText: string;
@@ -81,6 +80,7 @@ export type AcpDispatchDeliveryParams = {
   originatingThreadId?: string | number;
   originatingChatType?: ChatType;
   onReplyStart?: () => Promise<void> | void;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
   runId?: string;
 };
