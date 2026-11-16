@@ -398,12 +398,22 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
   ];
 }
 
-export const stateEngineSchema = {
+export const stateEngineSchema: StoreSchema & {
+  postgres: string;
+  postgresFragments: PostgresSchemaFragment[];
+} = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
   get postgres() {
-    return runtime.eagerSql;
+    const value = runtime.eagerSql;
+    Object.defineProperty(this, "postgres", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
   },
   get postgresFragments() {
     const value = runtime.fragments.map((fragment): PostgresSchemaFragment => {
@@ -438,7 +448,7 @@ export const stateEngineSchema = {
     });
     return value;
   },
-} satisfies StoreSchema;
+};
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
   const facts = getPostgresPhysicalFacts(db);
