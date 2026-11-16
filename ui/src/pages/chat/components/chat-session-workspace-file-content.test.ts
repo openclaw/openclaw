@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { createComponent } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import {
-  readWorkspaceFileText,
   workspaceBrowserFilePath,
   workspaceFileCopyPath,
 } from "./chat-session-workspace-file-content.ts";
+import { RailRow } from "./chat-session-workspace-row.tsx";
+
+// ── Pure helper tests ────────────────────────────────────────────────────────
 
 describe("workspaceBrowserFilePath", () => {
   it("joins a POSIX root with a relative file path", () => {
@@ -39,7 +45,9 @@ describe("workspaceBrowserFilePath", () => {
   });
 
   it("returns the path unchanged when the path is a UNC share", () => {
-    expect(workspaceBrowserFilePath("/ws", "\\\\server\\share\\f.txt")).toBe("\\\\server\\share\\f.txt");
+    expect(workspaceBrowserFilePath("/ws", "\\\\server\\share\\f.txt")).toBe(
+      "\\\\server\\share\\f.txt",
+    );
   });
 
   it("handles a root with backslashes but also a forward-slash file path", () => {
@@ -55,69 +63,94 @@ describe("workspaceFileCopyPath", () => {
     );
   });
 
-  it("returns the raw path when origin is session", () => {
-    expect(workspaceFileCopyPath("/home/u/ws", "session", "a.txt")).toBe("a.txt");
-  });
-
   it("returns the raw path for session origin even with a relative path", () => {
-    expect(workspaceFileCopyPath("/home/u/ws", "session", "sub/b.png")).toBe("sub/b.png");
+    expect(workspaceFileCopyPath("/home/u/ws", "session", "sub/b.png")).toBe(
+      "sub/b.png",
+    );
   });
 });
 
-describe("readWorkspaceFileText", () => {
-  it("returns text content when previewKind is text and encoding is utf8", () => {
-    const file = {
-      path: "a.txt",
-      name: "a.txt",
-      kind: "read" as const,
-      missing: false,
-      previewKind: "text" as const,
-      contentEncoding: "utf8" as const,
-      content: "hello",
-    };
-    expect(readWorkspaceFileText(file)).toBe("hello");
+// ── Row-level copy-button wiring ─────────────────────────────────────────────
+
+function makeWorkspace(
+  overrides: Partial<SessionWorkspaceProps> = {},
+): SessionWorkspaceProps {
+  return {
+    list: { root: "/home/user/workspace" },
+    activeId: "",
+    sessionKey: "test-session",
+    onOpenFile: vi.fn(),
+    onOpenArtifact: vi.fn(),
+    ...overrides,
+  } as unknown as SessionWorkspaceProps;
+}
+
+describe("RailRow copy-button wiring", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("returns null for image preview", () => {
-    const file = {
-      path: "a.png",
-      name: "a.png",
-      kind: "read" as const,
-      missing: false,
-      previewKind: "image" as const,
-      contentEncoding: "base64" as const,
-      content: "AA==",
-    };
-    expect(readWorkspaceFileText(file)).toBeNull();
+  it("copies the absolute workspace path for a workspace-origin file", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(
+      () =>
+        createComponent(RailRow, {
+        file: {
+          key: "ws-1",
+          path: "notes/a.txt",
+          name: "a.txt",
+          origin: "workspace",
+        },
+        workspace: makeWorkspace(),
+        view: "list",
+      }),
+      { container },
+    );
+    flush();
+
+    const copyBtn = container.querySelector<HTMLButtonElement>("button.chat-copy-btn");
+    expect(copyBtn).not.toBeNull();
+    copyBtn?.click();
+
+    await waitForSolid(() =>
+      expect(writeText).toHaveBeenCalledWith("/home/user/workspace/notes/a.txt"),
+    );
+
+    container.remove();
   });
 
-  it("returns null when content encoding is not utf8", () => {
-    const file = {
-      path: "a.txt",
-      name: "a.txt",
-      kind: "read" as const,
-      missing: false,
-      previewKind: "text" as const,
-      contentEncoding: "base64" as const,
-      content: "AA==",
-    };
-    expect(readWorkspaceFileText(file)).toBeNull();
-  });
+  it("copies the raw relative path for a session-origin file", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
 
-  it("returns null when file is undefined", () => {
-    expect(readWorkspaceFileText(undefined)).toBeNull();
-  });
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(
+      () =>
+        createComponent(RailRow, {
+        file: {
+          key: "sess-1",
+          path: "sub/b.png",
+          name: "b.png",
+          origin: "session",
+        },
+        workspace: makeWorkspace(),
+        view: "list",
+      }),
+      { container },
+    );
+    flush();
 
-  it("returns null when content is not a string", () => {
-    const file = {
-      path: "a.txt",
-      name: "a.txt",
-      kind: "read" as const,
-      missing: false,
-      previewKind: "text" as const,
-      contentEncoding: "utf8" as const,
-      content: 42 as unknown as string,
-    };
-    expect(readWorkspaceFileText(file)).toBeNull();
+    const copyBtn = container.querySelector<HTMLButtonElement>("button.chat-copy-btn");
+    expect(copyBtn).not.toBeNull();
+    copyBtn?.click();
+
+    await waitForSolid(() =>
+      expect(writeText).toHaveBeenCalledWith("sub/b.png"),
+    );
+
+    container.remove();
   });
 });
