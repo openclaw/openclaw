@@ -538,7 +538,7 @@ describe("node host MCP live lifecycle", () => {
     expect(createClientMock).toHaveBeenCalledTimes(13);
   });
 
-  it("keeps global ordering and descriptor caps after refresh", async () => {
+  it("keeps the full globally ordered inventory after refresh", async () => {
     let listed = [schemaTool("initial")];
     const crowded = createClient({ tools: () => listed });
     const sibling = createClient({ tools: () => [schemaTool("sibling")] });
@@ -558,12 +558,10 @@ describe("node host MCP live lifecycle", () => {
       schemaTool(`tool-${String(index).padStart(3, "0")}`),
     ).toReversed();
     crowded.onToolsChanged?.();
-    await vi.waitFor(() => expect(manager.descriptors).toHaveLength(128));
+    await vi.waitFor(() => expect(manager.descriptors).toHaveLength(131));
     expect(manager.descriptors[0]?.mcp).toEqual({ server: "crowded", tool: "tool-000" });
-    expect(manager.descriptors.at(-1)?.mcp).toEqual({ server: "crowded", tool: "tool-127" });
-    expect(manager.descriptors.some((descriptor) => descriptor.mcp?.server === "sibling")).toBe(
-      false,
-    );
+    expect(manager.descriptors[129]?.mcp).toEqual({ server: "crowded", tool: "tool-129" });
+    expect(manager.descriptors.at(-1)?.mcp).toEqual({ server: "sibling", tool: "sibling" });
     await manager.close();
   });
 
@@ -750,7 +748,7 @@ describe("node host MCP manager", () => {
     await untrusted.close();
   });
 
-  itWithFrozenClock("bounds untrusted descriptor count and schema bytes", async () => {
+  itWithFrozenClock("publishes more than 128 tools while rejecting oversized schemas", async () => {
     const tools = Array.from({ length: 130 }, (_, index) =>
       tool(`tool-${String(index).padStart(3, "0")}`),
     );
@@ -762,7 +760,7 @@ describe("node host MCP manager", () => {
       },
     });
     const manager = await startManagerWithTools({ docs: tools });
-    expect(manager.descriptors).toHaveLength(128);
+    expect(manager.descriptors).toHaveLength(130);
     expect(manager.descriptors.some((descriptor) => descriptor.mcp?.tool === "oversized")).toBe(
       false,
     );
@@ -770,7 +768,33 @@ describe("node host MCP manager", () => {
     await expect(callTool(manager, "oversized")).rejects.toMatchObject({
       code: "MCP_TOOL_UNAVAILABLE",
     });
-    await expect(callTool(manager, "tool-129")).rejects.toMatchObject({
+    await expect(callTool(manager, "tool-129")).resolves.toEqual(okResult);
+    await manager.close();
+  });
+
+  itWithFrozenClock("retains the aggregate MCP descriptor byte budget across servers", async () => {
+    const large = (name: string): Tool => ({
+      ...tool(name),
+      inputSchema: { type: "object", description: "x".repeat(700_000) },
+    });
+    const manager = await startManagerWithTools({
+      first: Array.from({ length: 8 }, (_, index) => large(`large-${index}`)),
+      second: [
+        ...Array.from({ length: 8 }, (_, index) => large(`large-${index}`)),
+        tool("z-small"),
+      ],
+    });
+    expect(manager.descriptors).toHaveLength(15);
+    expect(
+      manager.descriptors.filter((descriptor) => descriptor.mcp?.tool.startsWith("large-")),
+    ).toHaveLength(14);
+    expect(manager.descriptors.at(-1)?.mcp).toEqual({ server: "second", tool: "z-small" });
+    const bytes = manager.descriptors.reduce(
+      (sum, descriptor) => sum + Buffer.byteLength(JSON.stringify(descriptor)),
+      0,
+    );
+    expect(bytes).toBeLessThanOrEqual(10 * 1024 * 1024);
+    await expect(manager.callMcpTool({ server: "second", tool: "large-7" })).rejects.toMatchObject({
       code: "MCP_TOOL_UNAVAILABLE",
     });
     await manager.close();
@@ -792,10 +816,10 @@ describe("node host MCP manager", () => {
       { createClient: () => client, resolveTransport: () => transport, warn },
     );
 
-    expect(manager.descriptors).toHaveLength(128);
+    expect(manager.descriptors).toHaveLength(129);
     expect(manager.descriptors[0]?.mcp?.tool).toBe("a-later-page");
-    expect(manager.descriptors.some((descriptor) => descriptor.mcp?.tool === "z-127")).toBe(false);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("published 128 of 129 tools"));
+    expect(manager.descriptors.at(-1)?.mcp?.tool).toBe("z-127");
+    expect(warn).not.toHaveBeenCalled();
 
     await manager.close();
   });

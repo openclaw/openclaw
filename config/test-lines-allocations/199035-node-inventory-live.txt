@@ -1,0 +1,4 @@
+# PR #199035: requested real Gateway + node-host process and live model discovery/call proof.
+# The opt-in live case adds 359 lines, keeping deterministic transport/byte/authority regressions.
+# Total net test growth is 530; this covers the 130 lines above the default 400-line allowance.
+130

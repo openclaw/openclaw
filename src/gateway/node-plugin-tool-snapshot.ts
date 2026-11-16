@@ -34,7 +34,6 @@ export type RegisteredNodePluginToolCommand = {
 const toolsByNodeId = new Map<string, ConnectedNodePluginTool[]>();
 const NODE_PLUGIN_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH = 1024;
-const NODE_PLUGIN_TOOL_MAX_DESCRIPTORS = 128;
 const log = createSubsystemLogger("gateway/node-plugin-tools");
 let snapshotVersion = 0;
 
@@ -147,17 +146,10 @@ function normalizeNodePluginToolDescriptors(params: {
       left.descriptor.name.localeCompare(right.descriptor.name) ||
       (left.descriptor.command ?? "").localeCompare(right.descriptor.command ?? ""),
   );
-  const entries = dedupeByKey(
+  return dedupeByKey(
     normalized,
     (entry) => `${entry.descriptor.pluginId}\0${entry.descriptor.name}`,
   );
-  const droppedCount = entries.length - NODE_PLUGIN_TOOL_MAX_DESCRIPTORS;
-  if (droppedCount > 0) {
-    log.warn(
-      `node ${params.nodeId} published ${entries.length} plugin tool descriptors; dropped ${droppedCount} beyond the ${NODE_PLUGIN_TOOL_MAX_DESCRIPTORS} descriptor limit`,
-    );
-  }
-  return entries.slice(0, NODE_PLUGIN_TOOL_MAX_DESCRIPTORS);
 }
 
 function replaceConnectedNodePluginTools(params: {

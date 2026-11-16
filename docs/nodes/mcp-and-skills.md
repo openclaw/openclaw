@@ -74,6 +74,11 @@ by setting `_meta.ui.visibility` to `["app"]`. Server `toolFilter` entries use
 the same [raw names, probe aliases, and wildcard rules](/cli/mcp/registry) as
 Gateway-hosted servers.
 
+Node tool publication has no separate fixed tool-count cutoff. MCP publication
+still enforces a 1 MiB serialized descriptor budget and a 10 MiB aggregate
+descriptor budget, alongside the MCP listing limits and Gateway frame limit.
+Tools outside these byte budgets are not published or callable.
+
 Server-advertised tool-list changes apply live and replace the published node
 catalog. If an MCP transport closes or an SSE or stateful Streamable HTTP session
 expires, the node withdraws that server's stale tools and reconnects with
