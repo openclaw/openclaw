@@ -10765,7 +10765,7 @@ describe("package artifact reuse", () => {
       ),
     ).toMatchObject({
       command:
-        "OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+        "OPENCLAW_LIVE_RETAINED_CHILD=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
       profiles: "stable full",
     });
     expect(workflow).toContain("suite_id: native-live-src-agents-zai-coding");
