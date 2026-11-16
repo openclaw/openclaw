@@ -88,7 +88,6 @@ const runtimeOnlyUnitFiles = new Set([
   "test/decision-tool.codex.integration.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
-  "test/plugins/deep-research-routing.gateway.test.ts",
   "test/runtime-agent.codex-initialization.integration.test.ts",
   "test/scripts/ci-test-timings-tooling.test.ts",
   "test/scripts/eager-import-closure.test.ts",
