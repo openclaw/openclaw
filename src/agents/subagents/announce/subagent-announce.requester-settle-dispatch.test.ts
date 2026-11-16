@@ -686,9 +686,8 @@ describe("requester settle dispatch deadline", () => {
         expect(startTurn).not.toHaveBeenCalled();
         expect(completeBatch).not.toHaveBeenCalled();
         expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
-        using _clock = vi
-          .spyOn(Date, "now")
-          .mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
+        using clock = vi.spyOn(Date, "now");
+        clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
         context.createAgentTurnFacade = createFacade;
         startTurn.mockImplementation(async ({ preflight, io }) => {
           io.emitAcceptance([
