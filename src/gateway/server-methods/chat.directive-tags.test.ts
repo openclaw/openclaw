@@ -1167,7 +1167,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ["accepts an empty starting leaf without a session id", null, undefined, true],
     ["accepts an empty starting leaf after a same-session append", null, "current", true],
     ["accepts a same-session active ancestor", "rendered-leaf", "current", true],
-    ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", "changed"],
+    ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", false],
+    ["rejects an empty leaf from a replaced session", null, "replaced", false],
   ] as const)("%s", async (_name, expectedLeafEntryId, sessionId, accepted) => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-active-ancestor-",
@@ -1218,11 +1219,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     const response = expectDefined(lastRespondCall(respond), "active ancestor response invariant");
-    expect(response[0]).toBe(accepted === true);
-    expect(context.addChatRun).toHaveBeenCalledTimes(accepted === true ? 1 : 0);
-    if (accepted === "changed") {
-      expect(response[2]?.message).toContain("changed while starting work");
-    } else if (accepted) {
+    expect(response[0]).toBe(accepted);
+    expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
+    if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
       await captureSessionControllerSettlement({
         scope: mockState.storePath,

@@ -27,15 +27,18 @@ const answers: Record<string, string> = {
 };
 const switchedBranches = /switched branches/;
 
-function lastUserText(input: unknown): string {
+/** Runtime context can follow the prompt, so pick the scripted prompt the user items mention last. */
+function lastPrompt(input: unknown): string {
   const items = Array.isArray(input) ? (input as Record<string, unknown>[]) : [];
-  const user = items.findLast((item) => item.role === "user");
-  const content = user?.content;
-  if (typeof content === "string") {
-    return content;
-  }
-  const parts = Array.isArray(content) ? (content as { text?: string }[]) : [];
-  return parts.map((part) => part.text ?? "").join("");
+  const text = items
+    .filter((item) => item.role === "user")
+    .map((item) => JSON.stringify(item.content))
+    .join("\n");
+  const found = Object.keys(answers)
+    .map((key) => ({ key, at: text.lastIndexOf(key) }))
+    .filter(({ at }) => at >= 0)
+    .toSorted((left, right) => right.at - left.at)[0];
+  return found?.key ?? text;
 }
 
 /** Only inference is scripted; the held prompt keeps its turn running until released. */
@@ -54,8 +57,7 @@ async function startProvider() {
             return;
           }
           const body = JSON.parse((await buffer(request)).toString()) as { input?: unknown };
-          const text = lastUserText(body.input);
-          const prompt = Object.keys(answers).find((key) => text.includes(key)) ?? text;
+          const prompt = lastPrompt(body.input);
           prompts.push(prompt);
           if (prompt === heldPrompt) {
             heldStarted.resolve();
