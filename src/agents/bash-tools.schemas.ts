@@ -2,6 +2,7 @@
  * Keep these schemas provider-friendly: flat fields, string enums, and explicit
  * descriptions that match runtime validation.
  */
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -142,6 +143,16 @@ export const nodeExecSchema = Type.Object({
   }),
   node: execSchema.properties.node,
 });
+
+/** list, poll and log only observe sessions: safe to interrupt and expected to repeat. */
+export const PROCESS_OBSERVATION_REPEATABLE = { actions: ["list", "poll", "log"] } as const;
+
+export function isProcessObservationAction(args: unknown): boolean {
+  const action = asNonArrayRecord(args).action;
+  return (
+    typeof action === "string" && PROCESS_OBSERVATION_REPEATABLE.actions.some((a) => a === action)
+  );
+}
 
 export const processSchema = Type.Object({
   action: Type.String({
