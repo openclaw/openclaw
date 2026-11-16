@@ -686,6 +686,33 @@ describe("cron webhook optional output", () => {
     expect(h.cron.getJob(job.id)?.state.triggerEvalCount).toBe(1);
   });
 
+  it.each([
+    { status: "ok", summary: "Found 2 new alerts", executionStarted: true },
+    { status: "error", error: "Automation source is unavailable", executionStarted: false },
+  ] as const)("delivers $status after a trigger fires", async (outcome) => {
+    const sendCronWebhook = vi.fn<NonNullable<CronServiceDeps["sendCronWebhook"]>>(async () => ({
+      status: "delivered",
+    }));
+    const h = await createHarness({
+      evaluateCronTrigger: async () => evaluated(true),
+      runIsolatedAgentJob: async () => outcome,
+      sendCronWebhook,
+    });
+    const job = await h.cron.add(
+      watcher({ delivery: { mode: "webhook", to: "https://example.invalid/hook" } }),
+    );
+
+    await runWhenDue(h.cron, job.id);
+
+    expect(sendCronWebhook).toHaveBeenCalledOnce();
+    expect(sendCronWebhook.mock.calls[0]?.[0].event).toMatchObject({
+      action: "finished",
+      status: outcome.status,
+      summary: "summary" in outcome ? outcome.summary : undefined,
+      error: "error" in outcome ? outcome.error : undefined,
+    });
+  });
+
   it("does not deliver a skip before execution as output", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
     const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
