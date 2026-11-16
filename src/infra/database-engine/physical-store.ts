@@ -6,9 +6,8 @@ import {
 } from "../gateway-state-owner-errors.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isSqliteLockError } from "../sqlite-error-diagnostics.js";
-import { runWithSqliteCleanup } from "../sqlite-lifecycle-errors.js";
+import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "../sqlite-lifecycle-errors.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../sqlite-readonly-inspection.js";
-import { SqliteSnapshotCleanupError } from "../sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyCopyInProcess } from "../sqlite-readonly-location.js";
 import { runSqliteReadOnlyWorkerSync } from "../sqlite-readonly-worker.js";
 import { readEngineAnchor } from "./open.js";

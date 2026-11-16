@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SqlConnection } from "../infra/sql-connection.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";

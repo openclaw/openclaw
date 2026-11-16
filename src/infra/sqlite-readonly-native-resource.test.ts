@@ -6,7 +6,7 @@ import { MessageChannel } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   createSqliteReadOnlyNativeResourceClient,
   createSqliteReadOnlyNativeResourceConnection,
