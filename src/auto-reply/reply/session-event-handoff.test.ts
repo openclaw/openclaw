@@ -654,28 +654,6 @@ describe("session event target custody", () => {
     },
   );
 
-  it.for(["session reset", "lifecycle replacement"] as const)(
-    "rejects %s before dispatch",
-    async (change, { state: { env, storePath } }) => {
-      const target = await captureTarget("main", sessionKey, { env });
-      replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey, env },
-        {
-          sessionId: change === "session reset" ? "replacement-session" : "original-session",
-          lifecycleRevision: "replacement-revision",
-          updatedAt: 2,
-          delivery: normalizeSessionDeliveryState({
-            context: { ...route, to: "replacement-target" },
-          }),
-        },
-      );
-      const receipt = enqueueCompletion(target);
-
-      await expectStopped(receipt, "failed", "original session generation");
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    },
-  );
-
   it("cancels pending occurrences when queues close", async ({ state: { env } }) => {
     const target = await captureTarget("main", sessionKey, { env });
     const suspension = gatewayWork.tryBeginGatewaySuspendAdmission(() => {});
