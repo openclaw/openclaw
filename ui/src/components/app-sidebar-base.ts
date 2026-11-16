@@ -46,7 +46,7 @@ export type AppSidebarProps = {
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
   connectionPending?: boolean;
-  navigationView: "automations" | "customize" | "sessions" | "online";
+  navigationView: "automations" | "customize" | "sessions" | "online" | "plugin";
   navigationCollapsed: boolean;
   /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
   navigationCollapsedByChoice?: boolean;

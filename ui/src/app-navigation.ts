@@ -71,12 +71,14 @@ export function sidebarSectionForRoute(
 /**
  * The sidebar a page shows, decided by the page alone: its section's list, the Sessions list
  * beside conversations, or none, leaving only the rail. The open plugin page's key places
- * plugin pages that belong to a section.
+ * plugin pages that belong to a section; a plugin page whose navigation item has children
+ * (Workboard and its boards) lists them in a plugin sidebar.
  */
 export function sidebarViewForPage(
   route: NavigationRouteId,
   pluginKey?: string,
-): ReturnType<typeof sidebarSectionForRoute> | "sessions" {
+  pluginSection = false,
+): ReturnType<typeof sidebarSectionForRoute> | "sessions" | "plugin" {
   const section =
     sidebarSectionForRoute(route) ??
     (route === "plugin" && pluginKey && USERS_SECTION_PLUGIN_PAGES.has(pluginKey)
@@ -84,6 +86,9 @@ export function sidebarViewForPage(
       : undefined);
   if (section) {
     return section;
+  }
+  if (route === "plugin" && pluginSection) {
+    return "plugin";
   }
   // Systems lists its machines in the Sessions view of the sidebar; the Sessions page sits
   // beside the Sessions list it expands. A terminal is a conversation opened from that list.
