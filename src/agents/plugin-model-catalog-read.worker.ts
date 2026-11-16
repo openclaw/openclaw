@@ -10,8 +10,9 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../state/worker-operation-registry.js";
+import { inspectLegacyPluginModelCatalogWarning } from "./plugin-model-catalog-legacy-inspection.js";
 import type {
-  PluginModelCatalogReadInput,
+  PluginModelCatalogReadTask,
   PluginModelCatalogReadResult,
 } from "./plugin-model-catalog-read.types.js";
 import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
@@ -22,8 +23,13 @@ import {
 } from "./plugin-model-catalog.kernel.js";
 
 if (parentPort && workerData?.pluginCatalogRead === true) {
-  serveOwnedWorkerTasks<PluginModelCatalogReadResult, PluginModelCatalogReadInput>(
+  serveOwnedWorkerTasks<PluginModelCatalogReadResult, PluginModelCatalogReadTask>(
     async (input, channel) => {
+      if ("legacyAgentDir" in input) {
+        return {
+          legacyWarning: inspectLegacyPluginModelCatalogWarning(input.legacyAgentDir),
+        };
+      }
       if (!channel) {
         throw new Error("Plugin catalog read requires a result channel");
       }

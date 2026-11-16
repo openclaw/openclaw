@@ -7,9 +7,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { parseModelCatalogJson } from "../agents/model-catalog-json.js";
+import { inspectLegacyPluginModelCatalogs } from "../agents/plugin-model-catalog-legacy-inspection.js";
 import { repairPluginModelCatalogTransportMetadata } from "../agents/plugin-model-catalog-repair.js";
 import {
-  inspectLegacyPluginModelCatalogs,
   isGeneratedPluginModelCatalog,
   loadPersistedPluginModelCatalogsReadOnly,
   migrateLegacyPluginModelCatalogs,

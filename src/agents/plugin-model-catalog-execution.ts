@@ -11,7 +11,10 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
+import {
+  registerOpenClawAgentDatabaseAsyncResource,
+  registerOpenClawAgentDatabaseReadCandidateResource,
+} from "../state/openclaw-agent-db-resources.js";
 import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
@@ -19,9 +22,9 @@ import {
 } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
+import { captureOpenClawStateReadContextAsync } from "../state/openclaw-state-worker-context.js";
 import {
-  resolveAuthProfileDatabaseOwnerId,
+  resolveAuthProfileDatabaseOwnerIdAsync,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import { readPluginModelCatalogsInWorker } from "./plugin-model-catalog-read.js";
@@ -77,12 +80,7 @@ export async function loadPersistedPluginModelCatalogs(
     return [];
   }
   const env = cloneEnvWithPlatformSemantics(environment);
-  const options = {
-    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
-    path: resolveAuthProfileDatabasePath(agentDir),
-    env,
-  };
-  const root = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
   const controller = new AbortController();
   let reading: Promise<PersistedPluginModelCatalog[]> | undefined;
   const revoke = () => controller.abort(new Error("Plugin catalog read owner was revoked"));
@@ -90,14 +88,27 @@ export async function loadPersistedPluginModelCatalogs(
     revoke();
     await reading?.catch(() => undefined);
   };
-  const assertCurrent = () => {
-    controller.signal.throwIfAborted();
-    root.admission.assertCurrent();
-    root.maintenanceScope?.assertAdmission();
-  };
-  const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
+  const unregisterCandidate = registerOpenClawAgentDatabaseReadCandidateResource({
+    path: databasePath,
+    revoke,
+    close,
+  });
+  let unregisterAgent: (() => void) | undefined;
   try {
     reading = (async () => {
+      const [root, agentId] = await Promise.all([
+        captureOpenClawStateReadContextAsync(resolveOpenClawStateSqlitePath(env)),
+        resolveAuthProfileDatabaseOwnerIdAsync(agentDir),
+      ]);
+      const assertCurrent = () => {
+        controller.signal.throwIfAborted();
+        root.admission.assertCurrent();
+        root.maintenanceScope?.assertAdmission();
+      };
+      assertCurrent();
+      const options = { agentId, path: databasePath, env };
+      unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
+      unregisterCandidate();
       const identity = await readDatabasePathIdentity(options.path);
       assertCurrent();
       if (!identity.key.startsWith("file:")) {
@@ -120,6 +131,7 @@ export async function loadPersistedPluginModelCatalogs(
     })();
     return await reading;
   } finally {
-    unregisterAgent();
+    unregisterAgent?.();
+    unregisterCandidate();
   }
 }

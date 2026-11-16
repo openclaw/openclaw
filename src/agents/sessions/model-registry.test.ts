@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../model-auth-markers.js";
+import { MODELS_JSON_STATE, captureModelsJsonCostSource } from "../models-config-state.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -20,7 +21,6 @@ import {
 } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
-import { readModelRegistryPluginCatalogs } from "./model-registry-sources.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import {
   installModelRegistryTestFixtures,
@@ -155,6 +155,123 @@ describe("ModelRegistry", () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  it.each(["createAsync", "refreshAsync", "unregisterProviderAsync"] as const)(
+    "%s reads a supplied catalog path without synchronous filesystem access",
+    async (operation) => {
+      const canonicalPath = writeRoot({ custom: providerConfig([{ id: "canonical" }]) });
+      const modelsPath = join(dirname(canonicalPath), "alternate-catalog.json");
+      writeFileSync(
+        modelsPath,
+        JSON.stringify({ providers: { custom: providerConfig([{ id: "before" }]) } }),
+      );
+      const options = { pluginMetadataSnapshot: ownerSnapshot("custom") };
+      let registry =
+        operation === "createAsync"
+          ? undefined
+          : await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, options);
+      registry?.registerProvider("temporary", oauthProviderConfig("Temporary", "temporary"));
+      writeFileSync(
+        modelsPath,
+        JSON.stringify({ providers: { custom: providerConfig([{ id: "after" }]) } }),
+      );
+
+      using filesystem = observeMainThreadFs();
+      if (!registry) {
+        registry = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, options);
+      } else if (operation === "refreshAsync") {
+        await registry.refreshAsync();
+      } else {
+        await registry.unregisterProviderAsync("temporary");
+        expect(oauthIds(registry.authStorage)).not.toContain("temporary");
+      }
+      expect(registry.find("custom", "after")).toBeDefined();
+      expect(registry.find("custom", "before")).toBeUndefined();
+      expect(registry.find("custom", "canonical")).toBeUndefined();
+      expect(registry.getError()).toBeUndefined();
+      expect(
+        filesystem
+          .stacks()
+          .filter(({ stack }) =>
+            /loadCustomModels|readModelRegistry(?:Sources|PluginCatalogs)|inspectLegacyPluginModelCatalogs/.test(
+              stack,
+            ),
+          ),
+      ).toEqual([]);
+    },
+  );
+
+  it("keeps async catalog errors recoverable and explicit captured sources immutable", async () => {
+    const modelsPath = writeRoot({ custom });
+    const options = {
+      includePluginCatalogs: false,
+      pluginMetadataSnapshot: ownerSnapshot("custom"),
+    };
+    const captured = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, {
+      ...options,
+      modelsJsonContents: readFileSync(modelsPath, "utf8"),
+    });
+    writeFileSync(modelsPath, "{");
+    const disk = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, options);
+    expect(disk.getError()).toContain("Failed to parse models.json");
+    await captured.refreshAsync();
+    expect(captured.find("custom", "authored-model")).toBeDefined();
+    rmSync(modelsPath);
+    mkdirSync(modelsPath);
+    await disk.refreshAsync();
+    expect(disk.getError()).toContain("Failed to load models.json");
+    rmSync(modelsPath, { recursive: true });
+    await disk.refreshAsync();
+    expect(disk.getError()).toBeUndefined();
+    expect(disk.getAll()).toEqual([]);
+    writeFileSync(modelsPath, JSON.stringify({ providers: { custom } }));
+    await disk.refreshAsync();
+    expect(disk.find("custom", "authored-model")).toBeDefined();
+  });
+
+  it("joins the canonical catalog writer without publishing alternate files as pricing", async () => {
+    const modelsPath = writeRoot({ custom: providerConfig([{ id: "before" }]) });
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const writing = MODELS_JSON_STATE.writeQueue.enqueue(modelsPath, async () => {
+      entered.resolve();
+      await finish.promise;
+      writeFileSync(modelsPath, JSON.stringify({ providers: { custom } }));
+    });
+    await entered.promise;
+    const options = { pluginCatalogs: [], pluginMetadataSnapshot: ownerSnapshot("custom") };
+    let settled = false;
+    const creating = ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, options).then(
+      (value) => {
+        settled = true;
+        return value;
+      },
+    );
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+    } finally {
+      finish.resolve();
+      await writing;
+    }
+    expect((await creating).find("custom", "authored-model")).toBeDefined();
+    const alternatePath = join(dirname(modelsPath), "alternate.json");
+    writeFileSync(
+      alternatePath,
+      JSON.stringify({ providers: { custom: providerConfig([{ id: "alternate" }]) } }),
+    );
+    expect(
+      (await ModelRegistry.createAsync(AuthStorage.inMemory(), alternatePath, options)).find(
+        "custom",
+        "alternate",
+      ),
+    ).toBeDefined();
+    expect(
+      (await captureModelsJsonCostSource(dirname(modelsPath))).providers?.custom?.models?.[0]?.id,
+    ).toBe("authored-model");
   });
 
   it("accepts Bedrock AWS SDK auth without apiKey", async () => {
@@ -324,7 +441,11 @@ describe("ModelRegistry", () => {
     rmSync(modelsPath);
     {
       using filesystem = observeMainThreadFs();
-      expect(await readModelRegistryPluginCatalogs(modelsPath, {})).toEqual({ catalogs: [] });
+      const empty = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, {
+        pluginMetadataSnapshot: ownerSnapshot("zai", "other"),
+      });
+      expect(empty.getAll()).toEqual([]);
+      expect(empty.getError()).toBeUndefined();
       expect(filesystem.calls()).toEqual({});
     }
     const pluginMetadataSnapshot = ownerSnapshot("zai", "other");
@@ -475,7 +596,7 @@ describe("ModelRegistry", () => {
     }
   });
 
-  it("leaves released provider catalogs for Doctor", async () => {
+  it.each(["sync", "async"])("leaves released provider catalogs for Doctor (%s)", async (mode) => {
     const providerId = "migrated-catalog-provider";
     const modelsPath = writeRoot();
     const agentDir = dirname(modelsPath);
@@ -492,15 +613,22 @@ describe("ModelRegistry", () => {
     writeFileSync(catalogPath, contents, "utf8");
     chmodSync(dirname(catalogPath), 0o755);
 
-    const registry = createRegistry(modelsPath, {
-      pluginMetadataSnapshot: pluginOwnerSnapshot(providerId, "zai"),
-    });
+    using filesystem = observeMainThreadFs();
+    const options = { pluginMetadataSnapshot: pluginOwnerSnapshot(providerId, "zai") };
+    const registry =
+      mode === "async"
+        ? await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, options)
+        : createRegistry(modelsPath, options);
 
     expect(registry.getError()).toContain("Run openclaw doctor --fix");
     expect(registry.find(providerId, "glm-5.1")).toBeUndefined();
     await expect(registry.getApiKeyForProvider(providerId)).resolves.toBeUndefined();
     expect(registry.getProviderAuthStatus(providerId).configured).toBe(false);
-    registry.refresh();
+    if (mode === "async") {
+      await registry.refreshAsync();
+    } else {
+      registry.refresh();
+    }
     expect(readFileSync(catalogPath, "utf8")).toBe(contents);
     if (process.platform !== "win32") {
       expect(statSync(dirname(catalogPath)).mode & 0o777).toBe(0o755);
@@ -511,11 +639,26 @@ describe("ModelRegistry", () => {
     registry.getAvailable();
     registry.find(providerId, "glm-5.1");
     expect(registry.getError()).toContain("Run openclaw doctor --fix");
-    registry.refresh();
+    if (mode === "async") {
+      await registry.refreshAsync();
+    } else {
+      registry.refresh();
+    }
     expect(registry.getError()).toBeUndefined();
+    if (mode === "async") {
+      expect(
+        filesystem
+          .stacks()
+          .filter(({ stack }) =>
+            /loadCustomModels|readModelRegistry(?:Sources|PluginCatalogs)|inspectLegacyPluginModelCatalogs/.test(
+              stack,
+            ),
+          ),
+      ).toEqual([]);
+    }
   });
 
-  it.each(["disk", "captured"])("diagnoses legacy disk catalogs (%s)", async (source) => {
+  it.each(["disk", "async", "captured"])("diagnoses legacy disk catalogs (%s)", async (source) => {
     if (process.getuid?.() === 0) {
       return;
     }
@@ -532,7 +675,7 @@ describe("ModelRegistry", () => {
     chmodSync(sourcePath, 0o000);
 
     try {
-      const registry = createRegistry(modelsPath, {
+      const options = {
         ...(source === "captured"
           ? {
               modelsJsonContents: readFileSync(modelsPath, "utf8"),
@@ -540,9 +683,13 @@ describe("ModelRegistry", () => {
             }
           : {}),
         pluginMetadataSnapshot: ownerSnapshot("anthropic", "zai"),
-      });
+      };
+      const registry =
+        source === "async"
+          ? await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath, options)
+          : createRegistry(modelsPath, options);
 
-      if (source === "disk") {
+      if (source !== "captured") {
         expect(registry.getError()).toContain("Could not read legacy provider catalog");
         expect(registry.getError()).toContain("Run openclaw doctor --fix");
       } else {

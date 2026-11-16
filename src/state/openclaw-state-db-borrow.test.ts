@@ -5,7 +5,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
-  createOpenClawStateDatabaseAsyncLifecycle,
   isOpenClawDatabaseMaintenanceResourceOwned,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -14,6 +13,7 @@ import {
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-read-lifecycle.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {

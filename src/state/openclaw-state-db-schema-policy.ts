@@ -77,12 +77,15 @@ export function getExistingOpenClawStateSchemaPath(): string | undefined {
 }
 
 /** Admit this source once; retained reads only need the original scope's live lifetime. */
-export function captureOpenClawStateSchemaReadAdmission(pathname: string) {
+export function captureOpenClawStateSchemaReadAdmission(
+  pathname: string,
+  preparedCanonicalPath?: string,
+) {
   const scope = schemaPolicies.scopes.getStore();
   if (!scope) {
     return undefined;
   }
-  isExistingOpenClawStateSchema(pathname);
+  isExistingOpenClawStateSchema(pathname, undefined, preparedCanonicalPath);
   return { path: scope.path, assertCurrent: () => assertSchemaScopeActive(scope) };
 }
 
@@ -90,6 +93,7 @@ export function captureOpenClawStateSchemaReadAdmission(pathname: string) {
 export function isExistingOpenClawStateSchema(
   pathname: string,
   database?: EngineConnection,
+  preparedCanonicalPath?: string,
 ): boolean {
   const scopedPath = getExistingOpenClawStateSchemaPath();
   const scope = schemaPolicies.scopes.getStore();
@@ -102,7 +106,7 @@ export function isExistingOpenClawStateSchema(
     scopedPath !== undefined &&
     (scopedPath === resolvedPath ||
       scope?.canonicalPath === resolvedPath ||
-      scope?.canonicalPath === canonicalPath(resolvedPath));
+      scope?.canonicalPath === (preparedCanonicalPath ?? canonicalPath(resolvedPath)));
   if (scopedPath && !existing) {
     throw new Error(
       `Existing shared-state schema admission is bound to ${scopedPath}, not ${pathname}.`,

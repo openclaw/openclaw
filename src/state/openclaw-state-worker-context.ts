@@ -6,6 +6,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
+  captureOpenClawStateDatabaseReadAdmissionAsync,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -30,6 +31,20 @@ export function captureOpenClawStateReadContext(
     captureOpenClawStateDatabaseReadAdmission,
     openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
     preparedIdentity,
+  );
+}
+
+/** Retain close custody while cold physical identity is prepared off the host thread. */
+export async function captureOpenClawStateReadContextAsync(
+  pathname = resolveOpenClawStateSqlitePath(),
+): Promise<OpenClawStateReadContext> {
+  const admission = await captureOpenClawStateDatabaseReadAdmissionAsync(pathname);
+  admission.assertCurrent();
+  return captureOpenClawStateReadContextWithAdmission(
+    pathname,
+    () => admission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
+    admission.identity,
   );
 }
 

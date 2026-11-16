@@ -15,7 +15,6 @@ import { readGlobalSingleton, resolveGlobalSingleton } from "../shared/global-si
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import {
-  createOpenClawStateDatabaseAsyncLifecycle,
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
@@ -42,6 +41,7 @@ import {
   readTrackedStateDatabaseIdentity,
 } from "./openclaw-state-db-handle.js";
 import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
+import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-read-lifecycle.js";
 import { retainSqliteDatabaseRemovalExclusion } from "./openclaw-state-db-removal-exclusion.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
@@ -594,6 +594,8 @@ export function registerOpenClawStatePathAsyncResource(
 
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
+
+export const captureOpenClawStateDatabaseReadAdmissionAsync = asyncResources.captureAsync;
 
 export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 

@@ -6,10 +6,7 @@ import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createOpenClawDatabaseMaintenanceScope,
-  createOpenClawStateDatabaseAsyncLifecycle,
-} from "./openclaw-state-db-async-lifecycle.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
   prepareOpenClawStateDatabaseRemoval,
@@ -23,6 +20,7 @@ import {
   registerOpenClawStatePathAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
+import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-read-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {

@@ -14,10 +14,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  createOpenClawDatabaseMaintenanceScope,
-  createOpenClawStateDatabaseAsyncLifecycle,
-} from "./openclaw-state-db-async-lifecycle.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission as captureAdmission,
   closeOpenClawStateDatabaseAsync as closeDatabases,
@@ -25,6 +22,7 @@ import {
   publishOpenClawStateDatabaseWorkerAdmission as publishAdmission,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-read-lifecycle.js";
 import { withOpenClawStateDatabaseReadOnly as readOnly } from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema as withSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase as openDatabase } from "./openclaw-state-db.js";

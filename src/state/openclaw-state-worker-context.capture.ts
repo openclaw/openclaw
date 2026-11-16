@@ -38,7 +38,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   | "artifactPreservingReads"
   | "liveStateReads"
 > & { assertPublicationCurrent: () => void } {
-  const schema = captureOpenClawStateSchemaReadAdmission(pathname);
+  const schema = captureOpenClawStateSchemaReadAdmission(pathname, preparedIdentity?.canonicalPath);
   const capturedAdmission = captureAdmission(pathname, preparedIdentity);
   const serviceInstallation = getGatewayServiceInstallation();
   const integrity = capturedAdmission.captureIntegrity?.();
