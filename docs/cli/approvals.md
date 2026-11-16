@@ -28,6 +28,11 @@ compare-and-set check; a stale hash requires reloading and reapplying the edit.
 Routing changes only the mutation transport, not what any policy or grant
 authorizes to execute.
 
+Ctrl-C or SIGTERM cancels a pending `get`, `pending`, or `grants list` read without
+printing a late result or failure document; the CLI exits with status 130 or 143.
+A `resolve`, `set`, `revoke`, or allowlist mutation already sent to the Gateway still
+waits for its receipt during cleanup and reports any failure.
+
 Alias: `openclaw exec-approvals`
 
 Related: [Exec approvals](/tools/exec-approvals), [Nodes](/nodes)

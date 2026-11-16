@@ -44,6 +44,7 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import {
+  callApprovalsReadFromCli,
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
   readStdin,
@@ -136,7 +137,7 @@ async function loadSnapshot(
 ): Promise<ExecApprovalsSnapshot> {
   const method = nodeId ? "exec.approvals.node.get" : "exec.approvals.get";
   const params = nodeId ? { nodeId } : {};
-  return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
+  return (await callApprovalsReadFromCli(method, opts, params)) as ExecApprovalsSnapshot;
 }
 
 function isFileApprovalsSnapshot(
@@ -363,7 +364,7 @@ async function loadPendingApprovals(
   // The owner-specific list methods retain requester filtering unless the caller is an admin.
   // Request admin explicitly so this operator command cannot silently omit live approvals.
   const listCall = (method: string) =>
-    callGatewayFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE] });
+    callApprovalsReadFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE] });
   const [exec, plugin, systemAgent] = await Promise.all([
     listCall("exec.approval.list"),
     listCall("plugin.approval.list"),
@@ -410,7 +411,7 @@ async function loadConfigForApprovalsTarget(params: {
     if (params.source === "local") {
       return { config: await readBestEffortConfig(), timedOut: false };
     }
-    const snapshot = (await callGatewayFromCli(
+    const snapshot = (await callApprovalsReadFromCli(
       "config.get",
       params.opts,
       {},
@@ -757,7 +758,7 @@ export function registerExecApprovalsCli(program: Command) {
 
         const lookupOne = async (id: string, tolerateNotFound = false) => {
           try {
-            return (await callGatewayFromCli(
+            return (await callApprovalsReadFromCli(
               "approval.get",
               opts,
               { id },
@@ -885,7 +886,7 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
       await runApprovalsAction(opts, async () => {
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit", ".");
-        const result = (await callGatewayFromCli(
+        const result = (await callApprovalsReadFromCli(
           "exec.approval.grants.list",
           opts,
           limit !== undefined ? { limit } : {},

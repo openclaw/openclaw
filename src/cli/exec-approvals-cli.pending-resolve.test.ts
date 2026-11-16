@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -137,6 +138,22 @@ describe("exec approvals pending and resolve CLI", () => {
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["pending", ["approvals", "pending"]],
+    ["grants list", ["approvals", "grants", "list"]],
+  ])("hands the CLI abort signal to the %s read", async (_name, args) => {
+    // Both commands decode a list payload; empty is enough to observe the call options.
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "exec.approval.grants.list" ? { grants: [] } : [],
+    );
+    const work = new AsyncWorkScope();
+    await work.run(() => runApprovalsCommand(args));
+    for (const call of callGatewayFromCli.mock.calls) {
+      // Without this signal the read keeps waiting on the Gateway after Ctrl-C.
+      expect(call?.[3]?.signal).toBe(work.signal);
+    }
+  });
 
   it("forwards a valid grants list limit as a number", async () => {
     callGatewayFromCli.mockResolvedValueOnce({ grants: [] });
