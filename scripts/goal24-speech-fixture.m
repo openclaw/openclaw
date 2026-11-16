@@ -3,6 +3,9 @@
 #import <objc/runtime.h>
 #import <stdatomic.h>
 #import <stdio.h>
+#import <execinfo.h>
+#import <signal.h>
+#import <unistd.h>
 
 static IMP originalStatus;
 static IMP originalRequest;
@@ -10,11 +13,28 @@ static IMP fixtureStatus;
 static IMP fixtureRequest;
 static atomic_int requests;
 static atomic_int authorization;
+static struct sigaction previousTrap;
+
+// The hosted Swift crash helper cannot symbolize privileged test executables.
+// Preserve the crashing thread before exiting; never synthesize a signal.
+static void Goal24PrintNativeTrap(int signal) {
+    (void)signal;
+    const char marker[] = "Signal 5: Goal24 native crashing-thread trace\n";
+    write(STDERR_FILENO, marker, sizeof(marker) - 1);
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, count, STDERR_FILENO);
+    _exit(128 + SIGTRAP);
+}
 
 BOOL Goal24InstallSpeechFixture(void) {
     Method status = class_getClassMethod([SFSpeechRecognizer class], @selector(authorizationStatus));
     Method request = class_getClassMethod([SFSpeechRecognizer class], @selector(requestAuthorization:));
     if (!status || !request || originalStatus || originalRequest) return NO;
+    struct sigaction trap = {0};
+    trap.sa_handler = Goal24PrintNativeTrap;
+    sigemptyset(&trap.sa_mask);
+    if (sigaction(SIGTRAP, &trap, &previousTrap) != 0) return NO;
     atomic_store(&requests, 0);
     atomic_store(&authorization, SFSpeechRecognizerAuthorizationStatusNotDetermined);
     fixtureStatus = imp_implementationWithBlock(^SFSpeechRecognizerAuthorizationStatus(id receiver) {
@@ -42,6 +62,7 @@ void Goal24RestoreSpeechFixture(void) {
     method_setImplementation(class_getClassMethod([SFSpeechRecognizer class], @selector(requestAuthorization:)), originalRequest);
     imp_removeBlock(fixtureStatus);
     imp_removeBlock(fixtureRequest);
+    sigaction(SIGTRAP, &previousTrap, NULL);
     originalStatus = NULL;
     originalRequest = NULL;
 }

@@ -177,6 +177,7 @@ for (const scenario of [
   "setup",
   "wrong-stack",
   "missing-callback",
+  "signal-five",
   "completed-control",
   "nonreproducing-baseline",
 ]) {
@@ -213,6 +214,9 @@ for (const scenario of [
       log =
         "GOAL24_SPEECH_CALLBACK background=1 requests=1\nSignal 4 _dispatch_assert_queue_fail unrelated callback";
     }
+    if (scenario === "signal-five") {
+      log = log.replace("Signal 4", "Signal 5");
+    }
     if (scenario === "missing-callback") {
       log = log.replace("background=1", "background=0");
     }
@@ -228,7 +232,7 @@ for (const scenario of [
         path,
         output: "/synthetic",
       });
-    if (["candidate", "baseline"].includes(scenario)) {
+    if (["candidate", "baseline", "signal-five"].includes(scenario)) {
       assert.doesNotThrow(check);
     } else {
       assert.throws(check);

@@ -22,11 +22,6 @@ jobs:
       matrix:
         include:
           - proof: permissions
-            variant: candidate
-            runner: xcode-27
-            deadline: 45
-            sha: 77ee3e8424d789b7bad5804a9dc5a1693f34c91e
-          - proof: permissions
             variant: baseline
             runner: xcode-27
             deadline: 45

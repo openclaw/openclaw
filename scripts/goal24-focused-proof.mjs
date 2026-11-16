@@ -388,7 +388,7 @@ try {
       assert.equal(ended.length, 0, "baseline callback must trap before test completion");
       assert.match(
         log,
-        /(?:Signal 4|signal code 4|SIGILL|SIGTRAP|Trace\/BPT trap)/i,
+        /(?:Signal [45]|signal code [45]|SIGILL|SIGTRAP|Trace\/BPT trap)/i,
         "control must terminate with the native actor trap, not setup failure",
       );
       assert.match(
