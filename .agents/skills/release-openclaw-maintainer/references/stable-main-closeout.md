@@ -165,6 +165,7 @@ Separate metadata inventory, explicit object acquisition, and content review:
    renames appear as delete/add pairs. From the raw records collect distinct
    nonzero blob OIDs from **both** sides (exclude mode `160000` gitlinks). This
    includes deleted files and intermediate versions absent from either tip.
+
 3. Probe those OIDs with `git --no-lazy-fetch cat-file --batch-check`; collect
    only records marked `missing`. Acquire them in bounded batches (at most
    1,024 OIDs), through the existing Git source-acquisition owner. For an
@@ -179,6 +180,7 @@ Separate metadata inventory, explicit object acquisition, and content review:
    Keep the existing promisor/filter configuration; do not source internal
    `scripts/pr-lib` helpers or create another fetch/cache owner. If acquisition
    fails, stop and report the missing OIDs and remote error, not a lazy retry.
+
 4. Read patches and files with `git --no-lazy-fetch show ...` (disable external
    diff/textconv for patch reads). Missing content is a visible incomplete
    audit: acquire the additional required objects explicitly, then resume.
