@@ -7,6 +7,7 @@ import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
 import { sessionManagerOpenCompaction } from "../../agents/sessions/session-manager-core.js";
+import { sessionManagerReadTranscriptBranch } from "../../agents/sessions/session-manager-view-types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
@@ -65,7 +66,6 @@ export async function prepareGatewaySessionCompaction(
   }
   const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
     signal: params.abortSignal,
-    metadataOnly: true,
   });
   const { entry, runtimeEntry, sessionManager } = prepared;
   if (!entry || !runtimeEntry) {
@@ -80,15 +80,15 @@ export async function prepareGatewaySessionCompaction(
   if (!preparedSession) {
     return { entry };
   }
-  if (prepared.metadataOnly) {
-    return { entry, preparedSession };
-  }
   try {
-    const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 0,
-    });
+    const preflight = preflightManualSessionCompaction(
+      sessionManager[sessionManagerReadTranscriptBranch](),
+      {
+        enabled: true,
+        reserveTokens: 0,
+        keepRecentTokens: 0,
+      },
+    );
     return { entry, preparedSession, reason: preflight.compactable ? undefined : preflight.reason };
   } catch {
     // Preserve the existing compaction error path for malformed transcripts.

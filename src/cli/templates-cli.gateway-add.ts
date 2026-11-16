@@ -8,7 +8,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import {
   clawHubTemplateRef,
   isCanonicalClawHubPackageName,
@@ -178,10 +178,13 @@ export async function runTemplatesAddThroughOwner(
   if (opts.json) {
     writeRuntimeJson(runtime, result);
   } else {
+    const agentId = sanitizeTerminalText(result.agentId);
     runtime.log(
       result.status === "complete"
-        ? `Added agent: ${sanitizeTerminalText(result.agentId)}`
-        : `Template Add partial for agent ${sanitizeTerminalText(result.agentId)}. Inspect reported Gateway state before retrying.`,
+        ? `Added agent: ${agentId}`
+        : result.initializationPending
+          ? `Template Add partial for agent ${agentId}. Rerun with --agent-id ${agentId} to continue its setup.`
+          : `Template Add partial for agent ${agentId}. Inspect reported Gateway state before retrying.`,
     );
     if (result.error) {
       runtime.error(redactSensitiveText(sanitizeTerminalText(result.error.message)));

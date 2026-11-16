@@ -38,7 +38,8 @@ Read only the references needed for the selected phase:
 - Stable postpublish synchronization and the exact-SHA deployment handoff:
   [main closeout](references/stable-main-closeout.md).
 - Release retrospective and shared issue ledger (every track, and any handoff
-  snapshot): [retrospective](references/retrospective.md).
+  snapshot): [retrospective](references/retrospective.md), including
+  [in-flight fix tracking](references/retrospective.md#track-in-flight-fixes-per-agent).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
@@ -79,6 +80,9 @@ FRV must conclude **success** under pinned P's
 Apply only the exact exceptions in that policy, including its operator-authorized
 Kova grants; preserve each grant’s version, job, optional candidate SHA, and
 optional attempt restrictions.
+For grant-only edits, reuse the policy tests; add cases only for new matching or
+validation behavior. Keep new reasons to one sentence and authorization details
+in the PR/handoff, not published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
 A failed-job grant is not permission to skip the job or change C/Q. All other
 required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor

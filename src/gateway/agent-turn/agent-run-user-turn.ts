@@ -149,6 +149,7 @@ export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
@@ -388,6 +389,12 @@ export async function prepareAgentRunUserTurn(params: {
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",
+        // Direct completion results live in a runtime carrier after the trigger message.
+        ...(params.onTranscriptCommitted
+          ? params.request.internalEvents?.length
+            ? { onInputSubmitted: () => params.onTranscriptCommitted?.(params.runId) }
+            : { onMessagePersisted: () => params.onTranscriptCommitted?.(params.runId) }
+          : {}),
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
           params.assertCurrent();

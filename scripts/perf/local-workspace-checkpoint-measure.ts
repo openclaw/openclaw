@@ -23,6 +23,9 @@
  * per request. --reconcile-target canonical|projection selects guest export or host
  * import; --reconcile-changed-files N changes N existing files at their original size.
  * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
+ * It also reports uncompressed patch field bytes and journal counts (no paths/content).
+ * --build-input-files 24997 --files 3 --file-bytes 32 creates 25k files with a
+ * retained build-input inventory; two edited root files still produce a delta journal.
  * Phase durations are exclusive; existing checkpointPhases remain nested.
  * Freeze complete source arms for this mode so real worker entrypoints match the owner.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
@@ -149,9 +152,11 @@ import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { getHeapStatistics } from "node:v8";
+import { deserialize, getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -201,6 +206,7 @@ const { values } = parseArgs({
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
+    "build-input-files": { type: "string", default: "0" },
     "file-bytes": { type: "string", default: "0" },
     "transcript-mib": { type: "string", default: "0" },
     "agent-storage-dir": { type: "string" },
@@ -553,6 +559,8 @@ const requests = Number(values.requests),
   worktrees = Number(values.worktrees);
 const fileBytes = Number(values["file-bytes"]);
 assert(Number.isSafeInteger(fileBytes) && fileBytes >= 0);
+const buildInputFiles = Number(values["build-input-files"]);
+assert(Number.isSafeInteger(buildInputFiles) && buildInputFiles >= 0);
 const transcriptMiB = Number(values["transcript-mib"]);
 assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
 assert(!values["agent-db-fixture"] || (serialTurns && !transcriptMiB));
@@ -836,6 +844,8 @@ const owners = [
   "src/gateway/control-ui-assistant-media-read.ts",
   "src/gateway/worker-environments/local-workspace-checkout.ts",
   "src/gateway/worker-environments/local-workspace-store.kernel.ts",
+  "src/gateway/worker-environments/local-workspace-store.ts",
+  "src/gateway/worker-environments/local-workspace-publication.ts",
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
@@ -914,6 +924,8 @@ const reconcileTraffic: Array<{
   operation: string;
   bytes: number;
   action?: string;
+  fieldBytes?: Record<string, number>;
+  journalCounts?: Record<string, number>;
 }> = [];
 const reconcilePhases: Array<{ phase: string; durationMs: number }> = [];
 let reconcilePhase = "idle";
@@ -927,13 +939,65 @@ const markReconcilePhase = (phase: string) => {
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
   __reconcilePhase: markReconcilePhase,
-  __reconcileTraffic: (operation: string, input: { action?: { kind?: string } }, bytes: number) => {
+  __reconcileTraffic: (
+    operation: string,
+    input: { action?: { kind?: string }; mutation?: unknown },
+    bytes: number,
+  ) => {
     if (operation.startsWith("localWorkspace.")) {
+      const mutation: unknown =
+        input.mutation instanceof Uint8Array
+          ? deserialize(
+              input.mutation[0] === 0x28 &&
+                input.mutation[1] === 0xb5 &&
+                input.mutation[2] === 0x2f &&
+                input.mutation[3] === 0xfd
+                ? zstdDecompressSync(input.mutation)
+                : inflateRawSync(input.mutation),
+            )
+          : input.mutation;
+      const patch = isRecord(mutation) ? (mutation.patch ?? mutation.row) : undefined;
+      const fieldBytes = isRecord(patch)
+        ? Object.fromEntries(
+            Object.entries(patch).map(([key, value]) => [
+              key,
+              typeof value === "string"
+                ? Buffer.byteLength(value)
+                : value instanceof Uint8Array
+                  ? value.byteLength
+                  : 0,
+            ]),
+          )
+        : undefined;
+      const journal: unknown =
+        isRecord(patch) && typeof patch.journal_json === "string"
+          ? JSON.parse(patch.journal_json)
+          : undefined;
+      const journalCounts = isRecord(journal)
+        ? Object.fromEntries(
+            [
+              "baseEntries",
+              "appliedEntries",
+              "baseDirectories",
+              "appliedDirectories",
+              "baseTree",
+            ].map((key) => [
+              key,
+              Array.isArray(journal[key])
+                ? journal[key].length
+                : typeof journal[key] === "string"
+                  ? Buffer.byteLength(journal[key])
+                  : 0,
+            ]),
+          )
+        : undefined;
       reconcileTraffic.push({
         phase: reconcilePhase,
         operation,
         bytes,
         action: input.action?.kind,
+        fieldBytes,
+        journalCounts,
       });
     }
   },
@@ -1018,7 +1082,7 @@ registerHooks({
     let code = source.get(relative);
     if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
       code = fs.readFileSync(path.join(root, relative), "utf8");
-      const anchor = "payload = serialize({ type: commandType, input: command.input });";
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
       assert(code.includes(anchor));
       code = code.replace(
         anchor,
@@ -1211,7 +1275,7 @@ const git = (...args: string[]) =>
 if (reuseFixture && !resumeOwnerSwitch) {
   assert.equal(
     fs.readdirSync(repo).length - 1,
-    files,
+    files + (buildInputFiles ? 1 : 0),
     "Reused fixture must have the requested file count",
   );
 } else if (!resumeOwnerSwitch) {
@@ -1240,6 +1304,13 @@ if (reuseFixture && !resumeOwnerSwitch) {
         '{"name":"synthetic-builder","private":true}\n',
       );
       fs.writeFileSync(path.join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    }
+  }
+  if (buildInputFiles) {
+    const inputs = path.join(repo, ".artifacts", "build-cache-inputs");
+    fs.mkdirSync(inputs, { recursive: true });
+    for (let index = 0; index < buildInputFiles; index++) {
+      fs.writeFileSync(path.join(inputs, `input-${index}.json`), `{"synthetic":${index}}\n`);
     }
   }
   // An exported repository may contain deliberately tracked ignored fixtures.
@@ -2854,6 +2925,7 @@ measurement: try {
   const spans: Record<string, { count: number; totalMs: number }> = {};
   const latencies: number[] = [];
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const memoryBefore = process.memoryUsage();
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
   let representativeResult: unknown;
@@ -3068,6 +3140,7 @@ measurement: try {
     requests,
     burst,
     files,
+    buildInputFiles,
     fileBytes,
     transcriptMiB,
     separateAgentStorage: Boolean(values["agent-storage-dir"]),
@@ -3130,6 +3203,7 @@ measurement: try {
     gcMs,
     gcByKind,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
+    memoryBefore,
     memory: process.memoryUsage(),
     resultHash,
     semanticResultHash,

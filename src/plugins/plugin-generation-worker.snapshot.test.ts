@@ -21,6 +21,7 @@ import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.ty
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeDefaultRetainedNativeWorkerSource());
+afterEach(() => vi.restoreAllMocks());
 
 async function withSnapshot(
   run: (fixture: {
@@ -106,6 +107,60 @@ it("prepares independent runtime instances from worker-published immutable sourc
     });
   });
 });
+
+it.each(["capture failure", "frozen receipt mismatch"] as const)(
+  "awaits retained cleanup without synchronous worker waits after %s",
+  async (failure) => {
+    await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
+      const readDirectory = fs.readdirSync;
+      const captureError = new Error("Host reconstruction cannot read source");
+      // Workers keep the real filesystem view. Only host reconstruction fails or
+      // misses a file, exercising both cleanup owners after custody transfers.
+      const read = vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+        const entries = readDirectory(...args);
+        if (entries.some((name) => typeof name === "string" && name === "index.js")) {
+          if (failure === "capture failure") {
+            throw captureError;
+          }
+          return entries.filter((name) => typeof name !== "string" || name !== "index.js");
+        }
+        return entries;
+      });
+      const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+      const wait = vi.spyOn(Atomics, "wait");
+      try {
+        await expect(
+          preparePluginGenerationArtifact({
+            rootDir,
+            source: entry,
+            ...(failure === "frozen receipt mismatch"
+              ? { sourceSnapshot: { stateDir, descriptor } }
+              : {}),
+          }),
+        ).rejects.toThrow(
+          failure === "capture failure"
+            ? captureError
+            : "Plugin snapshot runtime receipt differs from its immutable source receipt",
+        );
+        const captures = posts.mock.calls.flatMap(([message]) =>
+          isRecord(message) &&
+          isRecord(message.input) &&
+          message.input.operation === "capture" &&
+          typeof message.input.scratch === "string"
+            ? [message.input.scratch]
+            : [],
+        );
+        expect(captures).toHaveLength(1);
+        expect.soft(wait).not.toHaveBeenCalled();
+        expect(captures.every((directory) => !fs.existsSync(directory))).toBe(true);
+      } finally {
+        read.mockRestore();
+        wait.mockRestore();
+        posts.mockRestore();
+      }
+    });
+  },
+);
 
 it.each(["manifest", "directory", "token"] as const)(
   "preserves named snapshot validation failures for a damaged %s",

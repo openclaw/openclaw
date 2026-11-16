@@ -324,7 +324,7 @@ export async function executeUsageCostWorker(
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
-    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+    throw new WorkerTaskError("Chat history for the requested usage is unavailable", "unavailable");
   }
   const sources = operation.sessionFiles
     ? []

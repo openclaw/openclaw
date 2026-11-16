@@ -1,0 +1,25 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/fixture/workspace"
+    },
+    "list": [
+      {
+        "id": "main"
+      },
+      {
+        "id": "ops",
+        "name": "ops",
+        "workspace": "/home/fixture/workspace-ops",
+        "agentDir": "/home/fixture/.openclaw/agents/ops/agent"
+      }
+    ]
+  },
+  "gateway": {
+    "mode": "local"
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.7.1",
+    "lastTouchedAt": "2026-11-13T14:34:24.093Z"
+  }
+}
