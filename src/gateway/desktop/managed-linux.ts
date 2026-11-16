@@ -16,6 +16,7 @@ import {
   type DesktopAudioSource,
   type ManagedLinuxAudio,
 } from "./managed-linux-audio.js";
+import { RfbAuthenticationRejectedError } from "./rfb-preauth.js";
 import { probeRfbServer } from "./rfb-probe.js";
 
 const MANAGED_DISPLAY_FIRST = 99;
@@ -317,9 +318,7 @@ export function createManagedLinuxDesktop(
         vncPassword: active.password,
       });
       if (probe.kind === "auth-rejected") {
-        throw new Error(
-          `managed Linux desktop rejected its VNC password on 127.0.0.1:${active.port}`,
-        );
+        throw new RfbAuthenticationRejectedError(1, "");
       }
       lastProbe = probe.kind;
       if (probe.kind === "rfb" && probe.securityTypes.includes(2)) {
