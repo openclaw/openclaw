@@ -1210,7 +1210,7 @@ export function validateParentManifest(value, expected) {
       : validateQualificationCoverage(value.qualificationCoverage);
   if (
     Boolean(qualificationCoverage) !== Boolean(value.sourceAdmission?.qualificationAdmission) ||
-    (qualificationCoverage && (!value.qualificationInputs || value.targetSha !== value.workflowSha))
+    (qualificationCoverage && !value.qualificationInputs)
   ) {
     throw new Error("Candidate-owned evidence omitted its admission, inputs, or frozen coverage");
   }
@@ -2617,12 +2617,16 @@ function qualificationReusePolicyIdentity(admission) {
   const identity = qualificationReuseIdentity(admission);
   const inputs = { ...identity.inputs };
   const envelope = JSON.parse(inputs.trusted_workflow_json);
+  // Changelog-only C descendants can advance their C-owned Q with C. An
+  // independently selected Q is policy, not product identity, and stays exact.
+  const qualificationSha =
+    identity.qualificationSha === identity.candidateSha ? "<candidate>" : identity.qualificationSha;
   inputs.ref = "<candidate>";
   inputs.expected_sha = "<candidate>";
   inputs.trusted_workflow_json = JSON.stringify(
     sortReleaseJsonValueKeys({
       ...envelope,
-      trustedWorkflow: { sha: "<candidate>" },
+      trustedWorkflow: { sha: qualificationSha },
     }),
   );
   // A main-dispatched admission always runs at the main tip, so a changelog
@@ -2635,7 +2639,7 @@ function qualificationReusePolicyIdentity(admission) {
   return {
     ...identity,
     candidateSha: "<candidate>",
-    qualificationSha: "<candidate>",
+    qualificationSha,
     publisher,
     inputs,
   };
@@ -2875,7 +2879,6 @@ export async function validateReleaseRunEvidence(
     const [path, pathRef] = String(parentRun.path).split("@", 2);
     if (
       manifest.version !== 4 ||
-      manifest.targetSha !== manifest.workflowSha ||
       manifest.targetRef !== manifest.targetSha ||
       manifest.workflowFullRef !== fullRef ||
       !SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef) ||
