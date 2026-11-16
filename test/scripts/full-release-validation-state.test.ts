@@ -235,19 +235,19 @@ describe("full release execution plan", () => {
       ]),
       blockers: [expect.objectContaining({ kind: "reused_evidence_invalid" })],
     });
-    const differentTooling = runPlanSubprocess(
+    const unverifiableTooling = runPlanSubprocess(
       {
         childPhaseVersion: 3,
         childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
       },
       { PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` },
     );
-    expect(differentTooling.result.status).toBe(2);
-    expect(JSON.parse(readFileSync(differentTooling.output, "utf8"))).toMatchObject({
+    expect(unverifiableTooling.result.status).toBe(2);
+    expect(JSON.parse(readFileSync(unverifiableTooling.output, "utf8"))).toMatchObject({
       blockers: [
         expect.objectContaining({
           kind: "reused_evidence_invalid",
-          message: expect.stringContaining("same tooling is required"),
+          message: expect.stringContaining("invalid workflow commit tree"),
         }),
       ],
     });

@@ -3,11 +3,6 @@ import type {
   DiagnosticEmbeddedRunOwner,
 } from "../infra/diagnostic-model-request-provenance.js";
 import {
-  type DiagnosticArgumentChurnActivity,
-  mergeArgumentChurnActivity,
-  recordDiagnosticActivityProgress,
-} from "./diagnostic-argument-churn-activity.js";
-import {
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
 } from "./diagnostic-repeated-request-activity.js";
@@ -17,14 +12,18 @@ import {
   type DiagnosticRecoveryActivity,
 } from "./diagnostic-run-activity-recovery.js";
 
-export type SessionActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity &
+export type SessionActivity = DiagnosticRepeatedRequestActivity &
   DiagnosticRecoveryActivity & {
     sessionId?: string;
     sessionKey?: string;
     lastProgressAt: number;
     lastProgressReason?: string;
+    lastProgressSequence?: number;
   };
+
+// Wall-clock timestamps measure staleness; this process-local order breaks
+// same-millisecond ties between progress events and merged refs.
+let diagnosticActivitySequence = 0;
 
 export type DiagnosticBackendActivity = {
   deadlineAtMs: number;
@@ -166,7 +165,6 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
     target.lastProgressReason = source.lastProgressReason;
     target.lastProgressSequence = source.lastProgressSequence;
   }
-  mergeArgumentChurnActivity(target, source);
   mergeRepeatedRequestActivity(target, source);
   replaceSessionActivityReferences(source, target);
 }
@@ -224,5 +222,5 @@ export function touchSessionActivity(
 ): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
-  recordDiagnosticActivityProgress(activity);
+  activity.lastProgressSequence = ++diagnosticActivitySequence;
 }

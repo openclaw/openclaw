@@ -112,8 +112,11 @@ export function prepareToolSearchCatalogDescriptors(entries: readonly ToolSearch
           ...descriptor,
           parameters: snapshotSchema(descriptor.parameters, encoded[index]!.parameters?.json),
           outputSchema: snapshotSchema(descriptor.outputSchema, encoded[index]!.outputSchema?.json),
+          // The key's stableStringify keeps `undefined` members, which are not JSON;
+          // snapshot MCP metadata through JSON, which drops them.
           ...(descriptor.mcp
-            ? { mcp: freezeTrustedJsonSnapshot(JSON.parse(encoded[index]!.descriptor[8]!)) }
+            ? // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON encoding must omit undefined; structuredClone preserves those members.
+              { mcp: freezeTrustedJsonSnapshot(JSON.parse(JSON.stringify(descriptor.mcp))) }
             : {}),
         }),
       ),

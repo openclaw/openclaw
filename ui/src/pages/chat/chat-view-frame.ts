@@ -90,6 +90,8 @@ export type ChatProps = Omit<
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
     onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
+    /** Presentation custody, not send authority. */
+    ownsComposer?: boolean;
     transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
