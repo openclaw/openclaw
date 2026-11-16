@@ -11,6 +11,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { GitOperationStarter } from "../infra/git-network-retry.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   withOpenClawStateLeaseAsync,
@@ -192,17 +193,43 @@ export async function materializeProjectClone(
       const displayName = name?.trim() || parsed.name;
       const directoryName = slugifyWorktreeTitle(displayName) ?? "project";
       const target = path.join(resolveStateDir(env), "projects", fingerprint, directoryName);
-      await (source?.clone ?? cloneProjectCheckout)(
-        { url: parsed.url, target, requiredCommit },
-        {
-          env,
-          signal: lease.signal,
-          timeoutMs,
-          token,
-          assertCurrent: assertCloneCurrent,
-          startRun: startCloneRun,
-        },
-      );
+      const cloneInput = { url: parsed.url, target, requiredCommit };
+      const cloneOptions = {
+        env,
+        signal: lease.signal,
+        timeoutMs,
+        token,
+        assertCurrent: assertCloneCurrent,
+        startRun: startCloneRun,
+      };
+      if (!source) {
+        await cloneProjectCheckout(cloneInput, cloneOptions);
+      } else {
+        if (
+          await fs.lstat(target).then(
+            () => true,
+            () => false,
+          )
+        ) {
+          throw new ProjectCloneError(
+            "target_exists",
+            "A managed checkout already exists for this repository. Register or remove it before retrying.",
+          );
+        }
+        // The host owns this unregistered target: a failed plugin clone must not block the retry.
+        try {
+          await source.clone(cloneInput, cloneOptions);
+        } catch (error) {
+          if (!hasCommandProcessCleanupError(error)) {
+            // Keep the clone error; only the current clone lease holder may remove the target.
+            await lease
+              .assertOwned()
+              .then(() => fs.rm(target, { recursive: true, force: true }))
+              .catch(() => {});
+          }
+          throw error;
+        }
+      }
       await lease.assertOwned();
       const repoRoot = await resolveProjectDirectory(target);
       await lease.assertOwned();

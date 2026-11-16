@@ -17,7 +17,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { createRepositorySources } from "../repository-sources.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -423,11 +422,7 @@ test("sessions.create refreshes a reused custom source after its remote default 
       };
     },
   });
-  const lifetime = new AbortController();
-  const context = {
-    ...runContext(),
-    repositorySources: createRepositorySources(lifetime.signal, source.registry),
-  };
+  const context = runContext();
   const created = await source.run(() =>
     createRun(
       { message: "start", projectGitUrl: url, repositorySource: source.id },
@@ -448,6 +443,5 @@ test("sessions.create refreshes a reused custom source after its remote default 
     expect(readSession(storePath, created.key)).not.toHaveProperty("pendingWorktree");
   } finally {
     await cleanupRun(context, storePath, created.key);
-    lifetime.abort();
   }
 });

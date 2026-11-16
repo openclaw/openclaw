@@ -130,36 +130,52 @@ async function resolveBase(
   input: { url: string; target: string; ref?: string },
   options: ManagedProjectTransportOptions,
 ): Promise<{ commit: string; ref: string }> {
-  const ref = input.ref?.trim();
-  if (ref) {
-    const branch = ref.replace(/^origin\//u, "");
-    if (!BRANCH.test(branch) || branch.includes("..")) {
+  const requested = input.ref?.trim();
+  if (requested && COMMIT.test(requested)) {
+    await ensureCommit({ ...input, commit: requested }, options);
+    return { commit: requested, ref: requested };
+  }
+  let remoteRef: string;
+  if (requested) {
+    const name = requested.replace(/^origin\//u, "");
+    if (!BRANCH.test(name) || name.includes("..")) {
       throw new Error("Use a branch name, tag or commit for the GitLab base.");
     }
-    await git(
+    // Clones skip tags, so ask GitLab whether the name is a branch or a tag.
+    const listed = await git(
       input.target,
-      [
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        "--",
-        input.url,
-        `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
-      ],
-      options,
-      "base fetch",
-    );
-    const commit = await git(
-      input.target,
-      ["rev-parse", "--verify", "--end-of-options", `refs/remotes/origin/${branch}^{commit}`],
+      ["ls-remote", "--", input.url, `refs/heads/${name}`, `refs/tags/${name}`],
       options,
       "base lookup",
     );
-    return { commit, ref: `origin/${branch}` };
+    const found = [`refs/heads/${name}`, `refs/tags/${name}`].find((candidate) =>
+      listed.split("\n").some((line) => line.endsWith(`\t${candidate}`)),
+    );
+    if (!found) {
+      throw new Error(
+        "GitLab has no branch or tag with that name. Use a branch, tag or full commit.",
+      );
+    }
+    remoteRef = found;
+  } else {
+    // Observe the current remote default, including a renamed default branch.
+    remoteRef = `refs/heads/${await remoteDefaultBranch(input, options)}`;
   }
-  // Observe the current remote default, including a renamed default branch.
-  const branch = await remoteDefaultBranch(input, options);
-  return await resolveBase({ ...input, ref: branch }, options);
+  const branch = remoteRef.startsWith("refs/heads/") ? remoteRef.slice("refs/heads/".length) : "";
+  const localRef = branch ? `refs/remotes/origin/${branch}` : remoteRef;
+  await git(
+    input.target,
+    ["fetch", "--quiet", "--no-tags", "--", input.url, `+${remoteRef}:${localRef}`],
+    options,
+    "base fetch",
+  );
+  const commit = await git(
+    input.target,
+    ["rev-parse", "--verify", "--end-of-options", `${localRef}^{commit}`],
+    options,
+    "base lookup",
+  );
+  return { commit, ref: branch ? `origin/${branch}` : localRef };
 }
 
 async function clone(

@@ -51,7 +51,8 @@ The registered source supplies:
   Without a ref, observe the current remote default and hydrate its commit through
   source transport, including a renamed default branch; return `origin/<branch>`
   as its ref. Explicit refs are resolved locally first; the source is consulted
-  only when the chosen ref is missing. Credentials stay in the source closure.
+  only when the chosen ref is missing, so it must hydrate a missing branch, tag or
+  full commit, not only branches. Credentials stay in the source closure.
 
 Use `createManagedProjectCheckoutV1(transport)` when the source needs managed
 clones. Its `materialize()` and `refresh()` operations reuse the existing checkout
@@ -62,7 +63,9 @@ verifies the returned commit locally, retains safe local-default fast-forward
 checks, and records the selected ref and immutable commit before setup. Retries
 reuse that pin without selecting or fetching a new base. The transport supplies URL
 resolution and authenticated clone, commit-fetch, and refresh operations; it does
-not choose host storage or maintain another registry. Call these operations from
+not choose host storage or maintain another registry. If `clone` fails, the host
+removes the unregistered target so a retry starts clean, unless the failure left a
+Git process whose cleanup is uncertain. Call these operations from
 the source's managed plugin invocation so the host can bind current Gateway
 configuration and plugin authority.
 

@@ -84,6 +84,11 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
         options.assertCurrent?.();
       },
     );
+    // A transport that fails after cloning, such as on a full disk, must not block the retry.
+    clone.mockImplementationOnce(async (input) => {
+      await git("git", ["clone", "--no-local", remote, input.target]);
+      throw new Error("clone setup failed");
+    });
     const refresh = vi.fn(
       async (input: { target: string }, options: { assertCurrent?: () => void }) => {
         options.assertCurrent?.();
@@ -126,6 +131,9 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
     bindGatewayContextResolver(fixture.registry, () => context);
     await fixture.run(async () => {
       const source = resolvePluginRepositorySource(fixture.id, url);
+      await expect(
+        source.prepare({ agentId: "main", requiredCommit: commit, assertCurrent() {} }),
+      ).rejects.toThrow("clone setup failed");
       const prepared = await source.prepare({
         agentId: "main",
         requiredCommit: commit,
@@ -139,7 +147,7 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
         (await source.prepare({ agentId: "main", requiredCommit: commit, assertCurrent() {} }))
           .project.id,
       ).toBe(prepared.project.id);
-      expect(clone).toHaveBeenCalledTimes(1);
+      expect(clone).toHaveBeenCalledTimes(2);
       await prepared.resolveBase();
       expect(refresh).toHaveBeenCalledTimes(1);
       await fixture.instance.dispose();
