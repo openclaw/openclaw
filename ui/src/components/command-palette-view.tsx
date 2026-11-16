@@ -223,7 +223,8 @@ function getOptionId(index: number): string {
 }
 
 function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
-  return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
+  const category = item.category === "archived" ? "chats" : item.category;
+  return filter === "all" || category === (filter === "sessions" ? "chats" : "messages");
 }
 
 function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
