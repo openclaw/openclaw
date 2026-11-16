@@ -5,34 +5,18 @@ import {
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
-import {
-  acquireTranscriptLease,
-  type TranscriptLease,
-} from "../config/sessions/transcript-lease.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
-import {
-  bindGatewayContextResolver,
-  withPluginRuntimeGatewayContextResolver,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
   GatewayDrainingError,
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { chatRef } from "../sessions/chat-ref.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  captureOperatorToolGatewayContinuationContext,
-  withOperatorToolGatewayAuthority,
-} from "./server-plugin-in-process-dispatch.js";
 import type {
   PreparedRestartStore,
   RestartResumeParams,
 } from "./session-restart-resume-discovery.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-/** Admit retained obligations before classifying nested waits in this store. */
+/** Readmit owed completions by key; each row restores its own saved origin when it delivers. */
 export async function prepareRestartCompletionCustody(
   { context, signal, log }: RestartResumeParams,
   { target, entries }: Pick<PreparedRestartStore, "target" | "entries">,
@@ -46,20 +30,28 @@ export async function prepareRestartCompletionCustody(
   assertCurrent();
   const recovered: string[] = [];
   for (const { sessionKey, entry } of entries) {
-    try {
-      recovered.push(
-        ...(await recoverRequesterCompletionCustody({
-          context,
-          ...target,
-          sessionKey,
-          entry,
-          agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
-          assertCurrent,
-        })),
-      );
-    } catch (error) {
-      signal.throwIfAborted();
-      log.warn(`Restart completion recovery failed for ${sessionKey}: ${String(error)}`);
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
+    for (const child of entry.archivedAt === undefined
+      ? getSubagentRunsForRequesterSession(sessionKey)
+      : []) {
+      if (
+        child.requesterAgentId !== agentId ||
+        !subagentRuns.isCompletionAuthorityRetired(child) ||
+        !(
+          (isYieldedSubagentRun(child) && owesRequesterCompletion(child)) ||
+          child.requesterSettleWake !== undefined ||
+          ["pending", "in_progress", "failed"].includes(child.delivery?.status ?? "")
+        )
+      ) {
+        continue;
+      }
+      try {
+        bindGatewayContextResolver(child, context.resolveGatewayContext);
+        subagentRuns.admitCompletion(child);
+        recovered.push(child.runId);
+      } catch (error) {
+        log.warn(`Restart completion recovery failed for ${sessionKey}: ${String(error)}`);
+      }
     }
   }
   return {
@@ -67,91 +59,8 @@ export async function prepareRestartCompletionCustody(
     resume: () => {
       signal.throwIfAborted();
       if (!isGatewayRestartDraining()) {
-        for (const runId of recovered) {
-          resumeSubagentRun(runId);
-        }
+        recovered.forEach((runId) => resumeSubagentRun(runId));
       }
     },
   };
-}
-
-/** Recover the obligation under a fresh exact requester admission, never its stored bearer. */
-async function recoverRequesterCompletionCustody(params: {
-  context: GatewayRequestContext;
-  agentId: string;
-  sessionKey: string;
-  storePath: string;
-  env?: NodeJS.ProcessEnv;
-  entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt">;
-  assertCurrent: () => void;
-}): Promise<string[]> {
-  const { context, entry, agentId, sessionKey, storePath, assertCurrent } = params;
-  if (entry.archivedAt !== undefined) {
-    return [];
-  }
-  const pending = [...getSubagentRunsForRequesterSession(sessionKey)].filter(
-    (child) =>
-      child.requesterAgentId === agentId &&
-      subagentRuns.isCompletionAuthorityRetired(child) &&
-      ((isYieldedSubagentRun(child) && owesRequesterCompletion(child)) ||
-        child.requesterSettleWake !== undefined ||
-        child.delivery?.status === "pending" ||
-        child.delivery?.status === "in_progress" ||
-        child.delivery?.status === "failed"),
-  );
-  if (!pending.length) {
-    return [];
-  }
-  const authority = await prepareSessionSystemTurnAuthority({
-    context,
-    agentId,
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    preserveRecordedSource: true,
-    assertCurrent,
-  });
-  let target: TranscriptLease | undefined;
-  try {
-    target = await acquireTranscriptLease(
-      chatRef({ agentId, sessionKey, storePath }),
-      { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
-      { env: params.env },
-    );
-    const requester = target;
-    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-      withOperatorToolGatewayAuthority(
-        {
-          operatorRunAuthority: authority?.authority,
-          operatorRoleActor: { kind: "system" },
-          scopes: authority?.authority.scopes ?? [ADMIN_SCOPE],
-          assertCurrent,
-        },
-        async () => {
-          for (const child of pending) {
-            const custody = await captureOperatorToolGatewayContinuationContext({
-              agentId,
-              sessionKey,
-            });
-            if (!custody) {
-              throw new Error("Restart completion has no current Gateway authority");
-            }
-            try {
-              assertCurrent();
-              requester.assertCurrent();
-              bindGatewayContextResolver(child, context.resolveGatewayContext);
-              subagentRuns.bindCompletionAuthority(child, custody);
-            } catch (error) {
-              custody.release();
-              throw error;
-            }
-          }
-        },
-      ),
-    );
-  } finally {
-    target?.release();
-    authority?.release();
-  }
-  return pending.map((child) => child.runId);
 }

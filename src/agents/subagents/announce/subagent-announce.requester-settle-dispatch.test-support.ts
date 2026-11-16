@@ -174,6 +174,7 @@ export function useDirectDelivery(requester = requesterSnapshot()) {
 export function settledChild(): SubagentRunRecord {
   return makeSettledChild({
     runId: "settled-child",
+    originFacts: { kind: "none" },
     requesterAgentId: "main",
     task: "finish child work",
     outcome: { status: "ok" },

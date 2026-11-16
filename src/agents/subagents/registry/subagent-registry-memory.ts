@@ -16,9 +16,7 @@ import {
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
-import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -238,19 +236,24 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
   publication.resolve();
 }
 
+type SubagentRequesterTurn = {
+  requesterRunInstance?: OperationalRunInstanceRef;
+  requesterCompletion?: Readonly<{ runId: string; ended?: true }>;
+};
+
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
-  private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
+  // Requester accounting only; a completion's authority comes from its saved origin facts.
+  private readonly requesterTurns = new WeakMap<object, SubagentRequesterTurn>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
-  private readonly requiredCompletionEntries = new WeakSet<object>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
     const entry = this.currentValue(observed);
     revokeGoalContinuationReturn(entry);
     this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(entry));
-    this.releaseCompletionAuthority(entry);
+    this.requesterTurns.delete(getSubagentRunRuntimeKey(entry));
   }
 
   isCompletionAuthorityRetired(entry: SubagentRunRecord): boolean {
@@ -261,85 +264,62 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  bindCompletionAuthority(
+  /** A live launch or restart admission owns completion again; its row carries the authority. */
+  admitCompletion(
     row: SubagentRunRecord,
-    source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
-    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
+    requesterCompletion: SubagentRequesterTurn["requesterCompletion"] = requesterRunInstance
       ? { runId: requesterRunInstance.runId }
       : undefined,
-  ) {
+  ): void {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
-    // A committed row with captured custody stays restricted if its source expires before publication.
-    this.requiredCompletionEntries.add(key);
-    source.assertCurrent();
     if (
       this.retiredCompletionEntries.has(key) &&
       !isSameSubagentRunOwner(this.get(entry.runId), entry)
     ) {
       throw new Error("Subagent completion retry no longer owns its source");
     }
-    this.releaseCompletionAuthority(entry);
-    this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
-    const custody: SubagentCompletionCustody = {
-      authority: source,
-      entry,
-      requesterRunInstance,
-      requesterCompletion,
-      stop: () => source.signal.removeEventListener("abort", revoked),
-    };
-    const revoked = () => this.releaseCompletionAuthority(custody.entry);
-    this.completionAuthorities.set(key, custody);
-    source.signal.addEventListener("abort", revoked, { once: true });
-    if (source.signal.aborted) {
-      revoked();
-    }
+    this.requesterTurns.set(key, { requesterRunInstance, requesterCompletion });
   }
 
   /** Steering adopts an existing execution without replacing its completion source. */
   bindRequesterRunInstance(entry: SubagentRunRecord, instance?: OperationalRunInstanceRef): void {
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      custody.requesterRunInstance = instance;
-      custody.requesterCompletion = { runId: instance.runId };
+    const turn = this.requesterTurns.get(getSubagentRunRuntimeKey(entry));
+    if (turn && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      turn.requesterRunInstance = instance;
+      turn.requesterCompletion = { runId: instance.runId };
     }
   }
 
   getRequesterRunInstance(entry: SubagentRunRecord): OperationalRunInstanceRef | undefined {
     return isSameSubagentRunOwner(this.get(entry.runId), entry)
-      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
+      ? this.requesterTurns.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
       : undefined;
   }
 
   /** Completion follows task adoption without changing the original execution receipt. */
   getRequesterCompletion(entry: SubagentRunRecord) {
     return isSameSubagentRunOwner(this.get(entry.runId), entry)
-      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterCompletion
+      ? this.requesterTurns.get(getSubagentRunRuntimeKey(entry))?.requesterCompletion
       : undefined;
   }
 
   /** Retain the accepted terminal postimage before a later turn replaces the session row. */
   recordRequesterCompletion(sessionKey: string, agentId: string, runId: string): void {
     for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
-      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
+      const turn = this.requesterTurns.get(getSubagentRunRuntimeKey(child));
       const requesterAgentId = resolveRecordedRequester(child);
-      if (custody?.requesterCompletion?.runId === runId && requesterAgentId === agentId) {
-        custody.requesterCompletion = { runId, ended: true };
+      if (turn?.requesterCompletion?.runId === runId && requesterAgentId === agentId) {
+        turn.requesterCompletion = { runId, ended: true };
       }
     }
   }
 
-  releaseCompletionAuthority(observed: SubagentRunRecord): void {
+  /** Owner and store-retirement checks; the authority check runs at delivery. */
+  assertCompletionCurrent(observed: SubagentRunRecord): void {
     const entry = this.currentValue(observed);
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    this.completionAuthorities.delete(getSubagentRunRuntimeKey(entry));
-    custody?.stop();
-    custody?.authority.release();
-  }
-
-  private assertCompletionEntryCurrent(entry: SubagentRunRecord): void {
     const current =
       this.get(entry.runId) ??
       this.readLookup
@@ -352,87 +332,16 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(entry))) {
       throw new Error("Subagent completion requester store was retired");
     }
-    if (
-      this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) &&
-      !isSameSubagentRunOwner(this.get(entry.runId), entry)
-    ) {
-      throw new Error("Subagent completion authority is no longer active");
-    }
   }
 
-  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
-    const entry = this.currentValue(observed);
-    this.assertCompletionEntryCurrent(entry);
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    // Keep the requester's retained authority after child cancellation. Only a notice
-    // without that custody uses its independently admitted cancellation caller.
-    if (!custody && this.isCancellationNotice(entry)) {
-      return run();
-    }
-    if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-      throw new Error("Subagent completion authority is no longer active");
-    }
-    return custody ? custody.authority.run(run) : run();
-  }
-
-  private isCancellationNotice(entry: SubagentRunRecord): boolean {
-    return (
-      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome?.status === "error"
-    );
-  }
-
-  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
+  /** Current owners of a completion cohort; throws when one was retired or replaced. */
+  currentCompletionBatch(observed: readonly SubagentRunRecord[]): SubagentRunRecord[] {
     const batch = observed.map((entry) => this.currentValue(entry));
-    batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
-    const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
-    if (!resultEntry) {
-      const sources = batch.map(
-        (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
-      );
-      const first = sources[0];
-      const original = first?.operatorAuthority;
-      // A cancellation-only cohort can share its retained requester. Otherwise its
-      // independently admitted cancellation caller still owns the notices.
-      if (
-        !first ||
-        !original ||
-        sources.some(
-          (source) =>
-            source?.operatorAuthority?.source !== original.source ||
-            source?.operatorAuthority?.invocation !== original.invocation ||
-            !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
-        )
-      ) {
-        return run();
-      }
-      sources.forEach((source) => source?.assertCurrent());
-      return first.run(run);
-    }
-    const firstCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry));
-    const first = firstCustody?.authority.operatorAuthority;
-    // Mixed waves must still prove the cancelled member's original source is live and identical.
-    // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
-    for (const entry of batch) {
-      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-      if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-        throw new Error("Subagent completion authority is no longer active");
-      }
-      custody?.authority.assertCurrent();
-      const source = custody?.authority.operatorAuthority;
-      if (
-        source?.source !== first?.source ||
-        source?.invocation !== first?.invocation ||
-        !isDeepStrictEqual(source?.scopes, first?.scopes) ||
-        !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
-      ) {
-        throw new Error("Subagent completion batch has incompatible operator authority");
-      }
-    }
-    return this.runWithCompletionAuthority(resultEntry, run);
+    batch.forEach((entry) => this.assertCompletionCurrent(entry));
+    return batch;
   }
 
-  /** Committed replacement transfers custody without reviving a retired source. */
+  /** Committed replacement keeps requester accounting without reviving a retired row. */
   transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     transferFollowupCohort(previous, next);
     if (
@@ -448,9 +357,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         ) {
           continue;
         }
-        const childCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
-        if (childCustody?.requesterCompletion?.runId === previous.runId) {
-          childCustody.requesterCompletion = { runId: next.runId };
+        const childTurn = this.requesterTurns.get(getSubagentRunRuntimeKey(child));
+        if (childTurn?.requesterCompletion?.runId === previous.runId) {
+          childTurn.requesterCompletion = { runId: next.runId };
         }
       }
     }
@@ -459,44 +368,12 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (this.retiredCompletionEntries.has(previousKey)) {
       this.retiredCompletionEntries.add(nextKey);
     }
-    if (this.requiredCompletionEntries.has(previousKey)) {
-      this.requiredCompletionEntries.add(nextKey);
-    }
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
-    if (!custody) {
+    const turn = this.requesterTurns.get(previousKey);
+    if (!turn) {
       return;
     }
-    this.completionAuthorities.delete(getSubagentRunRuntimeKey(previous));
-    custody.entry = next;
-    this.completionAuthorities.set(getSubagentRunRuntimeKey(next), custody);
-  }
-
-  /** Only acknowledged registry state retires completion custody. */
-  settleCompletionAuthorities(
-    committed: ReadonlyMap<string, SubagentRunRecord>,
-    changedRunIds?: readonly string[],
-  ): void {
-    const changed = changedRunIds && new Set(changedRunIds);
-    for (const { entry } of this.completionAuthorities.values()) {
-      if (changed && !changed.has(entry.runId)) {
-        continue;
-      }
-      const record = committed.get(entry.runId);
-      if (
-        !record ||
-        !isSameSubagentRunOwner(this.get(entry.runId), entry) ||
-        record.generation !== entry.generation ||
-        ((!record.requesterTurnRunId || record.expectsCompletionMessage === false) &&
-          !record.requesterSettleWake &&
-          record.pauseReason !== "sessions_yield" &&
-          (record.cleanupCompletedAt !== undefined ||
-            record.delivery?.status === "suspended" ||
-            record.delivery?.status === "discarded" ||
-            record.suppressCompletionDelivery === true))
-      ) {
-        this.releaseCompletionAuthority(entry);
-      }
-    }
+    this.requesterTurns.delete(previousKey);
+    this.requesterTurns.set(nextKey, turn);
   }
 
   /** Keep captured cancellation work; inspect current successors only at use. */
@@ -655,9 +532,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   override clear(): void {
     this.forEach(revokeGoalContinuationReturn);
-    for (const { entry } of this.completionAuthorities.values()) {
-      this.releaseCompletionAuthority(entry);
-    }
     for (const pending of retirementPublications.values()) {
       for (const publication of pending) {
         completeRetirementPublication(publication);

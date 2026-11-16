@@ -550,13 +550,13 @@ export class SubagentLifecycleController {
     return adoptSubagentRunForRequesterTurnInRuns({
       ...params,
       runs: this.options.runs,
-      assertCurrent: () =>
-        subagentRuns.runWithCompletionAuthority(params.expected, () => {
-          params.assertCurrent();
-          if (this.newerGenerationOwnsSession(params.expected)) {
-            throw new Error("Steered completion no longer owns its execution");
-          }
-        }),
+      assertCurrent: () => {
+        subagentRuns.assertCompletionCurrent(params.expected);
+        params.assertCurrent();
+        if (this.newerGenerationOwnsSession(params.expected)) {
+          throw new Error("Steered completion no longer owns its execution");
+        }
+      },
     });
   };
 

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { captureGatewayAuthPolicy } from "../../../gateway/auth-policy.js";
 import {
   createContext,
   createOperatorClient,
@@ -12,6 +12,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
+import {
+  runWithCompletionBatchOrigin,
+  runWithCompletionOrigin,
+} from "./subagent-completion-origin.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -58,7 +62,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
     });
   });
 
-  it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
+  it("restores an uncertain accepted address with its original runtime and completion origin", async () => {
     await withQueuedRegistrationFixture(async (f) => {
       const context = createContext();
       const resolveGatewayContext = () => context;
@@ -67,18 +71,23 @@ export function registerQueuedUnknownKillAuthorityTest() {
         profileName: "collector-rekey",
         scopes: ["operator.write"],
       });
-      const completion = await withPluginRuntimeGatewayRequestScope(
-        { client, context, resolveGatewayContext, isWebchatConnect: () => false },
-        () => captureOperatorToolGatewayContinuationContext(),
-      );
-      if (!completion?.operatorAuthority) {
-        throw new Error("Expected captured operator completion custody");
-      }
+      client.internal = {
+        authenticatedOperator: true,
+        operatorAccessAuthority: {
+          assertCurrent: () => {},
+          signal: new AbortController().signal,
+          gatewayAccessGrant: null,
+        },
+      };
+      client.authPolicy = captureGatewayAuthPolicy({}, { role: "operator", authMethod: "token" });
       f.registration.gatewayContextResolver = resolveGatewayContext;
-      await f.register();
+      await withPluginRuntimeGatewayRequestScope(
+        { client, context, resolveGatewayContext, isWebchatConnect: () => false },
+        () => f.register(),
+      );
       const original = f.current();
       const runtimeKey = getSubagentRunRuntimeKey(original);
-      subagentRuns.bindCompletionAuthority(original, completion);
+      expect(original.originFacts).toMatchObject({ kind: "gateway" });
       const retirement = subagentRuns.captureRetirement(
         original,
         (candidate) => candidate.runId !== original.runId,
@@ -121,13 +130,17 @@ export function registerQueuedUnknownKillAuthorityTest() {
         });
         expect(retirement.observation.entry).toBe(accepted);
         expect(f.scope.canAcceptLaunch()).toBe(true);
-        const readCompletionSource = () =>
-          getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source;
-        expect(subagentRuns.runWithCompletionAuthority(original, readCompletionSource)).toBe(
-          completion.operatorAuthority.source,
+        // The persisted origin, not an in-memory custody, restores the requester's principal.
+        expect(accepted.originFacts).toEqual(original.originFacts);
+        const readCompletionProfile = async () =>
+          getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.profileId;
+        const profileId = client.authenticatedUserProfile?.profileId;
+        expect(profileId).toBeTruthy();
+        await expect(runWithCompletionOrigin(original, readCompletionProfile)).resolves.toBe(
+          profileId,
         );
-        expect(subagentRuns.runWithCompletionBatchAuthority([original], readCompletionSource)).toBe(
-          completion.operatorAuthority.source,
+        await expect(runWithCompletionBatchOrigin([original], readCompletionProfile)).resolves.toBe(
+          profileId,
         );
         await expect(
           mutateSubagentRuns([original.runId, acceptedId], () => ({ value: true }), {
@@ -148,8 +161,6 @@ export function registerQueuedUnknownKillAuthorityTest() {
         ack.release();
         await Promise.allSettled([accepting]);
         retirement.release();
-        subagentRuns.releaseCompletionAuthority(original);
-        completion.release();
       }
     }, subagentRuns);
   });

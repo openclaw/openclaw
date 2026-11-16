@@ -334,8 +334,6 @@ export class CronStreamJobOwner {
       !this.removalRequested;
     const sourceAuthority = await prepareCronStreamSourceAuthority({
       job: this.job,
-      scheduleKey: this.scheduleKey,
-      sourceIdentity: this.sourceIdentity,
       resolveGatewayContext: this.params.resolveGatewayContext,
       assertCurrent: () => {
         if (!ownsProcess()) {

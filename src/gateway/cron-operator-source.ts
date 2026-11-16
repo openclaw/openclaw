@@ -19,7 +19,7 @@ import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
-import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import { authorizeTurn } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** Re-admit a job's captured parent-conversation source, never a session owner or ambient scheduler. */
@@ -35,69 +35,51 @@ export async function restoreCronOperatorSource(params: {
   if (!params.job.operatorSource) {
     return undefined;
   }
-  let operator: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+  let operator: Awaited<ReturnType<typeof authorizeTurn>> | undefined;
   try {
     const captured = params.job.operatorSource;
     const source = decodeGatewayOperatorRecoverySource(captured.source);
-    const target =
-      params.target ??
-      (source.kind === "gateway"
-        ? undefined
-        : { agentId: source.agentId, sessionKey: source.sessionKey });
     const context =
       params.context ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
     const assertOccurrence = captureCronJobSourceAuthority(params.job.id);
     if (!context || !assertOccurrence || !params.deliveryAttemptFence) {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
-    const fence = params.deliveryAttemptFence;
-    // The source's conversation is linked by key: edits and resets of that chat keep it.
-    let admitted = false;
-    const assertCurrent = () => {
-      params.signal?.throwIfAborted();
-      // Admission may force-run an already paused job; later disable/remove edits
-      // revoke this exact occurrence through its existing cancellation owner.
-      assertOccurrence();
-      fence.assertCurrent();
-      if (admitted) {
-        return;
-      }
-      const current: CronStoredJob | undefined = context.cron.getJob(params.job.id);
-      const policy = current?.scheduledToolPolicy;
-      if (
-        context.resolveGatewayContext?.() !== context ||
-        !current ||
-        current.operatorSource?.executionRevision !==
-          resolveCronOperatorExecutionRevision(current) ||
-        tryResolveCronJobEffectiveAgentId(current, context.cron.getDefaultAgentId()) !==
-          source.agentId ||
-        (target && target.agentId !== source.agentId) ||
-        (source.kind !== "gateway" &&
-          ((current.payload.kind !== "agentTurn" && !source.snapshot.openclawIdPrincipal) ||
-            !(
-              (policy?.mode === "account" && policy.ownerSessionKey === source.sessionKey) ||
-              (source.snapshot.openclawIdPrincipal &&
-                current.schedule.kind === "stream" &&
-                current.payload.kind === "command")
-            ) ||
-            current.owner?.sessionKey !== source.sessionKey ||
-            !isCronOperatorSourceParent(current, source.sessionKey))) ||
-        !isDeepStrictEqual(current.operatorSource, captured)
-      ) {
-        throw new Error(
-          "Scheduled operator continuation definition or conversation changed; recreate it from an authenticated turn",
-        );
-      }
-    };
-    assertCurrent();
-    operator = await restoreGatewayOperatorSource({
-      snapshot: source.snapshot,
-      target,
+    // Admission checks this occurrence and its definition once. Afterwards only a policy
+    // change or the explicit cancel signal (Stop, disable, removal) ends the run; an edit does not.
+    const current: CronStoredJob | undefined = context.cron.getJob(params.job.id);
+    const policy = current?.scheduledToolPolicy;
+    params.signal?.throwIfAborted();
+    assertOccurrence();
+    params.deliveryAttemptFence.assertCurrent();
+    if (
+      context.resolveGatewayContext?.() !== context ||
+      !current ||
+      current.operatorSource?.executionRevision !== resolveCronOperatorExecutionRevision(current) ||
+      tryResolveCronJobEffectiveAgentId(current, context.cron.getDefaultAgentId()) !==
+        source.agentId ||
+      (params.target && params.target.agentId !== source.agentId) ||
+      (source.kind !== "gateway" &&
+        ((current.payload.kind !== "agentTurn" && !source.snapshot.openclawIdPrincipal) ||
+          !(
+            (policy?.mode === "account" && policy.ownerSessionKey === source.sessionKey) ||
+            (source.snapshot.openclawIdPrincipal &&
+              current.schedule.kind === "stream" &&
+              current.payload.kind === "command")
+          ) ||
+          current.owner?.sessionKey !== source.sessionKey ||
+          !isCronOperatorSourceParent(current, source.sessionKey))) ||
+      !isDeepStrictEqual(current.operatorSource, captured)
+    ) {
+      throw new Error(
+        "Scheduled operator continuation definition or conversation changed; recreate it from an authenticated turn",
+      );
+    }
+    operator = await authorizeTurn({
+      facts: { kind: "gateway", snapshot: source.snapshot },
       context,
-      assertCurrent,
+      signal: params.signal,
     });
-    assertCurrent();
-    admitted = true;
     return operator;
   } catch (error) {
     operator?.release();

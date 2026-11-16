@@ -56,6 +56,25 @@ type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
+/** A refused origin names its reason and keeps the results readable; others get the generic copy. */
+export function renderChildCompletionFailure(
+  reason: string,
+  batch: readonly SubagentRunRecord[],
+): string {
+  const withheldAt = reason.indexOf("withheld: ");
+  if (withheldAt < 0) {
+    return expectDefined(
+      renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
+      "child completion failure notice",
+    );
+  }
+  const results = batch.flatMap((member) => {
+    const text = member.completion?.resultText ?? member.completion?.fallbackResultText;
+    return text ? [text] : [];
+  });
+  return [`⚠️ Child result ${reason.slice(withheldAt)}`, ...results].join("\n\n");
+}
+
 async function recordRequiredCompletionFailure(
   entry: SubagentRunRecord,
   reason: string,
@@ -121,10 +140,7 @@ async function recordRequiredCompletionFailure(
                 customType: "run-failed-before-reply",
                 display: true,
                 excludeFromContext: true,
-                content: expectDefined(
-                  renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-                  "child completion failure notice",
-                ),
+                content: renderChildCompletionFailure(reason, [entry]),
                 details: { runId, childRunId: entry.runId },
               },
       },

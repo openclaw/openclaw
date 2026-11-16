@@ -15,8 +15,8 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
+import { runWithCompletionBatchOrigin } from "../registry/subagent-completion-origin.js";
 import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
@@ -613,7 +613,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             if (!isSourceSessionEffectsAllowed()) {
               throw new Error("Requester completion source changed before continuation admission.");
             }
-            return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+            return runWithCompletionBatchOrigin(settledBatch, deliver);
           },
         );
       };

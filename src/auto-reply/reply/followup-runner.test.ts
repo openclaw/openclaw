@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import { TurnWithheldError } from "../../gateway/operator-run-recovery.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -507,14 +507,8 @@ describe("createFollowupRunner", () => {
   });
 
   it("withholds revoked operator input visibly instead of retrying a pre-execution refusal", async () => {
-    const failure = new Error("original operator role changed");
-    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        throw failure;
-      },
-    });
+    // The saved origin no longer passes current policy.
+    const failure = new TurnWithheldError("original operator role changed");
     const deliver = attachSource(turn);
     state.admit.mockRejectedValueOnce(failure);
 
@@ -529,7 +523,7 @@ describe("createFollowupRunner", () => {
         completion: {
           kind: "failed",
           error: failure.message,
-          notice: `withheld: ${failure.message}`,
+          notice: failure.message,
         },
         payloads: [],
       }),
@@ -539,15 +533,9 @@ describe("createFollowupRunner", () => {
   });
 
   it("reports revoked operator input as a visible failure, not an abort", async () => {
-    const failure = new Error("original operator role changed");
+    // The saved origin no longer passes current policy.
+    const failure = new TurnWithheldError("original operator role changed");
     turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
-    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        throw failure;
-      },
-    });
     const deliver = attachSource(turn);
     state.admit.mockResolvedValue({ kind: "admitted", turn });
     state.execute.mockRejectedValue(failure);
@@ -560,7 +548,7 @@ describe("createFollowupRunner", () => {
         completion: {
           kind: "failed",
           error: failure.message,
-          notice: `withheld: ${failure.message}`,
+          notice: failure.message,
         },
       }),
     );

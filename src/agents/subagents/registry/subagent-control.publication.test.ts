@@ -80,7 +80,8 @@ async function writeRegistrationSession(runId: string, lifecycleRevision?: strin
   return { target, storePath, sessionEntry, childSessionKey: target.sessionKey };
 }
 
-it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
+// A released launch handle no longer gates delivery; the saved origin and policy do.
+it.each(["live", "replaced child", "replaced Gateway"] as const)(
   "settles an unstarted plugin registration with a %s owner",
   async (ownerState) => {
     const runId = "unstarted-plugin";
@@ -94,7 +95,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     const context = createContext();
     let currentGateway = context;
     context.getRuntimeConfig = getRuntimeConfig;
-    const { client, revoked, source } = await retainedOperatorFixture(
+    const { client, source } = await retainedOperatorFixture(
       "unstarted-plugin-requester",
       context,
       () => currentGateway,
@@ -160,9 +161,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           }),
       );
       source.release();
-      if (ownerState === "revoked") {
-        revoked.abort(new Error("requester access revoked"));
-      } else if (ownerState === "replaced child") {
+      if (ownerState === "replaced child") {
         await writeSubagentSessionEntry({
           ...target,
           sessionId: "replacement-session",
@@ -181,17 +180,9 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         ...rejectedRun,
         requesterSessionKey: "agent:main:main",
       });
-      if (ownerState !== "revoked") {
-        expect(fixture.announce).toHaveBeenCalledOnce();
-        if (ownerState !== "replaced Gateway") {
-          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
-        }
-      } else {
-        expect(fixture.announce).not.toHaveBeenCalled();
-        const entry = expectDefined(subagentRuns.get(runId), "failed registration");
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+      expect(fixture.announce).toHaveBeenCalledOnce();
+      if (ownerState !== "replaced Gateway") {
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
       }
       if (ownerState === "replaced child") {
         expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(

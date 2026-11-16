@@ -632,17 +632,10 @@ it.each(["same", "failed", "pending acknowledgment"] as const)(
         settling = settleRootWork(true);
         await Promise.race([entered.promise, settling]);
         expect(observed).toBe(true);
-        expect(() => subagentRuns.runWithCompletionAuthority(subagent, () => "send")).toThrow(
-          /store was retired/,
-        );
-        expect(() =>
-          subagentRuns.runWithCompletionBatchAuthority([subagent], () => "send"),
-        ).toThrow(/store was retired/);
+        expect(() => subagentRuns.assertCompletionCurrent(subagent)).toThrow(/store was retired/);
         const successor = { ...structuredClone(subagent), runId: "replacement-completion" };
         subagentRuns.transferCompletionAuthority(subagent, successor);
-        expect(() => subagentRuns.runWithCompletionAuthority(successor, () => "send")).toThrow(
-          /store was retired/,
-        );
+        expect(() => subagentRuns.assertCompletionCurrent(successor)).toThrow(/store was retired/);
         expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
         expect(subagentRuns.isCompletionAuthorityRetired(successor)).toBe(true);
       } finally {

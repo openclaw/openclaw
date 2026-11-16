@@ -1,3 +1,4 @@
+import { TurnWithheldError } from "../../../gateway/operator-run-recovery.js";
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
@@ -14,6 +15,7 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { runWithCompletionOrigin } from "./subagent-completion-origin.js";
 import {
   ensureDeliveryState,
   getDeliveryLastError,
@@ -443,7 +445,7 @@ export const startSubagentAnnounceCleanupFlow = (
           () => {
             storeReplaced = true;
           },
-        ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
+        ) && (subagentRuns.assertCompletionCurrent(entry), true)
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
@@ -590,6 +592,7 @@ export const startSubagentAnnounceCleanupFlow = (
       deadlineTimer = setTimeout(abortDelivery, remainingMs);
       deadlineTimer.unref();
     }
+    let withheld: TurnWithheldError | undefined;
     try {
       if (entry.expectsCompletionMessage === true && !requesterOwnsCompletion()) {
         controllerInput = await reserveSubagentCompletionControllerSource(entry);
@@ -605,7 +608,7 @@ export const startSubagentAnnounceCleanupFlow = (
         )?.protocolRunId;
         await commit((draft) => recordRequesterHandoff(draft, blockingRunId));
       }
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
+      announceOutcome = await runWithCompletionOrigin(entry, () =>
         params.runSubagentAnnounceFlow({
           ...announceParams,
           controllerInput,
@@ -627,6 +630,7 @@ export const startSubagentAnnounceCleanupFlow = (
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
+      withheld = error instanceof TurnWithheldError ? error : undefined;
     } finally {
       clearTimeout(deadlineTimer);
       if (controllerInput && !controllerInput.custody.rpcAdopted) {
@@ -634,6 +638,16 @@ export const startSubagentAnnounceCleanupFlow = (
       }
     }
     assertPersistenceCurrent();
+    if (withheld && context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
+      // A refused origin is final; the chat keeps the result readable as withheld.
+      await suspendPendingFinalDelivery(context, {
+        runId,
+        entry,
+        reason: "permanent_failure",
+        error: withheld.message,
+      });
+      return;
+    }
     if (
       context.isCleanupAttemptCurrent(entry, cleanupGeneration) &&
       getCurrentSubagentRunOwner(params.runs, entry)?.delivery?.status !== "delivered" &&

@@ -4,6 +4,7 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
+import type { QueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
@@ -179,6 +180,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
   retireAfterRequesterTurn?: boolean;
   requesterOrigin?: DeliveryContext;
+  /** Saved origin authority; a completion restores it under current policy. */
+  originFacts?: SubagentOriginFacts;
   /** Durable source locator for transport-neutral progress presentation. */
   progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
@@ -279,3 +282,11 @@ export type RegisterSubagentRunOptions = {
 };
 
 export type SubagentAdmissionRejection = (error: string) => Promise<void>;
+
+/** Saved at launch from the host-issued continuation; tool and plugin input never reach it. */
+export type SubagentOriginFacts =
+  | QueuedOperatorRecoverySource
+  | Readonly<{ kind: "system"; scopes: readonly string[] }>
+  | Readonly<{ kind: "session"; profileId: string }>
+  // Launched without an operator Gateway authority; it delivers in its caller's scope as before.
+  | Readonly<{ kind: "none" }>;

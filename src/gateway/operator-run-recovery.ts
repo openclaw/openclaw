@@ -1,3 +1,4 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   createAdmittedRunOperatorAuthority,
@@ -8,6 +9,7 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -59,12 +61,14 @@ import {
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
+  type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
@@ -585,8 +589,9 @@ export async function captureGatewayOperatorContinuation(
   const inherited = input.client?.internal?.operatorRunAuthority;
   const context = input.context.resolveGatewayContext?.();
   const facts = inherited && captureQueuedOperatorRecoverySource(inherited);
+  // A session principal is restored from its profile. An origin beyond the recovery
+  // serialization bounds keeps its live authority; its completion is withheld visibly.
   if (!inherited || !context || !facts || facts.kind === "unavailable") {
-    // A source without saved facts keeps its live authority.
     return await captureGatewayOperatorRunAuthority(input);
   }
   // Other holders of the inherited object keep it until this work ends; its checks do not gate it.
@@ -615,4 +620,56 @@ export async function captureGatewayOperatorContinuation(
       releaseInherited?.();
     },
   };
+}
+
+/** A definitive refusal of detached work; the caller shows it as `withheld: <reason>`. */
+export class TurnWithheldError extends Error {
+  constructor(reason: string, options?: ErrorOptions) {
+    super(`withheld: ${reason}`, options);
+    this.name = "TurnWithheldError";
+  }
+}
+
+/**
+ * Detached work runs on saved origin facts intersected with current policy, checked at turn
+ * admission. Only a policy change or the explicit cancel signal ends it; the end of the request,
+ * turn or occurrence that started it does not.
+ */
+export async function authorizeTurn(params: {
+  facts: QueuedOperatorRecoverySource | undefined;
+  context: GatewayRequestContext;
+  signal?: AbortSignal;
+}) {
+  const { facts, signal } = params;
+  if (!facts || facts.kind === "unavailable") {
+    throw new TurnWithheldError("the origin of this work was not saved");
+  }
+  return await withheldOnRefusal(
+    () =>
+      restoreGatewayQueuedOperatorRecovery({
+        source: facts,
+        context: params.context,
+        assertCurrent: () => signal?.throwIfAborted(),
+      }),
+    signal,
+  );
+}
+
+/** Only a definitive refusal becomes `withheld`; any other failure stays retryable. */
+export async function withheldOnRefusal<T>(restore: () => Promise<T>, signal?: AbortSignal) {
+  try {
+    return await restore();
+  } catch (error) {
+    const refused = collectNestedErrorCandidates(error).find(
+      (candidate) =>
+        candidate instanceof TurnWithheldError ||
+        candidate instanceof GatewayOperatorRecoveryAuthorizationError ||
+        candidate instanceof GatewayOperatorAccessDeniedError ||
+        candidate instanceof SessionMutationAuthorizationChangedError,
+    );
+    if (signal?.aborted || !refused || refused instanceof TurnWithheldError) {
+      throw refused ?? error;
+    }
+    throw new TurnWithheldError(formatErrorMessage(refused), { cause: error });
+  }
 }

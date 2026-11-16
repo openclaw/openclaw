@@ -1,4 +1,5 @@
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import type { QueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type {
   FollowupRun,
   ReplyOperationRunState,
@@ -50,28 +51,17 @@ export type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
   /** Fact indexes are relative to this run's media array. */
   mediaImageLayout?: MediaImageLayout;
+  /** Saved at enqueue; admission restores authority from it under current policy. */
+  originFacts?: QueuedOperatorRecoverySource;
 };
 
-export function isFollowupOperatorAuthorityCurrent(run: Pick<FollowupRun, "operatorAuthority">) {
-  try {
-    run.operatorAuthority?.assertCurrent();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function isFollowupRunAborted(
-  run: Pick<
-    FollowupRun,
-    "abortSignal" | "queueAbortSignal" | "operatorAuthority" | "controllerInput"
-  >,
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "controllerInput">,
 ): boolean {
   return (
     (!run.controllerInput?.custody.cancellationRetired &&
       (run.abortSignal?.aborted === true || run.controllerInput?.abortSignal.aborted === true)) ||
-    run.queueAbortSignal?.aborted === true ||
-    run.operatorAuthority?.signal?.aborted === true
+    run.queueAbortSignal?.aborted === true
   );
 }
 

@@ -1,6 +1,5 @@
-import { ownsStreamSource } from "../cron/stream-schedule.js";
 import type { CronStoredJob } from "../cron/types.js";
-import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
+import { authorizeTurn } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 export const CRON_STREAM_SOURCE_CHANGED =
@@ -9,8 +8,6 @@ export const CRON_STREAM_SOURCE_CHANGED =
 /** Restores the native process's original full grant, never the mutable payload's source. */
 export async function prepareCronStreamSourceAuthority(params: {
   job: CronStoredJob;
-  scheduleKey: string;
-  sourceIdentity: string;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
   assertCurrent: () => void;
   revoked: () => void;
@@ -24,8 +21,7 @@ export async function prepareCronStreamSourceAuthority(params: {
   ) {
     return { isCurrent: () => true, release: () => {} };
   }
-  let active = true;
-  let restored: RestoredGatewayOperatorAuthority | undefined;
+  let restored: Awaited<ReturnType<typeof authorizeTurn>> | undefined;
   const onRevoked = () => {
     try {
       params.assertCurrent();
@@ -36,7 +32,6 @@ export async function prepareCronStreamSourceAuthority(params: {
     params.revoked();
   };
   const release = () => {
-    active = false;
     restored?.authority.signal?.removeEventListener("abort", onRevoked);
     restored?.release();
     restored = undefined;
@@ -46,21 +41,7 @@ export async function prepareCronStreamSourceAuthority(params: {
     if (!snapshot || !context) {
       throw new Error("Native stream source is missing; re-enable it from an authenticated turn.");
     }
-    const assertCurrent = () => {
-      params.assertCurrent();
-      const current = context.cron.getJob(job.id);
-      if (
-        !active ||
-        params.resolveGatewayContext?.() !== context ||
-        !current?.enabled ||
-        current.state.streamRestartExhausted ||
-        !ownsStreamSource(current, params.scheduleKey, params.sourceIdentity)
-      ) {
-        throw new Error("Native stream source identity is no longer current.");
-      }
-    };
-    const { restoreGatewayOperatorSource } = await import("./operator-run-recovery.js");
-    restored = await restoreGatewayOperatorSource({ snapshot, context, assertCurrent });
+    restored = await authorizeTurn({ facts: { kind: "gateway", snapshot }, context });
     // The recovery owner publishes profile, app-grant, credential and device revocation here.
     restored.authority.signal?.addEventListener("abort", onRevoked, { once: true });
     restored.authority.assertCurrent();

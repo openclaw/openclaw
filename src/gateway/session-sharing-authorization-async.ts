@@ -18,6 +18,7 @@ import {
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   intersectOperatorScopes,
@@ -93,9 +94,21 @@ export async function prepareSessionPrincipalRunAuthority(
       sourceAuthority: source,
     });
     if (!admitted) {
-      throw new Error("Session principal has no current run authority.");
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Session principal has no current run authority.",
+      );
     }
     const original = source.recordedOperatorAuthority;
+    if (!original?.recoverySnapshot && !original?.channelRecoverySource) {
+      const principal = admitted.authority;
+      admitted.authority = createAdmittedRunOperatorAuthority({
+        ...principal,
+        sessionPrincipalProfileId: params.profileId,
+        get modelPolicy() {
+          return principal.modelPolicy;
+        },
+      });
+    }
     if (original) {
       const current = admitted.authority;
       admitted.authority = createAdmittedRunOperatorAuthority({
@@ -155,7 +168,9 @@ async function prepareSessionPrincipalRunAccess(params: {
     // The recorded principal must itself remain the Gateway owner; this is never a fallback.
     if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
-        throw new Error("Session principal is no longer the Gateway owner.");
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Session principal is no longer the Gateway owner.",
+        );
       }
       return ["operator.admin"];
     }
@@ -174,7 +189,9 @@ async function prepareSessionPrincipalRunAccess(params: {
             profile.githubLogin ?? null,
           )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
-      throw new Error("Session principal has no current run authority.");
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Session principal has no current run authority.",
+      );
     }
     return scopes;
   };
@@ -225,7 +242,9 @@ async function prepareSessionPrincipalRunAccess(params: {
         }
         // readScopes validates the retained identity before consuming its current role.
         if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
-          throw new Error("Session principal has no current run authority.");
+          throw new GatewayOperatorRecoveryAuthorizationError(
+            "Session principal has no current run authority.",
+          );
         }
       },
       params.preserveRecordedSource ? undefined : { synchronousCheck: true },
@@ -247,16 +266,20 @@ async function prepareSessionPrincipalRunAccess(params: {
             target.storePath !== params.storePath &&
             !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
         ) {
-          throw new Error("Session is unavailable for this principal.");
+          throw new GatewayOperatorRecoveryAuthorizationError(
+            "Session is unavailable for this principal.",
+          );
         }
       },
     });
     sharing = resolved.authorization;
     if (resolved.error) {
-      throw new Error(resolved.error.message);
+      throw new GatewayOperatorRecoveryAuthorizationError(resolved.error.message);
     }
     if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
-      throw new Error("Session is unavailable for this principal.");
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Session is unavailable for this principal.",
+      );
     }
     const sharingSource = sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent;
     // This synthetic principal's sharing owner has no caller-supplied policy callbacks.
