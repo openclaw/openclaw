@@ -586,6 +586,10 @@ test("tells a woken conversation to end its wait and names its other running com
       "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn now; do not poll it or start another command for the same result.",
     );
     expect(first.followUp).toContain("run one command that loops until it holds");
+    // A waiter on its own push must not read a moving head as settled.
+    expect(first.followUp).toContain(
+      "pin the expected state: for example, wait for the exact commit you pushed and exit non-zero if it moved.",
+    );
     expect(first.followUp).not.toContain("Also running");
     // A second waiter in the same turn sees the first; the turn-start snapshot cannot.
     const second = runningSession((await exec("second-waiter", waitForRelease(release))).details);
