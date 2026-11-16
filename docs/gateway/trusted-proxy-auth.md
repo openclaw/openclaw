@@ -405,6 +405,11 @@ request that includes it always overlaps the grant and connects within it. Only 
 request that shares no scope with the grant, such as `operator.pairing` alone
 against a session-only grant, files the upgrade request as before.
 
+This setup needs no [named operator roles](/gateway/operator-scopes#named-operator-roles):
+the approved device grant alone sets what a guest's CLI or TUI can do. Set
+`gateway.roles.default` only when you want to limit people by who they are,
+across all their devices, rather than by each device's grant.
+
 The TUI's device token, like the CLI's, authenticates a direct Gateway
 connection without the proxy identity until the device or token is revoked.
 `openclaw security audit` reports the warn-level

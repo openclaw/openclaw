@@ -89,7 +89,8 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
   is refused once. With
   [`gateway.auth.trustedProxy.narrowToDeviceGrant`](/gateway/trusted-proxy-auth#approved-cli-and-tui-grants)
   on, that Gateway connects the TUI within its grant from the first start; that
-  section says when the TUI then keeps a device token. The command list and
+  section says when the TUI then keeps a device token. This needs no named
+  operator role (`gateway.roles.default`). The command list and
   pending approvals need `operator.read` and `operator.approvals` and stay
   empty.
 - With no explicit URL or port, `tui` follows the active local Gateway port

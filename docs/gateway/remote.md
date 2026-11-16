@@ -359,9 +359,10 @@ only over `wss://`, and never across redirects.
 When the Gateway uses [trusted-proxy auth](/gateway/trusted-proxy-auth), the
 proxy identity authenticates these connections, so a CLI or TUI behind it needs
 no Gateway token or password: its first `openclaw tui` connection sends a device
-pairing request for an administrator to approve. A Gateway on token or password
-auth still requires that credential; edgeAuth only gets the connection through
-the proxy.
+pairing request for an administrator to approve. The approved device grant
+limits that device; no named operator role (`gateway.roles.default`) is needed.
+A Gateway on token or password auth still requires that credential; edgeAuth
+only gets the connection through the proxy.
 
 ## Credential precedence
 
