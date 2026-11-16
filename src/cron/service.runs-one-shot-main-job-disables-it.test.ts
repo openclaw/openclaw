@@ -222,7 +222,8 @@ it.each([false, true])(
       status: "error" as const,
       summary: "last output",
       executionStarted,
-      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      errorClassification: { kind: "session-conflict" as const },
+      error: "Synthetic admission conflict",
     }));
     await using f = await fixture({ runIsolatedAgentJob: run });
     const { job, event } = await f.run(isolatedJob());

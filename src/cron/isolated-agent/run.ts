@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { findAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-error.js";
-import {
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  type AgentRunTerminalOutcome,
-} from "../../agents/agent-run-terminal-outcome.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { findErrorProperty, isFailoverError } from "../../agents/failover/error.js";
@@ -53,7 +49,10 @@ import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronAgentErrorClassification } from "../run-error-reason.js";
+import {
+  resolveCronAgentErrorClassification,
+  resolveCronAgentTerminalOutcome,
+} from "../run-error-reason.js";
 import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
@@ -148,6 +147,8 @@ async function runCronIsolatedAgentTurnInTrace(
       return {
         status: "error",
         error: err.message,
+        errorClassification: { kind: "session-conflict" },
+        executionStarted: false,
         admissionDisposition: err.admissionDisposition,
       };
     }
@@ -501,15 +502,11 @@ async function runCronIsolatedAgentTurnInTrace(
               );
               // Publish the execution fact captured before bookkeeping; cron persistence
               // and delivery retain their separate workflow outcome.
-              terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+              terminalOutcome = resolveCronAgentTerminalOutcome({
                 phase: "end",
-                data: {
-                  ...execution.runResult.meta,
-                  ...resolveAgentRunErrorLifecycleFields(
-                    undefined,
-                    ownReplyOperation?.abortSignal ?? abortSignal,
-                  ),
-                },
+                data: execution.runResult.meta,
+                operation: ownReplyOperation,
+                signal: abortSignal,
               });
               lifecycle.emit("end", execution.runResult, resolveUnstartedTerminalMetadata());
               finalModelResponse = resolveDiagnosticModelContentCapturePolicy(params.cfg)
@@ -556,15 +553,12 @@ async function runCronIsolatedAgentTurnInTrace(
                 ? finalized
                 : { ...finalized, nextCheck: { delayMs } };
             } catch (err) {
-              terminalOutcome ??=
-                findAgentRunTerminalOutcome(err) ??
-                buildAgentRunTerminalOutcomeFromLifecycleEvent({
-                  phase: "error",
-                  data: resolveAgentRunErrorLifecycleFields(
-                    err,
-                    ownReplyOperation?.abortSignal ?? abortSignal,
-                  ),
-                });
+              terminalOutcome ??= resolveCronAgentTerminalOutcome({
+                phase: "error",
+                error: err,
+                operation: ownReplyOperation,
+                signal: abortSignal,
+              });
               lifecycle.emit("error", err, resolveUnstartedTerminalMetadata());
               const interruptedByRestart =
                 resolveAgentRunErrorLifecycleFields(err, abortSignal).stopReason === "restart";
@@ -642,7 +636,9 @@ async function runCronIsolatedAgentTurnInTrace(
                 errorClassification:
                   err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }
-                    : resolveCronAgentErrorClassification(terminalOutcome, errorReason),
+                    : err instanceof CronSessionLifecycleClaimError
+                      ? { kind: "session-conflict" }
+                      : resolveCronAgentErrorClassification(terminalOutcome, errorReason),
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

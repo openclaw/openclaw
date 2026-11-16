@@ -1,7 +1,43 @@
-import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  type AgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
+import { resolveSessionEventTerminalOutcome } from "../auto-reply/reply/session-event-terminal.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import type { CronRunErrorClassification } from "./types.js";
+
+/** Reconcile a run result or thrown failure with controller-owned terminal facts. */
+export function resolveCronAgentTerminalOutcome(params: {
+  phase: "end" | "error";
+  data?: Parameters<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>[0]["data"];
+  error?: unknown;
+  operation?: Pick<ReplyOperation, "result" | "abortSignal">;
+  signal: AbortSignal;
+}): AgentRunTerminalOutcome {
+  const terminalOutcome =
+    findAgentRunTerminalOutcome(params.error) ??
+    buildAgentRunTerminalOutcomeFromLifecycleEvent({
+      phase: params.phase,
+      data: {
+        ...params.data,
+        ...resolveAgentRunErrorLifecycleFields(
+          params.error,
+          params.operation?.abortSignal ?? params.signal,
+        ),
+      },
+    });
+  return params.operation?.result
+    ? resolveSessionEventTerminalOutcome({
+        operation: params.operation,
+        signal: params.signal,
+        terminalOutcome,
+      }).terminalOutcome
+    : terminalOutcome;
+}
 
 /** Cron policy consumes settled run facts; display text cannot turn them into retries. */
 export function resolveCronAgentErrorClassification(
@@ -35,7 +71,7 @@ export function resolveCronRunErrorReason(
   provider?: string,
   classification?: CronRunErrorClassification,
 ): FailoverReason | undefined {
-  if (classification?.kind === "permanent" || classification?.kind === "aborted") {
+  if (classification && classification.kind !== "reason") {
     return undefined;
   }
   if (classification?.kind === "reason") {

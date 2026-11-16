@@ -195,6 +195,7 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
