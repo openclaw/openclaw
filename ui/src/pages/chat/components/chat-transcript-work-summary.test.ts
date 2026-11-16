@@ -113,6 +113,28 @@ it.each([false, true])(
       transcript.dispose();
       container.remove();
     });
+    const peer = (paneId: string) => {
+      const peerProps = () => ({ ...props, paneId });
+      const view = document.body.appendChild(document.createElement("div"));
+      const controller = createChatTranscript(() => paneId, { canFollowEnd: () => true });
+      const harness = createChatThreadHarness(view, controller);
+      const render = () => {
+        harness.render(peerProps());
+        controller.update();
+      };
+      onTestFinished(() => {
+        harness.unmount();
+        controller.dispose();
+        view.remove();
+      });
+      render();
+      return {
+        view,
+        render,
+        toggle: () => view.querySelector<HTMLButtonElement>(".chat-work-group > button")!,
+      };
+    };
+    const follower = !followEnd ? peer("following-same-session") : undefined;
     draw();
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-tool-row__cmd")).toHaveLength(2),
@@ -153,6 +175,16 @@ it.each([false, true])(
       expect(toggle()?.getAttribute("aria-expanded")).toBe(String(!followEnd)),
     );
     expect(container.textContent).toContain("Workspace verified.");
+    follower?.render();
+    const reopened = !followEnd ? peer("reopened-same-session") : undefined;
+    draw();
+    if (follower && reopened) {
+      await waitForSolid(() => {
+        expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+        expect(follower.toggle().getAttribute("aria-expanded")).toBe("false");
+        expect(reopened.toggle().getAttribute("aria-expanded")).toBe("false");
+      });
+    }
     if (followEnd) {
       expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
       toggle()!.click();
@@ -168,6 +200,22 @@ it.each([false, true])(
     draw();
     await waitForSolid(() => expect(toggle()?.getAttribute("aria-expanded")).toBe("false"));
     expect(container.textContent).not.toContain("Checking the next step.");
+    if (follower && reopened) {
+      follower.toggle().click();
+      draw();
+      reopened.render();
+      await waitForSolid(() => {
+        expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+        expect(reopened.toggle().getAttribute("aria-expanded")).toBe("true");
+      });
+      reopened.toggle().click();
+      draw();
+      follower.render();
+      await waitForSolid(() => {
+        expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
+        expect(follower.toggle().getAttribute("aria-expanded")).toBe("false");
+      });
+    }
   },
 );
 

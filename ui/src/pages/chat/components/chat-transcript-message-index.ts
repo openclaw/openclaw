@@ -23,6 +23,7 @@ import {
   type buildCachedChatItems,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getExplicitToolExpansion,
   getChatItemsGeneration,
   setExpansionState,
 } from "../chat-thread.ts";
@@ -334,15 +335,17 @@ function messageRevision(message: object): string {
 
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
-  expandedToolCards: Map<string, boolean>,
+  sharedExpansion: Map<string, boolean>,
   props: Pick<
     ChatThreadProps,
     "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
   >,
+  readerExpandedWork?: ReadonlySet<string>,
 ): TranscriptIndex {
   const cacheKey = [
-    expandedToolCards,
-    getExpansionStateVersion(expandedToolCards),
+    sharedExpansion,
+    getExpansionStateVersion(sharedExpansion),
+    readerExpandedWork,
     props.assistantName,
     props.currentAgentId,
     props.agents,
@@ -351,6 +354,13 @@ export function projectTranscriptIndex(
     props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
+    // This derived view is pane-local; it never publishes automatic expansion.
+    const expandedToolCards = readerExpandedWork?.size ? new Map(sharedExpansion) : sharedExpansion;
+    for (const key of readerExpandedWork ?? []) {
+      if (getExplicitToolExpansion(sharedExpansion, key) === undefined) {
+        expandedToolCards.set(key, true);
+      }
+    }
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
     const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {

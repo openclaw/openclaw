@@ -170,6 +170,9 @@ export function projectChatTranscript(
   if (state.observedWorkRun?.sessionKey !== props.sessionKey) {
     state.observedWorkRun = undefined;
   }
+  if (state.readerExpandedWork?.sessionKey !== props.sessionKey) {
+    state.readerExpandedWork = undefined;
+  }
   const completedWork =
     state.observedWorkRun &&
     transcriptChain.workGroups.find(
@@ -180,9 +183,15 @@ export function projectChatTranscript(
   if (completedWork) {
     // Completion must not remove the paragraph a reader scrolled back to read.
     // Cold history has no observed live run; explicit disclosure choices still win.
-    if (!transcript.canFollowEnd && !expandedToolCards.has(completedWork.key)) {
+    if (
+      !transcript.canFollowEnd &&
+      getExplicitToolExpansion(expandedToolCards, completedWork.key) === undefined
+    ) {
       transcript.preserveReaderPosition();
-      setExpansionState(expandedToolCards, completedWork.key, true);
+      state.readerExpandedWork = {
+        sessionKey: props.sessionKey,
+        keys: new Set([...(state.readerExpandedWork?.keys ?? []), completedWork.key]),
+      };
     }
     state.observedWorkRun = undefined;
   } else if (!props.loading && (props.runWorking || props.runActive) && props.runId) {
@@ -202,6 +211,10 @@ export function projectChatTranscript(
   if (replyNavigationId) {
     expandReplyTargetWork(transcriptItems, expandedToolCards, replyNavigationId);
   }
+  const readerExpandedWork = state.readerExpandedWork?.keys;
+  const isWorkExpanded = (key: string) =>
+    getExplicitToolExpansion(expandedToolCards, key) ??
+    Boolean(readerExpandedWork?.has(key) || expandedToolCards.get(key));
   const {
     messageRowKeysById,
     transcriptMessageKeys,
@@ -209,7 +222,7 @@ export function projectChatTranscript(
     positionIndex,
     rows,
     liveItem,
-  } = projectTranscriptIndex(transcriptChain, expandedToolCards, props);
+  } = projectTranscriptIndex(transcriptChain, expandedToolCards, props, readerExpandedWork);
   const questionPrompts = indexQuestionPrompts(props.questionPrompts);
   const toolExpanded = (id: string, card?: ToolCard) =>
     props.inlineCommands?.readInlineToolExpansion(expandedToolCards, id, card) ??
@@ -421,6 +434,7 @@ export function projectChatTranscript(
     appliedBranding.avatarHat,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
+    readerExpandedWork,
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
@@ -538,7 +552,7 @@ export function projectChatTranscript(
         : { kind: "stream", parts: item.parts, options: streamGroupOptions };
     }
     if (item.kind === "work-group") {
-      const workExpanded = expandedToolCards.get(item.key) ?? false;
+      const workExpanded = isWorkExpanded(item.key);
       return {
         kind: "work",
         item,
@@ -571,7 +585,7 @@ export function projectChatTranscript(
           streamOptions: streamGroupOptions,
           renderGroupOptions,
           partDependencies: renderDependencies,
-          isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
+          isWorkExpanded,
           onToggleWork: toggleToolCardExpanded,
         },
       };
@@ -645,7 +659,8 @@ export function projectChatTranscript(
     const targetSources =
       targetChain === transcriptChain
         ? loadedReplySources
-        : projectTranscriptIndex(targetChain, expandedToolCards, props).loadedReplySources;
+        : projectTranscriptIndex(targetChain, expandedToolCards, props, readerExpandedWork)
+            .loadedReplySources;
     const loaded = targetSources.has(replyToId);
     if (loaded) {
       expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);

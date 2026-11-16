@@ -67,6 +67,7 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
   observedWorkRun?: { sessionKey: string; runId: string };
+  readerExpandedWork?: { sessionKey: string; keys: ReadonlySet<string> };
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
@@ -306,6 +307,7 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   if (state) {
     state.asyncQuestionDrafts = new Map();
     state.observedWorkRun = undefined;
+    state.readerExpandedWork = undefined;
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }
