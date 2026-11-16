@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   loadDeviceAuthToken,
   loadDeviceAuthTokenReadOnly,
@@ -214,4 +215,21 @@ export async function loadStoredOperatorDeviceAuthToken(
   } catch {
     return null;
   }
+}
+
+/**
+ * A device with no identity behind gateway.remote.edgeAuth reaches the Gateway
+ * through the proxy but holds no scopes. `gateway call` is read-only and cannot
+ * pair it; the TUI can.
+ */
+export function withEdgeAuthPairingHint(
+  error: Error,
+  edgeAuthHeaders: Readonly<Record<string, string>> | undefined,
+  deviceIdentity: DeviceIdentity | null,
+): Error {
+  const details = "details" in error ? error.details : undefined;
+  if (edgeAuthHeaders && !deviceIdentity && readMissingScopeErrorDetails(details)) {
+    error.message = `${error.message}\nFix: this device is not paired with this Gateway yet. Run \`openclaw tui\` once to pair this device, approve the request in that Gateway's Control UI (Settings -> Devices), then retry.`;
+  }
+  return error;
 }
