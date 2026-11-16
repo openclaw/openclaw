@@ -46,8 +46,17 @@ export function isPluginSourceCaptureOperation(operation: object): boolean {
 type SourceCustody = {
   source: PluginRecoverySource;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
+  modules?: ReadonlyMap<string, PluginInspectedModule>;
 };
-export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
+/** Plain inspection facts; executable lookup callbacks stay with each consuming capture. */
+export type PluginInspectedModule = {
+  staticImports: ReadonlySet<string>;
+  observed: ReadonlyMap<string, string | null | undefined>;
+  acquisitions: ReadonlyArray<
+    { kind: "file"; source: string } | { kind: "dependency"; importer: string; name: string }
+  >;
+};
+export type PluginSourceCustodyFork = SourceCustody;
 const sourceCustody = new AsyncLocalStorage<{
   closing: boolean;
   prepared: Map<object, Map<string, Promise<PreparedSourceCustody>>>;
@@ -478,6 +487,7 @@ export function createPluginGenerationModuleLookup({
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
     prepareModule: markPluginSourcePreparationOperation((filename: string) => {
+      assertModuleAvailable(filename);
       // Directory capture is valid, but selecting that directory as a module is not.
       if (capturedDirectories.has(filename)) {
         readPluginCapturedCode(filename, true);
