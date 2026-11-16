@@ -143,31 +143,8 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   padding-top: 10px;
 }
 
-/* Card actions are the theme's buttons; only the shared community pill keeps
-   its own surface. */
-.apps-pill {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  transition:
-    transform 140ms ease,
-    background 140ms ease,
-    border-color 140ms ease;
-}
-
-.apps-pill:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
-  background: var(--bg-hover);
-}
-
 .apps-card__cta:focus-visible,
-.apps-pill:focus-visible {
+.apps-community__link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -178,23 +155,31 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   font-size: var(--control-ui-text-sm);
 }
 
+/* Community reads as one line: its label, then the links as compact buttons. */
 .apps-community {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 36px;
 }
 
-.apps-pill {
+.apps-section.apps-community > .settings-section__heading {
+  margin: 0;
+}
+
+.apps-community__links {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 15px;
 }
 
-.apps-pill__icon {
+.apps-community__icon {
   display: inline-flex;
 }
 
 .apps-card__icon svg,
-.apps-pill svg {
+.apps-community__icon svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -205,19 +190,17 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
 }
 
 .apps-card__icon svg.icon--filled,
-.apps-pill svg.icon--filled {
+.apps-community__icon svg.icon--filled {
   fill: currentColor;
   stroke: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .apps-card,
-  .apps-pill {
+  .apps-card {
     transition: none;
   }
 
-  .apps-card:hover,
-  .apps-pill:hover {
+  .apps-card:hover {
     transform: none;
   }
 }

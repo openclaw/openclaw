@@ -346,18 +346,18 @@ export function Apps(props: AppsProps) {
       <For each={APP_SECTIONS}>
         {(section) => <AppSectionView section={section} options={props} />}
       </For>
-      <section class="apps-section" aria-label={t("appsPage.sectionCommunity")}>
+      <section class="apps-section apps-community" aria-label={t("appsPage.sectionCommunity")}>
         <h2 class="settings-section__heading">{t("appsPage.sectionCommunity")}</h2>
-        <nav class="apps-community" aria-label={t("appsPage.sectionCommunity")}>
+        <nav class="apps-community__links" aria-label={t("appsPage.sectionCommunity")}>
           <For each={COMMUNITY_LINKS}>
             {(link) => (
               <a
-                class="apps-pill"
+                class="btn btn--sm apps-community__link"
                 href={link.href}
                 target={EXTERNAL_LINK_TARGET}
                 rel={buildExternalLinkRel()}
               >
-                <span class="apps-pill__icon" aria-hidden="true">
+                <span class="apps-community__icon" aria-hidden="true">
                   {link.icon()}
                 </span>
                 <span>{t(link.labelKey)}</span>
