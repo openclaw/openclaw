@@ -172,23 +172,36 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:touch-forked"]');
       await ui.visible(row, 10_000);
       const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");
-      const pin = ui.button(row, "Pin session", false);
-      const menu = row.locator("[data-sidebar-session-archive]");
+      const pin = row.locator("[data-sidebar-session-pin]");
+      const archive = row.locator("[data-sidebar-session-archive]");
+      const menu = row.locator("[data-sidebar-session-menu]");
       await expect.poll(() => fork.isVisible()).toBe(true);
+      expect(await pin.isVisible()).toBe(false);
+      expect(await archive.isVisible()).toBe(false);
       await ui.expectCount(row.locator(".session-row-state"), 0);
 
-      const [nameBounds, forkBounds, pinBounds, menuBounds] = await Promise.all([
+      const [nameBounds, forkBounds, menuBounds] = await Promise.all([
         ui.bounds(row.locator(".sidebar-recent-session__name")),
         ui.bounds(fork),
-        ui.bounds(pin),
         ui.bounds(menu),
       ]);
 
       expect(Math.abs(ui.centerY(forkBounds) - ui.centerY(nameBounds))).toBeLessThanOrEqual(2);
-      expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
-      expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
-      expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+      expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(menuBounds), 1);
+      expect(ui.right(nameBounds)).toBeLessThanOrEqual(menuBounds.x + 1);
+      expect(menuBounds.width).toBeGreaterThanOrEqual(44);
+      expect(menuBounds.height).toBeGreaterThanOrEqual(44);
       expect(nameBounds.width).toBeGreaterThan(0);
+      await menu.tap();
+      const actions = page.getByRole("menu", {
+        name: "Actions for A deliberately long non-running touch session title that must not overlap controls",
+        exact: true,
+      });
+      await ui.visible(actions);
+      await ui.visible(ui.menuItem(actions, "Pin session"));
+      await ui.visible(ui.menuItem(actions, "Archive session"));
+      await page.keyboard.press("Escape");
+      await actions.waitFor({ state: "hidden" });
       await row.locator(".sidebar-recent-session__link").tap();
       await expect
         .poll(() => new URL(page.url()).pathname)
