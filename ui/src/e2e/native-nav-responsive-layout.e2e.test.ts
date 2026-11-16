@@ -238,6 +238,44 @@ suite.define(() => {
       expect(errors).toEqual([]);
     },
   );
+  it("opens from the reachable content edge after a landscape safe-area inset", async () => {
+    const page = await openPage({ hasTouch: true, width: 852, height: 393 });
+    await shellHas(page, "shell--mobile-nav");
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--safe-area-left", "48px");
+    });
+    await expect.poll(async () => (await page.locator(".content").boundingBox())?.x).toBe(48);
+    const cdp = await context!.newCDPSession(page);
+    const swipeFrom = async (x: number) => {
+      // CDP hit-tests the actual point, unlike dispatching a touch to .content.
+      expect(
+        await page
+          .locator(".content")
+          .evaluate(
+            (content, startX) => content.contains(document.elementFromPoint(startX, 180)),
+            x,
+          ),
+      ).toBe(true);
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y: 180 }],
+      });
+      for (let step = 1; step <= 12; step++) {
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: x + step * 12, y: 180 }],
+        });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    // The inset moves the opening strip; it must not broaden content interception.
+    await swipeFrom(112);
+    await shellHas(page, "shell--nav-drawer-open", false);
+    await swipeFrom(72);
+    await shellHas(page, "shell--nav-drawer-open");
+  });
+
   it("leaves swipes away from the left edge to chat content", async () => {
     const text = [
       "See https://docs.openclaw.ai/a/long/synthetic/path/for/the/swipe/regression/test now.",

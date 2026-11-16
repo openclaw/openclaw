@@ -96,8 +96,7 @@ export class NavDrawerSwipeOwner {
       return;
     }
     const touch = event.touches[0];
-    // Leave gestures elsewhere to content such as canvas orbit controls.
-    if (!touch || touch.clientX > EDGE_SWIPE_START_PX) {
+    if (!touch) {
       return;
     }
     const path = event.composedPath();
@@ -105,7 +104,9 @@ export class NavDrawerSwipeOwner {
       (target): target is HTMLElement =>
         target instanceof HTMLElement && target.classList.contains("content"),
     );
-    if (!content) {
+    // The reachable content edge includes the shell’s device safe-area inset.
+    // Leave gestures farther inside to content such as canvas orbit controls.
+    if (!content || touch.clientX > content.getBoundingClientRect().left + EDGE_SWIPE_START_PX) {
       return;
     }
     const blocked = path
