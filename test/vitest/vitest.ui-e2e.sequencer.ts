@@ -44,7 +44,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["chat-flow.sidebar-presentation.e2e.test.ts", 12],
   ["chat-flow.streaming.e2e.test.ts", 20],
   ["chat-pull-requests.e2e.test.ts", 14],
-  ["chat-rail-columns.e2e.test.ts", 36],
   ["chat-reply-preview-recovery.e2e.test.ts", 15],
   ["chat-retained-pane-hydration.e2e.test.ts", 15],
   ["chat-run-lifecycle.e2e.test.ts", 13],

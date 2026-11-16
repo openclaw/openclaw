@@ -14,7 +14,6 @@ import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuil
 import {
   createUiE2eVitestConfig,
   uiE2ePrivateServerTestFiles,
-  uiE2eRuntimeBudgetTestFile,
   uiE2eSerialTestFiles,
 } from "../vitest/vitest.ui-e2e.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
@@ -110,7 +109,9 @@ export function assertControlUiE2eOwnership(
     ),
   );
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
-  expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
+  expect(uiE2eSerialTestFiles).toContain(
+    "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts",
+  );
 
   const config = createUiE2eVitestConfig({}, []);
   type Project = {

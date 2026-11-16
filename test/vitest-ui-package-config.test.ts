@@ -347,7 +347,7 @@ export default {
           path.join(
             uiRoot,
             browser === "webkit"
-              ? "src/components/solid/menu-navigation.browser.test.tsx"
+              ? "src/components/tooltip.browser.test.ts"
               : "src/components/markdown-mermaid.runtime.browser.test.ts",
           ),
         );

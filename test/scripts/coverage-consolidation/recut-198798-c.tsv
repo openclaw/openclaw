@@ -1,0 +1,56 @@
+# frozen_main	1b947c9a9f61c260219ddf0a6f281854600b7bdd
+# original_pr	198798
+# approved_source	8fe7b953d49ea4c22e727c7c8a1dbb2dd8ac6b6a
+# keeper_chains	1118 and1182 name retained node-worker-tunnel, breaking the reciprocal removed-keeper cycle.
+# webkit_fixture	Native WebKit discovery sentinel uses existing tooltip.browser, preserving every assertion.
+# repair_base	b90c5739fa5cbff09f35de8985e1579b4442d5cd
+# rebase_main	b90c5739fa5cbff09f35de8985e1579b4442d5cd
+# fixture	Runtime-budget serial discovery sentinels restored exactly from selected main; generic isolated WebKit sentinel remains the existing tooltip suite.
+# docs	Runtime-budget proof citations restored with their suite; generic isolated WebKit example remains current.
+# retentions	Thirteen suites retained exactly from selected main, including browser budgets, HTTPS renewal and Windows launcher crash recovery.
+rank	removed_lines	file	keeper_files	reason
+1117	837	src/config/sessions/session-accessor.sqlite-active-events.test.ts	src/config/sessions/session-accessor.conformance.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1143	0	src/config/sessions/session-accessor.sqlite-cleanup-race.test.ts	src/config/sessions/session-accessor.sqlite-cleanup-race.test.ts	Retained exact selected main: byte-limited archive cleanup and generation race assertions.
+1185	822	src/config/sessions/session-accessor.sqlite-replacement-publication.test.ts	src/config/sessions/session-accessor.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1162	827	src/config/sessions/session-sharing-store.worker.test.ts	src/config/sessions/session-sharing-store.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1181	823	src/cron/service.run-queue.test.ts	src/gateway/server-cron.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1194	820	src/cron/service.trigger-eval.test.ts	src/gateway/server-cron.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1170	0	src/daemon/service-definition-backup.test.ts	src/daemon/service-definition-backup.test.ts	Retained exact selected main after review: Windows interrupted launcher publication and subprocess crash recovery preserve runnable launchers and restorable receipts.
+1177	824	src/gateway/agent-turn/agent-wait-dedupe.test.ts	src/gateway/server-methods/server-methods.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1178	824	src/gateway/control-ui-session-task-prs.test.ts	src/gateway/session-row-projection.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1186	822	src/gateway/cron-stream-watchers.test.ts	src/gateway/server-cron.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1195	820	src/gateway/model-account-connect.worker.test.ts	src/commands/models/auth-login-gateway.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1105	840	src/gateway/server-methods.session-scoped-reads.test.ts	src/gateway/server-methods/server-methods.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1171	826	src/gateway/server-methods/chat-metadata-runtime.test.ts	src/gateway/server.chat.gateway-server-chat-b.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1151	0	src/gateway/server-methods/cron-stream-approval.integration.test.ts	src/gateway/server-methods/cron-stream-approval.integration.test.ts	Retained exact selected main: real cron stream approval, policy revalidation and creator authority assertions.
+1175	825	src/gateway/session-row-projection.backfill.test.ts	src/gateway/session-row-projection.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1187	822	src/gateway/talk/client-gateway-control.test.ts	src/gateway/talk/handlers/index.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1182	0	src/gateway/worker-environments/node-workspace-retain-coordinator.test.ts	src/gateway/worker-environments/node-workspace-retain-coordinator.test.ts	Retained exact selected main: prepared coordinator admission, exact hash and live build retention assertions.
+1118	0	src/gateway/worker-environments/workspace-sync-tunnel.test.ts	src/gateway/worker-environments/workspace-sync-tunnel.test.ts	Retained exact selected main: real workspace tunnel transfer, nonce and port-boundary assertions.
+1144	830	src/infra/state-migrations.media-persistence.test.ts	src/infra/state-migrations.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1196	0	src/infra/update-managed-service-handoff-single-flight.test.ts	src/infra/update-managed-service-handoff-single-flight.test.ts	Retained exact selected main: same-root single-flight helper ownership and native release assertions.
+1119	0	src/infra/worker-task-pool.preparation.test.ts	src/infra/worker-task-pool.preparation.test.ts	Retained exact selected main: preparation custody, native retirement and point-read admission assertions.
+1126	835	src/plugins/contracts/session-actions.contract.test.ts	src/plugins/contracts/host-hooks.contract.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1189	821	src/plugins/plugin-metadata-snapshot.test.ts	src/gateway/server-plugins.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1127	835	src/plugins/plugin-metadata-state-worker.test.ts	src/plugins/update.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1138	0	src/plugins/provider-hook-runtime.provenance.test.ts	src/plugins/provider-hook-runtime.provenance.test.ts	Retained exact selected main: runtime registry provenance and discovery-selection ownership assertions.
+1179	824	src/plugins/update-cohort-recovery.test.ts	src/plugins/update.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1141	0	src/secrets/egress-proxy/proxy-server.lifecycle.test.ts	src/secrets/egress-proxy/proxy-server.lifecycle.test.ts	Retained exact selected main after review: real HTTPS certificate renewal, recovery, trust continuity and revocation fencing are distinct lifecycle coverage.
+1128	835	src/secrets/runtime-state.test.ts	src/gateway/server-reload-handlers.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1157	0	src/skills/library/selection-authority.test.ts	src/skills/library/selection-authority.test.ts	Retained exact selected main: selection authority, shared-owner catalog and bounded SQL assertions.
+1158	0	src/skills/loading/workspace-skill-sync.runtime.test.ts	src/skills/loading/workspace-skill-sync.runtime.test.ts	Retained exact selected main: skill sync custody and Git discovery isolation assertions.
+1173	826	src/state/openclaw-agent-execution.creation-witness.test.ts	src/state/openclaw-agent-db.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1135	833	src/state/openclaw-database-preflight.test.ts	src/state/openclaw-state-db.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1110	839	src/transcripts/status.producer.test.ts	src/transcripts/status.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1159	828	test/scripts/oxlint-config.test.ts	test/scripts/run-oxlint.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1188	822	test/scripts/release-publish-parent.test.ts	test/scripts/release-no-push-workflow.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1163	827	ui/src/app/session-placement-startup.delivery.test.ts	ui/src/pages/chat/chat-send.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1120	837	ui/src/components/sidebar-snapshot.test.ts	ui/src/e2e/session-management.sidebar-reconnect.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1152	829	ui/src/components/solid/menu-navigation.browser.test.tsx	ui/src/components/solid/menu-native-contract.browser.test.tsx	Approved file-level area consolidation; named final surviving keepers retained.
+1139	832	ui/src/e2e/chat-rail-columns.e2e.test.ts	ui/src/pages/chat/chat-responsive.browser.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1112	0	ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts	ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts	Retained exact selected main after review: real browser 240-delta coalescing, heap ceilings and idle CPU budgets require this runtime suite.
+1183	823	ui/src/e2e/new-session-page.instant-thread.e2e.test.ts	ui/src/pages/chat/chat-send.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1129	835	ui/src/lib/board/provider.test.ts	ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1153	829	ui/src/lib/config/config-draft-model.test.ts	ui/src/lib/config/config-draft-revision.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1197	820	ui/src/lib/sessions/session-row-observation.test.ts	ui/src/pages/chat/chat-state.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1121	0	ui/src/e2e/session-progress-live-placement.e2e.test.ts	ui/src/e2e/session-progress-live-placement.e2e.test.ts	Retained: executable QA scenario requires live card placement and compact transcript receipt; the proposed background-work keeper does not cover this scenario.

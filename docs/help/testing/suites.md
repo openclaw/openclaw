@@ -454,7 +454,7 @@ For WebKit browser tests, the image must also contain the installed Playwright p
 ```bash
 node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
   --config test/vitest/vitest.ui-browser-webkit.config.ts --configLoader runner \
-  ui/src/components/solid/menu-navigation.browser.test.tsx --maxWorkers=1
+  ui/src/components/tooltip.browser.test.ts --maxWorkers=1
 ```
 
 If the host pnpm executable auto-selects another version, resolve the already prepared pinned native executable with `pnpm exec node -p process.env.npm_execpath` and set `npm_execpath` to that path for the invocation. The container checks the executable itself, without downloading a replacement.
