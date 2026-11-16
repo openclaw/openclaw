@@ -9,6 +9,7 @@ import OpenClawChatUI
 import OpenClawDiscovery
 @testable import OpenClawKit
 import OpenClawProtocol
+import QuartzCore
 import SwiftUI
 import Testing
 
@@ -940,6 +941,24 @@ private func inspectAISetupSheet(
     return snapshot
 }
 
+/// AX observes state before SwiftUI has committed its display transaction.
+/// Use the next AppKit turn, not a sleep, before recording the rendered state.
+@MainActor
+private func flushAISetupRendering(_ view: NSView) async {
+    await withCheckedContinuation { continuation in
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated {
+                view.layoutSubtreeIfNeeded()
+                CATransaction.flush()
+                continuation.resume()
+            }
+        }
+    }
+    view.needsDisplay = true
+    view.displayIfNeeded()
+    CATransaction.flush()
+}
+
 @MainActor
 private func inspectAISetupSurface(
     _ content: some View,
@@ -982,8 +1001,7 @@ private func inspectAISetupSurface(
            let directory = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_CAPTURE_DIR"]
         {
             do {
-                hosting.layoutSubtreeIfNeeded()
-                hosting.displayIfNeeded()
+                await flushAISetupRendering(hosting)
                 let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
                 let png = try #require(bitmap.representation(using: .png, properties: [:]))
@@ -1054,7 +1072,10 @@ struct OnboardingAISetupTests {
             _ = AppKitTestSupport.application
             let hosting = NSHostingView(rootView: view.aiSetupPage(contentHeight: 600)
                 .environment(\.colorScheme, colorScheme)
-                .transaction { $0.disablesAnimations = true }
+                .transaction {
+                    $0.animation = nil
+                    $0.disablesAnimations = true
+                }
                 .background(Color(nsColor: .windowBackgroundColor)))
             hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 600)
             let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -1070,10 +1091,9 @@ struct OnboardingAISetupTests {
             hosting.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
 
-            func capture(_ name: String) throws {
+            func capture(_ name: String) async throws {
                 guard let directory = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_CAPTURE_DIR"] else { return }
-                hosting.layoutSubtreeIfNeeded()
-                hosting.displayIfNeeded()
+                await flushAISetupRendering(hosting)
                 let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
                 let png = try #require(bitmap.representation(using: .png, properties: [:]))
@@ -1089,7 +1109,7 @@ struct OnboardingAISetupTests {
             #expect(!snapshot.actions.keys.contains { $0.contains("API Keys") })
             #expect(!snapshot.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") })
 
-            try capture("choices")
+            try await capture("choices")
 
             try await pressOnboardingEntryButton("Use a local model", in: hosting)
             try await TestWait.state("local setup page") {
@@ -1101,20 +1121,20 @@ struct OnboardingAISetupTests {
                 #expect(snapshot.actions["Find a model"] == true)
             }
             #expect(!snapshot.actions.keys.contains { $0.contains("API Keys") })
-            try capture("local")
+            try await capture("local")
 
             if hasLocalModel {
                 try await pressOnboardingEntryButton("Set up a different model", in: hosting)
                 try await TestWait.state("explicit managed setup after discovery") {
                     try await inspectAISetupAccessibility(hosting).actions["Find a model"] == true
                 }
-                try capture("local-different-model")
+                try await capture("local-different-model")
             }
             try await pressOnboardingEntryButton("Other model services and advanced settings", in: hosting)
             try await TestWait.state("advanced model services") {
                 try await inspectAISetupAccessibility(hosting).labels.contains { $0.contains("Ollama") }
             }
-            try capture("local-advanced")
+            try await capture("local-advanced")
             try await pressOnboardingEntryButton("Back", in: hosting)
             try await TestWait.state("connection choices restored") {
                 try await inspectAISetupAccessibility(hosting).actions["Connect an AI account"] == true
@@ -1126,12 +1146,12 @@ struct OnboardingAISetupTests {
             snapshot = try await inspectAISetupAccessibility(hosting)
             #expect(snapshot.actions.contains { $0.key.contains("API Keys") && $0.value })
             #expect(!snapshot.labels.contains("API key or token"))
-            try capture("account")
+            try await capture("account")
             try await pressOnboardingEntryButton("API Keys", in: hosting)
             try await TestWait.state("explicit key entry") {
                 try await inspectAISetupAccessibility(hosting).labels.contains("Connect with an API key or token")
             }
-            try capture("account-api-key-entry")
+            try await capture("account-api-key-entry")
             #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect"])
         } catch {
             await harness.gateway.shutdown()
