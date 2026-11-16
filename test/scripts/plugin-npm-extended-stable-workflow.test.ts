@@ -639,12 +639,13 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
   );
 
   it.each([
-    ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true],
-    ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false],
-    ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false],
+    ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true, "a"],
+    ["candidate-owned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, true, "b"],
+    ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false, "a"],
+    ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false, "a"],
   ])(
     "admits extended-stable FRV preflight through %s",
-    (_label, workflowRef, toolingReachable, admitted) => {
+    (_label, workflowRef, toolingReachable, admitted, sourcePrefix) => {
       const policy = readFileSync("scripts/plugin-npm-release-admission.py", "utf8");
       const root = mkdtempSync(join(tmpdir(), "plugin-extended-stable-preflight-"));
       try {
@@ -661,7 +662,7 @@ class GitFailure(Exception):
 target = os.environ["SOURCE_REF"]
 def git_output(_workspace, *args):
     if args[0] == "rev-parse":
-        return target
+        return args[1] if args[1] == os.environ["WORKFLOW_SHA"] else target
     raise RuntimeError("unexpected git_output call")
 def run_git(_workspace, *args, **_kwargs):
     if args[0] == "merge-base":
@@ -697,7 +698,7 @@ ${policy}`,
               RELEASE_PUBLISH_RUN_ID: "",
               RELEASE_PUBLISH_RUN_ATTEMPT: "",
               RELEASE_CANDIDATE_BRANCH: "",
-              SOURCE_REF: "a".repeat(40),
+              SOURCE_REF: sourcePrefix.repeat(40),
               NPM_DIST_TAG: "extended-stable",
               PUBLISH_SCOPE: "all-publishable",
               RELEASE_PLUGINS: "",
