@@ -1411,7 +1411,7 @@ describe("CI changed Node test plan", () => {
         },
         {
           targets: [
-            "src/audit/execution-decision-facts.test.ts",
+            "src/audit/audit-config.test.ts",
             "src/auto-reply/reply/commands-export-session.test.ts",
             "src/gateway/server-methods/session-change-event.fallback.test.ts",
           ],
