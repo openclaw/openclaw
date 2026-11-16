@@ -145,8 +145,11 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   );
   // Route changes retire the cron owner's transcript reads and retarget Gateway job queries.
   // While the next route loads its search is unknown, not empty, so nothing acts on it.
+  // Effects never compare, and route data republishes the same search, so a memo lets only a
+  // real change through; a stale repeat would otherwise re-record an automation just forgotten.
+  const routeSearch = createMemo(() => props.routeSearch);
   createEffect(
-    () => props.routeSearch,
+    () => routeSearch(),
     (search) => {
       if (search === undefined) {
         return;
