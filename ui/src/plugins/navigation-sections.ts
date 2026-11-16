@@ -2,6 +2,22 @@ import type { ControlUiContributions, ControlUiRegistration } from "./control-ui
 
 type NavigationRegistration = ControlUiRegistration<ControlUiContributions["navigation"]>;
 
+/**
+ * The plugin page open at a route: a plugin tab's own key, or the plugin page the Gateway
+ * places on a native route (Workboard at /workboard).
+ */
+export function pluginPageKeyForRoute(
+  route: string,
+  pluginTabKey: string | undefined,
+  tabs: readonly { pluginId: string; id: string; placement?: string }[],
+): string | undefined {
+  if (pluginTabKey) {
+    return pluginTabKey;
+  }
+  const tab = tabs.find((candidate) => candidate.placement === `route:${route}`);
+  return tab ? `${tab.pluginId}/${tab.id}` : undefined;
+}
+
 const sameParent = (child: NavigationRegistration, parent: NavigationRegistration) =>
   child.pluginId === parent.pluginId && child.value.parent === parent.value.id;
 
