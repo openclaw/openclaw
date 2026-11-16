@@ -227,6 +227,8 @@ it("lets each page decide its sidebar: its section, Sessions, or none", () => {
   expect(sidebarViewForPage("new-session")).toBe("sessions");
   expect(sidebarViewForPage("terminal")).toBe("sessions");
   expect(sidebarViewForPage("systems")).toBe("sessions");
+  expect(sidebarViewForPage("sessions")).toBe("sessions");
+  expect(sidebarViewForPage("worktrees")).toBe("sessions");
   expect(sidebarViewForPage("usage")).toBeUndefined();
   expect(sidebarViewForPage("plugin", "knowledge/overview")).toBeUndefined();
   // Remote access belongs to the Users section.

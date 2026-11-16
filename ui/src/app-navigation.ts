@@ -85,12 +85,13 @@ export function sidebarViewForPage(
   if (section) {
     return section;
   }
-  // Systems lists its machines in the Sessions view of the sidebar. A terminal is a conversation
-  // opened from that list.
+  // Systems lists its machines in the Sessions view of the sidebar; the Sessions page sits
+  // beside the Sessions list it expands. A terminal is a conversation opened from that list.
   return isSessionRouteId(route) ||
     route === "new-session" ||
     route === "terminal" ||
-    route === "systems"
+    route === "systems" ||
+    isSessionsHubRoute(route)
     ? "sessions"
     : undefined;
 }
