@@ -445,43 +445,50 @@ describe("grouped chat rendering", () => {
         ],
         ["roster", "subagents", { action: "list" }, { status: "ok", action: "list" }],
       ] as const
-    ).flatMap(([id, name, args, output], index): TestMessage[] => [
-      createAssistantMessage(
-        [
+    ).flatMap(([id, name, args, output], index): TestMessage[] => {
+      const rows: TestMessage[] = [
+        createAssistantMessage(
+          [
+            dispatched
+              ? createToolCall(id, "dispatch_action", { id: name, args })
+              : createToolCall(id, name, args),
+          ],
+          { __openclaw: { id: `${id}-call`, runId } },
+        ),
+      ];
+      if (dispatched) {
+        rows.push(
+          Object.assign(
+            createNestedToolActivity({
+              runId,
+              scopeId: "scope",
+              afterEntryId: `${id}-call`,
+              startOrder: index,
+              parentToolCallId: id,
+              toolCallId: `tool_call:${id}:${name}:${index}`,
+              toolName: name,
+              input: args,
+              result: { content: text(output) },
+              isError: false,
+              startedAt: index,
+              timestamp: index,
+            }),
+            { __openclaw: { id: `${id}-nested`, runId } },
+          ),
+        );
+      }
+      rows.push(
+        createToolResultMessage(
+          id,
+          dispatched ? "dispatch_action" : name,
           dispatched
-            ? createToolCall(id, "dispatch_action", { id: name, args })
-            : createToolCall(id, name, args),
-        ],
-        { __openclaw: { id: `${id}-call`, runId } },
-      ),
-      ...(dispatched
-        ? [
-            Object.assign(
-              createNestedToolActivity({
-                runId,
-                scopeId: "scope",
-                afterEntryId: `${id}-call`,
-                startOrder: index,
-                parentToolCallId: id,
-                toolCallId: `tool_call:${id}:${name}:${index}`,
-                toolName: name,
-                input: args,
-                result: { content: text(output) },
-                isError: false,
-                startedAt: index,
-                timestamp: index,
-              }),
-              { __openclaw: { id: `${id}-nested`, runId } },
-            ),
-          ]
-        : []),
-      createToolResultMessage(
-        id,
-        dispatched ? "dispatch_action" : name,
-        dispatched ? text({ tool: { id: name }, result: { content: text(output) } }) : text(output),
-        { isError: false, __openclaw: { id: `${id}-result`, runId } },
-      ),
-    ]);
+            ? text({ tool: { id: name }, result: { content: text(output) } })
+            : text(output),
+          { isError: false, __openclaw: { id: `${id}-result`, runId } },
+        ),
+      );
+      return rows;
+    });
     const history = attachHistoryActivity(prepareChatHistoryFixture(messages));
     const items = buildItems({ paneId: "dispatch", messages: history.messages });
     renderActivityGroup(
@@ -500,24 +507,37 @@ describe("grouped chat rendering", () => {
     "keeps a collection wait visible when an ID returned an error (persisted: %s)",
     async (persisted) => {
       // A capped result keeps only the compact error count recorded before the cap.
+      const worker = {
+        runId: "done",
+        sessionKey: "agent:main:subagent:worker",
+        label: "Worker",
+        status: "done",
+      };
       const output = {
-        completed: [],
+        completed: [worker],
         pending: [],
         errors: [{ runId: "gone", error: "not_found" }],
       };
       const groups = buildItems({
         messages: [
-          createAssistantMessage([createToolCall("wait", "agents_wait", { ids: ["gone"] })]),
+          createAssistantMessage([
+            createToolCall("wait", "agents_wait", { ids: ["done", "gone"] }),
+          ]),
           createToolResultMessage(
             "wait",
             "agents_wait",
             persisted ? "[output truncated]" : JSON.stringify(output),
-            persisted ? { subagentCollectionErrors: 1 } : {},
+            persisted ? { subagentCompletions: [worker], subagentCollectionErrors: 1 } : {},
           ),
         ],
       }).filter((item) => item.kind === "group");
       await renderToolGroups(groups, {});
-      expectCount(".chat-tool-msg-summary", 1);
+      expectCount("button.chat-tool-msg-summary", 1);
+      expect(harness.view.textContent).toContain("Worker finished");
+      await renderToolGroups(groups, expandedTools);
+      expect(elementText(".chat-tool-msg-body")).toContain(
+        persisted ? "[output truncated]" : "not_found",
+      );
     },
   );
 

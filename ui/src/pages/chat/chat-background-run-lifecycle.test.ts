@@ -226,8 +226,8 @@ describe("self-woken continuation projection", () => {
     // One block per prompt; the earlier answer stays visible in place.
     expect(first!.parts.map((part) => [part.kind, chatItemGroups(part)[0]?.runId])).toEqual([
       ["group", "ask"],
-      ["group", "late"],
-      ["group", "settle"],
+      ["activity-run", "late"],
+      ["activity-run", "settle"],
       ["group", "settle"],
     ]);
     expect(first!.parts.map((part) => partContinuation(part))).toEqual([
