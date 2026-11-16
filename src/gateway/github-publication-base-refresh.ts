@@ -145,7 +145,7 @@ export async function integrateManagedWorkspaceSource(
   let previousBase: string | undefined;
   const result = await withLocalWorkspaceProjection<SessionGitHubBaseRefreshResult>(
     { ...owner, assertCurrent },
-    async (state) => {
+    async (state, quiescence) => {
       if (
         sandbox.sessionKey !== owner.sessionKey ||
         sandbox.workspaceDir !== state.current().projection_path ||
@@ -344,6 +344,10 @@ export async function integrateManagedWorkspaceSource(
           if (integrated.code !== 0 && integrated.code !== 1) {
             throw new Error("The pending base ancestry could not be verified.");
           }
+          // Canonical custody and the captured baseline own preparation. Guest
+          // writes are checked by the target preflight before applying the result.
+          await quiescence?.resume();
+          quiescence?.markPhase("operation");
           const sourceHead = await git(["rev-parse", "HEAD"]);
           const merge = initialImport
             ? { code: 0, stdout: await git(["rev-parse", `${baseCommit}^{tree}`]) }

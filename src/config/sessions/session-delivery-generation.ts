@@ -35,10 +35,7 @@ import {
   projectSessionSharingEntry,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
-import type {
-  SessionEntryCreationOperation,
-  SessionSharingEntry,
-} from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { createLeaseDiagnostics } from "./session-delivery-generation-diagnostics.js";
@@ -99,9 +96,7 @@ async function prepareSessionGenerationLease(
   assertCurrent: SessionSourceAssertion;
   assertNativeTransactionCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
-  readSessionSettings: () =>
-    | Readonly<Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">>
-    | undefined;
+  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
   prepareRead: () => Promise<void> | undefined;
   release: () => void;
   bindCreation: (
@@ -195,6 +190,9 @@ async function prepareSessionGenerationLease(
     return entry;
   };
   const changed = (change: SessionRowChange) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
         // Registration changes do not retarget an in-flight delivery. Its selected
@@ -208,21 +206,12 @@ async function prepareSessionGenerationLease(
         if (change.scope.storePath && !paths.has(path.resolve(change.scope.storePath))) {
           return;
         }
-      } else if (
-        // Runtime and automation still invalidate this retained authority.
-        !sessionChangeScopeAffectsStoredRows(change) &&
-        change.scope !== "runtime" &&
-        change.scope !== "automation"
-      ) {
-        return;
       }
       diag.flip("row-invalidated");
       invalidated = true;
       return;
     }
     if (
-      change.scope === "automation" ||
-      change.scope === "acp" ||
       change.sessionKey !== generation.sessionKey ||
       (change.agentId && change.agentId !== generation.agentId) ||
       !change.storePath ||
@@ -528,9 +517,9 @@ async function prepareSessionGenerationLease(
         },
         fields: generation.exactTranscript
           ? ["sessionId", "lifecycleRevision"]
-          : generation.lifecycleRevision === null
-            ? []
-            : ["lifecycleRevision"],
+          : generation.exactLifecycle
+            ? ["lifecycleRevision"]
+            : [],
         assertCurrent: () => readCurrent(),
         assertHostCurrent: assertActive,
         refuse: () => {

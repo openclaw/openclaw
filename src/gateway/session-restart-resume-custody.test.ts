@@ -9,6 +9,57 @@ import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
+import { prepareRestartStores } from "./session-restart-resume-discovery.js";
+
+it("recovers an owed completion after its requester has already settled", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const person = ensureGatewayOwnerProfile("Restart custody owner");
+    const target = {
+      agentId: "main",
+      physicalAgentId: "main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const sessionKey = "agent:main:dashboard:settled-requester";
+    const entry = {
+      sessionId: "settled-requester",
+      lifecycleRevision: "original-revision",
+      updatedAt: 1,
+      createdActor: { type: "human" as const, source: "profile" as const, id: person.id },
+    };
+    replaceSessionEntrySync({ ...target, sessionKey }, entry);
+    const child = createSubagentRunRecord({
+      runId: "owed-completion",
+      childSessionKey: "agent:main:subagent:finished-child",
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterStorePath: target.storePath,
+      completionRequesterSessionId: entry.sessionId,
+      completionRequesterLifecycleRevision: entry.lifecycleRevision,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+      completionTarget: "parent",
+      endedAt: 1,
+      delivery: { status: "pending" },
+    });
+    subagentRuns.set(child.runId, child);
+    subagentRuns.retireCompletionAuthority(child);
+    try {
+      const params = {
+        context: createContext(),
+        signal: new AbortController().signal,
+        log: { warn: vi.fn() },
+      };
+      params.context.resolveGatewayContext = () => params.context;
+      const stores = await prepareRestartStores(params, [target]);
+      expect(stores?.[0]?.entries.map((row) => row.sessionKey)).toContain(sessionKey);
+      await prepareRestartCompletionCustody(params, stores![0]!);
+      expect(params.log.warn).not.toHaveBeenCalled();
+      expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(false);
+    } finally {
+      subagentRuns.delete(child.runId);
+    }
+  }));
 
 it.for(["archived", "replaced", "reset"] as const)(
   "does not recover completion custody from a stale %s requester snapshot",

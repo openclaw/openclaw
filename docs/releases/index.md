@@ -14,6 +14,9 @@ who contributed, with links to the source changes.
 ### November 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.11.4" href="/releases/2026.11.4">
+    Fixes for updates, conversations, data recovery and privacy.
+  </Card>
   <Card title="v2026.11.3" href="/releases/2026.11.3">
     Fixes for update recovery, backup discovery, privacy and reliability.
   </Card>

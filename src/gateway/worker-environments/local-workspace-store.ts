@@ -1,6 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { serialize } from "node:v8";
-import { deflateRaw, deflateRawSync } from "node:zlib";
+import { constants, deflateRawSync, zstdCompress } from "node:zlib";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
 import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
@@ -14,6 +18,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
@@ -39,7 +44,116 @@ import type {
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
-const compressMutation = promisify(deflateRaw);
+const compressMutation = promisify(zstdCompress);
+const log = createSubsystemLogger("agents/worktrees");
+let nextOversizedMutationLogAt = 0;
+const reconciliationContext = new AsyncLocalStorage<Record<string, string>>();
+const shortDigest = (value: string | Uint8Array) =>
+  createHash("sha256").update(value).digest("hex").slice(0, 16);
+
+export async function withLocalWorkspaceReconciliation<T extends { conflictPaths: string[] }>(
+  input: {
+    worktreeId: string;
+    pendingRef: string;
+    baseCommit: string | null;
+    targetCommit: string | null;
+    target: "canonical" | "projection";
+    reason: LocalWorkspacePauseReason;
+  },
+  run: (markApplied: () => void) => Promise<T>,
+): Promise<T> {
+  const correlation = {
+    workspace: shortDigest(input.worktreeId),
+    plan: shortDigest(input.pendingRef),
+    attempt: randomUUID(),
+    baseCommit: input.baseCommit?.slice(0, 12) ?? "-",
+    targetCommit: input.targetCommit?.slice(0, 12) ?? "-",
+    target: input.target,
+    reason: input.reason,
+  };
+  return reconciliationContext.run(correlation, async () => {
+    const fields = JSON.stringify(correlation);
+    const started = performance.now();
+    let applied = false;
+    let outcome = "aborted";
+    log.info(`Local workspace reconcile start: correlation=${fields}`);
+    try {
+      const result = await run(() => (applied = true));
+      outcome = result.conflictPaths.length ? "conflict" : applied ? "applied" : "replayed";
+      return result;
+    } finally {
+      log.info(
+        `Local workspace reconcile finish: correlation=${fields} outcome=${outcome} durationMs=${(performance.now() - started).toFixed(1)}`,
+      );
+    }
+  });
+}
+
+function warnOversizedMutation(
+  mutation: LocalWorkspaceMutation,
+  serializedBytes: number,
+  wireBytes: number,
+  worktreeId: string,
+  row: LocalWorkspaceProjection | undefined,
+) {
+  if (serializedBytes <= 1024 * 1024 || Date.now() < nextOversizedMutationLogAt) {
+    return;
+  }
+  nextOversizedMutationLogAt = Date.now() + 60_000;
+  const patch: Record<string, unknown> =
+    mutation.kind === "create" ? mutation.row : mutation.kind === "update" ? mutation.patch : {};
+  const bytes = (value: unknown) =>
+    typeof value === "string"
+      ? Buffer.byteLength(value)
+      : value instanceof Uint8Array
+        ? value.byteLength
+        : typeof value === "number"
+          ? 8
+          : 0;
+  const fields = Object.fromEntries(
+    Object.entries(patch).map(([key, value]) => [key, bytes(value)]),
+  );
+  // Inspect only the rate-limited diagnostic sample; never serialize the payload again.
+  const document = (raw: unknown): Record<string, unknown> => {
+    if (typeof raw === "string") {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (isRecord(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Diagnostics must not change mutation or recovery behavior.
+      }
+    }
+    return {};
+  };
+  const journal = document(patch.journal_json);
+  const checkpoint = document(patch.checkpoint_json);
+  const fingerprints =
+    mutation.kind === "update" && mutation.manifest?.fingerprints
+      ? mutation.manifest.fingerprints
+      : isRecord(checkpoint.fingerprints)
+        ? checkpoint.fingerprints
+        : {};
+  const blobs = [fingerprints.blob, fingerprints.oppositeBlob].filter(
+    (value) => typeof value === "string",
+  );
+  const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+  // Recovery's producer already hashes these exact pack bytes; do not scan them again here.
+  const packDigest =
+    typeof journal.basePackSha256 === "string" && /^[a-f0-9]{64}$/u.test(journal.basePackSha256)
+      ? journal.basePackSha256.slice(0, 16)
+      : "-";
+  const correlation = reconciliationContext.getStore() ?? {
+    workspace: shortDigest(worktreeId),
+    plan: row?.pending_ref ? shortDigest(row.pending_ref) : "-",
+    baseCommit: row?.base_commit.slice(0, 12) ?? "-",
+  };
+  log.warn(
+    `Local workspace oversized mutation: kind=${mutation.kind} serializedBytes=${serializedBytes} wireBytes=${wireBytes} fieldBytes=${JSON.stringify(fields)} manifestFingerprintCount=${blobs.length} manifestFingerprintBytes=${blobs.reduce((sum, blob) => sum + bytes(blob), 0)} journalBaseEntries=${count(journal.baseEntries)} journalAppliedEntries=${count(journal.appliedEntries)} journalBaseDirectories=${count(journal.baseDirectories)} journalAppliedDirectories=${count(journal.appliedDirectories)} journalBaseTreeBytes=${bytes(journal.baseTree)}` +
+      ` correlation=${JSON.stringify(correlation)} journalPackSha256=${packDigest} journalJsonSha256=${typeof patch.journal_json === "string" ? shortDigest(patch.journal_json) : "-"}`,
+  );
+}
 
 export async function hasLocalWorkspaceProjection(id: string, env?: NodeJS.ProcessEnv) {
   const reply = await executeExistingOpenClawStateRead(
@@ -282,17 +396,30 @@ export function withLocalWorkspaceStore<T>(
                   };
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
-                  // Compress large inventories to fit the broker's existing queue budget.
+                  // Reconcile checkpoints can retain MB of inputs below the broker queue limit.
+                  const diagnosticMutation =
+                    wireMutation instanceof Uint8Array ? mutation : wireMutation;
+                  let serializedBytes = preparedMutation?.byteLength ?? 0;
                   if (!preparedMutation) {
                     const serialized = serialize(wireMutation);
+                    serializedBytes = serialized.byteLength;
                     const compressed =
-                      serialized.byteLength > 32 * 1024 * 1024
-                        ? await compressMutation(serialized)
+                      serialized.byteLength > 1024 * 1024
+                        ? await compressMutation(serialized, {
+                            params: { [constants.ZSTD_c_compressionLevel]: 1 },
+                          })
                         : undefined;
                     if (compressed && compressed.byteLength < serialized.byteLength) {
                       wireMutation = compressed;
                     }
                   }
+                  warnOversizedMutation(
+                    diagnosticMutation,
+                    serializedBytes,
+                    wireMutation instanceof Uint8Array ? wireMutation.byteLength : serializedBytes,
+                    params.worktreeId,
+                    row,
+                  );
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const assertWrite = () => {

@@ -3,6 +3,7 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../src/gateway/test-helpers.e2e.ts";
+import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -10,7 +11,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureNestedSessionProof,
@@ -47,6 +48,129 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("reconciles captured selections across real refresh, removal, and successor updates", async () => {
+    if (!instance) {
+      throw new Error("Gateway fixture is not running");
+    }
+    const owner = instance;
+    const client = await connectGatewayClient({
+      url: owner.url,
+      token: owner.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    const replaced = "agent:main:selection-proof-replaced";
+    const retained = "agent:main:selection-proof-retained";
+    const removed = "agent:main:selection-proof-removed";
+    const keys = [replaced, retained, removed];
+    try {
+      for (const key of keys) {
+        await client.request("sessions.create", { key, agentId: "main", label: key });
+      }
+      const initial = await client.request<SessionsListResult>("sessions.list", {
+        agentId: "main",
+      });
+      const originalId = (key: string) => {
+        const id = initial.sessions.find((row) => row.key === key)?.sessionId;
+        if (!id) {
+          throw new Error("Synthetic selection fixture is missing a session identity");
+        }
+        return id;
+      };
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const deletes: unknown[] = [];
+        const deleteRequests = new Set<string>();
+        const deleteResponse = createDeferredCore<unknown>();
+        const listRequests: string[] = [];
+        let listResponses = 0;
+        page.on("websocket", (socket) => {
+          socket.on("framesent", ({ payload }) => {
+            const frame = JSON.parse(payload.toString());
+            if (frame.type === "req" && frame.method === "sessions.delete") {
+              deletes.push(frame.params);
+              deleteRequests.add(frame.id);
+            }
+            if (
+              frame.type === "req" &&
+              frame.method === "sessions.list" &&
+              frame.params?.source === "sessions-page"
+            ) {
+              listRequests.push(frame.id);
+            }
+          });
+          socket.on("framereceived", ({ payload }) => {
+            const frame = JSON.parse(payload.toString());
+            if (frame.type === "res" && deleteRequests.has(frame.id)) {
+              deleteResponse.resolve(frame);
+            }
+            if (frame.type === "res" && frame.ok && listRequests.includes(frame.id)) {
+              listResponses++;
+            }
+          });
+        });
+        await page.goto(suite.server.baseUrl + "sessions#token=" + owner.gatewayToken);
+        await waitForControlUiGatewayReady(page);
+        const roster = page.locator("openclaw-sessions-page");
+        const checkbox = (key: string) =>
+          roster.locator(`input[type="checkbox"][aria-label$=": ${key}"]`);
+        for (const key of keys) {
+          await checkbox(key).check();
+        }
+        const beforeRefresh = listResponses;
+        await roster.locator(".sessions-toolbar__refresh").click();
+        await expect.poll(() => listResponses).toBeGreaterThan(beforeRefresh);
+        for (const key of keys) {
+          await expect.poll(() => checkbox(key).isChecked()).toBe(true);
+        }
+        await roster.locator(".data-table-bulk-bar .danger").click();
+        const confirmation = await waitForConfirmModal(page);
+        // deleteSelected captured its rows before this real owner publication.
+        // Its post-confirmation reference check must still admit the retained row.
+        await client.request("sessions.patch", {
+          key: retained,
+          label: "Retained selection refreshed",
+        });
+        await roster.getByText("Retained selection refreshed", { exact: true }).waitFor();
+        for (const key of [removed, replaced]) {
+          expect(
+            await client.request("sessions.delete", { key, expectedSessionId: originalId(key) }),
+          ).toMatchObject({ deleted: true });
+        }
+        await client.request("sessions.create", {
+          key: replaced,
+          agentId: "main",
+          label: "Selection successor",
+        });
+        await roster.getByText("Selection successor", { exact: true }).waitFor();
+        await expect.poll(() => checkbox(removed).count()).toBe(0);
+        await expect.poll(() => checkbox(replaced).isChecked()).toBe(false);
+        await expect.poll(() => checkbox(retained).isChecked()).toBe(true);
+        await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+        await expect.poll(() => checkbox(retained).count()).toBe(0);
+        // Pending deletion hides the row before the Gateway commits it.
+        // Await the matching UI response before reading through another client.
+        expect(await deleteResponse.promise).toMatchObject({
+          ok: true,
+          payload: { deleted: true },
+        });
+        expect(deletes).toEqual([
+          expect.objectContaining({ key: retained, expectedSessionId: originalId(retained) }),
+        ]);
+        const final = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        const successor = final.sessions.find((row) => row.key === replaced);
+        expect(successor?.sessionId).toBeTruthy();
+        expect(successor?.sessionId).not.toBe(originalId(replaced));
+        expect(final.sessions.some((row) => row.key === removed || row.key === retained)).toBe(
+          false,
+        );
+      });
+    } finally {
+      await disconnectGatewayClient(client);
+    }
+  });
+
   it("creates and reopens an empty persistent child without running an agent", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");

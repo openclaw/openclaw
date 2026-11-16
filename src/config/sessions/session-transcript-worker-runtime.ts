@@ -19,7 +19,10 @@ import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
+import {
+  createSessionHistoryWorkerReaders,
+  type SessionHistoryWorkerRequestRunner,
+} from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
@@ -36,7 +39,6 @@ import {
 } from "./session-transcript-worker-resources.js";
 import type {
   SessionHistoryWorkerRequestOptions,
-  SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
@@ -61,8 +63,8 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
-    case "compaction-source":
     case "transcript-hydration":
+    case "compaction-preparation":
     case "current-turn-entry":
     case "recent-active-events":
     case "latest-active-message":

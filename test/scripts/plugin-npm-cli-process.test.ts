@@ -10,19 +10,59 @@ it("refuses fanout before writing its matrix when the current quota cannot cover
   const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-budget-"), "", 98);
   const result = f.preview();
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("requires 26112 requests for 98 packages; 5000 remain");
+  expect(result.stderr).toContain("requires 11608 requests for 98 packages; 5000 remain");
   expect(existsSync(result.output)).toBe(false);
   expect(existsSync(f.previewManifest)).toBe(false);
 });
 
-it("admits the full 101-package carrier-backed release within a fresh GitHub quota", async () => {
-  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-full-budget-"), "", 101, false);
-  f.json("/rate_limit", { resources: { core: { remaining: 30000, reset: 4_070_908_800 } } });
-  f.save();
-  const result = f.preview();
-  expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(readFileSync(f.previewManifest, "utf8")).packages).toHaveLength(101);
-});
+// This release-size proof deliberately crosses 202 independent CLI processes:
+// preview admission alone cannot prove that the enforced transport caps suffice.
+it.each([false, true])(
+  "runs the full 101-package consume/authorize flow within 12k requests (recovery=%s)",
+  async (recovery) => {
+    const f = await createNpmCliProcessFixture(
+      tempDirs.make("npm-cli-full-budget-"),
+      "",
+      101,
+      recovery,
+    );
+    f.json("/rate_limit", { resources: { core: { remaining: 12000, reset: 4_070_908_800 } } });
+    f.save();
+    const preview = f.preview();
+    expect(preview.status, preview.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(f.previewManifest, "utf8")).packages).toHaveLength(101);
+    const admission = preview.stderr
+      .split("\n")
+      .filter((line) => line.startsWith('{"githubPublicationBudget"'))
+      .map((line) => JSON.parse(line).githubPublicationBudget)[0];
+    expect(admission.required).toBe(11932);
+    f.sealCarrier();
+    for (let index = 0; index < 101; index += 1) {
+      for (const result of [
+        f.consume(`consume-${index}`, index),
+        f.authorize(`authorize-${index}`, true, index),
+      ]) {
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        const accounting = result.stderr
+          .split("\n")
+          .filter((line) => line.startsWith('{"githubRequestAccounting"'))
+          .map((line) => JSON.parse(line).githubRequestAccounting)
+          .find((entry) => entry.scope === "prepared-npm-command");
+        expect(accounting.limit).toBe(54);
+        expect(accounting.used).toBeLessThanOrEqual(accounting.limit);
+      }
+    }
+    const records = f.records();
+    expect(records.filter((row) => row.kind === "entrypoint")).toHaveLength(203);
+    const requests = records.filter((row) => row.kind === "request").length;
+    expect(requests).toBeLessThanOrEqual(12000);
+    console.info(
+      JSON.stringify({ fullReleaseRequestProof: { recovery, packages: 101, requests } }),
+    );
+  },
+  240_000,
+);
 
 // Distinct processes are essential: an in-memory client spy misses the retained
 // publication owner and cannot establish that the uploaded carrier is sufficient.
@@ -43,7 +83,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
       .filter((line) => line.startsWith('{"githubRequestAccounting"'))
       .map((line) => JSON.parse(line).githubRequestAccounting)
       .find((entry) => entry.scope === "prepared-npm-command");
-    expect(accounting?.limit).toBe(accounting.command === "load" ? 1024 : 128);
+    expect(accounting?.limit).toBe(accounting.command === "load" ? 1024 : 54);
     expect(accounting?.used).toBe(
       f
         .records()

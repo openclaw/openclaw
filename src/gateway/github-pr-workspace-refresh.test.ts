@@ -110,7 +110,10 @@ describe("imported PR source refresh", () => {
       f.pr.base.ref = "new-destination";
       f.pr.base.sha = f.headCommit;
       if (boundRuntime) {
-        expect(runtime?.isPaused()).toBe(true);
+        // Canonical-only acceptance has not mutated the guest. Recovery must
+        // preserve writes made before it acquires the guest application pause.
+        expect(runtime?.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "during-refresh.txt"), "later guest write\n");
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }
@@ -121,6 +124,11 @@ describe("imported PR source refresh", () => {
         conflictPaths: ["artifact.txt"],
       });
       expect(runtime?.isPaused() ?? false).toBe(false);
+      if (boundRuntime) {
+        expect(await fs.readFile(path.join(f.projection, "during-refresh.txt"), "utf8")).toBe(
+          "later guest write\n",
+        );
+      }
       const conflict = await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8");
       expect(conflict).toContain("guest saved conflict");
       expect(conflict).toContain("remote PR change");

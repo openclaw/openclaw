@@ -2,6 +2,7 @@ import type { AgentRunRequest } from "../../../gateway/server-methods/agent-requ
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import type { SubagentCompletion } from "../../../shared/subagent-completion.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
@@ -19,6 +20,8 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "operator_authority_unavailable"
   | "requester_abandoned"
+  | "requester_aborted"
+  | "requester_state_conflict"
   | "requester_transcript_conflict"
   | "requester_turn_pending"
   | "source_owner_changed"
@@ -62,12 +65,11 @@ export type SubagentAnnounceDirectParams = {
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
+  subagentCompletions?: readonly SubagentCompletion[];
   /** Exact producer-owned outputs admitted as inputs to the completion turn. */
   inputAttachments?: AgentRunRequest["attachments"];
   expectsCompletionMessage: boolean;
   completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  completionRequesterLifecycleRevision?: string;
   requireVisibleReply?: boolean;
   requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;

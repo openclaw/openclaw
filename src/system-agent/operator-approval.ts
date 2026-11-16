@@ -1,7 +1,7 @@
 // Host-owned authorization for exact delegated OpenClaw changes.
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import type { SystemAgentOperation } from "./operation-types.js";
+import type { SystemAgentOperation, SystemAgentOperatorProposal } from "./operation-types.js";
 import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 
 export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
@@ -50,7 +50,7 @@ export function classifySystemAgentApprovalText(message: string): SystemAgentApp
 export function resolvePendingOperatorProposal(
   pending: SystemAgentOperation | null,
   proposalRef: SystemAgentProposalRef,
-): { operation: SystemAgentOperation; hash: string } | null {
+): SystemAgentOperatorProposal | null {
   const operation = pending ?? proposalRef.operation;
   if (!operation || !isPersistentSystemAgentOperation(operation)) {
     return null;

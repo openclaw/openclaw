@@ -42,6 +42,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { SubagentCompletion } from "../../shared/subagent-completion.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -149,9 +150,11 @@ export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  subagentCompletions?: readonly SubagentCompletion[];
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
   request: AgentRunRequest;
@@ -341,16 +344,19 @@ export async function prepareAgentRunUserTurn(params: {
         params.assertCurrent();
         const sender = senderFields.sender;
         const metadata = submitted?.["__openclaw"];
-        if (sender?.id && metadata?.senderId === sender.id) {
-          // Profile labels can change after acceptance; replay keeps the recorded
-          // presentation while the input owner still compares the complete request.
+        const senderId = sender?.id ?? requesterOrigin?.operatorProfileId;
+        if (senderId && metadata?.senderId === senderId) {
+          // Restart authority retains the profile without its presentation client.
+          // Replay preserves accepted attribution, never authority from the transcript.
           senderFields.sender = {
             ...sender,
+            id: senderId,
             name: typeof metadata.senderName === "string" ? metadata.senderName : undefined,
           };
         }
       }
       const input: UserTurnInput = {
+        subagentCompletions: params.subagentCompletions,
         ...(params.privateCompletion ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
         isSubagentCoordinationInputProvenance(params.inputProvenance)
@@ -388,6 +394,12 @@ export async function prepareAgentRunUserTurn(params: {
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",
+        // Direct completion results live in a runtime carrier after the trigger message.
+        ...(params.onTranscriptCommitted
+          ? params.request.internalEvents?.length
+            ? { onInputSubmitted: () => params.onTranscriptCommitted?.(params.runId) }
+            : { onMessagePersisted: () => params.onTranscriptCommitted?.(params.runId) }
+          : {}),
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
           params.assertCurrent();

@@ -646,7 +646,7 @@ describe("model selection policy", () => {
       const stored = structuredClone(prefs.stored());
       expect(stored).toMatchObject(saved);
       const browser = browserBytes();
-      const writes = vi.spyOn(first.gateway, "persistPreference");
+      const writes = vi.spyOn(first.gateway, "persistModelPreference");
 
       catalog = restricted;
       control.invalidate();
@@ -674,7 +674,7 @@ describe("model selection policy", () => {
       expect(next.place.modelControl).toMatchObject({ ...savedControls, selected: model });
       expect(prefs.stored()).toEqual(stored);
 
-      const repairs = vi.spyOn(next.gateway, "persistPreference");
+      const repairs = vi.spyOn(next.gateway, "persistModelPreference");
       first.request.mockClear();
       catalog = { models };
       next.place.modelControl.invalidate();
