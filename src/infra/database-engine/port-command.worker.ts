@@ -23,12 +23,12 @@ import {
   withDatabasePortConnection,
   withDatabasePortPostgres,
 } from "./port-provider.js";
+import { migrateDatabasePortSource } from "./port-source-migration.js";
 import {
   DatabasePortDataError,
   inspectDatabasePort,
   inspectSqlitePortSchema,
   materializeDatabasePort,
-  migrateDatabasePortSource,
   sqlitePortAllocations,
   type PortDescriptor,
   type PortVerification,

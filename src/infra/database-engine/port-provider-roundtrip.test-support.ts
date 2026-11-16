@@ -10,7 +10,8 @@ import {
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { portBackupFixture } from "./port-backup.test-support.js";
 import { fixtureDescriptor } from "./port-provider-fixture.test-support.js";
-import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
+import { migrateDatabasePortSource } from "./port-source-migration.js";
+import { inspectDatabasePort } from "./port.worker.js";
 
 export async function runProviderRoundtrip(client: Client, directory: string) {
   const scope = { assertCurrent: () => {} };

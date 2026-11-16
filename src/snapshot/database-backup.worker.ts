@@ -44,7 +44,7 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
     }
     if (task.operation === "fingerprint") {
       return withDatabasePortConnection(task.params.config, (client) =>
-        fingerprintPostgresDatabase({ client, anchor }),
+        fingerprintPostgresDatabase({ client, anchor, digest: task.params.digest }),
       );
     }
     return withDatabasePortPostgres(

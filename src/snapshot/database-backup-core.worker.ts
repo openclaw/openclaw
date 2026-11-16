@@ -16,7 +16,11 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writePostgresExportEnvelope, type PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity } from "./git-backup-codec.js";
 import { createGitBackupRowTransform } from "./git-backup-sanitizer.js";
-import { fingerprintPostgresGeneration, inspectPostgresGeneration } from "./postgres-generation.js";
+import {
+  digestPostgresGeneration,
+  fingerprintPostgresGeneration,
+  inspectPostgresGeneration,
+} from "./postgres-generation.js";
 
 type Anchor = Pick<PostgresExportEnvelope["source"], "engine" | "storeId" | "namespace">;
 
@@ -53,6 +57,7 @@ export async function exportPostgresBackup(params: {
   profile: PostgresExportEnvelope["profile"];
   assertCurrent: () => void;
   gitIdentity?: GitBackupIdentity;
+  observeSource?: Parameters<typeof materializeDatabasePort>[0]["observeSource"];
 }): Promise<PostgresExportEnvelope> {
   const { client, descriptor, anchor } = params;
   const raw = path.join(params.directory, ".export.sqlite");
@@ -72,6 +77,7 @@ export async function exportPostgresBackup(params: {
       descriptor,
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
+      observeSource: params.observeSource,
       transformRow: params.gitIdentity
         ? createGitBackupRowTransform(
             params.gitIdentity,
@@ -160,6 +166,7 @@ export async function capturePostgresSchema(params: {
   directory: string;
   prune?: { directoryPrefix: string; captureId: string };
   assertCurrent: () => void;
+  observeSource?: Parameters<typeof materializeDatabasePort>[0]["observeSource"];
 }): Promise<PostgresExportEnvelope> {
   const { client, descriptor, anchor } = params;
   const schema = `restore_${randomUUID().replaceAll("-", "")}`;
@@ -187,6 +194,7 @@ export async function capturePostgresSchema(params: {
       },
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
+      observeSource: params.observeSource,
     });
     const manifest: PostgresExportEnvelope = {
       schemaVersion: 2,
@@ -325,12 +333,36 @@ export async function pruneOrphanedPostgresCaptures(
   return dropped;
 }
 
-export async function fingerprintPostgresDatabase(params: { client: Client; anchor: Anchor }) {
+export async function fingerprintPostgresDatabase(params: {
+  client: Client;
+  anchor: Anchor;
+  digest?: boolean;
+}) {
   const { client, anchor } = params;
   await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
   try {
-    return fingerprintPostgresGeneration(anchor, await inspectPostgresGeneration(client, anchor));
+    return params.digest
+      ? await digestPostgresGeneration(client, anchor)
+      : fingerprintPostgresGeneration(anchor, await inspectPostgresGeneration(client, anchor));
   } finally {
     await client.query("ROLLBACK");
+  }
+}
+
+/** Generation and reuse digest of the caller's open snapshot; restores its search_path. */
+export async function observePostgresSnapshot(client: Client, anchor: Anchor) {
+  const { rows } = await client.query<{ path: string }>(
+    "SELECT current_setting('search_path') AS path",
+  );
+  try {
+    return {
+      generation: fingerprintPostgresGeneration(
+        anchor,
+        await inspectPostgresGeneration(client, anchor),
+      ),
+      digest: await digestPostgresGeneration(client, anchor),
+    };
+  } finally {
+    await client.query("SELECT set_config('search_path',$1,true)", [rows[0]!.path]);
   }
 }

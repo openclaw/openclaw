@@ -673,3 +673,111 @@ it("retains only engine classification after settlement fails and preserves the 
   await expect(readUpdatePhysicalDatabaseGenerations([f.shared])).rejects.toBe(failure);
   expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
 });
+
+function mockObservedPostgresCaptures(events: string[], digests: Map<string, string>) {
+  return vi.spyOn(databaseBackup, "capturePostgresBackup").mockImplementation(async (params) => {
+    if (!("config" in params)) {
+      throw new Error("expected an update capture");
+    }
+    events.push(`capture ${path.basename(params.sourcePath)}`);
+    fs.mkdirSync(params.directory, { recursive: true });
+    return {
+      schemaVersion: 2,
+      snapshotId: path.basename(params.directory),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      profile: "exact",
+      source: {
+        engine: "postgres",
+        storeId,
+        owner: "test",
+        namespace: "store_schema",
+        schemaVersion: 0,
+      },
+      exportSchemaVersion: 0,
+      activeFragments: [],
+      verification: { tables: {}, allocations: {} },
+      artifacts: {
+        "database.sqlite": { sha256: "0".repeat(64), sizeBytes: 1 },
+        "anchor.sqlite": { sha256: "0".repeat(64), sizeBytes: 1 },
+      },
+      sanitizedDifferences: [],
+      ...(params.observe
+        ? {
+            observed: {
+              generation: `generation ${path.basename(params.sourcePath)}`,
+              digest: digests.get(params.sourcePath)!,
+            },
+          }
+        : {}),
+    };
+  });
+}
+
+it("captures each PostgreSQL store while the Gateway serves, from its own capture snapshot", async () => {
+  const f = await fixture();
+  const postgres = path.join(f.root, "z-postgres.sqlite");
+  writePostgresAnchor(postgres);
+  const events: string[] = [];
+  const fingerprint = vi.spyOn(databaseBackup, "fingerprintPostgresBackup");
+  mockObservedPostgresCaptures(events, new Map([[postgres, "store-digest"]]));
+  const online = await f.capture({ additionalPaths: [postgres], postgresOnline: true });
+  // The SQLite state store waits for the capture under ownership.
+  expect(events).toEqual(["capture z-postgres.sqlite"]);
+  expect(online.databases.map((entry) => entry.path)).toEqual([postgres]);
+  // The generation comes from the capture snapshot, not a before/after pair on a serving store.
+  expect(fingerprint).not.toHaveBeenCalled();
+  expect(online.sourceGenerations[postgres]).toBe("generation z-postgres.sqlite");
+  expect(online.sourceDigests).toEqual({ [postgres]: "store-digest" });
+});
+
+it("keeps an unchanged online capture and captures a written store again under ownership", async () => {
+  const f = await fixture();
+  const idle = path.join(f.root, "a-idle.sqlite");
+  const written = path.join(f.root, "b-written.sqlite");
+  writePostgresAnchor(idle, "idle_schema");
+  writePostgresAnchor(written, "written_schema");
+  const events: string[] = [];
+  const digests = new Map([
+    [idle, "idle-digest"],
+    [written, "written-digest"],
+  ]);
+  mockObservedPostgresCaptures(events, digests);
+  const online = await f.capture({ additionalPaths: [idle, written], postgresOnline: true });
+  events.length = 0;
+  const configPath = path.join(f.root, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+  const createConfigIO = configIo.createConfigIO;
+  vi.spyOn(configIo, "createConfigIO").mockImplementation((options) =>
+    createConfigIO({
+      ...options,
+      configPath,
+      env: { OPENCLAW_STATE_DIR: path.join(f.root, "config-state") },
+    }),
+  );
+  // A write acknowledged between the online capture and the stop changes one store.
+  vi.spyOn(databaseBackup, "digestPostgresBackup").mockImplementation(async (source) =>
+    source === written ? "written-digest-after-write" : digests.get(source)!,
+  );
+  vi.spyOn(databaseBackup, "fingerprintPostgresBackup").mockResolvedValue("live generation");
+  const discard = vi.spyOn(databaseBackup, "discardPostgresSchemaCaptures").mockResolvedValue();
+  const onlineWritten = online.databases.find((entry) => entry.path === written)!;
+  const backup = await f.capture({
+    additionalPaths: [idle, written],
+    postgresOffline: true,
+    reuse: online,
+  });
+  expect(events).toEqual(["capture b-written.sqlite"]);
+  expect(discard).toHaveBeenCalledWith({}, [onlineWritten.exportDirectory]);
+  expect(backup.databases.find((entry) => entry.path === idle)).toEqual(
+    online.databases.find((entry) => entry.path === idle),
+  );
+  expect(backup.sourceGenerations).toMatchObject({
+    [idle]: "generation a-idle.sqlite",
+    [written]: "live generation",
+    [f.shared]: expect.any(String),
+  });
+  expect(backup.databases.map((entry) => entry.path).toSorted()).toEqual(
+    [f.shared, idle, written].toSorted(),
+  );
+  expect(backup.warnings).toContain(`Kept the capture taken while the Gateway served: ${idle}`);
+});

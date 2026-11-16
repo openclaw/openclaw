@@ -13,7 +13,8 @@ import {
   usageCostPartitionKey,
 } from "../session-cost-usage-partitions.js";
 import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
-import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
+import { migrateDatabasePortSource } from "./port-source-migration.js";
+import { inspectDatabasePort } from "./port.worker.js";
 import { admitStoreSearch } from "./search-admission.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 

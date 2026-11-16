@@ -36,6 +36,7 @@ import {
   captureDatabaseArtifact,
   capturePostgresSchema,
   exportPostgresBackup,
+  observePostgresSnapshot,
   restorePostgresBackup,
   discardPostgresNamespace,
 } from "./database-backup-core.worker.js";
@@ -98,7 +99,9 @@ export async function capturePostgresBackupInWorker(params: {
   carrier?: "postgres-schema";
   /** Doctor owns local directory retention; other captures retire through their manifest. */
   prune?: { directoryPrefix: string; captureId: string };
-}): Promise<PostgresExportEnvelope> {
+  /** Also return the generation and reuse digest read inside the capture's own snapshot. */
+  observe?: boolean;
+}): Promise<CapturedPostgresBackup> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   params.assertCurrent();
   await fs.mkdir(params.directory, { mode: 0o700 });
@@ -123,9 +126,18 @@ export async function capturePostgresBackupInWorker(params: {
         baseDescriptor,
       );
       params.assertCurrent();
+      let observed: CapturedPostgresBackup["observed"];
+      const observeSource = params.observe
+        ? async (source: { engine: string; db: unknown }) => {
+            if (source.engine !== "postgres" || source.db !== client) {
+              throw new Error("PostgreSQL capture observed an unexpected source.");
+            }
+            observed = await observePostgresSnapshot(client, anchor);
+          }
+        : undefined;
       const manifest = params.carrier
-        ? await capturePostgresSchema({ ...params, client, descriptor, anchor })
-        : await exportPostgresBackup({ ...params, client, descriptor, anchor });
+        ? await capturePostgresSchema({ ...params, client, descriptor, anchor, observeSource })
+        : await exportPostgresBackup({ ...params, client, descriptor, anchor, observeSource });
       try {
         await verifyPostgresExportEnvelope(
           params.directory,
@@ -146,11 +158,18 @@ export async function capturePostgresBackupInWorker(params: {
         await syncDirectory(path.dirname(params.directory)),
         "PostgreSQL backup parent",
       );
-      return manifest;
+      if (params.observe && !observed) {
+        throw new Error("PostgreSQL capture did not observe its snapshot.");
+      }
+      return observed ? { ...manifest, observed } : manifest;
     },
     params.pluginOwners,
   );
 }
+
+export type CapturedPostgresBackup = PostgresExportEnvelope & {
+  observed?: { generation: string; digest: string };
+};
 
 /** Build a new namespace and anchor; the caller alone publishes the anchor. Never drop the old namespace. */
 export async function preparePostgresRestoreInWorker(params: {
@@ -342,6 +361,8 @@ export type BackupTask =
         sourcePath: string;
         config: OpenClawConfig;
         pluginOwners?: DatabasePortPluginOwners;
+        /** Return the cheap capture-reuse digest instead of the generation fingerprint. */
+        digest?: boolean;
       };
     };
 export type BackupReply =

@@ -104,6 +104,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   sha?: string;
   timeout?: string;
   drainTimeout?: string;
+  /** Wait this long for the operator to stop a Gateway the updater does not manage. */
+  waitForGatewayStop?: string;
   yes?: boolean;
 };
 
@@ -143,7 +145,7 @@ export function parseUpdateChannel(value?: string) {
 /** Parse the shared timeout contract without exiting an owning operation. */
 export function parseUpdateTimeoutMs(
   timeout?: string,
-  option: "--timeout" | "--drain-timeout" = "--timeout",
+  option: "--timeout" | "--drain-timeout" | "--wait-for-gateway-stop" = "--timeout",
 ): number | undefined {
   if (timeout === undefined) {
     return undefined;

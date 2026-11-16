@@ -19,6 +19,10 @@ export const UPDATE_OPTION_SPECS: readonly [
   ],
   ["--timeout <seconds>", "Set an overall update budget in seconds"],
   ["--drain-timeout <seconds>", "Set the immutable activation drain budget before interruption"],
+  [
+    "--wait-for-gateway-stop <seconds>",
+    "PostgreSQL installs: prepare while a Gateway the updater does not manage serves, then wait this long for you to stop it",
+  ],
   ["--sha <commit>", "Prepare an exact official commit for an adopted immutable installation"],
   ["--yes", "Skip confirmation prompts (non-interactive)", false],
   [

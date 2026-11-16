@@ -29,7 +29,12 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
-import { captureUpdateDatabases } from "./update-command-database-backup.js";
+import {
+  captureUpdateDatabases,
+  captureUpdateDatabasesOnline,
+  discardOnlineUpdateDatabaseCapture,
+  type OnlineUpdateDatabaseCapture,
+} from "./update-command-database-backup.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -63,9 +68,24 @@ export async function createUpdateCommandRollbackCapture(
   assertCurrent();
   let candidate: Awaited<ReturnType<typeof readPackageUpdateIdentity>> | undefined;
   let targetVersion = execution.packageTargetVersion;
+  let online: OnlineUpdateDatabaseCapture | undefined;
   return {
     selectTargetVersion(version: string | undefined) {
       targetVersion = version;
+    },
+    /** PostgreSQL stores are captured while the Gateway still serves; at most once per run. */
+    async captureOnline(env: NodeJS.ProcessEnv) {
+      if (run && !online) {
+        online = await captureUpdateDatabasesOnline({ execution, env, assertCurrent });
+      }
+    },
+    /** A run that ends before its capture under ownership leaves no online capture behind. */
+    async discardOnline() {
+      const unadopted = online;
+      online = undefined;
+      if (unadopted) {
+        await discardOnlineUpdateDatabaseCapture(unadopted);
+      }
     },
     async observeCandidate(root: string) {
       candidate = await readPackageUpdateIdentity(root);
@@ -101,11 +121,14 @@ export async function createUpdateCommandRollbackCapture(
       });
       assertCurrent();
       // Reservation writes share the state database; capture their settled generation.
+      const adopted = online;
+      online = undefined;
       const captured = await captureUpdateDatabases({
         transaction,
         execution,
         context,
         assertCurrent,
+        online: adopted,
       });
       if (captured.backup) {
         captured.backup.pluginCohortRecovery = {

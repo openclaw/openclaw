@@ -24,8 +24,12 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
-import type { PostgresExportEnvelope } from "./export-envelope.js";
+import type {
+  BackupTask,
+  CapturedPostgresBackup,
+  Capture,
+  Restore,
+} from "./database-backup.operations.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
 export { captureDatabaseArtifact, assertDatabaseArtifact } from "./database-backup-core.worker.js";
 export { verifyMatchedPostgresBackup } from "./database-backup.operations.js";
@@ -163,14 +167,14 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
 
 export function capturePostgresBackup(
   params: Capture | Pick<Capture, "sourcePath" | "directory">,
-): Promise<PostgresExportEnvelope> {
+): Promise<CapturedPostgresBackup> {
   if (!("config" in params)) {
     return runOfflineDatabaseBackup(params.sourcePath, ({ config, assertCurrent }) =>
       capturePostgresBackup({ ...params, config, assertCurrent, profile: "user-backup" }),
     );
   }
   const { assertCurrent, ...input } = params;
-  return runBackupTask<PostgresExportEnvelope>(
+  return runBackupTask<CapturedPostgresBackup>(
     { operation: "capture", params: input },
     assertCurrent,
   );
@@ -312,6 +316,18 @@ export function fingerprintPostgresBackup(
 ) {
   return runBackupTask<string>(
     { operation: "fingerprint", params: { sourcePath, config, pluginOwners } },
+    () => {},
+  );
+}
+
+/** The cheap capture-reuse digest (see digestPostgresGeneration), never a generation. */
+export function digestPostgresBackup(
+  sourcePath: string,
+  config: OpenClawConfig,
+  pluginOwners?: DatabasePortPluginOwners,
+) {
+  return runBackupTask<string>(
+    { operation: "fingerprint", params: { sourcePath, config, pluginOwners, digest: true } },
     () => {},
   );
 }

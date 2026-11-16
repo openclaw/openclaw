@@ -46,13 +46,7 @@ export async function lockPostgresGeneration(client: Client, namespace: string):
   }
 }
 
-/** Observe the caller's snapshot without interpreting it through this build's schema. */
-// Rows are read by several statements, so callers must hold REPEATABLE READ or write-blocking locks.
-export async function inspectPostgresGeneration(
-  client: Client,
-  anchor: Anchor,
-  limits = GENERATION_LIMITS,
-): Promise<PostgresGeneration> {
+async function readGenerationCatalog(client: Client, anchor: Anchor) {
   const metadata = await client.query<{
     store: string;
     version: string;
@@ -95,6 +89,93 @@ export async function inspectPostgresGeneration(
   for (const { name, definition } of routines.rows) {
     catalog.push({ table: name, kind: "functionDefinition", value: definition });
   }
+  return { store: row.store, version: Number(row.version), catalog };
+}
+
+/** Sequence allocations are read last so they cover every row the caller's snapshot saw. */
+async function readGenerationSequences(
+  client: Client,
+  anchor: Anchor,
+  catalog: PostgresCatalogFact[],
+): Promise<PostgresGeneration["allocations"]> {
+  const sequences = await client.query<{
+    name: string;
+    start: string;
+    increment: string;
+    minimum: string;
+    maximum: string;
+    cache: string;
+    cycle: boolean;
+  }>(
+    `SELECT c.relname AS name, s.seqstart::text AS start, s.seqincrement::text AS increment,
+     s.seqmin::text AS minimum, s.seqmax::text AS maximum, s.seqcache::text AS cache, s.seqcycle AS cycle
+     FROM pg_sequence s JOIN pg_class c ON c.oid=s.seqrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname=$1 ORDER BY c.relname COLLATE "C"`,
+    [anchor.namespace],
+  );
+  const allocations: PostgresGeneration["allocations"] = {};
+  for (const { name, ...definition } of sequences.rows) {
+    catalog.push({ table: name, kind: "sequenceDefinition", value: definition });
+    const allocation = await client.query<{ value: string; called: boolean }>(
+      `SELECT last_value::text AS value, is_called AS called FROM ${quote(anchor.namespace)}.${quote(name)}`,
+    );
+    allocations[name] = allocation.rows[0]!;
+  }
+  catalog.sort((a, b) => {
+    const left = JSON.stringify(a),
+      right = JSON.stringify(b);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  return allocations;
+}
+
+/**
+ * Cheap change check for reusing a capture taken while the Gateway served: catalog, sequence
+ * allocations, and per table a row count plus a sum of 64-bit row hashes, all computed on the
+ * server. It is not a generation fingerprint and never replaces one. Accepted: two different row
+ * multisets with an equal count and hash sum (about 2^-64) read as unchanged.
+ */
+// Callers must hold REPEATABLE READ, like inspectPostgresGeneration.
+export async function digestPostgresGeneration(client: Client, anchor: Anchor): Promise<string> {
+  const { store, version, catalog } = await readGenerationCatalog(client, anchor);
+  const relations = await client.query<{ name: string }>(
+    `SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname=$1 AND c.relkind IN ('r','p','m') ORDER BY c.relname COLLATE "C"`,
+    [anchor.namespace],
+  );
+  const tables: Record<string, { rows: string; sum: string }> = {};
+  for (const { name } of relations.rows) {
+    const digest = await client.query<{ rows: string; sum: string }>(
+      `SELECT count(*)::text AS rows,
+       coalesce(sum(hashtextextended(row_to_json(t)::text, 0)::numeric), 0)::text AS sum
+       FROM ${quote(anchor.namespace)}.${quote(name)} t`,
+    );
+    tables[name] = digest.rows[0]!;
+  }
+  const allocations = await readGenerationSequences(client, anchor, catalog);
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        namespace: anchor.namespace,
+        storeId: anchor.storeId,
+        store,
+        version,
+        catalog,
+        tables,
+        allocations,
+      }),
+    )
+    .digest("hex");
+}
+
+/** Observe the caller's snapshot without interpreting it through this build's schema. */
+// Rows are read by several statements, so callers must hold REPEATABLE READ or write-blocking locks.
+export async function inspectPostgresGeneration(
+  client: Client,
+  anchor: Anchor,
+  limits = GENERATION_LIMITS,
+): Promise<PostgresGeneration> {
+  const { store, version, catalog } = await readGenerationCatalog(client, anchor);
   const tables: PostgresGeneration["tables"] = {};
   // Below a quarter of work_mem the whole-row sort stays in memory and beats a second read by TID.
   // TOAST counts toward the sort's size; partitioned parents add up every leaf.
@@ -225,35 +306,8 @@ export async function inspectPostgresGeneration(
     }
     tables[name] = { rows, sha256: hash.digest("hex") };
   }
-  const sequences = await client.query<{
-    name: string;
-    start: string;
-    increment: string;
-    minimum: string;
-    maximum: string;
-    cache: string;
-    cycle: boolean;
-  }>(
-    `SELECT c.relname AS name, s.seqstart::text AS start, s.seqincrement::text AS increment,
-     s.seqmin::text AS minimum, s.seqmax::text AS maximum, s.seqcache::text AS cache, s.seqcycle AS cycle
-     FROM pg_sequence s JOIN pg_class c ON c.oid=s.seqrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-     WHERE n.nspname=$1 ORDER BY c.relname COLLATE "C"`,
-    [anchor.namespace],
-  );
-  const allocations: PostgresGeneration["allocations"] = {};
-  for (const { name, ...definition } of sequences.rows) {
-    catalog.push({ table: name, kind: "sequenceDefinition", value: definition });
-    const allocation = await client.query<{ value: string; called: boolean }>(
-      `SELECT last_value::text AS value, is_called AS called FROM ${quote(anchor.namespace)}.${quote(name)}`,
-    );
-    allocations[name] = allocation.rows[0]!;
-  }
-  catalog.sort((a, b) => {
-    const left = JSON.stringify(a),
-      right = JSON.stringify(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-  return { store: row.store, version: Number(row.version), catalog, tables, allocations };
+  const allocations = await readGenerationSequences(client, anchor, catalog);
+  return { store, version, catalog, tables, allocations };
 }
 
 export function fingerprintPostgresGeneration(

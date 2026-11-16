@@ -50,6 +50,11 @@ import {
   inspectRestorableDatabaseFiles,
   prepareRestorableDatabaseFiles,
 } from "./update-database-backup-files.js";
+import {
+  createOnlineUpdateCapture,
+  prepareUpdateDatabaseBackupDirectory,
+  type OnlineCaptureInput,
+} from "./update-database-backup-online.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
@@ -88,6 +93,8 @@ export const UpdateDatabaseBackupSchema = z.object({
   missingPaths: z.array(z.string()),
   sourcePaths: z.array(z.string()),
   sourceGenerations: z.record(z.string(), z.string().nullable()),
+  /** Capture-reuse digests read in each online capture's own snapshot (all-PostgreSQL updates). */
+  sourceDigests: z.record(z.string(), z.string()).optional(),
   /** Manual original images held under maintenance custody; never automatic rollback authority. */
   originalCaptureSourcePaths: z.array(z.string()).optional(),
   databaseOwners: z
@@ -112,7 +119,7 @@ export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & 
   pluginCohortRecovery?: import("./update-plugin-cohort-schema.js").PluginCohortRecoveryBinding;
 };
 
-type BackupInput = {
+type BackupInput = OnlineCaptureInput & {
   backupRoot: string;
   stateDir: string;
   config: OpenClawConfig;
@@ -350,9 +357,10 @@ export async function createUpdateDatabaseBackupInProcess(
             (file) => engines.get(file)?.engine === "sqlite",
           ),
         );
+        const online = createOnlineUpdateCapture(input, engines);
         if (
           [...engines.values()].some((engine) => engine.engine === "postgres") &&
-          !input.postgresOffline &&
+          !(input.postgresOffline || input.postgresOnline) &&
           !input.stopped
         ) {
           throw new Error(
@@ -361,6 +369,9 @@ export async function createUpdateDatabaseBackupInProcess(
         }
         for (const sourcePath of inventory.present) {
           input.onProgress?.({ phase: "pre-migration database backup", path: sourcePath });
+          if (await online.keep(sourcePath, { databases, sourceGenerations, warnings })) {
+            continue;
+          }
           const archivePath = buildBackupArchivePath("", sourcePath);
           let parent = directory;
           for (const component of path.posix.dirname(archivePath).split("/")) {
@@ -372,7 +383,10 @@ export async function createUpdateDatabaseBackupInProcess(
           }
           const snapshotPath = path.join(directory, archivePath);
           const retainGeneration =
-            !input.stopped && !input.originalState && !originalCaptureSources.has(sourcePath);
+            !input.stopped &&
+            !input.postgresOnline &&
+            !input.originalState &&
+            !originalCaptureSources.has(sourcePath);
           const before = retainGeneration
             ? await readGeneration(sourcePath, observations.get(sourcePath))
             : undefined;
@@ -430,7 +444,7 @@ export async function createUpdateDatabaseBackupInProcess(
                 resolvePathViaExistingAncestorSync(
                   path.join(input.stateDir, "state", "openclaw.sqlite"),
                 );
-            await capturePostgresBackup({
+            const captured = await capturePostgresBackup({
               sourcePath,
               directory: exportDirectory,
               profile: "exact",
@@ -438,8 +452,10 @@ export async function createUpdateDatabaseBackupInProcess(
               pluginOwners: input.pluginOwners,
               assertCurrent: () => {},
               ...(schemaCapture ? { carrier: "postgres-schema" as const } : {}),
+              observe: input.postgresOnline,
             });
             postgres = { ...engine, exportDirectory };
+            online.record(sourcePath, captured.observed, sourceGenerations);
           }
           // Automatic rollback keeps write attribution after custody ends. Manual original
           // capture stays under its maintenance owner and never grants restore authority.
@@ -490,12 +506,14 @@ export async function createUpdateDatabaseBackupInProcess(
           );
         }
         await inspectRestorableDatabaseFiles(inventory.present, identities, input.stopped);
+        const onlineResult = await online.finish();
         return {
           directory,
           databases,
           missingPaths: inventory.missing,
           sourcePaths: inventory.sourcePaths,
           sourceGenerations,
+          ...onlineResult,
           ...(input.originalCaptureSourcePaths
             ? { originalCaptureSourcePaths: [...originalCaptureSources] }
             : {}),
@@ -616,7 +634,7 @@ export async function createUpdateDatabaseBackup({
     signal.throwIfAborted();
     const backupRoot = path.resolve(input.backupRoot);
     const directory = `${backupRoot}.databases`;
-    await createPrivateSqliteDirectory(directory);
+    await prepareUpdateDatabaseBackupDirectory(directory, input.reuse);
     const identity = await fs.lstat(directory, { bigint: true });
     try {
       const sourceEnv = input.env ?? process.env;

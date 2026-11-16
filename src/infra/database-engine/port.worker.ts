@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { encodeSqliteValue, escapedSqliteText } from "../../snapshot/sqlite-cell-codec.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { decodePostgresRows } from "../postgres-sync/protocol.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
@@ -43,23 +42,6 @@ export type PortVerification = {
   tables: Record<string, { rows: number; sha256: string }>;
   allocations: Record<string, { value: string; called: boolean }>;
 };
-
-/** The caller owns this private SQLite copy and retains custody through verification. */
-export async function migrateDatabasePortSource(
-  sourcePath: string,
-  descriptor: PortDescriptor,
-  sourceVersion: number,
-  assertCurrent: () => void,
-): Promise<PortVerification> {
-  assertCurrent();
-  await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion, assertCurrent);
-  using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-  const { tables, allocations: retainedAllocations } = await inspectDatabasePort(
-    { engine: "sqlite", db },
-    descriptor,
-  );
-  return { tables, allocations: retainedAllocations };
-}
 type Endpoint = PortEndpoint;
 const copiedTables = (descriptor: PortDescriptor) =>
   descriptor.tables.filter(
@@ -579,6 +561,8 @@ export async function materializeDatabasePort(params: {
   onPlannerStatistics?: (result: PostgresPlannerStatistics) => void;
   /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
   transformRow?: (table: string, row: PortRow) => PortRow | undefined;
+  /** Reads the source inside the copy's own snapshot, before any row is read. */
+  observeSource?: (source: Endpoint) => Promise<void>;
 }): Promise<PortVerification> {
   const { source, destination, assertCurrent } = params;
   // A same-server copy shares one client, so one transaction snapshots both namespaces.
@@ -651,6 +635,8 @@ export async function materializeDatabasePort(params: {
         destination.db.exec(`DROP TRIGGER ${quote(trigger.name)}`);
       }
     }
+    // Both BEGINs above have run, so this reads the snapshot the copy reads.
+    await params.observeSource?.(source);
     const facts =
       params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
     // Same-server rows are copied on the server, then hashed from a separate source read
