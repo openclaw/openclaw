@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWhatsAppQaAuthState, whatsappPlugin } from "../extensions/whatsapp/api.js";
-import { getActiveWebListener, setWhatsAppRuntime } from "../extensions/whatsapp/runtime-api.js";
+import { setWhatsAppRuntime } from "../extensions/whatsapp/runtime-api.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
+import { createTestPluginServiceScheduler } from "../src/plugin-sdk/plugin-test-api.js";
 import { createStartAccountContext } from "../src/plugin-sdk/test-helpers/start-account-context.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { markPluginRegistryActive } from "../src/plugins/registry-lifecycle.js";
@@ -70,6 +71,7 @@ afterEach(() => {
 it("delivers same-chat phone JIDs through LID mapping and rejects a same-digit LID before I/O", async () => {
   await withOpenClawTestState({ prefix: "whatsapp-target-authority-" }, async (state) => {
     const abort = new AbortController();
+    const scheduler = createTestPluginServiceScheduler();
     let monitor: Promise<unknown> | undefined;
     try {
       const authDir = await createWhatsAppQaAuthState({
@@ -79,7 +81,9 @@ it("delivers same-chat phone JIDs through LID mapping and rejects a same-digit L
       });
       await fs.writeFile(path.join(authDir, "lid-mapping-15555550000.json"), '"987654"');
       const cfg: OpenClawConfig = {
-        channels: { whatsapp: { enabled: true, authDir, allowFrom: ["*"] } },
+        channels: {
+          whatsapp: { enabled: true, accounts: { default: { authDir, allowFrom: ["*"] } } },
+        },
         tools: { message: { crossContext: { allowWithinProvider: false } } },
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         session: { dmScope: "per-channel-peer" },
@@ -113,6 +117,7 @@ it("delivers same-chat phone JIDs through LID mapping and rejects a same-digit L
             },
           }),
           channelRuntime,
+          scheduler,
         }),
       );
       await Promise.race([
@@ -121,10 +126,6 @@ it("delivers same-chat phone JIDs through LID mapping and rejects a same-digit L
           throw new Error("WhatsApp fixture stopped before ready");
         }),
       ]);
-      const listener = instance.run(() => getActiveWebListener("default"));
-      assert(listener);
-      const send = vi.spyOn(listener, "sendMessage");
-      const composing = vi.spyOn(listener, "sendComposingTo");
       const dispatch = (target: string) =>
         runMessageAction({
           cfg,
@@ -138,15 +139,14 @@ it("delivers same-chat phone JIDs through LID mapping and rejects a same-digit L
         });
       await dispatch(phoneJid);
       expect(socket.sendMessage.mock.calls.map(([jid]) => jid)).toEqual([mappedLid]);
-      expect(send).toHaveBeenCalledOnce();
-      const presenceCalls = composing.mock.calls.length;
+      const presenceCalls = socket.sendPresenceUpdate.mock.calls.length;
       await expect(dispatch(unrelatedLid)).rejects.toThrow("Cross-context messaging denied");
-      expect(send).toHaveBeenCalledOnce();
-      expect(composing).toHaveBeenCalledTimes(presenceCalls);
+      expect(socket.sendPresenceUpdate).toHaveBeenCalledTimes(presenceCalls);
       expect(socket.sendMessage.mock.calls.map(([jid]) => jid)).toEqual([mappedLid]);
     } finally {
       abort.abort();
-      await monitor;
+      scheduler.beginClose();
+      await Promise.all([monitor, scheduler.stop()]);
     }
   });
 });

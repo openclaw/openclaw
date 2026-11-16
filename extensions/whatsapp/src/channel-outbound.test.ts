@@ -403,6 +403,7 @@ describe("whatsappChannelOutbound", () => {
       gifPlayback: undefined,
       quotedMessageKey: {
         id: "reply-live-1",
+        lookupTargetJid: "5511999999999@s.whatsapp.net",
         remoteJid: "5511999999999@c.us",
         fromMe: false,
         participant: "5511999999999@s.whatsapp.net",
@@ -444,6 +445,7 @@ describe("whatsappChannelOutbound", () => {
       forceDocument: undefined,
       quotedMessageKey: {
         id: "reply-media-1",
+        lookupTargetJid: "5511999999999@s.whatsapp.net",
         remoteJid: "5511999999999@c.us",
         fromMe: false,
         participant: "5511999999999@s.whatsapp.net",
@@ -532,7 +534,7 @@ describe("whatsappChannelOutbound", () => {
               gifPlayback: undefined,
               quotedMessageKey: {
                 id: "msg-1",
-                remoteJid: "5511999999999@c.us",
+                remoteJid: "5511999999999@s.whatsapp.net",
                 fromMe: false,
                 participant: undefined,
                 messageText: undefined,

@@ -17,61 +17,33 @@ function factsFor(target: string, allowFrom?: Array<string | number>) {
 
 describe("resolveWhatsAppTargetFacts", () => {
   it.each([
+    ["whatsapp:+1 (555) 123-0000", "+15551230000", "direct", "15551230000@s.whatsapp.net", true],
+    ["15551230000@s.whatsapp.net", "+15551230000", "direct", "15551230000@s.whatsapp.net", true],
     [
-      "direct",
-      "whatsapp:+1 (555) 123-0000",
-      {
-        normalizedTarget: "+15551230000",
-        chatType: "direct",
-        routePeer: { kind: "direct", id: "+15551230000" },
-        wireDelivery: {
-          jid: "15551230000@s.whatsapp.net",
-          shouldSendComposingPresence: true,
-        },
-      },
-    ],
-    [
-      "phone-number JID",
-      "15551230000@s.whatsapp.net",
-      {
-        normalizedTarget: "+15551230000",
-        chatType: "direct",
-        routePeer: { kind: "direct", id: "+15551230000" },
-        wireDelivery: {
-          jid: "15551230000@s.whatsapp.net",
-          shouldSendComposingPresence: true,
-          preserveJidAsAuthorizedTarget: false,
-        },
-      },
-    ],
-    [
-      "group",
       "whatsapp:120363401234567890@g.us",
-      {
-        normalizedTarget: "120363401234567890@g.us",
-        chatType: "group",
-        routePeer: { kind: "group", id: "120363401234567890@g.us" },
-        wireDelivery: {
-          jid: "120363401234567890@g.us",
-          shouldSendComposingPresence: true,
-        },
-      },
+      "120363401234567890@g.us",
+      "group",
+      "120363401234567890@g.us",
+      true,
     ],
     [
-      "newsletter",
       "WhatsApp:120363401234567890@NEWSLETTER",
-      {
-        normalizedTarget: "120363401234567890@newsletter",
-        chatType: "channel",
-        routePeer: { kind: "channel", id: "120363401234567890@newsletter" },
-        wireDelivery: {
-          jid: "120363401234567890@newsletter",
-          shouldSendComposingPresence: false,
-        },
-      },
+      "120363401234567890@newsletter",
+      "channel",
+      "120363401234567890@newsletter",
+      false,
     ],
-  ] as const)("derives %s target facts", (_name, target, expected) => {
-    expect(factsFor(target, ["+19999999999"])).toMatchObject(expected);
+  ] as const)("derives facts for %s", (target, normalizedTarget, chatType, jid, composing) => {
+    expect(factsFor(target, ["+19999999999"])).toMatchObject({
+      normalizedTarget,
+      chatType,
+      routePeer: { kind: chatType, id: normalizedTarget },
+      wireDelivery: {
+        jid,
+        shouldSendComposingPresence: composing,
+        preserveJidAsAuthorizedTarget: false,
+      },
+    });
   });
 
   it("keeps direct allowFrom semantics", () => {
@@ -114,7 +86,7 @@ describe("resolveWhatsAppTargetFacts", () => {
     );
   });
 
-  it.each(["+15555550000", "15555550000@s.whatsapp.net"])(
+  it.each(["+15555550000", "15555550000@s.whatsapp.net", "15555550000@c.us"])(
     "maps %s to a LID with auth context",
     (target) => {
       const authDir = tempDirs.make("openclaw-wa-target-facts-");
