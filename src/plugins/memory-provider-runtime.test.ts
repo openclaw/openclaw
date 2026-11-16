@@ -395,6 +395,36 @@ it("reports legacy health without host filesystem paths", async () => {
   });
 });
 
+it("reports a complete Ollama index as ready on a fresh status request", async () => {
+  const probeEmbeddingAvailability = vi.fn().mockResolvedValue({ ok: true });
+  const probeVectorAvailability = vi.fn().mockResolvedValue(true);
+  state.capability.runtime = legacy(
+    manager({
+      status: () => ({
+        backend: "builtin",
+        provider: "ollama",
+        requestedProvider: "ollama",
+        dirty: false,
+        vector: { enabled: true, index: { state: "complete" } },
+        custom: { providerState: { mode: "pending", requestedProvider: "ollama" } },
+      }),
+      probeEmbeddingAvailability,
+      probeVectorAvailability,
+    }),
+  );
+  const { provider: handle } = await open(context(), "status");
+  if (!handle) {
+    throw new Error("Expected a legacy memory provider");
+  }
+  onTestFinished(() => handle.close());
+
+  const health = await handle.health();
+  expect(health.status).toBe("ready");
+  expect(health.message).toBeUndefined();
+  expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+  expect(probeVectorAvailability).not.toHaveBeenCalled();
+});
+
 const providerState = (mode: string, requestedProvider?: string) => ({
   requestedProvider,
   custom: { providerState: { mode } },

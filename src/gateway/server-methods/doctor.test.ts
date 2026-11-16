@@ -279,6 +279,26 @@ describe("doctor.memory.status", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("reports an Ollama outage from an explicit probe even with a complete index", async () => {
+    const error = "Ollama embed HTTP 503: embedding server unavailable";
+    const { close, probeEmbeddingAvailability } = useMemoryManagerFixture({
+      status: () => ({
+        provider: "ollama",
+        dirty: false,
+        vector: { enabled: true, index: { state: "complete" } },
+      }),
+      probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: false, error }),
+    });
+
+    expectRecordFields(await memoryStatus({ params: { probe: true } }), {
+      agentId: "main",
+      provider: "ollama",
+      embedding: { ok: false, error },
+    });
+    expect(probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalled();
+  });
+
   it.each(["missing", "probe failure"] as const)(
     "reports %s memory manager errors",
     async (mode) => {

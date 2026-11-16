@@ -325,6 +325,19 @@ describe("Ollama embedding provider real transport", () => {
     expect(error?.message).not.toContain(proxyAuth);
   });
 
+  it("propagates HTTP 503 from the embedding endpoint", async () => {
+    const server = await startOllamaServer(() => ({
+      status: 503,
+      body: JSON.stringify({ error: "embedding server unavailable" }),
+    }));
+
+    const error = await captureEmbeddingError(createOptions(server.baseUrl));
+
+    expectRequest(server, {});
+    expect(error?.message).toContain("Ollama embed HTTP 503");
+    expect(error?.message).toContain("embedding server unavailable");
+  });
+
   it("returns normalized vectors on a successful response", async () => {
     const apiKey = "ollama_test_success_credential";
     const proxyAuth = "ollama_test_success_proxy_credential";
