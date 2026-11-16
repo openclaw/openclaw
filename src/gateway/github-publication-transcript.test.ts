@@ -7,6 +7,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
+  deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -324,6 +325,26 @@ describe("GitHub publication transcript reporting", () => {
       expect(
         reportMessages(await loadTranscriptEvents(successor), publishedResult.requestId),
       ).toEqual([]);
+    });
+  });
+  it("retires a report whose session was deleted before the result settled", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const identity = await createSession("publication-deleted");
+      const { resolveGatewaySessionStoreTargetInWorker } = await import("./session-utils.js");
+      const target = await resolveGatewaySessionStoreTargetInWorker({
+        cfg: {},
+        key: identity.sessionKey,
+        agentId: identity.agentId,
+      });
+      await deleteSessionEntryLifecycle({
+        archiveTranscript: false,
+        storePath: target.storePath,
+        target: { canonicalKey: target.canonicalKey, storeKeys: target.storeKeys },
+      });
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      await report(identity, publishedResult, markReportedAsync);
+      expect(markReportedAsync.mock.calls).toEqual([[publishedResult.requestId]]);
+      expect(await loadTranscriptEvents(identity)).toEqual([]);
     });
   });
   it("reports on the active branch while preserving large unrelated evidence", async () => {
