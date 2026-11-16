@@ -514,17 +514,13 @@
   white-space: nowrap;
 }
 
+/* The description reads as the title's subtitle, without a label. */
 .cron-detail-description {
   max-width: 72ch;
-  color: var(--text);
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.cron-detail-description__label {
-  color: var(--muted);
-  font-weight: 600;
 }
 
 .cron-detail-sub {
