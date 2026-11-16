@@ -18,6 +18,7 @@ import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
