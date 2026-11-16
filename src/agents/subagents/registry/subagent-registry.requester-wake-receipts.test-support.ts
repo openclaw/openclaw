@@ -72,6 +72,9 @@ function createRequesterWakeReceiptHolds(
     phase: keyof typeof holds;
   }>();
   vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation((params) => {
+    if (params.operation.kind === "requesterDelivery") {
+      return mutate(params);
+    }
     if (params.operation.kind === "settle") {
       return mutationScope.run(
         { entries: params.entries, phase: params.committed ? "reconcile" : "outcome" },
