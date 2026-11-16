@@ -2803,6 +2803,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.chat-adopted-failure.test.ts",
   "src/gateway/server.chat-cli-auth.test.ts",
   "src/gateway/server.chat-first-turn-binding.test.ts",
+  "src/gateway/server.chat-goal.test.ts",
   "src/gateway/server.chat-history-cursor.test.ts",
   "src/gateway/server.chat-recovered-output.test.ts",
   "src/gateway/server.chat.acp-completion.test.ts",
