@@ -1131,6 +1131,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/media-generate-tool.donor-resources.test.ts",
   "src/agents/tools/media-generate-tool.resources.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
+  "src/agents/embedded-agent-runner/context-engine-maintenance.resources.test.ts",
+  "src/agents/embedded-agent-runner/context-engine-maintenance.ownership.test.ts",
   "src/agents/subagents/registry/subagent-control.retirement.test.ts",
   "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
   "src/agents/subagents/registry/subagent-registry-read.prepared.test.ts",
