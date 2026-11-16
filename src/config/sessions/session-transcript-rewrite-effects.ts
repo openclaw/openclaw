@@ -84,3 +84,24 @@ export function transcriptRewritePreservesProjection(
     isDeepStrictEqual(extractTranscriptIndexEntry(before, 0), extractTranscriptIndexEntry(after, 0))
   );
 }
+
+/** Native prompt recording changes user metadata, not the conversation's structure. */
+export function transcriptRewriteOnlyChangesUserMetadata(
+  beforeJson: string,
+  afterJson: string,
+): boolean {
+  const before: unknown = JSON.parse(beforeJson);
+  const after: unknown = JSON.parse(afterJson);
+  // Historical JSON can contain duplicate members with different SQL/JS meanings.
+  // Only canonical writer output is eligible for this narrower invalidation.
+  if (JSON.stringify(before) !== beforeJson || JSON.stringify(after) !== afterJson) {
+    return false;
+  }
+  for (const event of [before, after]) {
+    if (!isRecord(event) || event.type !== "message" || !isUserMessage(event.message)) {
+      return false;
+    }
+    delete event.message["__openclaw"];
+  }
+  return isDeepStrictEqual(before, after);
+}

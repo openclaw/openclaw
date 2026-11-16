@@ -5,13 +5,18 @@ import {
 } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { createSqliteQueryCache } from "../../infra/kysely-sync.js";
-import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  sqlPublicationAnchor,
+  type EngineConnection,
+} from "../../infra/sql-connection.js";
 import {
   readSqliteDatabaseScopedWriteToken,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
+import { modelContextNavigationWriteScope } from "./session-model-context-navigation.js";
 import { createModelContextPairing } from "./session-model-context-pairing.js";
 import {
   collectSessionModelContextRequests,
@@ -54,6 +59,7 @@ type NavigationPage = {
 type NavigationSnapshot = {
   sessionId: string;
   generation: string;
+  navigationToken: string | undefined;
   through: number;
   maxEvents: number;
   anchorId?: string;
@@ -205,6 +211,7 @@ export function readModelContextNavigationPages(params: {
   database: EngineConnection;
   sessionId: string;
   generation: string | null;
+  readToken?: string;
   through: number;
   anchorId?: string;
   maxEvents?: number;
@@ -212,18 +219,32 @@ export function readModelContextNavigationPages(params: {
 }) {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
   const cache = navigationCache(database);
+  // PostgreSQL retains its generation-based reuse; its snapshot receipts have a different lifetime.
+  const postgres = isPostgresSqlConnection(database);
+  const readIsCurrent = () =>
+    postgres ||
+    (params.readToken !== undefined &&
+      params.readToken ===
+        readSqliteDatabaseScopedWriteToken(database, [sqliteSessionIdWriteScope(sessionId)]));
   const cacheable =
     generation !== null &&
     maxEvents !== undefined &&
     !hasUncommittedSqliteWrites(database) &&
+    readIsCurrent() &&
     // A historical read must not evict the current branch's warmed prefix facts.
     (anchorId === undefined ||
       cache.snapshot?.sessionId !== sessionId ||
       cache.snapshot.anchorId !== undefined);
+  const navigationToken =
+    cacheable && !postgres
+      ? readSqliteDatabaseScopedWriteToken(database, [modelContextNavigationWriteScope(sessionId)])
+      : undefined;
   let snapshot = cacheable ? cache.snapshot : undefined;
   if (
     snapshot?.sessionId !== sessionId ||
-    snapshot.generation !== generation ||
+    (postgres
+      ? snapshot.generation !== generation
+      : navigationToken === undefined || snapshot.navigationToken !== navigationToken) ||
     (maxEvents !== undefined && snapshot.maxEvents < maxEvents) ||
     snapshot.anchorId !== anchorId ||
     through < snapshot.through ||
@@ -284,9 +305,15 @@ export function readModelContextNavigationPages(params: {
       }
     }
     if (appendRows(snapshot, appended)) {
+      if (generation !== null) {
+        snapshot.generation = generation;
+      }
       snapshot.through = through;
       for (const [pageIndex, page] of pages) {
         page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
+      }
+      if (!readIsCurrent()) {
+        cache.snapshot = undefined;
       }
       return {
         rows: snapshot.rows,
@@ -316,7 +343,10 @@ export function readModelContextNavigationPages(params: {
   );
   const entries = normalizeSessionContextEntryBoundaries(branch, tree.nodes);
   const anchorFound = anchorId === undefined || tree.byId.has(anchorId);
-  if (cacheable && anchorFound) {
+  if (cacheable) {
+    cache.snapshot = undefined;
+  }
+  if (cacheable && anchorFound && readIsCurrent()) {
     for (const [pageIndex, page] of pages) {
       page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
       page.membership = undefined;
@@ -327,6 +357,7 @@ export function readModelContextNavigationPages(params: {
     snapshot = {
       sessionId,
       generation,
+      navigationToken,
       through,
       maxEvents,
       anchorId,

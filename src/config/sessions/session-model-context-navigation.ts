@@ -126,3 +126,8 @@ export function projectSessionModelContextNavigation(entry: SessionTreeEntry): S
   // SAFETY: Navigation preserves every entry discriminant and control field with empty payloads.
   return projected as SessionTreeEntry;
 }
+
+/** Destructive history changes revoke navigation separately from payload-page writes. */
+export function modelContextNavigationWriteScope(sessionId: string) {
+  return { sessionId, partition: "model-context-navigation" };
+}

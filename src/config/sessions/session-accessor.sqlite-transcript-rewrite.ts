@@ -26,6 +26,7 @@ import {
 } from "./session-transcript-index.js";
 import { reconcileRewrittenTranscriptIndex } from "./session-transcript-reconcile.js";
 import {
+  transcriptRewriteOnlyChangesUserMetadata,
   transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
@@ -77,6 +78,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   const admissionUnchanged = rewrites.every((row) =>
     transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
   );
+  const navigationUnchanged =
+    !options.legacyTextStorage &&
+    rewrites.every((row) =>
+      transcriptRewriteOnlyChangesUserMetadata(row.expectedEventJson, row.eventJson),
+    );
   const run = () =>
     withSqliteDatabaseWriteScope(database.db, [...writeScopes], () => {
       // Pre-trajectory media repair precedes admission of the current session-row schema.
@@ -133,7 +139,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       // payload rewrites still invalidate admissions and cursors.
       const generation = admissionUnchanged
         ? undefined
-        : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+        : rotateTranscriptGenerationInTransaction(
+            database,
+            resolved.sessionId,
+            navigationUnchanged,
+          );
       if (
         priorWorkspace &&
         generation &&
