@@ -35,20 +35,41 @@ it("retains file transport policy through producer teardown", () => {
   expect(produced.content).toEqual([
     { type: "text", text: "producer" },
   ]);
-  globalThis.__retainedTransportSdk = sdk;
+  globalThis.__retainedTransportSdk = { sdk, model, context, getDefaultAiTransportHost };
   configureAiTransportHost({ ...getDefaultAiTransportHost(), resolveSecretSentinel: () => "producer-policy" });
 });
 afterAll(() => {
   expect(getDefaultAiTransportHost().resolveSecretSentinel("input")).toBe("producer-policy");
 });
 `,
-    "09-host-b-observer.test.ts": `
+    "09-host-b-native.test.ts": `
+import { expect, it, vi } from "vitest";
+import { withGuardedFetchBeforeRequest } from ${source("src/infra/net/fetch-request-authority.ts")};
+import { sealSecretSentinel } from ${source("src/secrets/sentinel.ts")};
+it("restores retired policy for a retained native SDK without source host imports", async () => {
+  const { sdk, model, context, getDefaultAiTransportHost } = globalThis.__retainedTransportSdk;
+  const unexpectedFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected real fetch"));
+  const beforeRequest = vi.fn(() => { throw new Error("Synthetic egress owner retired"); });
+  const result = await withGuardedFetchBeforeRequest(
+    beforeRequest,
+    () => sdk.complete(model, context, { apiKey: "synthetic-key" }),
+  );
+  expect(beforeRequest).toHaveBeenCalled();
+  expect(result.stopReason).toBe("error");
+  expect(unexpectedFetch).not.toHaveBeenCalled();
+  expect(getDefaultAiTransportHost().resolveSecretSentinel(
+    sealSecretSentinel("synthetic-native-secret", { label: "host-lifetime" }),
+  )).toBe("synthetic-native-secret");
+});
+`,
+    "09-host-c-observer.test.ts": `
 import { afterAll, expect, it, vi } from "vitest";
 import { attachProviderAuthAuthority } from ${source("src/plugins/provider-auth-authority.ts")};
 ${shared}
 afterAll(() => { delete globalThis.__retainedTransportSdk; });
 it("retires file policy and shares fresh guarded policy with retained native providers", async () => {
   expect(getDefaultAiTransportHost().resolveSecretSentinel("input")).toBe("input");
+  expect(getDefaultAiTransportHost().buildModelFetch(model)).toBeUndefined();
   await import(${source("src/agents/ai-transport-runtime-host.ts")});
   const host = getDefaultAiTransportHost();
   const unexpectedFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected real fetch"));
@@ -59,7 +80,7 @@ it("retires file policy and shares fresh guarded policy with retained native pro
   expect(unexpectedFetch).not.toHaveBeenCalled();
   const observedFetch = vi.fn(async () => response("observer"));
   configureAiTransportHost({ ...host, buildModelFetch: () => observedFetch });
-  const sdk = globalThis.__retainedTransportSdk;
+  const { sdk } = globalThis.__retainedTransportSdk;
   expect((await sdk.complete(model, context, { apiKey: "synthetic-key" })).content).toEqual([
     { type: "text", text: "observer" },
   ]);

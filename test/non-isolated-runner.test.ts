@@ -624,8 +624,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 84,
-    numPassedTests: 83,
+    numTotalTests: 85,
+    numPassedTests: 84,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
