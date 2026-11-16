@@ -43,7 +43,7 @@ export async function prepareUpdateDatabaseBackupDirectory(
 }
 
 /** Drop one store's online capture: its server schema first, then its local files. */
-export async function discardOnlineCaptureEntry(entry: CaptureEntry, config: OpenClawConfig) {
+async function discardOnlineCaptureEntry(entry: CaptureEntry, config: OpenClawConfig) {
   if (entry.exportDirectory) {
     const { discardPostgresSchemaCaptures } = await import("../snapshot/database-backup.js");
     await discardPostgresSchemaCaptures(config, [entry.exportDirectory]);
