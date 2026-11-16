@@ -300,7 +300,7 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("default-runtime");
   });
 
-  it.each(["agent", "agent exec", "agents"])(
+  it.each(["agent", "agent exec", "agents", "agents render-blobster"])(
     "keeps %s help out of agent action modules",
     async (command) => {
       const { registerAgentsCommands } = await import("./program/register.agent.js");
@@ -317,6 +317,7 @@ describe("subcommand help cold imports", () => {
       expect(loaded.modules).not.toContain("agents-bind-command");
       expect(loaded.modules).not.toContain("agents-delete-command");
       expect(loaded.modules).not.toContain("agents-identity-command");
+      expect(loaded.modules).not.toContain("agents-blobster-command");
       expect(loaded.modules).not.toContain("agents-list-command");
       expect(loaded.modules).not.toContain("default-runtime");
     },

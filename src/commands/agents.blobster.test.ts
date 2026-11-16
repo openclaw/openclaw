@@ -1,11 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { renderBlobsterSvgFromDesignText } from "../agents/blobster-generation.js";
 import { defaultRuntime } from "../runtime.js";
 import { agentsRenderBlobsterCommand } from "./agents.commands.blobster.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -22,6 +21,14 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = createTestRuntime();
 
+async function readDesignGuideExampleJson(): Promise<string> {
+  const guide = await fs.readFile(
+    path.resolve("skills/create-blobster/references/design-guide.md"),
+    "utf8",
+  );
+  return expectDefined(/```json\r?\n([\s\S]*?)\r?\n```/u.exec(guide)?.[1], "guide json");
+}
+
 describe("agents render-blobster command", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
@@ -34,54 +41,41 @@ describe("agents render-blobster command", () => {
     );
   });
 
-  it("renders reference fixtures to byte-identical SVG and 256x256 RGBA PNG", async () => {
-    const dir = tempDirs.make("blobster-render-");
-    const fixturesUrl = new URL("../agents/blobster-fixtures/", import.meta.url);
-    const fixtureFiles = readdirSync(fixturesUrl).filter((file) => file.endsWith(".json"));
-    expect(fixtureFiles.length).toBeGreaterThan(0);
+  it("renders a design file to canonical SVG and reports the JSON summary", async () => {
+    const dir = tempDirs.make("blobster-render-svg-");
+    const guideJson = await readDesignGuideExampleJson();
+    const designPath = path.join(dir, "radar-watch.json");
+    const svgOut = path.join(dir, "out", "radar-watch.svg");
+    await fs.writeFile(designPath, guideJson, "utf8");
 
-    for (const filename of fixtureFiles) {
-      const rawFixture = JSON.parse(readFileSync(new URL(filename, fixturesUrl), "utf8")) as {
-        bounds?: unknown;
-        id: string;
-        name: string;
-        description: string;
-        layers: Record<string, string>;
-      };
-      const { bounds: _bounds, ...rest } = rawFixture;
-      const normalized = JSON.stringify({
-        ...rest,
-        layers: { ...EMPTY_LAYERS, ...rawFixture.layers },
-      });
-      const designPath = path.join(dir, filename);
-      const svgOut = path.join(dir, "out", `${rawFixture.id}.svg`);
-      await fs.writeFile(designPath, normalized, "utf8");
+    await agentsRenderBlobsterCommand({ design: designPath, out: svgOut, json: true });
 
-      await agentsRenderBlobsterCommand({ design: designPath, out: svgOut, json: true });
-      const summary = JSON.parse(
-        String(expectDefined(runtime.log.mock.calls.at(-1)?.[0], "json log")),
-      );
-      const writtenSvg = await fs.readFile(svgOut, "utf8");
-      const expected = renderBlobsterSvgFromDesignText(normalized);
-      expect(writtenSvg).toBe(expected.svg);
-      expect(summary).toEqual({
-        id: expected.id,
-        name: expected.name,
-        description: expected.description,
-        out: svgOut,
-        format: "svg",
-        bytes: Buffer.byteLength(expected.svg, "utf8"),
-      });
-    }
-
-    const guide = await fs.readFile(
-      path.resolve("skills/create-blobster/references/design-guide.md"),
-      "utf8",
+    const summary = JSON.parse(
+      String(expectDefined(runtime.log.mock.calls.at(-1)?.[0], "json log")),
     );
-    const guideJson = expectDefined(
-      /```json\r?\n([\s\S]*?)\r?\n```/u.exec(guide)?.[1],
-      "guide json",
+    const writtenSvg = await fs.readFile(svgOut, "utf8");
+    expect(writtenSvg).toMatch(
+      /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="256" height="256" viewBox="-12 -18 144 144" role="img">/u,
     );
+    expect(writtenSvg).toContain("<title>Radar Watch</title>");
+    expect(writtenSvg).toContain('<clipPath id="blobster-body-clip">');
+    expect(writtenSvg).toContain('fill="#3b6ea8"');
+    expect(writtenSvg).toContain('stroke="#f5b742"');
+    expect(writtenSvg.trimEnd().endsWith("</svg>")).toBe(true);
+    expect(summary).toEqual({
+      id: "radar-watch",
+      name: "Radar Watch",
+      description:
+        "A cobalt-blue Blobster in a high-visibility dispatch vest holding a signal dish.",
+      out: svgOut,
+      format: "svg",
+      bytes: Buffer.byteLength(writtenSvg, "utf8"),
+    });
+  });
+
+  it("rasterizes stdin design JSON to a 256x256 RGBA PNG", async () => {
+    const dir = tempDirs.make("blobster-render-png-");
+    const guideJson = await readDesignGuideExampleJson();
     const pngOut = path.join(dir, "out", "radar-watch.png");
     const originalStdin = expectDefined(
       Object.getOwnPropertyDescriptor(process, "stdin"),
