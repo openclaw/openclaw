@@ -86,6 +86,7 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const {
+    baseConfig,
     configSnapshot,
     createCaseDir,
     mockCurrentProcessFreshDoctor,
@@ -408,6 +409,7 @@ describe("update-cli", () => {
       shouldRunPackageUpdate: true,
     },
   ])("$name in non-interactive mode", async ({ options, shouldExit, shouldRunPackageUpdate }) => {
+    baseConfig.update = { channel: "stable" };
     const root = await setupNonInteractiveDowngrade();
     const runsBefore = listUpdateRuns();
     if (shouldRunPackageUpdate) {
@@ -656,6 +658,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
   it("reports activation failure when the updated CLI entrypoint is missing", async () => {
+    baseConfig.update = { channel: "stable" };
     const root = await mockPackageInstallAtCaseDir();
     mockRunningManagedGateway([
       nodeExecutable,
@@ -678,6 +681,7 @@ describe("update-cli", () => {
   it.each([true])(
     "tries the updated install restart when package service refresh fails (JSON: %s)",
     async (json) => {
+      baseConfig.update = { channel: "stable" };
       const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
       serviceLoaded.mockResolvedValue(true);
       primeServiceCommand([nodeExecutable, updatedEntrypoint, "gateway", "run"]);
@@ -738,6 +742,7 @@ describe("update-cli", () => {
   });
 
   it("shows the matching-version probe failure when a JSON package update restart stays unhealthy", async () => {
+    baseConfig.update = { channel: "stable" };
     setupNpmUpdatedRootRefresh();
     serviceLoaded.mockResolvedValue(true);
     restartHealthTestControl.snapshot = {

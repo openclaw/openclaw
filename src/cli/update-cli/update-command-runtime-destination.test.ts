@@ -72,7 +72,7 @@ it("keeps npm updates on the resolved installation when another npm prefix is oc
   );
   vi.spyOn(plugins, "preflightConfiguredNpmPluginTargets").mockResolvedValue([]);
 
-  await updateCommand({ tag: "2026.9.2", json: true, yes: true, dryRun: true });
+  await updateCommand({ channel: "stable", tag: "2026.9.2", json: true, yes: true, dryRun: true });
 
   expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
     expect.objectContaining({ dryRun: true, root: fixture.root }),
@@ -233,7 +233,13 @@ it.each([
     });
     const writes = vi.spyOn(packageUpdate, "runPackageInstallUpdate");
     vi.spyOn(plugins, "preflightConfiguredNpmPluginTargets").mockResolvedValue([]);
-    const continuation = updateCommand({ tag: "2026.9.2", json: true, yes: true, dryRun: true });
+    const continuation = updateCommand({
+      channel: "stable",
+      tag: "2026.9.2",
+      json: true,
+      yes: true,
+      dryRun: true,
+    });
     if (foreign || unknown) {
       await expect(continuation).rejects.toMatchObject({
         result: { reason: "global-install-foreign-destination" },
@@ -314,9 +320,9 @@ it.each([
       });
     }
     if (foreign || unknown) {
-      await expect(updateCommand({ tag: "2026.9.2", json: true, yes: true })).rejects.toEqual(
-        new ExitError(1),
-      );
+      await expect(
+        updateCommand({ channel: "stable", tag: "2026.9.2", json: true, yes: true }),
+      ).rejects.toEqual(new ExitError(1));
       expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
         expect.objectContaining({ reason: "global-install-foreign-destination" }),
       );

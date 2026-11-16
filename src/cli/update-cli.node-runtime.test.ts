@@ -68,7 +68,11 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
-  beforeEach(() => runtimeRecovery.stubNodeRuntime());
+  beforeEach(() => {
+    runtimeRecovery.stubNodeRuntime();
+    // These runtime scenarios use the stable npm targets configured below, not the checkout's release train.
+    baseConfig.update = { channel: "stable" };
+  });
 
   it("updates the invoking package and rebinds its owned Gateway after a Node-prefix switch", async () => {
     const invokingVersion = "2026.5.18";

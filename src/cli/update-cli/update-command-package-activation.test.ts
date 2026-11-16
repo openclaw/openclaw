@@ -104,7 +104,7 @@ function preparePreview(
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
 }
 
-const preview = () => updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+const preview = () => updateCommand({ channel: "stable", dryRun: true, json: true, tag: "3.0.0" });
 
 function expectPreview(note: RegExp, targetVersion?: string) {
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
@@ -283,7 +283,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       const candidate = fs.readFileSync(f.liveFile);
       await withPublicationFence(f.packageRoot, (fence) => expectLiveOwnerBlocks(f, fence));
       const previewBefore = snapshot(fixtureRoot);
-      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+      await updateCommand({ channel: "stable", dryRun: true, json: true, tag: "3.0.0" });
       expect(snapshot(fixtureRoot)).toEqual(previewBefore);
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -395,7 +395,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
 
       if (live === "damaged candidate") {
         await expect(
-          updateCommand({ dryRun: true, json: true, tag: "3.0.0" }),
+          updateCommand({ channel: "stable", dryRun: true, json: true, tag: "3.0.0" }),
         ).rejects.toMatchObject({ code: 1 });
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "update-recovery-pending" }),
@@ -411,7 +411,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         return;
       }
 
-      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+      await updateCommand({ channel: "stable", dryRun: true, json: true, tag: "3.0.0" });
 
       expect(snapshot(fixtureRoot)).toEqual(before);
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
@@ -468,7 +468,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
     preparePreview(f);
     const before = snapshot(fixtureRoot);
 
-    await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+    await updateCommand({ channel: "stable", dryRun: true, json: true, tag: "3.0.0" });
 
     expect(snapshot(fixtureRoot)).toEqual(before);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(

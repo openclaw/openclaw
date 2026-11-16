@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import type { UpdateDoctorConfigWriteRefusal } from "../infra/update-doctor-config.js";
 import {
@@ -68,6 +68,7 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const {
+    baseConfig,
     createCaseDir,
     mockCurrentProcessFreshDoctor,
     mockFileBackedPathExists,
@@ -85,6 +86,11 @@ describe("update-cli", () => {
     tempDirs,
     useFileBackedConfig,
   } = createUpdateCliFixture();
+
+  beforeEach(() => {
+    // Package lifecycle cases select synthetic stable targets independently of the checkout.
+    baseConfig.update = { channel: "stable" };
+  });
 
   it.each([
     {

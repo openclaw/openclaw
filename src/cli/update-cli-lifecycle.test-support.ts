@@ -175,6 +175,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   const invocationCwd = process.cwd();
   beforeEach(async () => {
+    // A scenario's package channel must not change the next scenario's Git routing.
+    delete baseConfig.update;
     vi.spyOn(taskProbe, "probeScheduledTaskUpdateAccess").mockReturnValue({ status: "allowed" });
     // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
     process.chdir(path.join(fixtureRoot, "checkout"));

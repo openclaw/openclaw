@@ -9,8 +9,8 @@ const { startProductionControlUiE2eServer, startCopiedProductionControlUiE2eServ
   }),
 );
 
-vi.mock("../test-helpers/control-ui-e2e.ts", () => ({
-  installMockGateway: vi.fn(),
+vi.mock("../test-helpers/control-ui-e2e.ts", async (original) => ({
+  ...(await original<typeof import("../test-helpers/control-ui-e2e.ts")>()),
   startProductionControlUiE2eServer,
   startCopiedProductionControlUiE2eServer,
 }));

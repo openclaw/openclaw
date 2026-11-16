@@ -60,6 +60,7 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const {
+    baseConfig,
     createCaseDir,
     mockFileBackedPathExists,
     mockGatewayHealth,
@@ -73,6 +74,7 @@ describe("update-cli", () => {
   } = createUpdateCliFixture();
 
   it("admits an absent service update while its selected port has an unmanaged listener", async () => {
+    baseConfig.update = { channel: "stable" };
     await mockPackageInstallAtCaseDir();
     const actualPortsProbe =
       await vi.importActual<typeof import("../infra/ports-probe.js")>("../infra/ports-probe.js");
@@ -122,6 +124,7 @@ describe("update-cli", () => {
   ])(
     "checks inherited Gateway ancestry before --no-restart updates: $caller",
     async ({ inheritedMarkers, ancestors, pid, runtime, code }) => {
+      baseConfig.update = { channel: "stable" };
       const root = await mockPackageInstallAtCaseDir();
       primeServiceCommand(
         [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
@@ -157,6 +160,7 @@ describe("update-cli", () => {
   );
 
   it("runs an owned managed update when native membership is absent", async () => {
+    baseConfig.update = { channel: "stable" };
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const root = await mockPackageInstallAtCaseDir();
     mockRunningManagedGateway([
@@ -224,6 +228,9 @@ describe("update-cli", () => {
   ])(
     "hands agent-initiated updates to $supervisor before stopping the gateway ($env, git=$git)",
     async ({ platform, env, supervisor, options = {}, ancestor = true, git = false }) => {
+      if (!git) {
+        baseConfig.update = { channel: "stable" };
+      }
       const phases = vi.spyOn(
         await import("./update-cli/update-command-service.js"),
         "maybeStopManagedServiceBeforeMutableUpdate",
@@ -420,6 +427,7 @@ describe("update-cli", () => {
     async ({ kind, platform, restart, fault }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       if (kind === "package") {
+        baseConfig.update = { channel: "stable" };
         await mockPackageInstallAtCaseDir();
       } else {
         mockGitUpdateAfterMutation();
@@ -476,6 +484,7 @@ describe("update-cli", () => {
 
   it("updates a package with stale sealed metadata and restarts its service", async () => {
     const root = await mockPackageInstallAtCaseDir("openclaw-sealed-code-update");
+    baseConfig.update = { channel: "stable" };
     const entrypoint = await writeOpenClawPackageFixture(root, "1.0.0", {
       entrySource: "export {};\n",
       inventory: true,
@@ -587,6 +596,7 @@ describe("update-cli", () => {
     },
   );
   it("admits a no-restart package update when service ownership is unresolved", async () => {
+    baseConfig.update = { channel: "stable" };
     await mockPackageInstallAtCaseDir();
     mockRunningManagedGateway(["openclaw-wrapper", "gateway", "run"]);
 
@@ -611,6 +621,7 @@ describe("update-cli", () => {
   });
 
   it("reports a fresh JSON refusal once through Commander", async () => {
+    baseConfig.update = { channel: "stable" };
     await mockPackageInstallAtCaseDir();
     const stateDir = tempDirs.make("openclaw-fresh-cli-refusal-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {

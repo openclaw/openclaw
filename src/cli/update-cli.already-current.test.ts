@@ -107,6 +107,7 @@ describe("update-cli", () => {
   )(
     "converges plugins on an already-current core (failure=$failure, platform=$platform)",
     async ({ failure, platform }) => {
+      baseConfig.update = { channel: "stable" };
       if (platform) {
         vi.spyOn(process, "platform", "get").mockReturnValue(platform);
         vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
@@ -246,6 +247,7 @@ describe("update-cli", () => {
 
   registerAlreadyCurrentAdmissionTests({
     prepareCurrentPackage: async (prefix) => {
+      baseConfig.update = { channel: "stable" };
       const root = await mockPackageInstallAtCaseDir(prefix, VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
@@ -294,6 +296,7 @@ describe("update-cli", () => {
   });
 
   it("reports retained pins on an already-current core", async () => {
+    baseConfig.update = { channel: "stable" };
     const root = await mockPackageInstallAtCaseDir();
     await writeOpenClawPackageFixture(root, VERSION);
     readPackageVersion.mockResolvedValue(VERSION);
@@ -346,6 +349,7 @@ describe("update-cli", () => {
   it.each(["inside", "descendant"] as const)(
     "never stages or stops an unchanged managed gateway under auto admission (membership=%s)",
     async (membership) => {
+      baseConfig.update = { channel: "stable" };
       const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
@@ -510,6 +514,7 @@ describe("update-cli", () => {
   });
 
   it.each(["latest", "next"] as const)("handles an unresolved %s dist-tag lookup", async (tag) => {
+    baseConfig.update = { channel: "stable" };
     setTty(false);
     await mockPackageInstallAtCaseDir();
     readPackageVersion.mockResolvedValue("2026.4.22");
@@ -547,7 +552,10 @@ describe("update-cli", () => {
   });
 
   registerUpdatePreflightTests({
-    mockPackageInstallAtCaseDir,
+    mockPackageInstallAtCaseDir: async () => {
+      baseConfig.update = { channel: "stable" };
+      return await mockPackageInstallAtCaseDir();
+    },
     statfsFixture,
     resolveNpmChannelTag,
     fetchNpmPackageTargetStatus,

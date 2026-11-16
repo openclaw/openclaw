@@ -78,7 +78,10 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         await prepareCandidateAdmissionFixture({ marker, verdict, pendingLifecycle: true });
       const stateDir = makeTempDir("candidate-admission-fresh-");
       const configPath = path.join(stateDir, "openclaw.json");
-      const configBytes = refused ? '{"gateway":{"port":"invalid"}}\n' : "{}\n";
+      const configBytes = `${JSON.stringify({
+        update: { channel: "stable" },
+        ...(refused ? { gateway: { port: "invalid" } } : {}),
+      })}\n`;
       await fs.writeFile(configPath, configBytes);
       const { createConfigIO } = await import("../../config/io.js");
       vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
@@ -370,7 +373,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       if (profile === "fresh") {
         const stateDir = makeTempDir("admission-recovery-fresh-");
         const configPath = path.join(stateDir, "openclaw.json");
-        await fs.writeFile(configPath, "{}\n");
+        await fs.writeFile(configPath, '{"update":{"channel":"stable"}}\n');
         Object.assign(env, { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath });
         const { createConfigIO } = await import("../../config/io.js");
         vi.mocked(readConfigFileSnapshot).mockImplementation(() =>

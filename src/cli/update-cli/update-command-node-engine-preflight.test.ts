@@ -51,7 +51,9 @@ it.each([
     const provision = vi.spyOn(runtimeRecovery, "resolveTargetNodeRuntime");
     const manifest = fs.readFileSync(path.join(fixture.root, "package.json"));
 
-    await expect(updateCommand({ tag: "2026.10.6", yes: true, json: true })).rejects.toMatchObject({
+    await expect(
+      updateCommand({ channel: "stable", tag: "2026.10.6", yes: true, json: true }),
+    ).rejects.toMatchObject({
       code: 1,
     });
 

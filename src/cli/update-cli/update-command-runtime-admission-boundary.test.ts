@@ -226,7 +226,13 @@ it.each(["installed", undefined] as const)(
     });
     const provision = vi.spyOn(recovery, "resolveTargetNodeRuntime");
     await expect(
-      updateCommand({ tag: targetMetadata.version, yes: true, json: true, admission: owner }),
+      updateCommand({
+        channel: "stable",
+        tag: targetMetadata.version,
+        yes: true,
+        json: true,
+        admission: owner,
+      }),
     ).rejects.toMatchObject({ code: 1 });
     expect(recheck).toHaveBeenCalled();
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
@@ -332,7 +338,13 @@ it.each(["permission", "definition", "executable"] as const)(
     const install = vi.spyOn(packageUpdate, "runPackageInstallUpdate");
     const prepareRuntime = vi.spyOn(runtimeOwner, "preparePackageUpdateRuntime");
     await expect(
-      updateCommand({ tag: targetMetadata.version, yes: true, json: true, admission: "installed" }),
+      updateCommand({
+        channel: "stable",
+        tag: targetMetadata.version,
+        yes: true,
+        json: true,
+        admission: "installed",
+      }),
     ).rejects.toMatchObject({ code: 1 });
     try {
       console.error(

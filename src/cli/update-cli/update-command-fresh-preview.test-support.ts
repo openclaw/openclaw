@@ -237,6 +237,7 @@ export function registerOriginalCaptureTests({
           return null;
         });
       const update = updateCommand({
+        channel: "stable",
         tag: refused ? "main" : "file:/fixture/forward.tgz",
         yes: true,
         json: true,

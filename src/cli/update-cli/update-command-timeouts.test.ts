@@ -54,6 +54,7 @@ it.each([
 
     await updateCommand({
       admission: "installed",
+      channel: "stable",
       tag: "2026.9.4",
       yes: true,
       json: true,
@@ -120,6 +121,7 @@ it("forwards an inherited activation budget for already-current updates without 
   });
   await updateCommand({
     admission: "installed",
+    channel: "stable",
     tag: "2026.9.3",
     yes: true,
     json: true,
@@ -183,6 +185,7 @@ it("ends an unsettled candidate and unready predecessor within one --timeout bud
   const output = vi.mocked(defaultRuntime.writeJson);
   const running = updateCommand({
     admission: "installed",
+    channel: "stable",
     tag: "2026.9.4",
     yes: true,
     json: true,

@@ -132,6 +132,7 @@ it.each([false, true])(
 
     expect(fs.existsSync(fixture.databasePath)).toBe(false);
     await updateCommand({
+      channel: "stable",
       tag: `file:${artifact}`,
       yes: true,
       json: true,

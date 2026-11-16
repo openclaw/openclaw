@@ -222,9 +222,13 @@ describe("update-cli", () => {
       });
 
       if (succeeds) {
-        await updateCommand({ yes: true, json: true }).catch((cause: unknown) => {
-          throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, { cause });
-        });
+        await updateCommand({ channel: "stable", yes: true, json: true }).catch(
+          (cause: unknown) => {
+            throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
+              cause,
+            });
+          },
+        );
         expect(events).toEqual(["validate", "stop", "plugins"]);
         expect(spawn).toHaveBeenCalledOnce();
         expect(runExec).toHaveBeenCalledWith(
@@ -241,7 +245,9 @@ describe("update-cli", () => {
           verification: { readyz: true, serviceRunning: true },
         });
       } else {
-        await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+        await expect(updateCommand({ channel: "stable", yes: true, json: true })).rejects.toEqual(
+          new ExitError(1),
+        );
         expect(events).toEqual(["validate"]);
         expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
         expect(freshRestartCalls()).toHaveLength(0);
@@ -302,6 +308,7 @@ describe("update-cli", () => {
         "run",
       ]);
       await invokeUpdateCli({
+        channel: "stable",
         yes: true,
         json: true,
         restart: mode !== "no-restart",
@@ -344,7 +351,7 @@ describe("update-cli", () => {
         ],
       });
     });
-    await expect(updateCommand({ yes: true, json: true })).rejects.toThrow();
+    await expect(updateCommand({ channel: "stable", yes: true, json: true })).rejects.toThrow();
     expect(await fs.readFile(path.join(root, "package.json"))).toEqual(before);
     expect(doctorCommandCall()).toBeUndefined();
     expect(serviceStop).not.toHaveBeenCalled();
@@ -376,7 +383,9 @@ describe("update-cli", () => {
       }),
     );
 
-    await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+    await expect(updateCommand({ channel: "stable", yes: true, json: true })).rejects.toEqual(
+      new ExitError(1),
+    );
 
     expect(doctorCommandCall()).toBeDefined();
     expectNoSideEffects(serviceStart, serviceRestart, runDaemonRestart);
@@ -412,7 +421,7 @@ describe("update-cli", () => {
     serviceDefinitionMutationCapability.mockResolvedValue({ kind: "sealed", detail: "fixture" });
     mockFileBackedPathExists();
 
-    await updateCommand({ yes: true }).catch((cause: unknown) => {
+    await updateCommand({ channel: "stable", yes: true }).catch((cause: unknown) => {
       throw new Error(`${getErrorOutput()}\n${getLogOutput()}`, { cause });
     });
     platformSpy.mockRestore();
@@ -524,7 +533,7 @@ describe("update-cli", () => {
 
       try {
         await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
-          const updatePromise = updateCommand({ yes: true });
+          const updatePromise = updateCommand({ channel: "stable", yes: true });
           const firstOutcome = await Promise.race([
             stopStarted.then(() => "stop" as const),
             updatePromise.then(() => "update" as const),
@@ -581,7 +590,7 @@ describe("update-cli", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, async () => {
-        await updateCommand({ yes: true });
+        await updateCommand({ channel: "stable", yes: true });
       });
     } finally {
       platformSpy.mockRestore();
@@ -612,7 +621,9 @@ describe("update-cli", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
-        await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
+        await expect(
+          updateCommand({ channel: "stable", yes: true, timeout: "17" }),
+        ).rejects.toEqual(new ExitError(1));
       });
     } finally {
       platformSpy.mockRestore();
