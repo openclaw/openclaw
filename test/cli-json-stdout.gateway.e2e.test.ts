@@ -199,13 +199,12 @@ it.each([
     expect(result.status, result.stderr).toBe(1);
     if ("human" in testCase && testCase.human) {
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
-      expect(result.stderr).toContain(testCase.message);
     } else {
       expectCliError(result.stdout, expect.stringContaining(testCase.message));
-      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-      expect(result.stderr).not.toContain(testCase.message);
+      expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
     }
+    expect(result.stderr).toContain(testCase.message);
+    expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
     expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
   });
 });
