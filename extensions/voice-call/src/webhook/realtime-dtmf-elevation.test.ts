@@ -4,7 +4,8 @@ import { DtmfElevationGate, type DtmfElevationOutcome } from "./realtime-dtmf-el
 const INTER_DIGIT_TIMEOUT_MS = 3_000;
 
 const PIN = "4321";
-const inbound = { direction: "inbound" as const, from: "+1 (555) 000-1234" };
+const inbound = { direction: "inbound" as const, from: "+1 (555) 000-1234", to: "+15550007777" };
+const outbound = { direction: "outbound" as const, from: "+15550007777", to: "+15550001234" };
 
 function open(
   gate = new DtmfElevationGate({
@@ -12,7 +13,7 @@ function open(
     config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 3, lockoutMs: 60_000 },
     allowFrom: ["+15550001234"],
   }),
-  call: { direction: "inbound" | "outbound"; from: string } = inbound,
+  call: { direction: "inbound" | "outbound"; from: string; to: string } = inbound,
 ) {
   const outcomes: DtmfElevationOutcome[] = [];
   const session = gate.openCall(call, (outcome) => outcomes.push(outcome));
@@ -29,10 +30,26 @@ afterEach(() => {
 });
 
 describe("DtmfElevationGate", () => {
-  it("only opens for inbound calls from allowlisted numbers", () => {
+  it("opens only when the other party is allowlisted, in either direction", () => {
     expect(open().session).toBeDefined();
-    expect(open(undefined, { ...inbound, direction: "outbound" }).session).toBeUndefined();
     expect(open(undefined, { ...inbound, from: "+15550009999" }).session).toBeUndefined();
+    // Outbound: the callee is the other party; an allowlisted caller id on our side is not.
+    expect(open(undefined, outbound).session).toBeDefined();
+    expect(
+      open(undefined, { ...outbound, from: "+15550001234", to: "+15550009999" }).session,
+    ).toBeUndefined();
+  });
+
+  it("shares failures and lockout between inbound and outbound calls with one number", () => {
+    const gate = new DtmfElevationGate({
+      pin: PIN,
+      config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 2, lockoutMs: 60_000 },
+      allowFrom: ["+15550001234"],
+    });
+    open(gate, inbound).press("*0000#");
+    const later = open(gate, outbound);
+    later.press("*0000#");
+    expect(later.outcomes).toEqual([{ kind: "locked-out", attempt: 2, maxAttempts: 2 }]);
   });
 
   it("ignores digits until the prefix and submits on #", () => {

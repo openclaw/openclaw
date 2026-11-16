@@ -1213,7 +1213,7 @@ export class RealtimeCallHandler {
       callRecord,
       createRealtimeElevationReporter({
         callId,
-        caller: callRecord.from,
+        call: callRecord,
         isCurrent: () => !sessionClosed && this.isActiveBridgeOwner(callId, session),
         sendNotice: (notice) => session.sendUserMessage(notice),
         hangUp: async () => {
