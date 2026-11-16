@@ -13,7 +13,7 @@ import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
-  it("shows every Other session while named sections keep independent pages", async () => {
+  it("pages every section except the last one, which follows section order", async () => {
     const threadKeys = Array.from({ length: 17 }, (_, index) => `agent:main:thread-${index}`);
     const categoryKeys = Array.from({ length: 17 }, (_, index) => `agent:main:alpha-${index}`);
     const sessions = createSessionsHarness("main", [...threadKeys, ...categoryKeys]);
@@ -28,23 +28,28 @@ describe("AppSidebar session section visibility", () => {
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
     const category = sidebar.querySelector('[data-session-section="category:Alpha"]');
     const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
+    const expectSection = (section: Element | null, rows: number, paged: boolean) => {
+      expect(section?.querySelectorAll(".sidebar-recent-session")).toHaveLength(rows);
+      expect(section?.querySelector('[aria-label="Show more"]') !== null).toBe(paged);
+    };
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
     expect(threads?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
       "Other",
     );
-    expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
-    expect(threads?.querySelector(".sidebar-session-pagination")).toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(1);
+    expectSection(category, 15, true);
+    expectSection(threads, 17, false);
 
-    category?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
+    sessions.publish({ groups: ["Alpha"], sectionOrder: ["ungrouped", "category:Alpha"] });
     await settleLitElement(sidebar);
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
-    expect(category?.querySelector('[aria-label="Show more"]')).toBeNull();
-    expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
+    expectSection(threads, 15, true);
+    expectSection(category, 17, false);
+
+    threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
+    await settleLitElement(sidebar);
+
+    expectSection(threads, 17, false);
+    expectSection(category, 17, false);
   });
 
   it("keeps global session actions when every unpinned thread has a custom group", async () => {

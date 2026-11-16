@@ -218,17 +218,19 @@ describe("sidebar projection memo", () => {
   });
 
   it.each([
-    { savedGrouping: "none", grouping: "none", limit: undefined, expected: 45 },
-    { savedGrouping: "none", grouping: "category", limit: undefined, expected: 61 },
-    { savedGrouping: "category", grouping: "none", limit: undefined, expected: 30 },
-    { savedGrouping: "category", grouping: "category", limit: 15, expected: 61 },
-    { savedGrouping: "category", grouping: "category", limit: 60, expected: 61 },
-    { savedGrouping: undefined, grouping: "none", limit: undefined, expected: 30 },
+    // The flat list is the last section here, so it shows every row.
+    { savedGrouping: "none", grouping: "none", limit: undefined, expected: 62 },
+    { savedGrouping: "none", grouping: "category", limit: undefined, expected: 15 },
+    { savedGrouping: "category", grouping: "none", limit: undefined, expected: 62 },
+    { savedGrouping: "category", grouping: "category", limit: 15, expected: 15 },
+    { savedGrouping: "category", grouping: "category", limit: 60, expected: 60 },
+    { savedGrouping: undefined, grouping: "none", limit: undefined, expected: 62 },
   ] as const)(
-    "restores $savedGrouping paging into $grouping without capping grouped Other",
+    "keeps $savedGrouping pagination isolated in $grouping through cached handoff",
     async ({ savedGrouping, grouping, limit, expected }) => {
       const sessionsToShow = Array.from({ length: 61 }, (_, index) => session(`row-${index}`));
-      const mounted = await mount(sessionsToShow);
+      // Groups below Other keeps grouped Other paged.
+      const mounted = await mount([...sessionsToShow, session("room", { kind: "group" })]);
       const { sidebar } = mounted;
       const owner = getAppSidebarOwner(sidebar.hostElement)!;
       const sectionId = "ungrouped";
@@ -251,7 +253,7 @@ describe("sidebar projection memo", () => {
       if (grouping !== (savedGrouping ?? "category")) {
         await settleLitElement(sidebar);
         expect(
-          sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+          sidebar.querySelectorAll('[data-session-section="ungrouped"] .sidebar-recent-session'),
         ).toHaveLength(expected);
       }
       if (limit !== undefined) {
@@ -261,7 +263,7 @@ describe("sidebar projection memo", () => {
       owner.invalidate();
       await settleLitElement(sidebar);
       expect(
-        sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+        sidebar.querySelectorAll('[data-session-section="ungrouped"] .sidebar-recent-session'),
       ).toHaveLength(expected);
     },
   );

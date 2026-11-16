@@ -126,11 +126,15 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
   });
 
-  it("keeps flat pages scoped to grouping while grouped Other stays unpaged", async () => {
+  it("keeps session pages scoped to grouping and lets the last section show every row", async () => {
     const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
-    const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
+    const harness = createSessionsHarness("main", keys);
+    // A group conversation puts Groups below Other in every grouped view.
+    harness.result.sessions.push({ key: "agent:main:room", kind: "group", updatedAt: 0 });
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const rows = () =>
+      sidebar.querySelectorAll('[data-session-section="ungrouped"] .sidebar-recent-session');
     const button = (label: string) =>
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
     const click = async (label: string) => {
@@ -140,38 +144,28 @@ describe("AppSidebar session pagination", () => {
       await settleLitElement(sidebar);
     };
 
-    for (const grouping of ["none", "category", "person", "project"] as const) {
+    for (const grouping of ["category", "person", "project"] as const) {
       setSessionsGrouping(sidebar.sessionOrganizer, grouping);
       await settleLitElement(sidebar);
-      if (grouping !== "none") {
-        expect(rows()).toHaveLength(61);
-        expect(button("Show more")).toBeNull();
-        expect(button("Collapse")).toBeNull();
-        continue;
-      }
-      const initial = 30;
-      expect(rows()).toHaveLength(initial);
+      expect(rows()).toHaveLength(15);
       expect(button("Collapse")).toBeNull();
       await click("Show more");
-      expect(rows()).toHaveLength(initial + 15);
+      expect(rows()).toHaveLength(30);
       await click("Collapse");
-      expect(rows()).toHaveLength(initial);
+      expect(rows()).toHaveLength(15);
       expect(button("Collapse")).toBeNull();
       await click("Show more");
     }
 
     setSessionsGrouping(sidebar.sessionOrganizer, "none");
     await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(45);
-    for (const count of [60, 61]) {
-      await click("Show more");
-      expect(rows()).toHaveLength(count);
-      expect(button("Show more") !== null).toBe(count < 61);
-    }
-    await click("Collapse");
-    expect(rows()).toHaveLength(30);
-    expect(button("Show more")).not.toBeNull();
+    expect(rows()).toHaveLength(62);
+    expect(button("Show more")).toBeNull();
     expect(button("Collapse")).toBeNull();
+
+    setSessionsGrouping(sidebar.sessionOrganizer, "category");
+    await settleLitElement(sidebar);
+    expect(rows()).toHaveLength(30);
   });
 });
 

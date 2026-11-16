@@ -604,6 +604,17 @@ export class SidebarSessionProjection {
             section.id !== soloOwnerSectionId &&
             (section.id !== "work" || section.rows.length > 0),
         ));
+    // Only the bottom list section shows every loaded row; an unpaged section
+    // above another buries it (1700+ sessions on a team server). Empty Other
+    // and Coding render nothing below. The last section keeps its stored page
+    // as visibleLimit for when a section follows it again. Agent roster cards
+    // (input.sections) keep their own paging.
+    const trailingSectionId = input.sections
+      ? undefined
+      : sections.findLast(
+          (section) =>
+            section.rows.length > 0 || (section.id !== "ungrouped" && section.id !== "work"),
+        )?.id;
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
@@ -618,14 +629,10 @@ export class SidebarSessionProjection {
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
       const { initialLimit: pageLimit, key } = sidebarSessionPagination(grouping, section.id);
-      // Other already windows its rows to the sidebar viewport. Let the list
-      // scroll rather than hiding loaded sessions behind another local page.
-      const initialLimit =
-        grouping !== "none" && section.id === "ungrouped" ? totalRowCount : pageLimit;
-      const visibleLimit = Math.max(
-        initialLimit,
-        input.visibleSessionLimits.get(key) ?? initialLimit,
-      );
+      const visibleLimit = input.visibleSessionLimits.get(key) ?? pageLimit;
+      const trailing = section.id === trailingSectionId;
+      const initialLimit = trailing ? totalRowCount : pageLimit;
+      const rowLimit = trailing ? totalRowCount : visibleLimit;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.containsActiveDescendant || row.pinned),
         0,
@@ -636,8 +643,8 @@ export class SidebarSessionProjection {
       );
       let visibleRowCount = 0;
       if (!collapsed) {
-        let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
-        let retainedSlots = visibleLimit;
+        let optionalSlots = Math.max(0, rowLimit - requiredRowCount);
+        let retainedSlots = rowLimit;
         const sticky = this.stickySections.get(section.id);
         // Keep one prior page through run-state and recency changes. An unbounded
         // union eventually renders the entire roster without a Show more action.
@@ -655,7 +662,13 @@ export class SidebarSessionProjection {
           retainedSlots -= 1;
           return true;
         });
-        this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
+        // The last section holds no prior page: once a section follows it,
+        // it drops back to its own page instead of keeping every row.
+        if (trailing) {
+          this.stickySections.delete(section.id);
+        } else {
+          this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
+        }
         visibleRows.push(...section.rows);
         visibleRowCount = section.rows.length;
       }
