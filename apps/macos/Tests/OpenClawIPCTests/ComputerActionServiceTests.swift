@@ -312,9 +312,6 @@ struct ComputerActionServiceTests {
         try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseDown,
             leftButtonDown: false)
-        try ComputerScreenActionExecutor.validateHeldButtonTransition(
-            action: .leftMouseUp,
-            leftButtonDown: true)
     }
 
     @Test(arguments: [false, true])

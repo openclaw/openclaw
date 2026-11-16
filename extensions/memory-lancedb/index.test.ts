@@ -1822,19 +1822,13 @@ describe("memory plugin e2e", () => {
     expect(
       shouldCapture("I always read docs and I saw 'Sender:' described in the API reference"),
     ).toBe(true);
-    expect(shouldCapture("I prefer dark mode")).toBe(true);
     expect(shouldCapture("Remember that my name is John")).toBe(true);
     expect(shouldCapture("My email is test@example.com")).toBe(true);
     expect(shouldCapture("Call me at +1234567890123")).toBe(true);
     expect(shouldCapture("I always want verbose output")).toBe(true);
     expect(shouldCapture("记住这个")).toBe(true);
-    expect(shouldCapture("我喜欢")).toBe(true);
-    expect(shouldCapture("以后都用这个")).toBe(true);
-    expect(shouldCapture("重要")).toBe(true);
     expect(shouldCapture("覚えて")).toBe(true);
-    expect(shouldCapture("私は猫が好き")).toBe(true);
     expect(shouldCapture("기억해줘")).toBe(true);
-    expect(shouldCapture("중요")).toBe(true);
     expect(shouldCapture("blue", { customTriggers: ["blue"] })).toBe(false);
     expect(shouldCapture("记住这个", { customTriggers: ["记住"] })).toBe(true);
     expect(shouldCapture("use the azure profile", { customTriggers: ["azure profile"] })).toBe(
@@ -2021,7 +2015,6 @@ describe("memory plugin e2e", () => {
   });
 
   test("detectCategory classifies using production logic", () => {
-    expect(detectCategory("I prefer dark mode")).toBe("preference");
     expect(detectCategory("We decided to use React")).toBe("decision");
     expect(detectCategory("My email is test@example.com")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");

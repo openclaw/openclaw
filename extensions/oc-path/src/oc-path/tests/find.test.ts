@@ -298,6 +298,8 @@ describe("findOcPaths — JSONL", () => {
     const out = find(ast, "oc://session/{L2,$first,$last}/event");
     expect(leafValues(out)).toEqual(["action", "start", "end"]);
     expect(out.map(({ path }) => path.section)).toEqual(["L2", "L1", "L3"]);
+    expect(out.map(({ match }) => match.line)).toEqual([2, 1, 3]);
+    expect(find(ast, "oc://session/*/event").map(({ match }) => match.line)).toEqual([1, 2, 3]);
   });
 
   it("filters value lines by a top-level field", () => {

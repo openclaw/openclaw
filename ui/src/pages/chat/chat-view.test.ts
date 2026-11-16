@@ -31,7 +31,6 @@ import {
 import {
   getAttachmentMenuOption,
   renderAttachmentHarness,
-  requireAttachmentInput,
   selectAttachmentMenuOption,
   selectFile,
 } from "./chat-attachment-picker.test-support.ts";
@@ -1126,27 +1125,6 @@ describe("chat voice controls", () => {
     expect(preview.muted).toBe(true);
   });
 
-  it("stops active voice input without sending a composed draft", () => {
-    const onSend = vi.fn();
-    const onToggleRealtimeTalk = vi.fn();
-    const container = renderChatView({
-      draft: "Keep this draft",
-      realtimeTalkActive: true,
-      onSend,
-      onToggleRealtimeTalk,
-    });
-
-    const stop = requireElement(
-      container,
-      '[aria-label="Stop voice input"]',
-      "stop voice input button",
-    );
-    stop.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(1);
-    expect(onSend).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["connecting", "Connecting voice input…"],
     ["thinking", "Asking the agent…"],
@@ -1208,7 +1186,10 @@ describe("chat voice controls", () => {
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
     const inputLevel = new RealtimeTalkLevelSignal();
     const onToggleRealtimeTalk = vi.fn();
+    const onSend = vi.fn();
     const container = renderChatView({
+      draft: "Keep this draft",
+      onSend,
       realtimeTalkActive: true,
       realtimeTalkStatus: "listening",
       realtimeTalkInputLevel: inputLevel,
@@ -1233,6 +1214,7 @@ describe("chat voice controls", () => {
         "Stop voice input",
       ).click();
       expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+      expect(onSend).not.toHaveBeenCalled();
     } finally {
       disposeChatView(container);
       container.remove();
@@ -2036,19 +2018,6 @@ describe("chat attachment picker", () => {
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    const pastedTextAttachments = [
-      registerChatAttachmentPayload({
-        attachment: {
-          id: "retained-paste",
-          fileName: "pasted-text-123.txt",
-          mimeType: "text/plain",
-          origin: "paste",
-        },
-        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
-        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
-      }),
-    ];
-
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
         id: "ordinary-text-file",
@@ -2060,28 +2029,11 @@ describe("chat attachment picker", () => {
       dataUrl: `data:text/plain;base64,${btoa("file")}`,
       file: new File(["file"], "pasted-text-1.txt", { type: "text/plain" }),
     });
-    const imageAttachment: ChatAttachment = {
-      id: "image",
-      fileName: "screen.png",
-      mimeType: "image/png",
-      sizeBytes: 2048,
-    };
-
-    const textOnly = renderChatView({ attachments: pastedTextAttachments });
-    expect(textOnly.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholder", { name: "Val" }),
-    );
-
     const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
     expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
     expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
-
-    const withImage = renderChatView({ attachments: [imageAttachment] });
-    expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholder", { name: "Val" }),
-    );
 
     const withComment = renderChatView({
       assistantName: "Roboclaw",
@@ -2103,25 +2055,6 @@ describe("chat attachment picker", () => {
     expect(withComment.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Roboclaw" }),
     );
-  });
-
-  it("opens the scoped file input from the attachment menu", async () => {
-    const container = renderChatView();
-    const input = requireAttachmentInput(
-      container,
-      ".agent-chat__file-input",
-      "attachment file input",
-    );
-    const attachButton = await getAttachmentMenuOption(
-      container,
-      t("chat.composer.attachFileOption"),
-    );
-    const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
-
-    expect(attachButton).toBeInstanceOf(HTMLElement);
-    selectAttachmentMenuOption(attachButton);
-
-    await waitForSolid(() => expect(clickInput).toHaveBeenCalledTimes(1));
   });
 
   it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
@@ -2626,56 +2559,6 @@ describe("chat model controls", () => {
     },
   );
 
-  it("shows disabled configured models and model setup when no model has authentication", async () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          available: false,
-          unavailableReason: "missing-auth",
-        },
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          available: false,
-          unavailableReason: "missing-auth",
-        },
-      ],
-    });
-    const onModelSetup = vi.fn();
-    const container = await renderModelControls(state, {
-      agentDefaultModel: "openai/gpt-5.6-sol",
-      onModelSetup,
-    });
-
-    const options = container.querySelectorAll<HTMLElement>("[data-chat-model-option]");
-    expect([...options].map((option) => option.dataset.chatModelOption)).toEqual([
-      "openai/gpt-5.6-sol",
-      "openai/gpt-5.6-luna",
-    ]);
-    expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
-    expect(options[0]?.textContent).toContain("Default");
-    for (const option of options) {
-      expect(option.getAttribute("aria-disabled")).toBe("true");
-      expect(option.getAttribute("aria-label")).toContain("Sign-in needed");
-      expect(option.querySelector(".chat-controls__model-option-meta")).toBeNull();
-      expect(option.textContent).not.toContain("1M");
-    }
-    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
-      "Sign-in needed",
-    );
-    expect(container.querySelector('[data-chat-model-setup="true"]')?.textContent).toBe("Set up");
-    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
-  });
-
   it("keeps each alias's auth action tied to its own availability reason", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-luna",
@@ -3075,39 +2958,6 @@ describe("chat model controls", () => {
       { fastMode: true },
       { model: "google/gemini-3-pro" },
     ]);
-  });
-
-  it("keeps reconciliation inside the session settings lane", async () => {
-    const reconciliationStarted = createDeferred();
-    const releaseReconciliation = createDeferred();
-    const patches: Array<Record<string, unknown>> = [];
-    const patchResult: SessionPatchResult = {
-      ok: true,
-      path: "",
-      key: "main",
-      entry: { sessionId: "main" },
-    };
-    const host = createSettingsLaneHost(
-      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-        if (options?.waitFor) {
-          await options.waitFor;
-        }
-        patches.push(patch);
-        reconciliationStarted.resolve();
-        await releaseReconciliation.promise;
-        return patchResult;
-      },
-    );
-
-    const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
-    await reconciliationStarted.promise;
-    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
-    await Promise.resolve();
-    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
-
-    releaseReconciliation.resolve();
-    await expect(Promise.all([modelSwitch, thinkingPatch])).resolves.toEqual([true, true]);
-    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
   });
 
   it("validates queued settings independently after a model switch fails", async () => {

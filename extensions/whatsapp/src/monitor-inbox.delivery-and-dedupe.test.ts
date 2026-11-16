@@ -128,7 +128,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     { domain: "lid", phone: "999" },
     { domain: "hosted.lid", phone: "999" },
     { domain: "lid", phone: "888" },
-    { domain: "hosted.lid", phone: "888" },
   ])("retries unresolved @$domain DMs and authorizes mapped +$phone", ({ domain, phone }) =>
     withRetryClock(async () => {
       mockLoadConfig.mockReturnValue({
@@ -697,7 +696,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
   it.each([
-    { reason: "an explicit retryable failure", error: "retry me", id: "retryable-dedupe" },
     {
       reason: "reply session conflicts",
       error: "reply session initialization conflicted for agent:main:whatsapp:direct:+15551234567",

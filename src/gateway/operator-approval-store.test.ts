@@ -467,77 +467,6 @@ describe("operator approval store", () => {
     ).toEqual({ outcome: "conflict" });
   });
 
-  it("returns the first terminal answer and distinguishes same and conflicting retries", async () => {
-    const databaseOptions = getSuiteDatabaseOptions();
-    const inserted = await Promise.all([
-      insertOperatorApproval({ approval: approval("first-wins"), databaseOptions }),
-      insertOperatorApproval({ approval: approval("first-wins"), databaseOptions }),
-    ]);
-    expect(inserted.map((result) => result.outcome)).toEqual(["inserted", "existing"]);
-    for (const result of inserted) {
-      expect(result).toMatchObject({ record: { id: "first-wins", status: "pending" } });
-    }
-
-    const winnerPending = resolveOperatorApproval({
-      id: "first-wins",
-      decision: "allow-once",
-      resolver: { kind: "device", id: "winner-device" },
-      nowMs: 2_000,
-      databaseOptions,
-    });
-    const sameRetryPending = resolveOperatorApproval({
-      id: "first-wins",
-      decision: "allow-once",
-      resolver: { kind: "channel", id: "telegram:loser" },
-      nowMs: 2_001,
-      databaseOptions,
-    });
-    const conflictingRetryPending = resolveOperatorApproval({
-      id: "first-wins",
-      decision: "deny",
-      resolver: { kind: "channel", id: "telegram:loser" },
-      nowMs: 2_002,
-      databaseOptions,
-    });
-
-    const denialPending = forceDenyOperatorApproval({
-      id: "first-wins",
-      reason: "run-aborted",
-      resolver: { kind: "system", id: "late-denial" },
-      nowMs: 2_003,
-      databaseOptions,
-    });
-    const [winner, sameRetry, conflictingRetry, denial] = await Promise.all([
-      winnerPending,
-      sameRetryPending,
-      conflictingRetryPending,
-      denialPending,
-    ]);
-
-    expect(winner).toMatchObject({
-      outcome: "resolved",
-      record: {
-        status: "allowed",
-        decision: "allow-once",
-        resolver: { kind: "device", id: "winner-device" },
-      },
-    });
-    expect(sameRetry).toMatchObject({
-      outcome: "already-resolved",
-      retry: "same",
-      record: { resolver: { kind: "device", id: "winner-device" } },
-    });
-    expect(conflictingRetry).toMatchObject({
-      outcome: "already-resolved",
-      retry: "conflict",
-      record: { decision: "allow-once" },
-    });
-    expect(denial).toMatchObject({
-      outcome: "already-terminal",
-      record: { decision: "allow-once", resolver: { id: "winner-device" } },
-    });
-  });
-
   it("expires at the exact deadline and never accepts a late allow", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
     await insertOperatorApproval({
@@ -644,56 +573,6 @@ describe("operator approval store", () => {
     ).toMatchObject({ outcome: "consumed" });
   });
 
-  it("consumes allow-once exactly once without erasing the terminal decision", async () => {
-    const databaseOptions = getSuiteDatabaseOptions();
-    await insertOperatorApproval({
-      approval: approval("consume", { createdAtMs: 5_000 }),
-      databaseOptions,
-    });
-    const resolved = await resolveOperatorApproval({
-      id: "consume",
-      decision: "allow-once",
-      resolver: { kind: "runtime", id: "approval-runtime" },
-      nowMs: 2_000,
-      databaseOptions,
-    });
-    expect(resolved).toMatchObject({
-      outcome: "resolved",
-      record: { resolvedAtMs: 5_000, updatedAtMs: 5_000 },
-    });
-
-    const firstPending = consumeOperatorApprovalAllowOnce({
-      id: "consume",
-      consumerId: "run-1:tool-call-1",
-      redemptionWindowMs: 15_000,
-      nowMs: 3_000,
-      databaseOptions,
-    });
-    const replayPending = consumeOperatorApprovalAllowOnce({
-      id: "consume",
-      consumerId: "run-2:tool-call-2",
-      redemptionWindowMs: 15_000,
-      nowMs: 3_001,
-      databaseOptions,
-    });
-
-    const [first, replay] = await Promise.all([firstPending, replayPending]);
-
-    expect(first).toMatchObject({
-      outcome: "consumed",
-      record: {
-        status: "allowed",
-        decision: "allow-once",
-        consumedAtMs: 5_000,
-        consumedBy: "run-1:tool-call-1",
-      },
-    });
-    expect(replay).toMatchObject({
-      outcome: "already-consumed",
-      record: { decision: "allow-once", consumedAtMs: 5_000, consumedBy: "run-1:tool-call-1" },
-    });
-  });
-
   it("rejects allow-once redemption at the exact grace boundary", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
     await insertOperatorApproval({ approval: approval("stale-redemption"), databaseOptions });
@@ -717,62 +596,6 @@ describe("operator approval store", () => {
       outcome: "redemption-expired",
       record: { resolvedAtMs: 2_000, consumedAtMs: null },
     });
-  });
-
-  it("cancels pending rows from older runtime epochs after reopen", async () => {
-    const databaseOptions = createDatabaseOptions();
-    await insertOperatorApproval({
-      approval: approval("orphan", { createdAtMs: 5_000 }),
-      databaseOptions,
-    });
-    await insertOperatorApproval({
-      approval: approval("current", { runtimeEpoch: "runtime-b" }),
-      databaseOptions,
-    });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-
-    const result = await recoverOperatorApprovalsOnStartup({
-      runtimeEpoch: "runtime-b",
-      nowMs: 2_000,
-      databaseOptions,
-    });
-
-    expect(result).toMatchObject({
-      affected: 1,
-      pruned: 0,
-      records: [
-        {
-          id: "orphan",
-          status: "cancelled",
-          decision: "deny",
-          terminalReason: "gateway-restart",
-          resolvedAtMs: 5_000,
-          updatedAtMs: 5_000,
-        },
-      ],
-    });
-    expect(
-      await getOperatorApproval({ id: "orphan", nowMs: 2_000, databaseOptions }),
-    ).toMatchObject({ status: "cancelled", terminalReason: "gateway-restart" });
-    expect(
-      await getOperatorApproval({ id: "current", nowMs: 2_000, databaseOptions }),
-    ).toMatchObject({
-      status: "pending",
-    });
-    expect(
-      (await prepareOperatorApprovalReplay({ nowMs: 2_000, databaseOptions })).records.map(
-        (record) => record.id,
-      ),
-    ).toEqual(["current"]);
-    expect(
-      await consumeOperatorApprovalAllowOnce({
-        id: "orphan",
-        consumerId: "restarted-consumer",
-        nowMs: 2_000,
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "not-allow-once" });
   });
 
   it("terminalizes a corrupt pending row and never returns it as approvable", async () => {

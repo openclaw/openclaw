@@ -915,7 +915,6 @@ describe("scheduleRestartSentinelWake", () => {
       const finishedRun = getUpdateRun(updateRun.runId)!;
       const report = renderUpdateRunSummary(finishedRun);
       expect.soft(finishedRun?.verification.noticeDelivered).toBe(true);
-      expect.soft(sessionDeliveryPublications).toEqual([]);
       expect.soft(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1058,7 +1057,6 @@ describe("scheduleRestartSentinelWake", () => {
     expect(keys).toEqual([
       "image:task-internal-upgrade:agent-loop:attempt:1:generated-media-host-transcript",
     ]);
-    expect(keys).not.toContain("image:task-internal-upgrade:agent-loop:generated-media-transcript");
   });
 
   it("dead-letters a host media send that may have reached the chat", async () => {

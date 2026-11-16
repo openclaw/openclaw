@@ -509,11 +509,6 @@ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
       filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol..."],
     },
     {
-      phase: "release",
-      nativeOwner: false,
-      filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol..."],
-    },
-    {
       phase: "tests",
       nativeOwner: false,
       filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol..."],

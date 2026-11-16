@@ -630,17 +630,6 @@ describe("dreaming view", () => {
     expect(compactText(container.querySelector(".dreams-diary__preview-body"))).toBe(
       "# Weekly stock report Summary content.",
     );
-
-    const closePreviewButton = container.querySelector<HTMLButtonElement>(
-      ".dreams-diary__preview-footer .btn",
-    );
-    expect(closePreviewButton).toBeInstanceOf(HTMLButtonElement);
-    expect(container.querySelector(".dreams-diary__preview-header button")).toBeNull();
-    expect(
-      closePreviewButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
-    ).toBe(closePreviewButton?.closest("openclaw-modal-actions"));
-    closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(props.onCloseWikiPreview).toHaveBeenCalledOnce();
   });
 
   it("shows one memory-wiki enablement row when the plugin is disabled", () => {

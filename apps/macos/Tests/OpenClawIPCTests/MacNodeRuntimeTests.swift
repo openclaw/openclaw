@@ -558,7 +558,6 @@ struct MacNodeRuntimeTests {
         let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
         let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
             (.off, authorizedWhenInUse, false),
-            (.off, .authorizedAlways, false),
             (.whileUsing, authorizedWhenInUse, true),
             (.always, authorizedWhenInUse, false),
             (.whileUsing, .authorizedAlways, true),

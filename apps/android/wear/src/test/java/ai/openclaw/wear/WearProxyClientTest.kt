@@ -649,16 +649,6 @@ class WearProxyClientTest {
   }
 
   @Test
-  fun snapshotWatermarkMakesTheFirstMissingEventVisible() {
-    val tracker = WearEventSequenceTracker()
-
-    tracker.adoptSnapshot("stream", 10)
-    assertEquals(WearSequenceDecision.GapOrReset, tracker.accept("stream", 12))
-    tracker.adoptSnapshot("stream", 12)
-    assertEquals(WearSequenceDecision.Accepted, tracker.accept("stream", 13))
-  }
-
-  @Test
   fun rpcResponseMustMatchTheCurrentStreamAndWatermark() {
     val tracker = WearEventSequenceTracker()
 

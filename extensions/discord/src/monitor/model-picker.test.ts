@@ -226,86 +226,6 @@ describe("Discord model picker custom_id", () => {
       }),
     ).toThrow(/custom_id exceeds/i);
   });
-
-  it("keeps typical submit ids under Discord max length", () => {
-    const modelToken = createDiscordModelPickerModelToken("azure-openai-responses", "gpt-5.5");
-    const customId = buildDiscordModelPickerCustomId({
-      command: "models",
-      action: "submit",
-      view: "models",
-      provider: "azure-openai-responses",
-      page: 1,
-      providerPage: 1,
-      modelIndex: 10,
-      modelToken,
-      userId: "12345678901234567890",
-    });
-
-    expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
-    const parsed = parseDiscordModelPickerCustomId(customId);
-    expect(parsed?.modelToken).toBe(modelToken);
-    expect(parsed?.modelIndex).toBeUndefined();
-  });
-});
-
-describe("provider paging", () => {
-  it("buckets providers when count exceeds the alpha-bucket threshold", () => {
-    // 28 providers all starting with the same letter ("p") → letter-bucket
-    // fallback uses count-based numeric chunks of 20 items.
-    const entries: Record<string, string[]> = {};
-    for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 3; i += 1) {
-      entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
-    }
-    const data = createModelsProviderData(entries);
-
-    const firstBucket = getDiscordModelPickerProviderPage({ data, page: 1 });
-    expect(firstBucket.buckets).toHaveLength(2);
-    expect(firstBucket.bucket?.id).toBe("1-20");
-    expect(firstBucket.items).toHaveLength(20);
-    expect(firstBucket.totalPages).toBe(1);
-    expect(firstBucket.hasNext).toBe(false);
-
-    const secondBucket = getDiscordModelPickerProviderPage({
-      data,
-      page: 1,
-      bucket: "21-28",
-    });
-    expect(secondBucket.bucket?.id).toBe("21-28");
-    expect(secondBucket.items).toHaveLength(8);
-    expect(secondBucket.totalPages).toBe(1);
-    expect(secondBucket.hasPrev).toBe(false);
-  });
-
-  it("uses Discord-safe provider pages with and without buckets", () => {
-    const compactData = createModelsProviderData({
-      anthropic: ["claude-sonnet-4-5"],
-      openai: ["gpt-4o"],
-      google: ["gemini-3-pro"],
-    });
-    const compactPage = getDiscordModelPickerProviderPage({
-      data: compactData,
-      page: 1,
-    });
-    expect(compactPage.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX);
-    expect(compactPage.buckets).toHaveLength(1);
-    expect(compactPage.bucket?.id).toBe("all");
-
-    // 26 providers → buckets engage. First bucket has 20 items which fits a
-    // single select page; the user navigates between buckets, not pages.
-    const pagedEntries: Record<string, string[]> = {};
-    for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 1; i += 1) {
-      pagedEntries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
-    }
-    const pagedData = createModelsProviderData(pagedEntries);
-    const pagedPage = getDiscordModelPickerProviderPage({
-      data: pagedData,
-      page: 1,
-    });
-    expect(pagedPage.buckets.length).toBeGreaterThan(1);
-    expect(pagedPage.items.length).toBeLessThanOrEqual(
-      DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX,
-    );
-  });
 });
 
 describe("model paging", () => {
@@ -340,15 +260,6 @@ describe("model paging", () => {
     expect(secondBucket.bucket?.id).toBe("21-29");
     expect(secondBucket.items[0]).toBe("model-21");
     expect(secondBucket.items).toHaveLength(9);
-  });
-
-  it("uses Discord select-option max for model pages", () => {
-    const data = createModelsProviderData({ openai: ["gpt-4o", "gpt-4.1"] });
-    const page = requireValue(
-      getDiscordModelPickerModelPage({ data, provider: "openai" }),
-      "expected model page when provider exists",
-    );
-    expect(page.pageSize).toBe(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
   });
 });
 

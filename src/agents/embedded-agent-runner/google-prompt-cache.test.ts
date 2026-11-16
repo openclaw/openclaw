@@ -319,140 +319,144 @@ describe("google prompt cache", () => {
     }
   });
 
-  it("creates cached content from the system prompt and strips that prompt from live requests", async () => {
-    // Cached system prompts should move out of live request context and into the
-    // cachedContent option to avoid paying prompt tokens repeatedly.
-    const now = 1_000_000;
-    const expireTime = new Date(now + 3_600_000).toISOString();
-    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
-    const entries: SessionCustomEntry[] = [];
-    const sessionManager = makeSessionManager(entries);
-    const fetchMock = createCacheFetchMock({
-      name: "cachedContents/system-cache-1",
-      expireTime,
-    });
-    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn("stream", {
-      tools: [{ functionDeclarations: [{ name: "lookup" }] }],
-      toolConfig: { functionCallingConfig: { mode: "AUTO" } },
-    });
-    const providerMetadata = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "google",
-          providers: ["google"],
-          providerEndpoints: [
-            {
-              endpointClass: "google-generative-ai",
-              hosts: ["generativelanguage.googleapis.com"],
-            },
-          ],
-        },
-      ],
-    });
-
-    const wrapped = await preparePromptCacheStream({
-      fetchMock,
-      now,
-      sessionManager,
-      streamFn: innerStreamFn,
-    });
-
-    expect(wrapped).toBeTypeOf("function");
-    expect(fetchMock).not.toHaveBeenCalled();
-    await withPluginMetadataSnapshotScope(providerMetadata, () =>
-      wrapped?.(
-        makeGoogleModel(),
-        {
-          systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-          messages: [],
-          tools: [
-            {
-              name: "lookup",
-              description: "Look up a value",
-              parameters: {
-                type: "object",
-                properties: { from: { type: "string" } },
-                required: ["from"],
+  it.each(["gemini-api-key", '{"token":"","projectId":"demo"}', "{not-json}"])(
+    "creates cached content and strips the live system prompt with API credential %s",
+    async (apiKey) => {
+      // Cached system prompts should move out of live request context and into the
+      // cachedContent option to avoid paying prompt tokens repeatedly.
+      const now = 1_000_000;
+      const expireTime = new Date(now + 3_600_000).toISOString();
+      const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+      const entries: SessionCustomEntry[] = [];
+      const sessionManager = makeSessionManager(entries);
+      const fetchMock = createCacheFetchMock({
+        name: "cachedContents/system-cache-1",
+        expireTime,
+      });
+      const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn("stream", {
+        tools: [{ functionDeclarations: [{ name: "lookup" }] }],
+        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+      });
+      const providerMetadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "google",
+            providers: ["google"],
+            providerEndpoints: [
+              {
+                endpointClass: "google-generative-ai",
+                hosts: ["generativelanguage.googleapis.com"],
               },
-            },
-          ],
-        } as never,
-        { temperature: 0.2, toolChoice: "auto" } as never,
-      ),
-    );
+            ],
+          },
+        ],
+      });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(callArg(fetchMock, 0, 0)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/cachedContents",
-    );
-    const createInit = fetchInit(fetchMock);
-    expect(createInit.method).toBe("POST");
-    const createHeaders = createInit.headers as Record<string, string>;
-    expect(createHeaders["x-goog-api-key"]).toBe("gemini-api-key");
-    expect(createHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
-    expect(createHeaders["X-Provider"]).toBe("google");
-    expect(typeof createInit.body).toBe("string");
-    const createBody = JSON.parse(createInit.body as string) as Record<string, unknown>;
-    expect(createBody).toEqual({
-      model: "models/gemini-3.1-pro-preview",
-      ttl: "3600s",
-      systemInstruction: {
-        parts: [{ text: "Follow policy." }],
-      },
-      tools: [
-        {
-          functionDeclarations: [
-            {
-              name: "lookup",
-              description: "Look up a value",
-              parametersJsonSchema: {
-                type: "object",
-                properties: { from_: { type: "string" } },
-                required: ["from_"],
+      const wrapped = await preparePromptCacheStream({
+        apiKey,
+        fetchMock,
+        now,
+        sessionManager,
+        streamFn: innerStreamFn,
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      await withPluginMetadataSnapshotScope(providerMetadata, () =>
+        wrapped?.(
+          makeGoogleModel(),
+          {
+            systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+            messages: [],
+            tools: [
+              {
+                name: "lookup",
+                description: "Look up a value",
+                parameters: {
+                  type: "object",
+                  properties: { from: { type: "string" } },
+                  required: ["from"],
+                },
               },
-            },
-          ],
+            ],
+          } as never,
+          { temperature: 0.2, toolChoice: "auto" } as never,
+        ),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(callArg(fetchMock, 0, 0)).toBe(
+        "https://generativelanguage.googleapis.com/v1beta/cachedContents",
+      );
+      const createInit = fetchInit(fetchMock);
+      expect(createInit.method).toBe("POST");
+      const createHeaders = createInit.headers as Record<string, string>;
+      expect(createHeaders["x-goog-api-key"]).toBe(apiKey);
+      expect(new Headers(createInit.headers).has("Authorization")).toBe(false);
+      expect(createHeaders["Content-Type"]).toBe("application/json");
+      expect(createHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
+      expect(createHeaders["X-Provider"]).toBe("google");
+      const createBody = JSON.parse(createInit.body as string) as Record<string, unknown>;
+      expect(createBody).toEqual({
+        model: "models/gemini-3.1-pro-preview",
+        ttl: "3600s",
+        systemInstruction: {
+          parts: [{ text: "Follow policy." }],
         },
-      ],
-      toolConfig: {
-        functionCallingConfig: {
-          mode: "AUTO",
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "lookup",
+                description: "Look up a value",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: { from_: { type: "string" } },
+                  required: ["from_"],
+                },
+              },
+            ],
+          },
+        ],
+        toolConfig: {
+          functionCallingConfig: {
+            mode: "AUTO",
+          },
         },
-      },
-    });
-    expect(innerStreamFn).toHaveBeenCalledTimes(1);
-    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
-    expect(streamContext(innerStreamFn).tools).toMatchObject([
-      { name: "lookup", parameters: { properties: { from: { type: "string" } } } },
-    ]);
-    expect(getCapturedPayload()).not.toHaveProperty("tools");
-    expect(getCapturedPayload()).not.toHaveProperty("toolConfig");
-    expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
-    expect(streamOptions(innerStreamFn).toolChoice).toBe("auto");
-    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
-    expect(entries).toEqual([
-      {
-        type: "custom",
-        id: "entry-1",
-        parentId: null,
-        timestamp: new Date(1_000).toISOString(),
-        customType: "openclaw.google-prompt-cache",
-        data: {
-          status: "ready",
-          timestamp: now,
-          provider: "google",
-          modelId: "gemini-3.1-pro-preview",
-          modelApi: "google-generative-ai",
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-          systemPromptDigest,
-          cacheConfigDigest: expect.any(String),
-          cacheRetention: "long",
-          cachedContent: "cachedContents/system-cache-1",
-          expireTime,
+      });
+      expect(innerStreamFn).toHaveBeenCalledTimes(1);
+      expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+      expect(streamContext(innerStreamFn).tools).toMatchObject([
+        { name: "lookup", parameters: { properties: { from: { type: "string" } } } },
+      ]);
+      expect(getCapturedPayload()).not.toHaveProperty("tools");
+      expect(getCapturedPayload()).not.toHaveProperty("toolConfig");
+      expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
+      expect(streamOptions(innerStreamFn).toolChoice).toBe("auto");
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
+      expect(entries).toEqual([
+        {
+          type: "custom",
+          id: "entry-1",
+          parentId: null,
+          timestamp: new Date(1_000).toISOString(),
+          customType: "openclaw.google-prompt-cache",
+          data: {
+            status: "ready",
+            timestamp: now,
+            provider: "google",
+            modelId: "gemini-3.1-pro-preview",
+            modelApi: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            systemPromptDigest,
+            cacheConfigDigest: expect.any(String),
+            cacheRetention: "long",
+            cachedContent: "cachedContents/system-cache-1",
+            expireTime,
+          },
         },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("reuses managed cached content when tool discovery order changes", async () => {
     const now = 1_000_000;
@@ -596,7 +600,6 @@ describe("google prompt cache", () => {
     expect(fetchInit(fetchMock).method).toBe("PATCH");
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
     expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
-    expect(typeof streamOptions(innerStreamFn)).toBe("object");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
   });
 

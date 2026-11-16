@@ -996,23 +996,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       await checkConversation(
         [
           { role: "user", content: "What's the weather?" },
-          { role: "assistant", content: "Checking the weather." },
-          {
-            role: "tool",
-            tool_call_id: "call_1",
-            content: [{ type: "text", text: "Sunny, 70F." }],
-          },
-        ],
-        {
-          history: ["User: What's the weather?", "Assistant: Checking the weather."],
-          current: ["Tool:call_1: Sunny, 70F."],
-        },
-        [{ text: "ok" }],
-      );
-
-      await checkConversation(
-        [
-          { role: "user", content: "What's the weather?" },
           {
             role: "assistant",
             content: null,

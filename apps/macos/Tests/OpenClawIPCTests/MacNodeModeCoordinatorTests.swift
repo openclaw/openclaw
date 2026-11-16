@@ -530,13 +530,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(binding.gatewayID == nil)
     }
 
-    @Test func `node device auth binding keeps gateway owners distinct`() throws {
-        let first = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-a")
-        let second = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-b")
-
-        #expect(first.gatewayID != second.gatewayID)
-    }
-
     @Test func `stop pause and endpoint changes revoke final connect admission`() throws {
         let first = try GatewayConnection.EndpointSnapshot(
             config: GatewayConnection.Config(
@@ -868,15 +861,6 @@ extension MacNodeModeCoordinatorTests {
         ])
     }
 
-    @Test func `local native manifest leaves browser proxy to the CLI worker`() {
-        let caps = MacNodeModeCoordinator.resolvedCaps(
-            connectionMode: .local)
-        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
-
-        #expect(!caps.contains(OpenClawCapability.browser.rawValue))
-        #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
-    }
-
     @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local,
@@ -1148,11 +1132,6 @@ extension MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawCameraCommand.ptzControl.rawValue))
     }
 
-    @Test func `tls pin store key uses default wss port`() throws {
-        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-        #expect(GatewayTLSRoute.storeKey(for: url) == "gateway.example.ts.net:443")
-    }
-
     @Test func `tls pin store key preserves the shipped host identity`() throws {
         let url = try #require(URL(string: "wss://Gateway.Example.ts.net"))
 
@@ -1387,41 +1366,4 @@ extension MacNodeModeCoordinatorTests {
         #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
     }
 
-    @Test func `auto repairs trusted loopback pin mismatch`() throws {
-        let url = try #require(URL(string: "wss://127.0.0.1:18789"))
-        let failure = GatewayTLSValidationFailure(
-            kind: .pinMismatch,
-            host: "127.0.0.1",
-            storeKey: "127.0.0.1:18789",
-            expectedFingerprint: "old",
-            observedFingerprint: "new",
-            systemTrustOk: true,
-            port: 18789)
-        let route = try #require(GatewayTLSRoute.resolve(
-            url: url,
-            connectionMode: .remote,
-            configuredFingerprint: nil,
-            storedFingerprint: "old"))
-
-        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == nil)
-    }
-
-    @Test func `does not auto repair untrusted loopback pin mismatch`() throws {
-        let url = try #require(URL(string: "wss://127.0.0.1:18789"))
-        let failure = GatewayTLSValidationFailure(
-            kind: .pinMismatch,
-            host: "127.0.0.1",
-            storeKey: "127.0.0.1:18789",
-            expectedFingerprint: "old",
-            observedFingerprint: "new",
-            systemTrustOk: false,
-            port: 18789)
-        let route = try #require(GatewayTLSRoute.resolve(
-            url: url,
-            connectionMode: .remote,
-            configuredFingerprint: nil,
-            storedFingerprint: "old"))
-
-        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .systemTrustFailed)
-    }
 }

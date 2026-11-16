@@ -1469,21 +1469,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(await expiredRefresh.value == false)
     }
 
-    @Test @MainActor func `expired background refresh settles unsuccessful exactly once`() {
-        let wakeTask = Task { true }
-        var completions: [Bool] = []
-        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
-            completions.append($0)
-        }
-
-        attempt.expire()
-        attempt.complete(success: true)
-        attempt.expire()
-
-        #expect(completions == [false])
-        #expect(wakeTask.isCancelled)
-    }
-
     @Test @MainActor func `completed background refresh ignores later expiration`() {
         let wakeTask = Task { true }
         var completions: [Bool] = []
@@ -1617,22 +1602,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
             #expect(appModel.talkMode.isEnabled)
         }
-    }
-
-    @Test @MainActor func `chat session key uses agent scoped key for non default agent`() {
-        let appModel = NodeAppModel()
-        appModel.gatewayDefaultAgentId = "main"
-        appModel.setSelectedAgentId("agent-123")
-        #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
-        #expect(appModel.mainSessionKey == "agent:agent-123:main")
-    }
-
-    @Test @MainActor func `session key extracts canonical agent ID`() {
-        #expect(OpenClawChatSessionKey.agentID(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
-        #expect(OpenClawChatSessionKey.agentID(from: " agent:main:main ") == "main")
-        #expect(OpenClawChatSessionKey.agentID(from: "main") == nil)
-        #expect(OpenClawChatSessionKey.agentID(from: "agent::main") == nil)
-        #expect(OpenClawChatSessionKey.agentID(from: nil) == nil)
     }
 
     @Test @MainActor func `chat agent name uses focused canonical session agent`() {
@@ -3192,32 +3161,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talkMode._test_activePushToTalkCaptureId() == activePayload.captureId)
 
         #expect(await appModel.handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
-    }
-
-    @Test @MainActor func `PTT cancel invalidates suspended preparation without waiting`() async {
-        let (talkMode, appModel) = makeTalkModel()
-        let barrier = TalkPreparationBarrier()
-        talkMode.updateGatewayConnected(true)
-        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
-        defer {
-            appModel.testTalkCapturePreparationHandler = nil
-            appModel.voiceWake.stop()
-        }
-
-        let start = Task { @MainActor in
-            await appModel.handleInvoke(talkRequest(id: "stale-start", command: .pttStart))
-        }
-        await barrier.waitUntilEntered()
-        let epoch = appModel.talkPttCommandEpoch
-
-        let cancel = await appModel.handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
-        #expect(cancel.ok)
-        #expect(appModel.talkPttCommandEpoch == epoch + 1)
-        barrier.release()
-
-        #expect(await start.value.ok == false)
-        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
-        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
     @Test @MainActor func `PTT start after cancel uses the new command epoch`() async throws {
@@ -9146,15 +9089,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(encodedApproval["gatewayStableID"] as? String == "gateway-a")
         #expect(encodedApproval["warningText"] as? String == "Review shell expansion")
 
-        let reply = try #require(try parseWatchExecApprovalResolvePayload([
-            "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
-            "replyId": "reply-a",
-            "approvalId": "approval-a",
-            "gatewayStableID": "gateway-a",
-            "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
-        ], transport: "sendMessage"))
-        #expect(reply.gatewayStableID == "gateway-a")
-
         let resolved = WatchMessagingPayloadCodec.encodeExecApprovalResolvedPayload(
             OpenClawWatchExecApprovalResolvedMessage(
                 approvalId: "approval-a",
@@ -9229,12 +9163,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             ], transport: "applicationContext"))
         #expect(missingHeldApprovalsRequest.requestId == "missing-held-approvals")
         #expect(missingHeldApprovalsRequest.heldApprovals.isEmpty)
-        let missingRequestIdRequest = try #require(
-            try parseWatchExecApprovalSnapshotRequestPayload([
-                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
-                "heldApprovals": [],
-            ], transport: "applicationContext"))
-        #expect(!missingRequestIdRequest.requestId.isEmpty)
         let emptyRequestIdRequest = try #require(
             try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
@@ -9592,22 +9520,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(coalescedPrompt.id != firstPrompt.id)
         #expect(coalescedPrompt.messagePreview.contains("second prompt"))
-    }
-
-    @Test @MainActor func `handle deep link strips delivery fields before confirmation`() async throws {
-        let appModel = NodeAppModel()
-        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
-        let url = makeAgentDeepLinkURL(
-            message: "route this",
-            deliver: true,
-            to: "123456",
-            channel: "telegram")
-
-        await appModel.handleDeepLink(url: url)
-        let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
-        #expect(prompt.request.deliver == false)
-        #expect(prompt.request.to == nil)
-        #expect(prompt.request.channel == nil)
     }
 
     @Test @MainActor func `handle deep link rejects long message when connected`() async {

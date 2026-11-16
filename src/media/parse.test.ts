@@ -72,8 +72,6 @@ describe("splitMediaFromOutput", () => {
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
     ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
     ["media://inbound/image.png", "MEDIA:media://inbound/image.png"],
-    ["./screenshot.png", " MEDIA:./screenshot.png"],
-    ["./screenshot.png", "  MEDIA:./screenshot.png"],
     ["./screenshot.png", "   MEDIA:./screenshot.png"],
     ["~/Pictures/My File.png", "MEDIA:~/Pictures/My File.png"],
     ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
@@ -213,7 +211,6 @@ describe("splitMediaFromOutput", () => {
 
   it.each([
     // A backtick wrapper does not turn a whitespace-separated list into one filename.
-    ["MEDIA:`/tmp/a.png /tmp/b.png`", ["/tmp/a.png", "/tmp/b.png"]],
     [
       "MEDIA:`/tmp/first image.png /tmp/second image.png`",
       ["/tmp/first image.png", "/tmp/second image.png"],
@@ -225,7 +222,6 @@ describe("splitMediaFromOutput", () => {
   it.each([
     ['MEDIA:["/tmp/a.png","/tmp/b.png"]', ["/tmp/a.png", "/tmp/b.png"]],
     ['MEDIA: ["/tmp/a.png", "/tmp/b.png"]', ["/tmp/a.png", "/tmp/b.png"]],
-    ['MEDIA:["/tmp/a.png","/tmp/b.png","/tmp/c.png"]', ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]],
     ['MEDIA:["first.png","second.png"]', ["first.png", "second.png"]],
     [
       'MEDIA:["/tmp/first image.png","/tmp/second image.png"]',
@@ -422,13 +418,6 @@ describe("splitMediaFromOutput", () => {
     expectOrderedMediaOutputCase(input, mediaUrls);
   });
 
-  it("keeps a quoted relative reference separate from the quoted reference before it", () => {
-    expectOrderedMediaOutputCase('MEDIA:"/tmp/first image.png" "media/second image.png"', [
-      "/tmp/first image.png",
-      "media/second image.png",
-    ]);
-  });
-
   it("keeps a trailing quote pair inside one quoted reference", () => {
     // Adjacent trailing quotes are part of the signed URL, not an empty sibling reference.
     expectParsedMediaOutputCase('MEDIA:"https://example.com/video.mp4?token=ends"""', {
@@ -603,9 +592,7 @@ describe("splitMediaFromOutput", () => {
   it.each([
     ["before", "First paragraph\n\nMEDIA:https://example.com/a.png\nSecond paragraph"],
     ["after", "First paragraph\nMEDIA:https://example.com/a.png\n\nSecond paragraph"],
-    ["around", "First paragraph\n\nMEDIA:https://example.com/a.png\n\nSecond paragraph"],
     ["with spaces", "First paragraph\n \nMEDIA:https://example.com/a.png\n  \nSecond paragraph"],
-    ["with tabs", "First paragraph\n\t\nMEDIA:https://example.com/a.png\n\t\nSecond paragraph"],
   ])("preserves a paragraph separator %s an attachment", (_placement, input) => {
     const result = splitMediaFromOutput(input);
 

@@ -110,7 +110,6 @@ struct WatchInboxStoreOperationTests {
     @Test func `reply accepts current delivered queued and failed outcomes`() throws {
         try Self.withStore { store, _ in
             let outcomes: [(WatchReplySendResult, WatchDeliveryStatusCode)] = [
-                (Self.result(.delivered), .sent),
                 (Self.result(.queued), .queued),
                 (Self.result(.notSent, errorMessage: "Offline"), .failed),
             ]

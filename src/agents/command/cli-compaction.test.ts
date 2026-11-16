@@ -471,14 +471,17 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("treats already-compacted CLI transcript compaction as a no-op", async () => {
+    const resolveBackend = vi.fn(() => null);
     const scenario = await prepareScenario("qwen-already-compacted", {
       provider: "ollama",
       model: "qwen3:14b",
       compact: async () => {
         throw new Error("Already compacted");
       },
+      deps: { resolveCliBackendConfig: resolveBackend },
     });
     expect(await scenario.run()).toBe(scenario.sessionEntry);
+    expect(resolveBackend).toHaveBeenCalledWith("ollama", expect.anything());
     expect(scenario.calls).toHaveLength(1);
     expectNoCalls(scenario.maintenance, scenario.record);
   });
@@ -803,44 +806,50 @@ describe("runCliTurnCompactionLifecycle", () => {
     }
   });
 
-  it("preserves google-gemini-cli native history and resume binding under compaction pressure", async () => {
-    const entry = cliCompactionBackendEntrypoints[1];
-    const { provider, pluginId } = entry;
-    const bundled = path.join(tmpDir, "bundled");
-    const pluginRoot = path.join(bundled, pluginId);
-    await fs.mkdir(pluginRoot, { recursive: true });
-    await fs.copyFile(
-      new URL(`../../../extensions/${pluginId}/openclaw.plugin.json`, import.meta.url),
-      path.join(pluginRoot, "openclaw.plugin.json"),
-    );
-    await fs.writeFile(
-      path.join(pluginRoot, "setup-api.mjs"),
-      `export { default } from ${JSON.stringify(resolveRuntimeWorkerUrl(entry).href)};`,
-    );
-    await fs.copyFile(path.join(pluginRoot, "setup-api.mjs"), path.join(pluginRoot, "index.mjs"));
-    const backend = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundled }, () =>
-      resolveCliBackendConfig(provider),
-    );
-    expect(backend).not.toBeNull();
-    const nativeCompact = vi.fn();
-    const scenario = await prepareScenario(`${provider}-owns-compaction`, {
-      provider,
-      sessionEntry: {
-        cliSessionBindings: { [provider]: { sessionId: "native-session" } },
-      },
-      deps: {
-        maybeCompactAgentHarnessSession: nativeCompact as never,
-        resolveCliBackendConfig: () => backend,
-      },
-    });
-    const { calls, record, sessionEntry } = scenario;
-    const updatedEntry = await scenario.run();
+  it.each(cliCompactionBackendEntrypoints)(
+    "preserves $provider native history and resume binding under compaction pressure",
+    async (entry) => {
+      const { provider, pluginId } = entry;
+      const bundled = path.join(tmpDir, "bundled");
+      const pluginRoot = path.join(bundled, pluginId);
+      await fs.mkdir(pluginRoot, { recursive: true });
+      await fs.copyFile(
+        new URL(`../../../extensions/${pluginId}/openclaw.plugin.json`, import.meta.url),
+        path.join(pluginRoot, "openclaw.plugin.json"),
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "setup-api.mjs"),
+        `export { default } from ${JSON.stringify(resolveRuntimeWorkerUrl(entry).href)};`,
+      );
+      await fs.copyFile(path.join(pluginRoot, "setup-api.mjs"), path.join(pluginRoot, "index.mjs"));
+      const backend = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundled }, () =>
+        resolveCliBackendConfig(provider),
+      );
+      expect(backend).not.toBeNull();
+      const resolveBackend = vi.fn((backendId: string) =>
+        backendId === provider ? backend : null,
+      );
+      const nativeCompact = vi.fn();
+      const scenario = await prepareScenario(`${provider}-owns-compaction`, {
+        provider: pluginId === "anthropic" ? "anthropic" : provider,
+        sessionEntry: {
+          cliSessionBindings: { [provider]: { sessionId: "native-session" } },
+        },
+        deps: {
+          maybeCompactAgentHarnessSession: nativeCompact as never,
+          resolveCliBackendConfig: resolveBackend,
+        },
+      });
+      const { calls, record, sessionEntry } = scenario;
+      const updatedEntry = await scenario.run({ cliBackendId: provider });
 
-    expectNoCalls(nativeCompact, record);
-    expect(calls).toHaveLength(0);
-    expect(updatedEntry).toBe(sessionEntry);
-    expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
-  });
+      expect(resolveBackend).toHaveBeenCalledWith(provider, expect.anything());
+      expectNoCalls(nativeCompact, record);
+      expect(calls).toHaveLength(0);
+      expect(updatedEntry).toBe(sessionEntry);
+      expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
+    },
+  );
 
   it("does not compact reset-discarded tool output in the post-turn lifecycle", async () => {
     const manager = SessionManager.fromEntries([

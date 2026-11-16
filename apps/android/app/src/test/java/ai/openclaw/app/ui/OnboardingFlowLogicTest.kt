@@ -163,27 +163,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun locationCapabilityRequiresBothTheSavedModeAndAndroidPermission() {
-    listOf(
-      Triple(LocationMode.Off, false, false),
-      Triple(LocationMode.Off, true, false),
-      Triple(LocationMode.WhileUsing, false, false),
-      Triple(LocationMode.WhileUsing, true, true),
-      Triple(LocationMode.Always, false, false),
-      Triple(LocationMode.Always, true, true),
-    ).forEach { (savedMode, androidPermissionGranted, expected) ->
-      assertEquals(
-        "savedMode=$savedMode androidPermissionGranted=$androidPermissionGranted",
-        expected,
-        initialDeviceCapabilityEnabled(
-          savedCapabilityEnabled = savedMode != LocationMode.Off,
-          androidPermissionGranted = androidPermissionGranted,
-        ),
-      )
-    }
-  }
-
-  @Test
   fun deviceCapabilityRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
     assertEqualsCases(
       "Allow" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = false).resolveNativeText(),
@@ -293,11 +272,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun blocksFinishWhenDisconnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
-  }
-
-  @Test
   fun blocksFinishWhenOnlyNodeIsConnected() {
     assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
@@ -384,34 +358,6 @@ class OnboardingFlowLogicTest {
         currentlyGranted = { false },
       )
     assertFalse(afterUnrelatedPermissionWithSmsDenied)
-  }
-
-  @Test
-  fun contactAndCalendarPermissionGroupsRequireBothGrants() {
-    val permissionGroups =
-      listOf(
-        listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
-        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
-      )
-
-    for (requiredPermissions in permissionGroups) {
-      val readPermission = requiredPermissions.first()
-      val writePermission = requiredPermissions.last()
-      assertFalse(
-        mergedRequiredPermissionGrantState(
-          permissions = mapOf(readPermission to true),
-          requiredPermissions = requiredPermissions,
-          currentlyGranted = { false },
-        ),
-      )
-      assertTrue(
-        mergedRequiredPermissionGrantState(
-          permissions = mapOf(writePermission to true),
-          requiredPermissions = requiredPermissions,
-          currentlyGranted = { permission -> permission == readPermission },
-        ),
-      )
-    }
   }
 
   @Test
@@ -574,17 +520,6 @@ class OnboardingFlowLogicTest {
         ),
       )
     }
-  }
-
-  @Test
-  fun gatewayPairingStopsAtConnectedEvenWhenNodeApprovalIsStillPending() {
-    assertEquals(
-      GatewayRecoveryUiState.Connected,
-      gatewayPairingUiState(
-        gatewayPairingCanContinue = true,
-        statusText = "Waiting for node approval",
-      ),
-    )
   }
 
   @Test

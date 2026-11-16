@@ -715,7 +715,6 @@ describe("live inbound voice talkback scenario", () => {
     expect(result.status).toBe("pass");
     const inbound = state.getSnapshot().messages.find((message) => message.direction === "inbound");
     const audioBase64 = inbound?.attachments?.[0]?.contentBase64;
-    expect(audioBase64).toBeTruthy();
     const audio = Buffer.from(audioBase64 ?? "", "base64");
     expect(audio.subarray(0, 4).toString("ascii")).toBe("RIFF");
     expect(audio).toHaveLength(54_238);

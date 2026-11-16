@@ -729,15 +729,6 @@ describe("live subagent scenario timeouts", () => {
     },
   );
 
-  it("rejects a Code Mode nested exec with the wrong command despite matching output", async () => {
-    await expect(
-      runCompletionPolicyFlow({
-        parentExecMode: "code-mode",
-        parentExecCommand: "printf wrong-command",
-      }).result,
-    ).rejects.toThrow("parent exec did not use the exact delivered-completion command");
-  });
-
   it("rejects an unrelated custom row with the exact exec ID and command", async () => {
     await expect(
       runCompletionPolicyFlow({

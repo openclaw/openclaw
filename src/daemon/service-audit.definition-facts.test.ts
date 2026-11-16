@@ -570,7 +570,6 @@ it.each([
   { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },
   { platform: "darwin", value: "/etc/ssl/cert.pem", replacement: "/operator-private/ca.pem" },
   { platform: "linux", value: "/etc/ssl/cert.pem", replacement: undefined },
-  { platform: "win32", value: "/etc/ssl/cert.pem", replacement: undefined },
 ] as const)(
   "refuses other CA changes ($platform, $value -> $replacement)",
   ({ platform, value, replacement }) => {

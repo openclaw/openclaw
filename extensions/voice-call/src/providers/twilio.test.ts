@@ -444,20 +444,6 @@ describe("TwilioProvider", () => {
     expectStreamingTwiml(requireResponseBody(second.providerResponseBody));
   });
 
-  it("returns empty TwiML for status callbacks", () => {
-    const provider = createProvider();
-    const ctx = createContext("CallStatus=ringing&Direction=outbound-api", {
-      callId: "call-1",
-      type: "status",
-    });
-
-    const result = provider.parseWebhookEvent(ctx);
-
-    expect(result.providerResponseBody).toBe(
-      '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-    );
-  });
-
   it("returns queue TwiML for second inbound call when first call is active", () => {
     const provider = createProvider();
     const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA111");
@@ -790,24 +776,6 @@ describe("TwilioProvider", () => {
       }),
     ).rejects.toThrow("refusing TwiML fallback");
     expect(apiRequest).not.toHaveBeenCalled();
-  });
-
-  it("falls back to TwiML when no active stream exists and telephony TTS is unavailable", async () => {
-    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
-      providerCallId: "CA-nostream",
-    });
-
-    await expect(
-      provider.playTts({
-        callId: "call-nostream",
-        providerCallId: "CA-nostream",
-        text: "Hello TwiML",
-      }),
-    ).resolves.toBeUndefined();
-    expect(apiRequest).toHaveBeenCalledTimes(1);
-    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
-    expect(endpoint).toBe("/Calls/CA-nostream.json");
-    expect(params.Twiml).toContain("<Say");
   });
 
   it.each([

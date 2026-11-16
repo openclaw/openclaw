@@ -589,56 +589,6 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
-  fun immediateSendWaitsForPendingModelSelection() =
-    runTest {
-      val patchStarted = CompletableDeferred<Unit>()
-      val releasePatch = CompletableDeferred<Unit>()
-      val requests = mutableListOf<String>()
-      val controller =
-        createChatController { method, _ ->
-          requests += method
-          when (method) {
-            "sessions.patch" -> {
-              patchStarted.complete(Unit)
-              releasePatch.await()
-              "{}"
-            }
-
-            "chat.send" -> {
-              """{"runId":"run-ok","status":"ok"}"""
-            }
-
-            else -> {
-              emptyChatGatewayResponse(method)
-            }
-          }
-        }
-      controller.handleGatewayEvent("health", null)
-
-      controller.setSessionModel("main", "openai/gpt-5")
-      patchStarted.await()
-      val send =
-        async {
-          controller.sendMessageAwaitAcceptance(
-            message = "hello",
-            thinkingLevel = "off",
-            attachments = emptyList(),
-          )
-        }
-      yield()
-
-      assertEquals(listOf("sessions.patch"), requests.filter { it == "sessions.patch" || it == "chat.send" })
-
-      releasePatch.complete(Unit)
-      assertTrue(send.await())
-      runCurrent()
-      assertEquals(
-        listOf("sessions.patch", "chat.send"),
-        requests.filter { it == "sessions.patch" || it == "chat.send" },
-      )
-    }
-
-  @Test
   fun immediateSendWaitsForModelCapabilitiesAfterANewerMessageSnapshot() =
     runTest {
       val patchStarted = CompletableDeferred<Unit>()

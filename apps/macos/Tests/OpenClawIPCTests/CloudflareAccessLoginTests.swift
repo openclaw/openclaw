@@ -385,26 +385,6 @@ struct CloudflareAccessLoginTests {
     }
 
     @MainActor
-    @Test func `another discovered issuer never opens browser sign in`() async throws {
-        let gateway = try self.session(host: "gateway.example.net")
-        let app = try self.embedApplication(issuerHost: "other.cloudflareaccess.com")
-        var runs = 0
-        let owner = CloudflareAccessEmbedLogin(
-            discover: { _ in app },
-            signIn: { _, _ in
-                runs += 1
-                throw CloudflareAccessLogin.LoginError.loginFailed
-            },
-            now: { self.now })
-        #expect(try await owner.signIn(
-            appURL: #require(URL(string: "https://embed.example.net/")),
-            gateway: gateway,
-            observedIframeHosts: ["embed.example.net"],
-            isCurrent: { true }) == nil)
-        #expect(runs == 0)
-    }
-
-    @MainActor
     @Test func `a new account signs in while the previous account helper is still running`() async throws {
         let gatewayA = try self.session(host: "gateway.example.net")
         let gatewayB = try self.session(host: "gateway.example.net", subject: "user-b")

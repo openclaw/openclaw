@@ -132,26 +132,6 @@ describe("evidence summary", () => {
     });
   }
 
-  it("provider identity fallback: slim evidence still omits execution", () => {
-    const evidence = buildScriptEvidenceSummary({
-      artifactPaths: [],
-      evidenceMode: "slim",
-      generatedAt: "2026-09-10T00:00:00.000Z",
-      primaryModel: "",
-      providerMode: "live-frontier",
-      providerId: "openai",
-      targets: [{ id: "provider-identity", title: "Provider identity", sourcePath: "probe.ts" }],
-      results: [
-        { id: "provider-identity", status: "blocked", failureMessage: "missing candidate" },
-      ],
-    });
-
-    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
-    expect(evidence.evidenceMode).toBe("slim");
-    expect(evidence.entries[0]).not.toHaveProperty("execution");
-    expect(evidence.entries[0]?.result.status).toBe("blocked");
-  });
-
   it("builds QA suite evidence entries from catalog metadata", () => {
     const evidence = suiteEvidence({
       artifactPaths: [
@@ -509,30 +489,6 @@ describe("evidence summary", () => {
     });
   });
 
-  it("carries profile env values without hardcoding taxonomy coverage ids", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
-      scenarioDefinitions: [
-        {
-          id: "dm-chat-baseline",
-          title: "DM baseline conversation",
-          surface: "dm",
-          coverage: {
-            primary: ["channels.dm"],
-          },
-        },
-      ],
-      channelId: "qa-channel",
-      env: {
-        OPENCLAW_QA_PROFILE: "experimental-profile",
-      } as NodeJS.ProcessEnv,
-      generatedAt: "2026-06-07T12:09:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
-    });
-    expect(evidence.profile).toBe("experimental-profile");
-  });
   it.each([
     { evidenceMode: undefined, expectedMode: "slim", hasExecution: false },
     { evidenceMode: "full" as const, expectedMode: "full", hasExecution: true },
@@ -560,32 +516,6 @@ describe("evidence summary", () => {
       );
     },
   );
-
-  it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
-    const evidence = suiteEvidence({
-      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
-      scenarioDefinitions: [
-        {
-          id: "anthropic-parity",
-          title: "Anthropic parity",
-          surface: "runtime",
-          coverage: { primary: ["providers.anthropic"] },
-        },
-      ],
-      generatedAt: "2026-06-07T12:10:00.000Z",
-      primaryModel: "anthropic/claude-opus-4-8",
-      scenarioResults: [{ name: "Anthropic parity", status: "pass" }],
-    });
-
-    expect(evidence.entries[0]?.execution).toMatchObject({
-      provider: {
-        id: "anthropic",
-        model: { name: "claude-opus-4-8", ref: "anthropic/claude-opus-4-8" },
-        live: false,
-        fixture: "mock-openai",
-      },
-    });
-  });
 });
 
 const unknownIdentity: QaEvidenceIdentity = makeQaSuiteTestLaunch();

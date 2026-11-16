@@ -138,15 +138,11 @@ describe("handleChatSendSetupError", () => {
             cleanupAdmittedRun,
             lifecycleGeneration: "test-generation",
           },
-          context: {
-            agentRunSeq: new Map(),
+          context: createDirectChatContext({
             broadcast,
-            chatRunState: createChatRunState(),
             dedupe,
-            logGateway: { warn: vi.fn() },
-            nodeSendToSession: vi.fn(),
-            removeChatRun: vi.fn(),
-          } as never,
+            getRuntimeConfig: () => ({}),
+          }),
           error,
           respond,
           session: {
@@ -248,18 +244,13 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             cleanupAdmittedRun: vi.fn(),
             lifecycleGeneration,
           },
-          context: {
+          context: createDirectChatContext({
             agentRunSeq,
             broadcast,
-            broadcastToConnIds: vi.fn(),
             chatRunState,
-            dedupe: new Map(),
             getRuntimeConfig: () => ({}),
-            getSessionEventSubscriberConnIds: () => new Set<string>(),
-            logGateway: { warn },
-            nodeSendToSession: vi.fn(),
-            removeChatRun: vi.fn(),
-          } as never,
+            logGateway: { warn } as never,
+          }),
           isQueuedFollowupEnqueued: () => false,
           isAgentRunStarted: () => false,
           persistUserTurnTranscript,
@@ -461,16 +452,13 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           cleanupAdmittedRun,
           lifecycleGeneration: "test-generation",
         },
-        context: {
-          agentRunSeq: new Map(),
+        context: createDirectChatContext({
           broadcast,
-          chatRunState: createChatRunState(),
           dedupe,
           getRuntimeConfig: () => ({}),
-          logGateway: { warn },
-          nodeSendToSession: vi.fn(),
+          logGateway: { warn } as never,
           removeChatRun,
-        } as never,
+        }),
         isQueuedFollowupEnqueued: () => true,
         isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
@@ -549,16 +537,14 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             cleanupAdmittedRun: registration.cleanup,
             lifecycleGeneration: "test-generation",
           },
-          context: {
-            agentRunSeq: new Map(),
+          context: createDirectChatContext({
             broadcast,
             chatRunState,
             dedupe,
             getRuntimeConfig: () => ({}),
-            logGateway: { warn },
-            nodeSendToSession: vi.fn(),
+            logGateway: { warn } as never,
             removeChatRun,
-          } as never,
+          }),
           isQueuedFollowupEnqueued: () => false,
           isAgentRunStarted: () => false,
           persistUserTurnTranscript: vi.fn(),
@@ -617,16 +603,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           cleanupAdmittedRun: vi.fn(),
           lifecycleGeneration: "test-generation",
         },
-        context: {
-          agentRunSeq: new Map(),
+        context: createDirectChatContext({
           broadcast,
           chatRunState,
           dedupe,
           getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
+        }),
         isQueuedFollowupEnqueued: () => false,
         isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
@@ -701,16 +683,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           cleanupAdmittedRun: registration.cleanup,
           lifecycleGeneration: "test-generation",
         },
-        context: {
-          agentRunSeq: new Map(),
+        context: createDirectChatContext({
           broadcast,
           chatRunState,
           dedupe,
           getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
+        }),
         isQueuedFollowupEnqueued: () => false,
         isAgentRunStarted: () => true,
         persistUserTurnTranscript: vi.fn(),
@@ -798,7 +776,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
     const cleanupAdmittedRun = vi.fn(work.release);
     const activeRunCleanup = vi.fn(registration.cleanup);
-    const broadcast = vi.fn(() => getTerminalSessionWorkAdmissionRelease(target));
+    let broadcastAdmissionRelease:
+      | ReturnType<typeof getTerminalSessionWorkAdmissionRelease>
+      | undefined;
+    const broadcast = vi.fn((..._args: unknown[]) => {
+      broadcastAdmissionRelease = getTerminalSessionWorkAdmissionRelease(target);
+    });
     const dedupe = new Map();
     rpcSourceTesting.set(
       "compat-owner-run",
@@ -815,18 +798,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           cleanupAdmittedRun,
           lifecycleGeneration: "test-generation",
         },
-        context: {
-          agentRunSeq: new Map(),
+        context: createDirectChatContext({
           broadcast,
-          broadcastToConnIds: vi.fn(),
-          chatRunState: createChatRunState(),
           dedupe,
           getRuntimeConfig: () => cfg,
-          getSessionEventSubscriberConnIds: () => new Set<string>(),
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
+        }),
         isQueuedFollowupEnqueued: () => false,
         isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
@@ -876,7 +852,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect.objectContaining({ runId: clientRunId, state: "error" }),
         expect.anything(),
       );
-      await expect(broadcast.mock.results[0]?.value).resolves.toBeUndefined();
+      await expect(broadcastAdmissionRelease).resolves.toBeUndefined();
       expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {

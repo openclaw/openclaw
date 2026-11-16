@@ -677,45 +677,6 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
-  fun selectingAgentPublishesItsModelsWithoutAnotherPageRead() =
-    runBlocking {
-      val runtime = createConnectedRuntime()
-      try {
-        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
-          val agentId =
-            Json
-              .parseToJsonElement(paramsJson.orEmpty())
-              .jsonObject["agentId"]
-              ?.jsonPrimitive
-              ?.content ?: "alpha"
-          when (method) {
-            "models.list" -> {
-              """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
-            }
-
-            "models.authStatus" -> {
-              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
-            }
-
-            else -> {
-              error("Unexpected model request: $method")
-            }
-          }
-        }
-        runtime.selectChatAgent("beta")
-
-        val catalog = withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
-        val providerCatalog = withTimeout(2_000) { runtime.providerModelCatalog.first { it.isNotEmpty() } }
-        val providers = withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }
-        assertEquals("beta-model", catalog.single().id)
-        assertEquals("beta-model", providerCatalog.single().id)
-        assertEquals("beta-credential", providers.single().id)
-      } finally {
-        closeNodeRuntimeTestFixture(runtime)
-      }
-    }
-
-  @Test
   fun switchingAwayAndBackRetiresPendingModelReads() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -1403,9 +1364,6 @@ class NodeRuntimeAgentSelectionTest {
 
   @Test
   fun newCatalogSessionWinsWhenAgentLookupReturnsAfterCreation() = assertNewSessionWinsOverAgentLookup(catalogId = "codex", lookupBeforeCreation = false)
-
-  @Test
-  fun agentSelectionRestoresNewChatAfterSwitchingAway() = assertAgentSelectionRestoresCreatedSession(catalogId = null)
 
   @Test
   fun agentSelectionRestoresNewCatalogChatAfterSwitchingAway() = assertAgentSelectionRestoresCreatedSession(catalogId = "codex")

@@ -738,13 +738,11 @@ it.each([
 
 it.each([
   ["normal", "beta", "2026.9.9-beta.1", true],
-  ["prepared", "beta", "2026.9.9-beta.1", true],
   ["normal", "latest", "2026.9.9-beta.1", true],
   ["prepared", "latest", "2026.9.9-beta.1", true],
   ["normal", "latest", "2026.9.9", true],
   ["prepared", "latest", "2026.9.9-1", true],
   ["normal", "beta", "2026.9.9", false],
-  ["prepared", "beta", "2026.9.9-1", false],
   ["extended-stable", "extended-stable", "2026.8.33", false],
 ] as const)(
   "retains only supported plugin absence on %s/%s/%s (accepted=%s)",

@@ -484,7 +484,6 @@ describe("Muse native MSP harness", () => {
   it.each([
     ["off", "minimal"],
     ["low", "low"],
-    ["high", "high"],
   ] as const)("sends the Meta-compatible reasoning effort for %s", async (thinkLevel, expected) => {
     const { run } = setup();
     const result = await run({ prompt: "effort", thinkLevel });

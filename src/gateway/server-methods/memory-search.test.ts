@@ -444,19 +444,40 @@ describe("memory.search gateway method", () => {
     }
   });
 
-  it("rejects a missing or whitespace-only query before acquiring a manager", async () => {
+  it.each<[string, Record<string, unknown>[], string, boolean?]>([
+    [
+      "rejects a missing or whitespace-only query before acquiring a manager",
+      [{}, { query: "   " }],
+      "query must be a non-empty string",
+    ],
+    [
+      "rejects an unknown agentId without acquiring a manager",
+      [{ query: "lantern", agentId: "invented" }],
+      "unknown agentId",
+    ],
+    [
+      "rejects a non-string agentId without acquiring a manager",
+      [{ query: "lantern", agentId: 42 }],
+      "agentId must be a string",
+    ],
+    [
+      "rejects normalization-empty agentIds without acquiring a manager",
+      ["   ", "---", "ſ"].map((agentId) => ({ query: "lantern", agentId })),
+      "unknown agentId",
+      true,
+    ],
+  ])("%s", async (_name, requests, message, forbidDefault) => {
     const cfg = createConfig(testState.workspaceDir);
-
-    for (const params of [{}, { query: "   " }]) {
+    for (const params of requests) {
       const respond = await invokeMemorySearch(params, cfg);
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: "query must be a non-empty string",
-        }),
+        expect.objectContaining({ code: "INVALID_REQUEST", message }),
       );
+    }
+    if (forbidDefault) {
+      expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     }
     expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
@@ -504,22 +525,6 @@ describe("memory.search gateway method", () => {
     expect(manager.close).not.toHaveBeenCalled();
   });
 
-  it("rejects an unknown agentId without acquiring a manager", async () => {
-    const cfg = createConfig(testState.workspaceDir);
-
-    const respond = await invokeMemorySearch({ query: "lantern", agentId: "invented" }, cfg);
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown agentId",
-      }),
-    );
-    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
-  });
-
   it("returns typed selection-required when an explicit fleet omits agentId", async () => {
     const cfg = createConfig(testState.workspaceDir);
     cfg.agents = {
@@ -546,42 +551,6 @@ describe("memory.search gateway method", () => {
     );
     expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
-
-  it("rejects a non-string agentId without acquiring a manager", async () => {
-    const cfg = createConfig(testState.workspaceDir);
-
-    const respond = await invokeMemorySearch({ query: "lantern", agentId: 42 }, cfg);
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "agentId must be a string",
-      }),
-    );
-    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
-  });
-
-  it.each(["   ", "---", "ſ"])(
-    "rejects a normalization-empty agentId without acquiring a manager: %j",
-    async (agentId) => {
-      const cfg = createConfig(testState.workspaceDir);
-
-      const respond = await invokeMemorySearch({ query: "lantern", agentId }, cfg);
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: "unknown agentId",
-        }),
-      );
-      expect(resolveDefaultAgentId).not.toHaveBeenCalled();
-      expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     { configured: "research", requested: "Research" },

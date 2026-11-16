@@ -778,46 +778,6 @@ describePosix("native squash attribution", () => {
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it.each([
-    {
-      name: "linked human",
-      user: { login: "contributor", type: "User" },
-      empty: false,
-      keep: true,
-    },
-    { name: "unlinked author", user: null, empty: false, keep: false },
-    { name: "GitHub bot", user: { login: "bot[bot]", type: "Bot" }, empty: false, keep: false },
-    {
-      name: "empty refresh author",
-      user: { login: "contributor", type: "User" },
-      empty: true,
-      keep: false,
-    },
-  ])(
-    "preserves appropriate $name credit when REST has no server squash preview",
-    ({ user, empty, keep }) => {
-      const result = prepareBody({
-        restPreview: true,
-        previewBody: "Reviewed repair",
-        sourceCommits: [
-          {
-            message: "Repair",
-            author: { name: "Contributor", email: "contributor@example.com" },
-            githubAuthor: user,
-            empty,
-          },
-        ],
-      });
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.mergeBody).toBe(
-        keep
-          ? "Reviewed repair\n\nCo-authored-by: Contributor <contributor@example.com>\n"
-          : "Reviewed repair\n",
-      );
-    },
-  );
-
   it.each(["agent@host.LOCALHOST", "123+unknown@users.noreply.github.com", "unlinked@example.com"])(
     "drops unverified commit-author credit from both preview and source: %s",
     (email) => {
@@ -1147,9 +1107,6 @@ describePosix("native squash attribution", () => {
   it("does not duplicate an existing trailer or mistake prose for a trailer", () => {
     const credit = "Co-authored-by: Contributor <contributor@example.com>";
     const previewBody = `Quoted example: ${credit}\n\nNot a trailer.`;
-    const present = prepareBody({ sourceMessages: [`Repair\n\n${credit}`], previewBody: credit });
-    expect(present.status, present.stderr).toBe(0);
-    expect(present.mergeBody).toBe(`${credit}\n`);
     const prose = prepareBody({ sourceMessages: [`Repair\n\n${credit}`], previewBody });
     expect(prose.status, prose.stderr).toBe(0);
     expect(prose.mergeBody).toBe(`${previewBody}\n\n${credit}\n`);

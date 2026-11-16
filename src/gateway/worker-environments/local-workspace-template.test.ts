@@ -464,16 +464,15 @@ function prewarmFixture() {
   const prepare = (signal: AbortSignal) =>
     prewarmLocalWorkspaceTemplates({ getConfig: () => config, signal });
   const prewarmEnv = { ...process.env };
-  const seed = async (signal: AbortSignal) => {
-    const templateRoot = path.join(state, "worktree-projections");
-    await fs.mkdir(templateRoot);
-    await withWorktreeAllocationLease({ env: prewarmEnv, signal }, (guard) =>
+  const templateRoot = path.join(state, "worktree-projections");
+  const clone = (name: string, commit: string, signal: AbortSignal) =>
+    withWorktreeAllocationLease({ env: prewarmEnv, signal }, (guard) =>
       cloneLocalWorkspaceTemplate({
         source,
         repoRoot: source,
-        baseCommit,
-        branch: "openclaw/prior-session",
-        destination: path.join(templateRoot, "prior-session"),
+        baseCommit: commit,
+        branch: `openclaw/${name}`,
+        destination: path.join(templateRoot, name),
         temporaryRoot: templateRoot,
         templateRoot,
         env: prewarmEnv,
@@ -481,9 +480,12 @@ function prewarmFixture() {
         guard: { ...guard, signal: guard.signal ?? signal },
       }),
     );
+  const seed = async (signal: AbortSignal) => {
+    await fs.mkdir(templateRoot);
+    await clone("prior-session", baseCommit, signal);
     mocks.install.mockClear();
   };
-  return { state, config, env: prewarmEnv, prepare, seed };
+  return { state, config, env: prewarmEnv, prepare, seed, clone, templateRoot };
 }
 
 function holdInstall() {
@@ -550,23 +552,10 @@ it("joins background preparation through the allocation owner", async ({ signal 
   const preparation = warmed.prepare(signal);
   try {
     await waitForStart(preparation);
-    const templateRoot = path.join(warmed.state, "worktree-projections");
+    const { templateRoot } = warmed;
     const destination = path.join(templateRoot, "first-session");
     const selectedCommit = await git(source, "rev-parse", "HEAD");
-    const cloning = withWorktreeAllocationLease({ env: warmed.env, signal }, (guard) =>
-      cloneLocalWorkspaceTemplate({
-        source,
-        repoRoot: source,
-        baseCommit: selectedCommit,
-        branch: "openclaw/first-session",
-        destination,
-        temporaryRoot: templateRoot,
-        templateRoot,
-        env: warmed.env,
-        sandbox,
-        guard: { ...guard, signal: guard.signal ?? signal },
-      }),
-    );
+    const cloning = warmed.clone("first-session", selectedCommit, signal);
     release.resolve();
     expect(await cloning).toEqual(
       await captureWorkspaceManifestDocument({
@@ -594,23 +583,9 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
   signal,
 }) => {
   const warmed = prewarmFixture();
-  const templateRoot = path.join(warmed.state, "worktree-projections");
+  const { templateRoot } = warmed;
   await fs.mkdir(templateRoot);
-  const clone = (name: string, commit: string) =>
-    withWorktreeAllocationLease({ env: warmed.env, signal }, (guard) =>
-      cloneLocalWorkspaceTemplate({
-        source,
-        repoRoot: source,
-        baseCommit: commit,
-        branch: `openclaw/${name}`,
-        destination: path.join(templateRoot, name),
-        temporaryRoot: templateRoot,
-        templateRoot,
-        env: warmed.env,
-        sandbox,
-        guard: { ...guard, signal: guard.signal ?? signal },
-      }),
-    );
+  const clone = (name: string, commit: string) => warmed.clone(name, commit, signal);
   await clone("prior-session", baseCommit);
   const priorUse = (await listTemplatesAsync(warmed.env))[0]!.lastUsedAt;
   warmed.config.agents = {
@@ -667,25 +642,11 @@ it.each([false, true])(
     await warmed.seed(signal);
     await warmed.prepare(signal);
     const commit = await git(source, "rev-parse", "HEAD");
-    const templateRoot = path.join(warmed.state, "worktree-projections");
     const guard = { commitGuard: () => {} };
     for (const record of await listTemplatesAsync(warmed.env)) {
       await markTemplateReadyAsync(warmed.env, record.id, 1, guard.commitGuard);
     }
-    await withWorktreeAllocationLease({ env: warmed.env, signal }, (allocation) =>
-      cloneLocalWorkspaceTemplate({
-        source,
-        repoRoot: source,
-        baseCommit,
-        branch: "openclaw/pinned-session",
-        destination: path.join(templateRoot, "pinned-session"),
-        temporaryRoot: templateRoot,
-        templateRoot,
-        env: warmed.env,
-        sandbox,
-        guard: { ...allocation, signal: allocation.signal ?? signal },
-      }),
-    );
+    await warmed.clone("pinned-session", baseCommit, signal);
     const pinned = (await listTemplatesAsync(warmed.env)).find(
       (record) => record.sourceCommit === baseCommit,
     )!;

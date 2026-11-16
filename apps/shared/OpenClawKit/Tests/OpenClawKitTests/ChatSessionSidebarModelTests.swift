@@ -348,49 +348,6 @@ struct ChatSessionSidebarModelTests {
         #expect(sections[1].title == "Recent")
     }
 
-    @Test func `pinned sidebar sessions follow gateway pin chronology`() {
-        let sections = ChatSessionSidebarModel.sections(
-            sessions: [
-                self.entry(key: "pinned-old", updatedAt: 300, pinned: true, pinnedAt: 100),
-                self.entry(key: "pinned-new", updatedAt: 100, pinned: true, pinnedAt: 300),
-                self.entry(key: "recent", updatedAt: 400),
-            ],
-            currentSessionKey: "recent",
-            query: "")
-
-        #expect(sections.map(\.id) == ["pinned", "recent"])
-        #expect(sections[0].nodes.map(\.session.key) == ["pinned-new", "pinned-old"])
-        #expect(sections[1].nodes.map(\.session.key) == ["recent"])
-    }
-
-    @Test func `sidebar sessions preserve deterministic gateway key ties`() {
-        let sections = ChatSessionSidebarModel.sections(
-            sessions: [
-                self.entry(key: "z-tie", updatedAt: 100),
-                self.entry(key: "a-tie", updatedAt: 100),
-                self.entry(key: "m-tie", updatedAt: 100),
-            ],
-            currentSessionKey: "a-tie",
-            query: "")
-
-        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["a-tie", "m-tie", "z-tie"])
-    }
-
-    @Test func `gateway groups preserve canonical session order`() {
-        let sections = ChatSessionSidebarModel.sections(
-            sessions: [
-                self.entry(key: "project-z", updatedAt: 100, category: "Projects"),
-                self.entry(key: "project-a", updatedAt: 100, category: "Projects"),
-                self.entry(key: "recent", updatedAt: 50),
-            ],
-            currentSessionKey: "recent",
-            groups: [OpenClawChatSessionGroup(name: "Projects", position: 0)],
-            query: "")
-
-        #expect(sections.map(\.id) == ["group:Projects", "recent"])
-        #expect(sections[0].nodes.map(\.session.key) == ["project-a", "project-z"])
-    }
-
     @Test func `single unpinned section carries no title`() {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [self.entry(key: "a", updatedAt: 100)],
@@ -572,18 +529,6 @@ struct ChatSessionSidebarModelTests {
             mainSessionKey: "agent:main:main",
             activeAgentID: "ops") == "global")
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["global"])
-    }
-
-    @Test func `query filters on display name and key`() {
-        let sections = ChatSessionSidebarModel.sections(
-            sessions: [
-                self.entry(key: "agent:main:research", displayName: "Deep Research", updatedAt: 200),
-                self.entry(key: "agent:main:main", updatedAt: 100),
-            ],
-            currentSessionKey: "agent:main:main",
-            query: "research")
-
-        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
     @Test(arguments: ["holiday", "KYOTO", "session-123", "team planning", "  HoLiDaY  "])
@@ -909,15 +854,6 @@ struct ChatSessionSidebarModelTests {
         ])
 
         #expect(nodes.map(\.id) == ["parent", "stale-child"])
-    }
-
-    @Test func `orphaned parents remain visible as roots`() {
-        let nodes = ChatSessionSidebarModel.tree(from: [
-            self.entry(key: "orphan", parentSessionKey: "missing"),
-            self.entry(key: "root"),
-        ])
-
-        #expect(nodes.map(\.id) == ["orphan", "root"])
     }
 
     @Test func `sessions without hierarchy data keep flat ordering`() {

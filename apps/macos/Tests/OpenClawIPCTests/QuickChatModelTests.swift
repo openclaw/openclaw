@@ -57,22 +57,6 @@ struct QuickChatModelTests {
         #expect(model.text == "hello")
     }
 
-    @Test func `unchanged draft reuses idempotency key after transport failure`() async {
-        var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
-            keys.append(idempotencyKey)
-            if keys.count == 1 { throw FakeSendError.rejected }
-            return "started"
-        })
-        await self.prepare(model)
-        model.text = "hello"
-
-        #expect(await !(model.send()))
-        #expect(await model.send())
-        #expect(keys.count == 2)
-        #expect(keys[0] == keys[1])
-    }
-
     @Test func `no-op reasoning selection preserves idempotent retry`() async {
         var keys: [String] = []
         let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in

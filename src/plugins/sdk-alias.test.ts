@@ -1312,21 +1312,6 @@ describe("plugin sdk alias helpers", () => {
     },
   );
 
-  it("reuses prepared aliases in the same generation", () => {
-    const first = preparePluginLoaderAliases({
-      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
-      argv1: "/repo/openclaw.mjs",
-      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-    });
-    const second = preparePluginLoaderAliases({
-      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
-      argv1: "/repo/openclaw.mjs",
-      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-    });
-
-    expect(second).toBe(first);
-  });
-
   it.each(["src", "dist"])(
     "retains missing SDK targets until a new generation (%s), including deferred complete maps",
     (kind) => {

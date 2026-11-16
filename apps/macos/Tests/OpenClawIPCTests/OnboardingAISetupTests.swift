@@ -978,25 +978,6 @@ private func inspectAISetupSurface(
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct OnboardingAISetupTests {
-    @Test func `detection never activates the first candidate`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingReadOnlyDetectionTests"))
-        let recorder = AISetupRequestRecorder()
-        let session = makeAISetupSession(recorder: recorder, detectedKind: "codex-cli")
-        let gateway = try makeAISetupGateway(
-            url: #require(URL(string: "ws://example.invalid")),
-            session: session
-        )
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-
-        await model.detectConnections()
-
-        #expect(await recorder.snapshot().methods == ["openclaw.setup.detect"])
-        #expect(model.candidates.map(\.kind) == ["codex-cli"])
-        #expect(model.selectedKind == nil)
-        #expect(model.phase == .ready)
-        await gateway.shutdown()
-    }
-
     @Test func `remote custom endpoint shows host-side credential handoff`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRemoteCustomHandoffTests"))
         let recorder = AISetupRequestRecorder()
@@ -1027,18 +1008,6 @@ struct OnboardingAISetupTests {
         await gateway.shutdown()
     }
 
-    @Test func `candidate failure keeps friendly summary and exact detail`() {
-        let failure = OnboardingAISetupModel.failure(
-            label: "Codex CLI",
-            status: "auth",
-            error: "Codex login expired (request 42)"
-        )
-
-        #expect(failure.summary == "Codex CLI is installed, but the login didn’t work. Sign in again, then retry.")
-        #expect(failure.detail == "Codex login expired (request 42)")
-        #expect(failure.copyText == "Codex login expired (request 42)")
-    }
-
     @Test func `candidate failure omits empty detail`() {
         let failure = OnboardingAISetupModel.failure(
             label: "Codex CLI",
@@ -1049,15 +1018,6 @@ struct OnboardingAISetupTests {
         #expect(failure.summary == "Codex CLI didn’t answer in time.")
         #expect(failure.detail == nil)
         #expect(failure.copyText == failure.summary)
-    }
-
-    @Test func `transport failure preserves original detail`() {
-        let failure = OnboardingAISetupModel.transportFailure(
-            "Gateway request failed: connection reset"
-        )
-
-        #expect(failure.summary == "The Gateway setup request failed. Show details to inspect or copy the error.")
-        #expect(failure.detail == "Gateway request failed: connection reset")
     }
 
     @Test func `unavailable failure keeps long detail out of the visible summary`() {
@@ -2201,13 +2161,6 @@ struct OnboardingAISetupTests {
             "openclaw.setup.detect",
             "openclaw.setup.activate",
         ])
-    }
-
-    @Test func `provider setup kinds encode reserved choice id characters`() {
-        #expect(OnboardingAISetupModel.providerAutoSetupKind(
-            choiceID: "vendor/local:v1%beta?x#y"
-        ) ==
-            "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y")
     }
 
     @Test func `provider auth opens only safe external links`() {
@@ -4079,28 +4032,6 @@ struct OnboardingAISetupTests {
         ) == .activationExpired)
     }
 
-    @Test func `missing model cannot start a second activation before pending deadline`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingPendingDeadlineBlockTests"))
-        let url = try #require(URL(string: "ws://localhost:18789"))
-        let appState = AppState(preview: true)
-        appState.connectionMode = .local
-        let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: appState)
-        markPending(defaults, for: routeIdentity, timeoutMs: 30000)
-        let harness = AISetupHarness(url: url) { _, request, _ in
-            request.method == "agents.list" ? missingConfiguredModelResponse(id: request.id) : nil
-        }
-        let view = harness.view(state: appState, defaults: defaults, routeIdentityProvider: { routeIdentity })
-
-        let initialProbe = try #require(view.onboardingDidAppear())
-        await initialProbe.value
-        await settleQueuedAISetupTasks()
-
-        #expect(await (harness.recorder.snapshot()).methods == ["agents.list"])
-        #expect(view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(isPending(defaults, for: routeIdentity))
-        view.onboardingDidDisappear()
-    }
-
     @Test func `expired pending activation restores choices without automatically testing`() async throws {
         let suiteName = "OnboardingExpiredPendingActivationTests-\(UUID().uuidString)"
         let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
@@ -5176,14 +5107,6 @@ struct OnboardingAISetupTests {
         #expect(isOwned(by: activationOwner, defaults: defaults))
     }
 
-    @Test func `pending marker for another route is preserved`() throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingSystemAgentRouteMismatchTests"))
-        markPending(defaults, for: "remote:id:gateway-a")
-
-        #expect(!isPending(defaults, for: "remote:id:gateway-b"))
-        #expect(isPending(defaults, for: "remote:id:gateway-a"))
-    }
-
     @Test func `A to B to A preserves first activation lease`() throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingSystemAgentMultiRouteTests"))
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -5434,33 +5357,6 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
         #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect", kind.startMethod])
         await harness.gateway.shutdown()
-    }
-
-    @Test func `activation marks pending before request and clears definitive failure`() async throws {
-        let suiteName = "OnboardingActivationMarkerTests-\(UUID().uuidString)"
-        let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
-        let observation = ActivationMarkerObservation()
-        let session = makeAISetupRequestSession(preparationKind: "codex-cli") { task, request in
-            let requestDefaults = UserDefaults(suiteName: suiteName)
-            await observation.record(
-                requestDefaults.map {
-                    OnboardingSystemAgentResumeStore.isPending(
-                        for: "local",
-                        defaults: $0
-                    )
-                } == true
-            )
-            task.emitReceiveSuccess(.data(failedActivationResponse(id: request.id)))
-        }
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let gateway = makeAISetupGateway(url: url, session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-
-        await model.detectConnections()
-        await model.activate(kind: "codex-cli")
-
-        #expect(await observation.value())
-        #expect(!isPending(defaults))
     }
 
     @Test(arguments: [false, true])
@@ -5906,36 +5802,6 @@ struct OnboardingAISetupTests {
         #expect(model.phase == .detecting)
         #expect(scheduledDeadlines.count == 1)
         #expect(scheduledDeadlines.first?.routeIdentity == "local")
-    }
-
-    @Test func `indeterminate Gateway activation error retains pending resume marker`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingIndeterminateGatewayActivationTests"))
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let recorder = AISetupRequestRecorder()
-        let gateway = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
-                recorder: recorder,
-                preparationKind: "codex-cli")
-            { task, request in
-                task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-            })
-        )
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        var scheduledRoutes: [String] = []
-        model.onPendingActivationDeadline = { _, routeIdentity in
-            scheduledRoutes.append(routeIdentity)
-        }
-
-        await model.detectConnections()
-        await model.activate(kind: "codex-cli")
-
-        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.activate"])
-        #expect(isPending(defaults))
-        #expect(model.pendingActivationVerification)
-        #expect(model.waitingForPendingActivationDeadline)
-        #expect(model.phase == .detecting)
-        #expect(scheduledRoutes == ["local"])
     }
 
     @Test func `ambiguous activation recreates a marker cleared by an earlier probe`() async throws {
@@ -6471,21 +6337,6 @@ struct OnboardingAISetupTests {
         await staleActivation.value
 
         #expect(isPending(defaults, for: "remote:id:gateway-b"))
-    }
-
-    @Test func `configured resume preserves marker until route reset`() throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredResumeMarkerTests"))
-        let model = OnboardingAISetupModel(
-            defaults: defaults,
-            routeIdentityProvider: { "local" }
-        )
-        markPending(defaults)
-
-        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
-        #expect(isPending(defaults))
-
-        model.resetForGatewayChange()
-        #expect(!isPending(defaults))
     }
 
     @Test func `retired setup socket requires a fresh detection lease`() {

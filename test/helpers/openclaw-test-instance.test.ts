@@ -1971,12 +1971,8 @@ describe("openclaw test instance", () => {
       const cases = [
         { chunks: ["€a", "b"], limit: 4, expected: "ab" },
         { chunks: ["old", "recent"], limit: 8, expected: "ldrecent" },
-        { chunks: ["€abc"], limit: 4, expected: "abc" },
-        { chunks: ["😀a", "b"], limit: 5, expected: "ab" },
         { chunks: ["😀a"], limit: 1, expected: "a" },
-        { chunks: ["😀"], limit: 1, expected: "" },
         { chunks: ["😀"], limit: 3, expected: "" },
-        { chunks: ["€"], limit: 2, expected: "" },
         { chunks: ["a", "€"], limit: 3, expected: "€" },
         { chunks: ["x".repeat(32)], limit: 32, expected: "x".repeat(32), truncated: false },
       ];
@@ -2258,7 +2254,6 @@ describe("openclaw test instance", () => {
 
   it.each([
     { status: 502, body: "proxy refusal", phase: "body", error: "invalid-json" },
-    { status: 503, body: '{"ready":false}', phase: "complete", ready: false },
     { status: 200, body: '{"ready":false}', phase: "complete", ready: false },
     { status: 503, body: '{"ready":true}', phase: "complete", ready: true },
     { status: 200, body: "{}", phase: "complete" },

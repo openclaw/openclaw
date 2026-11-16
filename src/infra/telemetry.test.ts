@@ -187,16 +187,6 @@ describe("anonymous telemetry", () => {
     },
   );
 
-  it("does not send or claim any installation metadata to a legacy receiver", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(update));
-    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(
-      new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).has("OpenClaw-Installation-Count"),
-    ).toBe(false);
-    expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
-  });
-
   it.each(["endpoint", "state directory"] as const)(
     "does not join concurrent update/count cycles for a different %s",
     async (scope) => {

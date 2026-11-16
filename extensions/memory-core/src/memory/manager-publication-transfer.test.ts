@@ -398,7 +398,6 @@ describe("bounded memory publication transfer", () => {
       const result = publish(owner, replacement());
       if (failClose) {
         const failure: unknown = await result.catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(AggregateError);
         assert.ok(failure instanceof AggregateError);
         expect(failure.cause).toBe(original);
         expect(failure.errors).toHaveLength(2);

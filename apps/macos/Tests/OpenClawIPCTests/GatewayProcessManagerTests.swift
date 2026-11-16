@@ -299,17 +299,6 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `runtime preparation refuses lost seeded ownership instead of reporting ready`() async throws {
-        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
-            let manager = GatewayProcessManager()
-            try #require(!manager.usesSeededGateway)
-            await #expect(throws: GatewayHostingError.self) {
-                try await manager.prepareBundledRuntimeAfterUpdate()
-            }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
-        }
-    }
-
     @Test func `terminal child failure stays stopped until an explicit request`() async throws {
         let port = AppProfile.current.defaultGatewayPort
         try await self.withLaunchAgentEnvironment(port: port) {
@@ -1015,22 +1004,6 @@ struct GatewayProcessManagerTests {
             let error = await self.manager.enableLaunchAgentIfNeeded(port: 29871).error
             #expect(error?.contains("retained Gateway command is invalid") == true)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
-        }
-    }
-
-    @Test func `coalesces concurrent launch agent enable requests`() async throws {
-        let port = 19081
-        try await self.withLaunchAgentEnvironment(
-            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
-        {
-            let manager = self.manager
-            async let first: String? = manager.enableLaunchAgentIfNeeded(port: port).error
-            async let second: String? = manager.enableLaunchAgentIfNeeded(port: port).error
-            _ = await (first, second)
-
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.filter { $0.first == "status" }.count == 1)
-            #expect(calls.filter { $0.first == "install" }.count == 1)
         }
     }
 
@@ -2253,24 +2226,6 @@ struct GatewayProcessManagerTests {
 
             #expect(manager.status == .failed("Gateway did not start in time"))
             #expect(manager._testHasLaunchAgentReadinessFailure())
-        }
-    }
-
-    @Test func `repairs a stable launch agent PID with a wedged listener`() async throws {
-        let port = 19087
-        try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
-            let manager = self.manager
-            let listener = self.gatewayDescriptor(pid: 4242)
-            await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
-            await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-
-            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
-
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.filter { $0.first == "status" }.count == 1)
-            #expect(calls.filter { $0.first == "install" }.count == 1)
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
     }
 

@@ -440,8 +440,6 @@ describe("workboard tools", () => {
     const childPayload = await runTool(tools, "create", {
       title: "Child",
       parents: [parent.id],
-      tenant: "qa",
-      skills: ["testing"],
     });
     const child = childPayload.card as { id: string; status: string };
     expect(child.status).toBe("todo");

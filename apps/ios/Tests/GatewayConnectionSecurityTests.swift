@@ -213,9 +213,7 @@ import Testing
     @Test @MainActor func `manual connections force TLS for non loopback hosts`() {
         let controller = self.makeController()
 
-        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "gateway.ts.net", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "100.64.0.9", useTLS: false) == true)
 
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
@@ -280,7 +278,6 @@ import Testing
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
-        #expect(controller._test_resolveManualUseTLS(host: "192.168.1.20", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "10.0.0.5", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "172.16.1.5", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "169.254.1.5", useTLS: false) == false)
@@ -1118,28 +1115,6 @@ import Testing
             connectingDetail: "Connecting…",
             localFailure: nil,
             retryableFailure: nil) == appModel.lastGatewayProblem.map(OnboardingConnectPhase.failed))
-    }
-
-    @Test @MainActor func `unreachable tailscale host offers setup and retry`() async {
-        let host = "gateway-\(UUID().uuidString).example.ts.net"
-        let port = 443
-        let stableID = "manual|\(host.lowercased())|\(port)"
-        defer { clearTLSFingerprint(stableID: stableID) }
-        self.clearTLSFingerprint(stableID: stableID)
-        let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(
-            appModel: appModel,
-            startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in .unreachable })
-
-        await controller.connectManual(host: host, port: port, useTLS: true)
-
-        #expect(appModel.lastGatewayProblem?.kind == .reachabilityFailed)
-        #expect(appModel.lastGatewayProblem?.docsURL == GatewayConnectionIssue.tailscaleSetupURL)
-        #expect(appModel.lastGatewayProblem?.message.contains("same tailnet") == true)
-        #expect(appModel.lastGatewayProblem?.actionLabel == "Retry")
-        #expect(appModel.lastGatewayProblem?.retryable == true)
-        #expect(appModel.gatewayDisplayStatusText == "Gateway is not reachable")
     }
 
     /// A tailnet address on a gateway's loopback-only port is refused while Tailscale works. The

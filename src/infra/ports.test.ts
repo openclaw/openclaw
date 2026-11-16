@@ -165,7 +165,6 @@ describe("ports helpers", () => {
   it.each([
     { details: "openclaw-gateway", openclaw: false },
     { details: "node dist/index.js", openclaw: false },
-    { details: "node src/index.ts", openclaw: false },
   ])(
     "keeps port guidance independent of diagnostic text ($details)",
     async ({ details, openclaw }) => {

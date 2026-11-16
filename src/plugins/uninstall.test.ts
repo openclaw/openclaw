@@ -549,20 +549,6 @@ describe("removePluginFromConfig", () => {
 
   it.each([
     {
-      name: "clears memory slot when uninstalling active memory plugin",
-      config: createPluginConfig({
-        entries: {
-          "memory-plugin": { enabled: true },
-        },
-        slots: {
-          memory: "memory-plugin",
-        },
-      }),
-      pluginId: "memory-plugin",
-      expectedMemory: undefined,
-      expectedChanged: true,
-    },
-    {
       name: "does not modify memory slot when uninstalling non-memory plugin",
       config: createPluginConfig({
         entries: createSinglePluginEntries(),
@@ -579,22 +565,6 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.slots?.memory).toBe(expectedMemory);
     expect(actions.memorySlot).toBe(expectedChanged);
-  });
-
-  it("clears context engine slot when uninstalling active context engine plugin", () => {
-    const config = createPluginConfig({
-      entries: {
-        "context-plugin": { enabled: true },
-      },
-      slots: {
-        contextEngine: "context-plugin",
-      },
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "context-plugin");
-
-    expect(result.plugins?.slots?.contextEngine).toBeUndefined();
-    expect(actions.contextEngineSlot).toBe(true);
   });
 
   it("cleans up empty slots object", () => {

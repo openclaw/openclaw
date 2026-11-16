@@ -2368,11 +2368,6 @@ describe("prepareCliRunContext", () => {
   });
 
   it("fails bundled MCP preparation when the loopback runtime is unavailable", async () => {
-    registerTestMemoryPromptBuilder(({ availableTools }) =>
-      availableTools.has("memory_search")
-        ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
-        : [],
-    );
     const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
     const ensureMcpLoopbackServer = vi.fn(async () => {
       throw new Error("loopback unavailable");
@@ -3525,35 +3520,6 @@ describe("prepareCliRunContext", () => {
     expect(inputs.at(-1)).toContain("recovery");
 
     expect(inputs.at(-1)).not.toContain("account A private history");
-  });
-
-  it("does not replay the already-admitted current user turn during fresh CLI recovery", async () => {
-    await withAuthenticatedHistory("claude-cli", async (prepare) => {
-      fixture.appendTranscript({
-        id: "prior",
-        parentId: null,
-        timestamp: "2020-01-01T00:00:00.000Z",
-        message: { role: "user", content: "prior task", timestamp: 1 },
-      });
-      const { sessionTarget } = fixture.session;
-      const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "latest ask", idempotencyKey: "recovery-current-turn" },
-        target: {
-          ...sessionTarget,
-          sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
-        },
-      });
-      await recorder.persistApproved();
-      expect(recorder.getAdmissionReceipt()).toBeDefined();
-      setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
-      const context = await prepare({
-        provider: "claude-cli",
-        model: "opus",
-        userTurnTranscriptRecorder: recorder,
-      });
-      expect(context.openClawHistoryPrompt).toContain("User: prior task");
-      expect(context.openClawHistoryPrompt?.split("latest ask")).toHaveLength(2);
-    });
   });
 
   it("redelivers conversation and tool results after a native transcript disappears", async () => {

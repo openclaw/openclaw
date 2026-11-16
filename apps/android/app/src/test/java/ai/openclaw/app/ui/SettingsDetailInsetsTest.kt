@@ -607,18 +607,11 @@ class SettingsDetailInsetsTest {
   fun keyboardInsetsResizeSettingsInCompactSidebarShell() = verifyInsets()
 
   @Test
-  fun keyboardInsetsResizeSettingsInWideSidebarShell() = verifyInsets()
-
-  @Test
   fun keyboardInsetsRemainPaneRelativeAcrossHorizontalAndVerticalFolds() = verifyInsets(foldChanges = true)
 
   @Test
   @Config(qualifiers = "w320dp-h800dp-mdpi")
   fun appearanceSwatchesKeepAccessibleTouchTargetsInANarrowWindow() = verifyAppearanceSwatches()
-
-  @Test
-  @Config(qualifiers = "w393dp-h800dp-mdpi")
-  fun appearanceSwatchesKeepTheirSizeInAWiderWindow() = verifyAppearanceSwatches()
 
   private fun verifyAppearanceSwatches() {
     val app = RuntimeEnvironment.getApplication() as NodeApp

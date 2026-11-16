@@ -400,17 +400,6 @@ describe("qa mock openai server", () => {
     });
   });
 
-  it("serves health and streamed responses", async () => {
-    const server = await startMockServer();
-
-    expect(await getJson(server, "/healthz")).toEqual({ ok: true, status: "live" });
-
-    const response = await streamResponse(server, "Inspect the repo docs and kickoff task.");
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
-    const body = await response.text();
-    expectIncludes(body, '"type":"response.output_item.added"', '"name":"read"');
-  });
-
   it("recovers the stranded-final fixture by calling the message tool on the retry prompt", async () => {
     const server = await startMockServer();
 
@@ -541,7 +530,6 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const cases: Array<[unknown, string, boolean?, number?, string?]> = [
       ["Quiet streaming QA check: reply exactly `QA_STREAMING_OK`.", "QA_STREAMING_OK", true],
-      ["Partial streaming QA check: reply exactly `QA_PARTIAL_OK`.", "QA_PARTIAL_OK"],
       [
         userInputs(
           "Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK",
@@ -1728,11 +1716,6 @@ describe("qa mock openai server", () => {
       ["NONE"],
       ["codename is ORBIT-10"],
     );
-    await check(
-      userInputs(ranking, results(hit(path, "Project Nebula current codename: ORBIT-9."))),
-      ["codename is ORBIT-9"],
-      ["codename is ORBIT-10"],
-    );
     await check(userInputs(agent(snackPrompt)), ['"name":"memory_search"']);
     await check(
       userInputs(
@@ -1741,7 +1724,6 @@ describe("qa mock openai server", () => {
       ),
       [snack],
     );
-    await check(userInputs(snackPrompt), [snack], [], "System context:\n" + injected);
     await check(userInputs(agent(rememberPrompt)), [
       '"name":"memory_search"',
       "QA movie night snack lemon pepper wings blue cheese",

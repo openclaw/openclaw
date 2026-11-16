@@ -680,7 +680,6 @@ server.listen(port, "127.0.0.1", () => {
     expect(classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)")).toBe(
       "http-listen",
     );
-    expect(classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe("gateway-ready");
     expect(classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
     expect(classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
   });

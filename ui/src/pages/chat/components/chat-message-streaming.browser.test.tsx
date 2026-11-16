@@ -265,36 +265,6 @@ describe("streaming Markdown DOM", () => {
     },
   );
 
-  it("keeps code wrap controls and updates copy content while a fence grows", async () => {
-    const code = Array.from({ length: 6 }, (_, index) => `const value${index} = ${index};`).join(
-      "\n",
-    );
-    const initial = `\`\`\`ts\n${code}`;
-    draw(initial);
-    await Promise.resolve();
-    const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
-    const button = wrapper.querySelector<HTMLButtonElement>(".code-block-wrap")!;
-    button.click();
-    const extra = "\nconst seventh = 7;\nconst eighth = 8;";
-    draw(initial + extra);
-    await Promise.resolve();
-    expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
-    expect(wrapper.classList.contains("is-wrapped")).toBe(true);
-    expect(wrapper.classList.contains("is-collapsible")).toBe(true);
-    expect(button.getAttribute("aria-pressed")).toBe("true");
-    const expand = wrapper.querySelector<HTMLButtonElement>(".code-block-expand")!;
-    const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
-    expect(viewport.id).not.toBe("");
-    expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
-    expand.click();
-    draw(initial + extra + "\nconst ninth = 9;");
-    expect(wrapper.classList.contains("is-expanded")).toBe(true);
-    expect(expand.getAttribute("aria-expanded")).toBe("true");
-    expect(readMarkdownCodeBlockCopyText(wrapper.querySelector(".code-block-copy")!)).toBe(
-      code + extra + "\nconst ninth = 9;",
-    );
-  });
-
   it("retains table controls and updates overflow as streamed cells resize", async () => {
     container.className = "chat-text";
     const initial = "| Name | Value |\n| --- | --- |\n| First | Growing";

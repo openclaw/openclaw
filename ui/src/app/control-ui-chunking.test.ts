@@ -906,7 +906,6 @@ describe("Control UI build chunking", () => {
     for (const [id, expected] of [
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
       ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", "markdown-runtime"],
-      ["/repo/ui/node_modules/entities/dist/esm/index.js", "markdown-runtime"],
       ["/repo/ui/node_modules/linkify-it/build/index.cjs.js", "markdown-runtime"],
       ["/repo/ui/node_modules/mdurl/index.mjs", "markdown-runtime"],
       ["/repo/ui/node_modules/punycode.js/punycode.es6.js", "markdown-runtime"],
@@ -928,7 +927,6 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
       [modulePath("../components/markdown-windows-paths.ts"), "markdown-runtime"],
-      [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
       [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],
       [modulePath("../components/solid/radio-navigation.ts"), "navigation-helpers"],

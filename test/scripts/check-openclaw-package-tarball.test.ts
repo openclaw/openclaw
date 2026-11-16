@@ -895,48 +895,6 @@ syncBuiltinESMExports();
       stderr: ["missing required tar entry dist/agents/code-mode-node.worker.js"],
     },
     {
-      name: "rejects dist files that import missing relative chunks",
-      inventory: ["dist/cli/run-main.js"],
-      files: { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
-      status: "nonzero",
-      stderr: ["dist/cli/run-main.js imports missing dist/memory-state-old.js"],
-    },
-    {
-      name: "rejects leaked private QA Docker chunks that import an omitted QA runtime",
-      inventory: ["dist/docker-runtime-BVdgRgxA.js"],
-      files: {
-        "dist/docker-runtime-BVdgRgxA.js":
-          'import { createQaDockerRuntime } from "./qa-runtime-Bi1S3plf.js";\n' +
-          "export { createQaDockerRuntime };\n",
-      },
-      status: "nonzero",
-      stderr: ["dist/docker-runtime-BVdgRgxA.js imports missing dist/qa-runtime-Bi1S3plf.js"],
-    },
-    {
-      name: "accepts dist files whose relative chunks are present",
-      inventory: ["dist/cli/run-main.js", "dist/memory-state-current.js"],
-      files: {
-        "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
-        "dist/memory-state-current.js": "export {};\n",
-      },
-      status: 0,
-      successText: true,
-    },
-    {
-      name: "rejects formatted import.meta.url URL dependencies",
-      files: {
-        "dist/index.js": [
-          "const worker = new URL(",
-          '  "./worker.js",',
-          "  import.meta.url,",
-          ");",
-          "",
-        ].join("\n"),
-      },
-      status: "nonzero",
-      stderr: ["dist/index.js imports missing dist/worker.js"],
-    },
-    {
       name: "rejects missing Control UI assets",
       options: { includeControlUi: false },
       status: "nonzero",

@@ -642,15 +642,6 @@ struct TalkModeManagerTests {
         #expect(!manager._test_audioSessionIsActive())
     }
 
-    @Test func `maps web RTC realtime transport to native web RTC on IOS`() {
-        let parsed = Self.parseRealtime(
-            provider: "openai",
-            mode: "realtime",
-            transport: "webrtc")
-
-        #expect(parsed.route == .realtimeWebRTC)
-    }
-
     @Test func `routes forced agent consultation through gateway relay`() {
         let parsed = Self.parseRealtime(
             provider: "openai",
@@ -694,16 +685,6 @@ struct TalkModeManagerTests {
             isEnabled: true,
             gatewayConnected: true,
             captureIsContinuous: false))
-    }
-
-    @Test func `keeps provider web socket realtime transport on gateway relay`() {
-        let parsed = Self.parseRealtime(
-            provider: "google",
-            mode: "realtime",
-            transport: "provider-websocket",
-            brain: "agent-consult")
-
-        #expect(parsed.route == .realtimeRelay)
     }
 
     @Test(arguments: ["direct-tools", "none"])

@@ -47,7 +47,7 @@ async function transcriptFixture(
   plainFirstRow = false,
   ordinary: boolean | "retained" | "data-only" = false,
   viewportHeight = 600,
-  completedFrame: boolean | "toolCall" = false,
+  completedFrame = false,
   retainStride = 1,
   streamingTail = false,
 ) {
@@ -124,18 +124,7 @@ async function transcriptFixture(
                   key: `idle-frame-${index}-${part}`,
                   message: {
                     role: "assistant",
-                    content:
-                      completedFrame === "toolCall"
-                        ? [
-                            { type: "text", text: `**idle-frame-${index}-${part}-toolCall**` },
-                            {
-                              type: "toolCall",
-                              id: `idle-tool-${index}-${part}`,
-                              name: "read",
-                              arguments: {},
-                            },
-                          ]
-                        : `**idle-frame-${index}-${part}**`,
+                    content: `**idle-frame-${index}-${part}**`,
                     timestamp: index,
                   },
                 })),

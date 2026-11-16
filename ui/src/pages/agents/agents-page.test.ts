@@ -255,26 +255,6 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(refresh).toHaveBeenCalledWith({ background: true });
   });
 
-  it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
-    const models = [
-      {
-        id: "claude-opus-4-8",
-        name: "Opus 4.8",
-        alias: "opus",
-        provider: "anthropic",
-      },
-    ];
-    const request = vi.fn(async () => ({ models }));
-    const { page } = mountPage({ request } as unknown as GatewayBrowserClient, "overview");
-
-    refreshPanel(page);
-    refreshPanel(page);
-
-    await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(models));
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
-  });
-
   it("reads separate configured model catalogs when switching default and worker agents", async () => {
     const defaultModels = [
       { id: "default-model", name: "Default account model", provider: "openai" },

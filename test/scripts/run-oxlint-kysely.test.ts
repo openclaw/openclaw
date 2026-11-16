@@ -76,7 +76,7 @@ const striped = [
   "scripts/run-oxlint-shards.mts",
   "--only=core",
   "--split-core",
-  "--core-stripe=1/5",
+  "--core-stripe=2/5",
   "--files-json",
   JSON.stringify([consumer]),
   "--threads=1",

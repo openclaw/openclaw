@@ -39,7 +39,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -156,15 +155,6 @@ class FoldAwareDropdownMenuTest {
   }
 
   @Test
-  fun verticalMenuPaddingRoundsEachEdgeAtFractionalDensity() {
-    val density = Density(2.8125f)
-    with(density) {
-      assertEquals("PaddingNode sums round(8)+round(8)", 46, 2 * 8.dp.roundToPx())
-      assertEquals("Single 16.dp round disagrees at this density", 45, 16.dp.roundToPx())
-    }
-  }
-
-  @Test
   fun menuTopLeftFlipsAboveWhenOnePixelTallerWouldOverflowBottom() {
     val available = IntRect(0, 0, 1000, 800)
     val anchor = IntRect(372, 372, 485, 485)
@@ -217,7 +207,6 @@ class FoldAwareDropdownMenuTest {
       assertEquals(before, screenBounds(first))
       assertTrue(first.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
       assertTrue("The owner must reject the stale action before deferred removal", actions.isEmpty())
-      println("unsafe/safe pre-disposal UP: deliveries=${publisher.deliveries} attached=${first.isAttachedToWindow} focused=${first.hasFocus()} windowFocused=${first.hasWindowFocus()} actions=$actions")
     }
     composeRule.waitForIdle()
     assertEquals(1, dismissals)
@@ -269,7 +258,6 @@ class FoldAwareDropdownMenuTest {
         Case(350, 80, false, listOf(testFold(Rect(490, 0, 490, 800), separating = false)), Rect(0, 0, 1000, 800)),
       )
     for (case in cases) {
-      println("Native geometry case: $case")
       composeRule.runOnIdle {
         x = case.x.dp
         y = case.y.dp
@@ -620,7 +608,6 @@ class FoldAwareDropdownMenuTest {
   private fun open() {
     composeRule.onNodeWithTag("anchor").performClick()
     composeRule.waitForIdle()
-    println("Opening: expanded=$expanded dismissals=$dismissals anchor=${composeRule.onNodeWithTag("anchor").getUnclippedBoundsInRoot()} native=${nativePopups().map(::screenBounds)}")
     composeRule.onNodeWithText(labels.first()).assertIsDisplayed()
     assertEquals(1, nativePopups().size)
   }

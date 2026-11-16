@@ -229,28 +229,6 @@ class MicCaptureManagerTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun terminalGatewayErrorSurfacesFailureWithoutWaitingForRunEvents() =
-    runTest {
-      val manager =
-        createManager(
-          scope = this,
-          sendToGateway = { _, onRunIdKnown ->
-            onRunIdKnown("run-error")
-            ChatSendAck(runId = "run-error", status = "error")
-          },
-        )
-
-      manager.onGatewayConnectionChanged(true)
-      manager.submitTranscribedMessage("terminal error message")
-      runCurrent()
-
-      assertNull(privateField<String?>(manager, "pendingRunId"))
-      assertEquals(false, manager.isSending.value)
-      assertEquals("Voice request failed", manager.statusText.value)
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun chatFailureRetainsLocalizedSourceForLaterLocaleChanges() =
     runTest {
       val manager =

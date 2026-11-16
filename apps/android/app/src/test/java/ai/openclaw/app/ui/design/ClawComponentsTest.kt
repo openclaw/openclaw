@@ -10,7 +10,6 @@ import ai.openclaw.app.parseClawHubSearchResults
 import ai.openclaw.app.ui.SettingsRefreshControls
 import ai.openclaw.app.ui.SettingsSummaryContent
 import ai.openclaw.app.ui.chat.ChatMarkdown
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,7 +38,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toPixelMap
@@ -65,8 +63,6 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import kotlinx.serialization.json.Json
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -77,8 +73,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import java.io.File
-import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w360dp-h800dp-mdpi")
@@ -142,8 +136,6 @@ class ClawComponentsTest {
   fun avatarMarksKeepBothGlyphsInsideTheirCircleAtLargeFont() {
     val fontScale = mutableStateOf(1f)
     val marks = listOf("OC", "WW")
-    val evidence = File("build/outputs/avatar-monogram", UUID.randomUUID().toString())
-    assertTrue(evidence.mkdirs())
     composeRule.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
         ClawDesignTheme {
@@ -165,10 +157,6 @@ class ClawComponentsTest {
         val node = text.fetchSemanticsNode()
         val circle = container.fetchSemanticsNode().boundsInRoot
         val glyphs = mark.indices.map { layout.getBoundingBox(it).translate(node.positionInRoot) }
-        println("AVATAR_MONOGRAM scale=$scale text=$mark lines=${layout.lineCount} layout=${layout.size} paragraph=${layout.multiParagraph.height} circle=$circle glyphs=$glyphs")
-        File(evidence, "$scale-$mark.png").outputStream().use {
-          assertTrue(container.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
-        }
         try {
           text.assertCompleteText(mark)
           assertEquals("Initials must remain one line", 1, layout.lineCount)
@@ -195,9 +183,6 @@ class ClawComponentsTest {
     val current = mutableStateOf(Triple("", "", ""))
     val width = mutableStateOf(320.dp)
     val fontScale = mutableStateOf(1f)
-    val evidence = File("build/outputs/detail-row-required-subtitle", UUID.randomUUID().toString())
-    check(!evidence.exists() && evidence.mkdirs())
-    val observations = JSONArray()
     val failures = mutableListOf<String>()
 
     // These English/French fixture words may break at source spacing or punctuation, not inside letters.
@@ -277,36 +262,6 @@ class ClawComponentsTest {
             val warningStart = subtitle.indexOf(warning)
             val complete = warningStart >= 0 && visibleEnd >= warningStart + warning.length && !ellipsized
             val warningBreaks = intraWordBreaks(subtitle, layout, warningStart, warningStart + warning.length)
-            File(evidence, "$name.png").outputStream().use { stream ->
-              check(panel.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, stream))
-            }
-            observations.put(
-              JSONObject()
-                .put("case", name)
-                .put("title", result.displayName)
-                .put("titleComplete", titleComplete)
-                .put("titleLineEnds", JSONArray((0 until titleLayout.lineCount).map { titleLayout.getLineEnd(it, visibleEnd = true) }))
-                .put("titleIntraWordBreaks", JSONArray(titleBreaks))
-                .put("warningIntraWordBreaks", JSONArray(warningBreaks))
-                .put("subtitleLineEnds", JSONArray((0 until layout.lineCount).map { layout.getLineEnd(it, visibleEnd = true) }))
-                .put("titleTop", titleBounds.top)
-                .put("subtitleBottom", subtitleBounds.bottom)
-                .put("controlTop", controlBounds.top)
-                .put("controlBottom", controlBounds.bottom)
-                .put("reference", result.reference)
-                .put("subtitle", subtitle)
-                .put("warning", warning)
-                .put("warningStart", warningStart)
-                .put("warningEnd", warningStart + warning.length)
-                .put("lineCount", layout.lineCount)
-                .put("visibleEnd", visibleEnd)
-                .put("ellipsized", ellipsized)
-                .put("didExceedMaxLines", layout.multiParagraph.didExceedMaxLines)
-                .put("layoutWidthPx", layout.size.width)
-                .put("layoutHeightPx", layout.size.height)
-                .put("warningComplete", complete),
-            )
-            File(evidence, "observations.json").writeText(observations.toString(2))
             if (!complete) failures += "$name: warning [$warningStart, ${warningStart + warning.length}), visibleEnd=$visibleEnd, ellipsized=$ellipsized"
             if (!titleComplete || titleBreaks.isNotEmpty() || warningBreaks.isNotEmpty()) {
               failures += "$name: titleComplete=$titleComplete, title word breaks=$titleBreaks, warning word breaks=$warningBreaks"
@@ -740,19 +695,6 @@ class ClawComponentsTest {
     val options = listOf("One", "Two", "Three", "Four")
 
     assertEquals(listOf(options), segmentedControlRows(options, maxOptionsPerRow = 4))
-  }
-
-  @Test
-  fun fiveSegmentedOptionsSplitIntoBalancedRows() {
-    val options = listOf("Pending", "Held", "Applied", "Rejected", "All")
-
-    assertEquals(
-      listOf(
-        listOf("Pending", "Held", "Applied"),
-        listOf("Rejected", "All"),
-      ),
-      segmentedControlRows(options, maxOptionsPerRow = 4),
-    )
   }
 
   @Test

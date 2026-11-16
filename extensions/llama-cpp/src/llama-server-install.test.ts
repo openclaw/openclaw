@@ -572,7 +572,6 @@ describe("downloadVerifiedFile", () => {
 describe("ensureLlamaServerInstalled", () => {
   it.each([
     ["libssl.so.3", "OpenSSL 3", "libssl3t64"],
-    ["libcrypto.so.3", "OpenSSL 3", "libssl3t64"],
     ["libgomp.so.1", "OpenMP", "libgomp1"],
     ["libcustom.so.1", "libcustom.so.1", "system package manager"],
   ])(

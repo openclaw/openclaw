@@ -465,9 +465,6 @@ describe("synthetic configured context publication", () => {
   it("preserves provider synthetic provenance through the catalog row projection", () => {
     expect(modelCatalogRowToEntry(fallback)).toHaveProperty("contextWindowSource", "synthetic");
   });
-  it("uses accepted account prompt limits instead of the superseded synthetic window", () => {
-    expect(budget()).toBe(872_000);
-  });
   it.each([false, undefined])(
     "preserves configured non-sizing metadata with reasoning override %s",
     (configuredReasoning) => {

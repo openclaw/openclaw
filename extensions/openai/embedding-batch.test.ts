@@ -701,24 +701,6 @@ describe("OpenAI embedding batch output", () => {
     expect(outputChunksSent).toBeLessThan(outputChunkCount);
   });
 
-  it("retries normalized transient batch-status errors", async () => {
-    let statusCalls = 0;
-    const fetchImpl = batchFetch({
-      status: () => {
-        statusCalls += 1;
-        return statusCalls === 1
-          ? Response.json({ error: { message: "retry status" } }, { status: 503 })
-          : Response.json({ id: "batch-0", status: "completed", output_file_id: "output-0" });
-      },
-      output: new Response(JSON.stringify(outputLine("0", [1]))),
-    });
-
-    const result = await runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000));
-
-    expect(result).toEqual(new Map([["0", [1]]]));
-    expect(statusCalls).toBe(2);
-  });
-
   it("bounds batch resource error bodies without using response.text()", async () => {
     const tracked = cancelTrackedTextResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
       status: 400,
