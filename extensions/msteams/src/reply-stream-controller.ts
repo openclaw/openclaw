@@ -37,6 +37,82 @@ function hasUnstreamedContent(payload: ReplyPayload): boolean {
   return Boolean(payload.presentation || payload.mediaUrl || payload.mediaUrls?.length);
 }
 
+// How much of an unfinished line is safe to format and stream: it must not be able to
+// become a block (list, heading, quote, table), and inline markup must be closed. Cut at
+// the last word boundary where code, emphasis, strikethrough, and link syntax balance.
+function streamablePartialLineLength(line: string): number {
+  if (!/^[\p{L}"'({$]/u.test(line)) {
+    return 0;
+  }
+  let safe = 0;
+  let backticks = 0;
+  let stars = 0;
+  let tildes = 0;
+  let brackets = 0;
+  let parens = 0;
+  for (let index = 0; index <= line.length; index += 1) {
+    const char = line[index];
+    const balanced = backticks % 2 === 0 && stars % 2 === 0 && tildes % 2 === 0;
+    if (balanced && brackets === 0 && parens === 0 && (char === " " || char === undefined)) {
+      safe = index;
+    }
+    if (
+      char === undefined ||
+      "|<>\\".includes(char) ||
+      ((char === "@" || char === "!") && (line[index + 1] ?? "[") === "[") ||
+      (char === "_" && !/[\p{L}\p{N}]_[\p{L}\p{N}]/u.test(line.slice(index - 1, index + 2)))
+    ) {
+      if (char !== undefined) {
+        break;
+      }
+      continue;
+    }
+    // A run such as "**" or "``" opens or closes one span.
+    const runStart = char !== line[index - 1];
+    backticks += char === "`" && runStart ? 1 : 0;
+    stars += char === "*" && runStart ? 1 : 0;
+    tildes += char === "~" && runStart ? 1 : 0;
+    brackets += char === "[" ? 1 : char === "]" ? -1 : 0;
+    parens += char === "(" && line[index - 1] === "]" ? 1 : char === ")" && parens > 0 ? -1 : 0;
+  }
+  return safe;
+}
+
+const FENCE_LINE_RE = /^[\s>*+\-\d.)]*(`{3,}|~{3,})(.*)$/u;
+
+// Teams rejects a stream update that does not extend the text it already accepted, and
+// formatting rewrites unfinished Markdown (heading and list markers, table layout, open
+// fences). Format and stream only complete lines outside open fences and tables, plus
+// the safe part of the unfinished line.
+function streamableMarkdownLength(text: string): number {
+  const lineStart = text.lastIndexOf("\n") + 1;
+  const end = lineStart + streamablePartialLineLength(text.slice(lineStart));
+  let safeEnd = 0;
+  let openFence: string | undefined;
+  let tableStart: number | undefined;
+  for (let start = 0; start < end;) {
+    const newline = text.indexOf("\n", start);
+    const next = newline === -1 || newline >= end ? end : newline + 1;
+    const line = text.slice(start, next);
+    const fence = FENCE_LINE_RE.exec(line.replace(/\r?\n$/u, ""));
+    if (openFence !== undefined) {
+      // Only a bare run of the same character, at least as long, closes a fence.
+      if (fence?.[1]?.startsWith(openFence) && !fence[2]?.trim()) {
+        openFence = undefined;
+      }
+    } else if (fence?.[1]) {
+      openFence = fence[1];
+    } else {
+      tableStart = line.includes("|") ? (tableStart ?? start) : undefined;
+    }
+    if (openFence === undefined && tableStart === undefined) {
+      safeEnd = next;
+    }
+    start = next;
+  }
+  return safeEnd;
+}
+
 /** Bridge reply callbacks to the SDK stream; shared conversations use block delivery. */
 export function createTeamsReplyStreamController(params: {
   allowProviderPreview: boolean;
@@ -65,6 +141,15 @@ export function createTeamsReplyStreamController(params: {
   // The SDK appends deltas to cumulative pipeline text. Retain the text, not just
   // its length, because later snapshots can normalize trailing whitespace.
   let emittedText = "";
+  // Partial mode streams formatted text; keep the source Markdown it was rendered from
+  // and each rendered snapshot's source so acknowledgements map back to logical text.
+  let emittedRawText = "";
+  const renderedSourceLengths = new Map<number, number>();
+  // The latest partial snapshot, including text still held back from the stream.
+  let lastPartialText = "";
+  // Text that went to block delivery before anything streamed; the stream must not then
+  // start on a later segment.
+  let streamSkipped = false;
   let acknowledgedText = "";
   let acknowledgedLogicalText = "";
   let acknowledgedStreamId: string | undefined;
@@ -103,7 +188,8 @@ export function createTeamsReplyStreamController(params: {
       acknowledgedText = activity.text;
       acknowledgedLogicalText = replacementAcknowledgement
         ? replacementTextAwaitingAcknowledgement!.logicalText
-        : activity.text;
+        : emittedRawText.slice(0, renderedSourceLengths.get(activity.text.length) ?? 0) ||
+          activity.text;
       if (replacementAcknowledgement) {
         replacementTextAwaitingAcknowledgement = undefined;
       }
@@ -167,8 +253,12 @@ export function createTeamsReplyStreamController(params: {
     replacementTextAwaitingAcknowledgement = { text: activity.text!, logicalText: text };
     activeStream.emit(activity);
     queuedFinalActivity = activity;
-    emittedText = text;
+    emittedText = activity.text!;
+    emittedRawText = text;
   };
+
+  // The finalized message text, as one string, for any source Markdown.
+  const renderStreamText = (text: string) => finalStreamActivity(text).text ?? "";
 
   const deferredReplacementLogicalContent = (): string | undefined => {
     const content = deferredReplacementEntries
@@ -243,22 +333,31 @@ export function createTeamsReplyStreamController(params: {
         return;
       }
       // Closing the first segment does not grant another native delivery claim.
-      if (streamFinalizationPending || nativeDeliveryClaimed) {
+      if (streamFinalizationPending || nativeDeliveryClaimed || streamSkipped) {
         return;
       }
       // Convert cumulative-text from the pipeline into deltas for the SDK's
       // appending sink. Without this, "Here's a" → "Here's a sonnet" → ...
       // gets emitted as full repeats and the SDK concatenates the lot.
       const fullText = payload.text;
+      if (!lastPartialText.startsWith(fullText)) {
+        // A different segment arrived while the first was still held back: the stream
+        // can no longer own the first segment, so leave this turn to block delivery.
+        if (!nativeDispatchStarted && !fullText.trimEnd().startsWith(lastPartialText.trimEnd())) {
+          streamSkipped = true;
+          return;
+        }
+        lastPartialText = fullText;
+      }
       let prefixLength = 0;
       while (
-        prefixLength < emittedText.length &&
+        prefixLength < emittedRawText.length &&
         prefixLength < fullText.length &&
-        emittedText[prefixLength] === fullText[prefixLength]
+        emittedRawText[prefixLength] === fullText[prefixLength]
       ) {
         prefixLength += 1;
       }
-      const previousRemainder = emittedText.slice(prefixLength);
+      const previousRemainder = emittedRawText.slice(prefixLength);
       const delta = fullText.slice(prefixLength);
       // Duplicate or prefix-only out-of-order snapshots produce no delta.
       if (!delta) {
@@ -278,8 +377,22 @@ export function createTeamsReplyStreamController(params: {
         streamFinalizationPending = true;
         return;
       }
-      stream.emit(delta);
-      emittedText = fullText;
+      // Stream the same formatting the final message uses. Hold text until it is safe to
+      // format, and skip snapshots whose formatting would not extend what Teams accepted.
+      // Each snapshot formats the whole streamable text, so long replies advance in steps
+      // of about 1% instead of on every token.
+      if (fullText.length - emittedRawText.length < emittedRawText.length / 100) {
+        return;
+      }
+      const source = fullText.slice(0, streamableMarkdownLength(fullText));
+      const rendered = source ? renderStreamText(source) : "";
+      if (rendered.length <= emittedText.length || !rendered.startsWith(emittedText)) {
+        return;
+      }
+      stream.emit(rendered.slice(emittedText.length));
+      emittedText = rendered;
+      emittedRawText = source;
+      renderedSourceLengths.set(rendered.length, source.length);
       tokensEmitted = true;
       nativeDispatchStarted = true;
     },
@@ -328,6 +441,7 @@ export function createTeamsReplyStreamController(params: {
       if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
         stream.emit(payload.text);
         emittedText = payload.text;
+        emittedRawText = payload.text;
         nativeDispatchStarted = true;
         tokensEmitted = true;
       }
@@ -346,6 +460,9 @@ export function createTeamsReplyStreamController(params: {
           ...mediaPayload
         } = payload;
         return { ...mediaPayload, text: undefined };
+      }
+      if (payload.text && !nativeDispatchStarted) {
+        streamSkipped = true;
       }
       return payload;
     },
@@ -385,8 +502,33 @@ export function createTeamsReplyStreamController(params: {
         logicalContent ??= replacementSettlementPending
           ? deferredReplacementLogicalContent()
           : undefined;
-        const logicalText = pendingFinalPayload?.text ?? (emittedText || undefined);
-        const finalActivity = queuedFinalActivity ?? finalStreamActivity(logicalText);
+        // Without a final text payload, the latest partial is the reply, held text included.
+        const streamedText = lastPartialText.startsWith(emittedRawText)
+          ? lastPartialText
+          : emittedRawText;
+        const logicalText = pendingFinalPayload?.text ?? (streamedText || undefined);
+        let finalActivity = queuedFinalActivity ?? finalStreamActivity(logicalText);
+        // Formatting the whole reply normally extends the formatted text already streamed.
+        // When it would rewrite streamed text instead, Teams would reject the final update,
+        // so format only the unstreamed rest.
+        if (
+          !queuedFinalActivity &&
+          streamMode === "partial" &&
+          emittedText &&
+          logicalText?.startsWith(emittedRawText) &&
+          !finalActivity.text?.startsWith(emittedText)
+        ) {
+          const rest = logicalText.slice(emittedRawText.length);
+          const gap = `${/\s*$/u.exec(emittedRawText)![0]}${/^\s*/u.exec(rest)![0]}`;
+          const separator = gap.includes("\n\n") ? "\n\n" : gap.includes("\n") ? "\n" : gap && " ";
+          // Text that only has meaning with the streamed part (a link definition) renders
+          // to nothing alone; keep it as written.
+          const renderedRest = rest.trim() ? renderStreamText(rest) || rest.trim() : "";
+          finalActivity = {
+            ...finalActivity,
+            text: renderedRest ? `${emittedText}${separator}${renderedRest}` : emittedText,
+          };
+        }
         const content = finalActivity.text;
         logicalContent ??= content !== logicalText ? logicalText : undefined;
         // The replacement path already queued text and final metadata as one

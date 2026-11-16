@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import { flattenInformativeStatus } from "./informative-status.js";
 import { createStreamMock as makeAcknowledgedStream } from "./reply-dispatcher.test-support.js";
@@ -46,7 +47,7 @@ const progressConfig = {
 
 describe("createTeamsReplyStreamController", () => {
   it.each([
-    ["normalizes cumulative whitespace", ["Intro\n\n ", "Intro\n\nNext"], ["Intro\n\n ", "Next"]],
+    ["normalizes cumulative whitespace", ["Intro\n\n ", "Intro\n\nNext"], ["Intro", "\n\nNext"]],
     ["ignores duplicate/shorter snapshots", ["abcdef", "abc", "abcdef"], ["abcdef"]],
   ] satisfies [string, string[], string[]][])("%s", (_name, partials, emitted) => {
     const stream = makeStream();
@@ -55,6 +56,78 @@ describe("createTeamsReplyStreamController", () => {
       ctrl.onPartialReply({ text });
     }
     expect(stream.emit.mock.calls).toEqual(emitted.map((text) => [text]));
+  });
+
+  it("streams formatted lines and recovers only unacknowledged source text", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "# Sta" });
+    ctrl.onPartialReply({ text: "# Status\n" });
+    expect(stream.emit.mock.calls).toEqual([["**Status**"]]);
+    stream.acknowledge("**Status**");
+    stream.close.mockRejectedValueOnce(new Error("network failure"));
+    expect(ctrl.preparePayload({ text: "# Status\nAll good" })).toBeUndefined();
+
+    await expect(ctrl.finalize()).resolves.toMatchObject({
+      ...acknowledged,
+      content: "**Status**",
+      fallbackPayload: { text: "All good" },
+    });
+  });
+
+  it("streams an unfinished line only up to closed inline markup", () => {
+    const stream = makeStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "Use **bo" });
+    ctrl.onPartialReply({ text: "Use **bold** and more" });
+    expect(stream.emit.mock.calls).toEqual([["Use"], [" **bold** and more"]]);
+  });
+
+  it("leaves the turn to block delivery when held text was never streamed", () => {
+    const stream = makeStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "**Checking the logs now.**" });
+    expect(ctrl.preparePayload({ text: "**Checking the logs now.**" })).toEqual({
+      text: "**Checking the logs now.**",
+    });
+    ctrl.onPartialReply({ text: "Here is what I found." });
+    expect(ctrl.preparePayload({ text: "Here is what I found." })).toEqual({
+      text: "Here is what I found.",
+    });
+    expect(stream.emit).not.toHaveBeenCalled();
+  });
+
+  it("does not start the stream on a second segment while the first is held", () => {
+    const stream = makeStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "**Checking the logs now.**" });
+    ctrl.onPartialReply({ text: "Here is what I found." });
+    expect(stream.emit).not.toHaveBeenCalled();
+    expect(ctrl.preparePayload({ text: "**Checking the logs now.**" })).toEqual({
+      text: "**Checking the logs now.**",
+    });
+  });
+
+  it("holds a nested fence until the outer fence closes", () => {
+    const stream = makeStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "Example:\n````md\n```js\ncode\n```\n" });
+    expect(stream.emit.mock.calls).toEqual([["Example:"]]);
+  });
+
+  it("formats only the unstreamed rest when formatting would rewrite streamed text", async () => {
+    const stream = makeStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "Revenue\n" });
+    const text = "Revenue\n---\nUp 4%";
+    expect(formatMSTeamsMarkdown(text, "code").startsWith("Revenue")).toBe(false);
+    expect(ctrl.preparePayload({ text })).toBeUndefined();
+    await ctrl.finalize();
+    expect(stream.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: `Revenue\n${formatMSTeamsMarkdown("---\nUp 4%", "code")}`,
+      }),
+    );
   });
 
   it("retains an acknowledged replacement when stream close produces no activity", async () => {

@@ -4,6 +4,7 @@ import { HttpStream } from "@microsoft/teams.apps/dist/http/http-stream.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type TeamsLoopbackRequest = {
@@ -39,7 +40,9 @@ const provider = createServer((request, response) => {
         (scenario === "cancel-close" && activity.type === "message") ||
         (scenario.startsWith("cancel-card-") && activity.type === "message") ||
         (scenario === "presentation-timeout" && priorScenarioRequests === 2) ||
-        (activity.text?.length ?? 0) > 4_000;
+        (activity.text?.length ?? 0) > 4_000 ||
+        (scenario.startsWith("prefix-") &&
+          !(activity.text ?? "").startsWith(lastAcceptedText(scenario)));
       const status = rejected ? 403 : 201;
       requests.push({
         scenario,
@@ -54,7 +57,9 @@ const provider = createServer((request, response) => {
           ? "exceeded streaming time"
           : scenario.startsWith("cancel") || scenario === "presentation-cancel"
             ? "Content stream was canceled by user"
-            : "Message size too large";
+            : scenario.startsWith("prefix-")
+              ? "Request streamed content should contain the previously streamed content"
+              : "Message size too large";
       response.end(
         JSON.stringify(rejected ? { error: { message } } : { id: `stream-${scenario}` }),
       );
@@ -63,6 +68,13 @@ const provider = createServer((request, response) => {
       response.destroy(error instanceof Error ? error : new Error(String(error))),
     );
 });
+
+// Teams accepts a stream update only when it extends the text it last accepted.
+function lastAcceptedText(scenario: string) {
+  return (
+    requests.findLast((entry) => entry.scenario === scenario && entry.status === 201)?.text ?? ""
+  );
+}
 
 let providerUrl = "";
 
@@ -162,12 +174,16 @@ function scenarioRequests(scenario: string) {
   return requests.filter((request) => request.scenario === scenario);
 }
 
-async function acknowledgedController(scenario: string, text = acknowledgedPrefix) {
+async function acknowledgedController(
+  scenario: string,
+  text = acknowledgedPrefix,
+  acknowledged = text,
+) {
   const harness = createLoopbackController(scenario);
   harness.controller.onPartialReply({ text });
   await harness.firstAcknowledgement;
   expect(harness.logger.error).not.toHaveBeenCalled();
-  expect(harness.acknowledgements).toEqual([{ id: `stream-${scenario}`, text }]);
+  expect(harness.acknowledgements).toEqual([{ id: `stream-${scenario}`, text: acknowledged }]);
   return harness;
 }
 
@@ -303,16 +319,42 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   );
 });
 
+describe("Teams partial streams with formatted Markdown", () => {
+  it("streams the final message's formatting so Teams accepts every update", async () => {
+    const scenario = "prefix-format";
+    const reply =
+      "# Totals\n\n| Region | Sales |\n| --- | --- |\n| East | 10 |\n\nAll regions are up.";
+    const expected = formatMSTeamsMarkdown(reply, "code");
+    const { controller } = createLoopbackController(scenario);
+    for (let end = 1; end < reply.length; end += 5) {
+      controller.onPartialReply({ text: reply.slice(0, end) });
+    }
+    controller.onPartialReply({ text: reply });
+    expect(controller.preparePayload({ text: reply })).toBeUndefined();
+
+    const result = await controller.finalize();
+
+    const sent = scenarioRequests(scenario);
+    expect(sent.map((request) => request.status).every((status) => status === 201)).toBe(true);
+    expect(sent.filter((request) => request.type === "typing").length).toBeGreaterThan(0);
+    expect(sent.every((request) => expected.startsWith(request.text))).toBe(true);
+    expect(sent.at(-1)).toMatchObject({ type: "message", text: expected });
+    expect(result).toMatchObject({ visibleReplySent: true, content: expected });
+    expect(result).not.toHaveProperty("fallbackPayload");
+  });
+});
+
 describe("Teams native final text preparation", () => {
   it("preserves required AI metadata when the SDK completes a timed-out stream by update", async () => {
     const { controller, firstAcknowledgement } = createLoopbackController("presentation-timeout");
-    const text = "# Status";
-    controller.onPartialReply({ text });
+    controller.onPartialReply({ text: "# Status\n" });
     await firstAcknowledgement;
+    const text = "# Status\nAll good";
+    controller.onPartialReply({ text });
     controller.preparePayload({ text });
     await expect(controller.finalize()).resolves.toMatchObject({ visibleReplySent: true });
     const final = requests.findLast((request) => request.scenario === "presentation-timeout");
-    expect(final?.text).toBe("**Status**");
+    expect(final?.text).toBe("**Status**\n\nAll good");
     expect(final?.entities).toEqual(
       expect.arrayContaining([
         {
@@ -332,12 +374,15 @@ describe("Teams native final text preparation", () => {
     async (scenario) => {
       const canceled = scenario === "presentation-cancel";
       const text = canceled
-        ? "# Deployment status"
+        ? "# Deployment status\n"
         : "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
-      const { controller } = await acknowledgedController(scenario, text);
+      const { controller } = await acknowledgedController(scenario, text, "**Deployment status**");
       controller.preparePayload({ text, presentation });
       await expect(controller.finalize()).resolves.toEqual({
-        ...receipt(scenario, canceled ? text : "**Deployment status**\n\n<at>Alex</at>"),
+        ...receipt(
+          scenario,
+          canceled ? "**Deployment status**" : "**Deployment status**\n\n<at>Alex</at>",
+        ),
         ...(canceled
           ? {}
           : { logicalContent: text, fallbackPayload: { text: undefined, presentation } }),
