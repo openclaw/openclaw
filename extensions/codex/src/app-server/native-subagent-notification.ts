@@ -15,6 +15,7 @@ export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   // App-server exposes no typed terminal subagent result. Keep this one raw
   // boundary until its protocol provides the child's terminal status and text.
   "rawResponseItem/completed",
+  "rawResponse/completed",
 ]);
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";

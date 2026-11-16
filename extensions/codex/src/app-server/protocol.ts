@@ -155,6 +155,7 @@ export type CodexThreadStartParams = CodexThreadConfigurationParams & {
 
 export type CodexThreadResumeParams = CodexThreadConfigurationParams & {
   threadId: string;
+  experimentalRawEvents?: boolean;
   cwd?: string | null;
   model?: string;
   personality?: CodexPersonality | null;

@@ -1132,6 +1132,18 @@ class Monitor {
     ) {
       this.submissions.observeTurn(readString(params, "threadId") ?? "", params.turn);
     }
+    // Client handlers run concurrently. Preserve native receipt/acknowledgment
+    // ordering before raw-item submission persistence can await another owner.
+    const receiptParent = threadId ? this.parentStates.get(threadId) : undefined;
+    if (receiptParent && this.isCurrentParent(receiptParent)) {
+      observeCodexNativeSubagentDeliveryReceipts({
+        state: receiptParent,
+        notification,
+        knownChildren: this.knownChildren.values(),
+        applyReceipts: (runIds) => this.completionDelivery.applyReceipts(receiptParent, runIds),
+        allowConsumption: canNativeParentConsumeCompletion(receiptParent, readString(params, "turnId")),
+      });
+    }
     if (
       notification.method === "rawResponseItem/completed" &&
       params &&
@@ -1181,14 +1193,6 @@ class Monitor {
       return;
     }
     const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
-    if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
-      observeCodexNativeSubagentDeliveryReceipts({
-        state: parent,
-        notification,
-        knownChildren: this.knownChildren.values(),
-        applyReceipts: (runIds) => this.completionDelivery.applyReceipts(parent, runIds),
-      });
-    }
     if (
       childState &&
       !childState.terminal &&

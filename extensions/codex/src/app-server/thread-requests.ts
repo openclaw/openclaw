@@ -246,6 +246,8 @@ export async function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    // The matched native build supports opt-in on both cold and loaded resume.
+    experimentalRawEvents: true,
     // Only the latest turn id/status is needed to preserve active-turn conflict
     // handling; avoid rebuilding and validating the full persisted history.
     excludeTurns: true,

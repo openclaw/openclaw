@@ -59,10 +59,49 @@ export class CodexNativeSubagentDeliveryReceipts {
   private readonly seen = new Set<string>();
   private readonly pending: Receipt[] = [];
   private readonly outcomes = new Map<string, Outcome>();
+  private readonly unacknowledged = new Map<string, Map<string, Receipt>>();
+  private readonly compacting = new Set<string>();
+
+  discardUnacknowledged(threadId: string, turnId?: string): void {
+    const prefix = `${threadId}\0`;
+    for (const key of new Set([...this.unacknowledged.keys(), ...this.compacting])) {
+      if (turnId ? key === `${prefix}${turnId}` : key.startsWith(prefix)) {
+        this.unacknowledged.delete(key);
+        this.compacting.delete(key);
+      }
+    }
+  }
 
   observe(notification: CodexServerNotification): string[] {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     const item = isJsonObject(params?.item) ? params.item : undefined;
+    const threadId = readString(params, "threadId");
+    const turnId = readString(params, "turnId");
+    const samplingKey = threadId && turnId ? `${threadId}\0${turnId}` : undefined;
+    if (samplingKey && item?.type === "contextCompaction") {
+      // Replacing history invalidates unsampled evidence, never accepted receipts.
+      this.unacknowledged.delete(samplingKey);
+      if (notification.method === "item/started") {
+        this.compacting.add(samplingKey);
+      } else if (notification.method === "item/completed") {
+        this.compacting.delete(samplingKey);
+      }
+      return [];
+    }
+    if (notification.method === "rawResponse/completed") {
+      if (!samplingKey || !readString(params, "responseId") || this.compacting.has(samplingKey)) {
+        return [];
+      }
+      const sampled = this.unacknowledged.get(samplingKey);
+      this.unacknowledged.delete(samplingKey);
+      for (const [id, receipt] of sampled ?? []) {
+        if (!this.seen.has(id)) {
+          this.seen.add(id);
+          this.pending.push(receipt);
+        }
+      }
+      return this.match();
+    }
     if (!item) {
       return [];
     }
@@ -72,7 +111,6 @@ export class CodexNativeSubagentDeliveryReceipts {
       if (this.seen.has(id)) {
         continue;
       }
-      this.seen.add(id);
       let result = nativeResults.find((value) => value.agentPath === agentPath)?.result;
       if (item.type === "agent_message" && Array.isArray(item.content)) {
         const part = item.content[0];
@@ -82,7 +120,22 @@ export class CodexNativeSubagentDeliveryReceipts {
         const child = item.agentsStates[agentPath];
         result = isJsonObject(child) ? readString(child, "message") : result;
       }
-      this.pending.push({ agentPath, result: receiptResultKey(result) });
+      const receipt = { agentPath, result: receiptResultKey(result) };
+      if (notification.method === "rawResponseItem/completed") {
+        // Input arrival is not proof of a successful native sampling response.
+        if (samplingKey && !this.compacting.has(samplingKey)) {
+          let batch = this.unacknowledged.get(samplingKey);
+          if (!batch) {
+            batch = new Map();
+            this.unacknowledged.set(samplingKey, batch);
+          }
+          batch.set(id, receipt);
+        }
+      } else {
+        // Preserve the existing matching-terminal V1 tool-output contract.
+        this.seen.add(id);
+        this.pending.push(receipt);
+      }
     }
     return this.match();
   }
@@ -176,6 +229,7 @@ export function observeCodexNativeSubagentDeliveryReceipts<Parent extends Receip
   notification: CodexServerNotification;
   knownChildren: Iterable<KnownReceiptChild<Parent>>;
   applyReceipts: (runIds: readonly string[]) => void;
+  allowConsumption?: boolean;
 }): void {
   const { state, notification, knownChildren, applyReceipts } = params;
   const trackers = new Set([state.deliveryReceipts]);
@@ -188,7 +242,16 @@ export function observeCodexNativeSubagentDeliveryReceipts<Parent extends Receip
     }
   }
   for (const tracker of trackers) {
-    applyReceipts(tracker.observe(notification));
+    if (params.allowConsumption === false) {
+      const nativeParams = isJsonObject(notification.params) ? notification.params : undefined;
+      const turn = isJsonObject(nativeParams?.turn) ? nativeParams.turn : undefined;
+      const turnId = readString(nativeParams, "turnId") ?? readString(turn, "id");
+      if (turnId) {
+        tracker.discardUnacknowledged(state.parentThreadId, turnId);
+      }
+    } else {
+      applyReceipts(tracker.observe(notification));
+    }
   }
 }
 

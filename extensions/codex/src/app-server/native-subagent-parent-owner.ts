@@ -346,6 +346,15 @@ export async function registerNativeSubagentParent(
       if (current === registeredState) {
         current.owners.delete(ownerKey);
         dependencies.closes.prune(current);
+        const stillOwnsTurn = owner.turnId && [...current.owners.values()].some(
+          (candidate) => candidate.turnId === owner.turnId,
+        );
+        if (current.owners.size === 0 || (owner.turnId && !stillOwnsTurn)) {
+          current.deliveryReceipts.discardUnacknowledged(
+            current.parentThreadId,
+            current.owners.size === 0 ? undefined : owner.turnId,
+          );
+        }
         if (owner.turnId) {
           current.turnIds.delete(owner.turnId);
         }
