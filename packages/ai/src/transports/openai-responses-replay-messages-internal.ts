@@ -225,7 +225,6 @@ export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
-  authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
   mutableInput?: boolean;
@@ -268,7 +267,6 @@ function convertResponsesMessagesWithStyle(
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
   });
   const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
   const sanitizeIdPart = (part: string) => {
@@ -313,7 +311,6 @@ function convertResponsesMessagesWithStyle(
   };
   const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
   if (replayPlan.itemRecovery) {
