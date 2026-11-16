@@ -23,11 +23,16 @@ delivery notice. The child result remains available in its session and the
 to answer the user: later parent turns own any outstanding answer. A child task
 itself still owes its result; this quiet settlement applies to the parent reviewing it.
 
-An aborted requester completion turn is not a quiet settlement. When the execution
-owner positively proves that the whole run was replay-safe, its completion uses
-the existing bounded requester retry schedule (three attempts, with 30-second and
-two-minute delays). Runs with committed or unknown effects remain failed for
-explicit recovery, with the existing blocked-delivery notice.
+An interrupted requester completion turn is not a quiet settlement. Typed cancellation,
+worker timeout, preparation invalidation, and saved-state or transcript conflicts
+retain the existing bounded retry schedule when replay is safe: three attempts,
+with 30-second and two-minute delays. Cancellation before dispatch also uses that
+schedule. Every retryable settle outcome keeps its wake; exhausting the budget
+records a permanent failure and the existing blocked-delivery notice. Runs with
+committed or unknown effects remain failed for explicit recovery instead of
+repeating their work.
+Ordinary completion delivery retains its existing frozen-result retry policy and
+delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
 precedence; cancellation does not revive work those owners have closed.
 

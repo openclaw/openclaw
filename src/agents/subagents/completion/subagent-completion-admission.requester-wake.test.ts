@@ -226,6 +226,63 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
+  it.each(["parent", "yielded"] as const)(
+    "records exhausted retryable delivery as a visible terminal failure across reopen (%s)",
+    async (kind) => {
+      const input = armRequesterWake(records());
+      if (kind === "parent") {
+        input.subagent.completionTarget = "parent";
+      } else {
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      }
+      input.subagent.delivery = { status: "failed", disposition: "retryable" };
+      input.subagent.completionRequesterSessionId = "requester-session";
+      input.subagent.requesterStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "sessions.json",
+      );
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+        sessionId: "requester-session",
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      persistOwner(input);
+      using driver = requesterWakeDriver([input]);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+          {
+            delivered: false,
+            path: "direct",
+            reason: "requester_timed_out",
+            disposition: "permanent_failure",
+            error: "worker task timed out",
+          },
+        );
+        return false;
+      });
+      await driver.run();
+      db.value = await reopenOwners();
+      const restored = subagentRuns.get(input.subagent.runId)!;
+      expect(restored.requesterSettleWake).toBeUndefined();
+      expect(restored.delivery).toMatchObject({
+        status: "failed",
+        disposition: "permanent_failure",
+      });
+      const notices = (await loadTranscriptEvents(scope)).filter((event) =>
+        JSON.stringify(event).includes("The child result couldn't be delivered"),
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({
+        customType: "run-failed-before-reply",
+        display: true,
+      });
+    },
+  );
+
   it("settles lost operator authority without discarding child results or queuing a notice", async () => {
     const input = armRequesterWake(records());
     input.subagent.cleanupCompletedAt = undefined;

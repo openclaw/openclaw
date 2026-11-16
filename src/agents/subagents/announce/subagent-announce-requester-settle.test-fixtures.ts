@@ -139,7 +139,7 @@ export function createRequesterSettleCases() {
       }),
     ),
     settleCase(
-      "does not record a canceled partial answer as a visible final",
+      "does not record a timed-out partial answer as a visible final",
       { payloads: [{ text: "partial answer" }] },
       { ...localOnly, status: "timeout", expected: deliveredRequesterFinal },
     ),

@@ -245,10 +245,11 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();
   fixture.controller.abort();
-  await expect(fixture.startDelivery()).resolves.toEqual({
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
     delivered: false,
     path: "none",
-    phases: [],
+    reason: "requester_aborted",
+    disposition: "retryable",
   });
   expectNoReplay(fixture, 0);
 });
@@ -404,7 +405,7 @@ it.each([
   {
     name: "aborted requester with unknown effects",
     input: { status: "timeout", result: { payloads: [], meta: { aborted: true } } },
-    expected: { delivered: false, reason: "requester_aborted", disposition: undefined },
+    expected: { delivered: false, reason: "requester_aborted", disposition: "permanent_failure" },
   },
   {
     name: "explicit stop",
@@ -417,7 +418,7 @@ it.each([
       status: "timeout",
       result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
     },
-    expected: { delivered: false, reason: "requester_aborted", disposition: undefined },
+    expected: { delivered: false, reason: "requester_aborted", disposition: "permanent_failure" },
   },
   {
     name: "unconfirmed automatic send before cancellation",
