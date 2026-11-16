@@ -6,7 +6,6 @@ import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import * as diskSpace from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -448,15 +447,14 @@ describe("backupVerifyCommand", () => {
     const tempDir = tempDirs.make("openclaw-backup-verify-input-");
     const archivePath = await prepare(tempDir);
     const runtime = createTestRuntime();
+    const message = `Backup archive verification failed: ${archivePath}. ${detail}`;
 
-    await runCommandWithRuntime(runtime, async () => {
-      await backupVerifyCommand(runtime, { archive: archivePath });
+    await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message,
+      humanOutput: message,
+      machineOutput: message,
     });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Backup archive verification failed: ${archivePath}. ${detail}`,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("rejects a missing path header after valid backup entries", async () => {
@@ -479,15 +477,12 @@ describe("backupVerifyCommand", () => {
       ),
     );
     const runtime = createTestRuntime();
+    const message = `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. path is required. Choose another archive or create a new one with \`openclaw backup create\`.`;
 
-    await runCommandWithRuntime(runtime, async () => {
-      await backupVerifyCommand(runtime, { archive: archivePath });
+    await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message,
     });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. path is required. Choose another archive or create a new one with \`openclaw backup create\`.`,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
     const progress = runtime.log.mock.calls.map(([line]) => {
       if (typeof line !== "string") {
         throw new Error("Backup progress must be a string");

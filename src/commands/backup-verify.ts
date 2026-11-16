@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import {
   recordArchiveSymbolicLink,
   resolvePortableArchivePathKey,
@@ -508,7 +509,6 @@ async function verifyResolvedBackupArchive(
     }
     entriesByPath.set(entry.normalized, entry);
   }
-  const normalizedEntrySet = new Set(entriesByPath.keys());
 
   const manifestMatches = entries.filter((entry) => isRootBackupManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
@@ -532,7 +532,7 @@ async function verifyResolvedBackupArchive(
     throw manifestRaw;
   }
   const manifest = parseBackupManifest(manifestRaw);
-  verifyBackupManifestEntries(manifest, normalizedEntrySet);
+  verifyBackupManifestEntries(manifest, new Set(entriesByPath.keys()));
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const hardlinkTargets = new Map<string, string>();
   for (const entry of entries) {
@@ -701,7 +701,7 @@ export async function prepareBackupArchive(
   return await verifyResolvedBackupArchive(archivePath, requiredSnapshots, onProgress).catch(
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : formatErrorMessage(error);
-      throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
+      throwExpectedCliError(`Backup archive verification failed: ${archivePath}. ${detail}`);
     },
   );
 }

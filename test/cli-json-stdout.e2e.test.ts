@@ -380,6 +380,9 @@ describe("cli json stdout contract", () => {
             message: expect.stringContaining("missing-backup.tar.gz"),
           },
         });
+        expect(result.stderr).toContain(
+          "Archive does not exist. Check the path and run `openclaw backup verify <archive>` again.",
+        );
       },
       { prefix: "openclaw-json-failure-e2e-" },
     );
