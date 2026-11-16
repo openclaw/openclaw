@@ -58,15 +58,24 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
       return [];
     }
-    const result = await readCronInventory(snapshot.client, {
-      includeDisabled: true,
-      compact: true,
-      limit: 200,
-      offset: 0,
-      sortBy: "name",
-      sortDir: "asc",
-    }).catch(() => null);
-    return result?.jobs ?? [];
+    // The sidebar is the only list beside the Automations page, so it reads every page.
+    const rows: CronCompactJob[] = [];
+    let offset = 0;
+    while (true) {
+      const page = await readCronInventory(snapshot.client, {
+        includeDisabled: true,
+        compact: true,
+        limit: 200,
+        offset,
+        sortBy: "name",
+        sortDir: "asc",
+      }).catch(() => null);
+      rows.push(...(page?.jobs ?? []));
+      if (!page?.hasMore || !page.nextOffset || page.nextOffset <= offset) {
+        return rows;
+      }
+      offset = page.nextOffset;
+    }
   });
   // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
   const shown = createMemo(() => {
