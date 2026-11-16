@@ -56,7 +56,9 @@ async function resolveConfiguredGatewaySecretInput(params: {
         if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
           throw error;
         }
-        throw new GatewaySecretRefUnavailableError(params.path);
+        // Preserve the provider failure as `cause` so the surfaced message can point
+        // at restoring provider access instead of credential replacement.
+        throw new GatewaySecretRefUnavailableError(params.path, { cause: error });
       },
     });
   // CLI RPC paths defer storage selection, so read store refs from a PostgreSQL state family

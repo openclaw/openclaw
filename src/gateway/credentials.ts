@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isProviderScopedSecretResolutionError } from "../secrets/resolve-errors.js";
 import {
   createGatewayCredentialPlan,
   type GatewayCredentialPlan,
@@ -35,17 +36,37 @@ export class GatewaySecretRefUnavailableError extends Error {
   readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
   readonly path: string;
 
-  constructor(path: string) {
-    super(
-      [
-        `${path} is configured as a secret reference but is unavailable in this command path.`,
-        "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
-        "or run a gateway command path that resolves secret references before credential selection.",
-      ].join("\n"),
-    );
+  constructor(path: string, options?: { cause?: unknown }) {
+    super(gatewaySecretRefUnavailableMessage(path, options?.cause), {
+      cause: options?.cause,
+    });
     this.name = "GatewaySecretRefUnavailableError";
     this.path = path;
   }
+}
+
+/**
+ * Builds the operator-facing message for GatewaySecretRefUnavailableError.
+ *
+ * When the configured secret provider itself could not be read (provider-scoped
+ * resolution failure), replacing credentials would not help, so the message
+ * surfaces the provider failure and points at restoring provider access instead
+ * of environment variables or explicit flags.
+ */
+function gatewaySecretRefUnavailableMessage(path: string, cause: unknown): string {
+  const firstLine = `${path} is configured as a secret reference but is unavailable in this command path.`;
+  if (isProviderScopedSecretResolutionError(cause)) {
+    return [
+      firstLine,
+      `Secret provider "${cause.source}:${cause.provider}" could not be read: ${cause.message}`,
+      "Fix: restore access to that secret provider, then retry this command with the same configuration.",
+    ].join("\n");
+  }
+  return [
+    firstLine,
+    "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+    "or run a gateway command path that resolves secret references before credential selection.",
+  ].join("\n");
 }
 
 export function isGatewaySecretRefUnavailableError(

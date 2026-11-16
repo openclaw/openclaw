@@ -6,6 +6,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import { providerResolutionError } from "../secrets/resolve-errors.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import { GatewaySecretRefUnavailableError } from "./credentials.js";
 
@@ -18,12 +19,18 @@ vi.mock("../infra/database-engine/config.js", async (importOriginal) => ({
   resolveDatabaseEngineSelection: mocks.resolveDatabaseEngineSelection,
 }));
 
-const storeMocks = vi.hoisted(() => ({ sqliteToken: undefined as string | undefined }));
+const storeMocks = vi.hoisted(() => ({
+  sqliteToken: undefined as string | undefined,
+  failure: undefined as Error | undefined,
+}));
 
 // PostgreSQL state holds "store-token"; the default SQLite store holds sqliteToken, if any.
 vi.mock("../secrets/resolve-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/resolve-store.js")>()),
   resolveStoreRefs: async (params: { refs: Array<{ id: string }> }) => {
+    if (storeMocks.failure) {
+      throw storeMocks.failure;
+    }
     const token =
       getDatabaseEngineSelection()?.effectiveEngines.state === "postgres"
         ? "store-token"
@@ -53,6 +60,7 @@ const config = {
 afterEach(() => {
   mocks.resolveDatabaseEngineSelection.mockReset();
   storeMocks.sqliteToken = undefined;
+  storeMocks.failure = undefined;
 });
 
 describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
@@ -103,5 +111,31 @@ describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
     const result = resolveGatewayCredentialsWithSecretInputs({ config, env: {} });
     await expect(result).rejects.toBeInstanceOf(GatewaySecretRefUnavailableError);
     await expect(result).rejects.toThrow("gateway.auth.token");
+  });
+
+  it("preserves the provider failure instead of suggesting credential replacement", async () => {
+    mocks.resolveDatabaseEngineSelection.mockResolvedValue(postgresSelection);
+    const providerFailure = providerResolutionError({
+      code: "SECRET_PROVIDER_UNAVAILABLE",
+      source: "store",
+      provider: "default",
+      message: "Secret store database is unavailable.",
+      cause: new AggregateError([new Error("Shared-state read and cleanup failed")]),
+    });
+    storeMocks.failure = providerFailure;
+
+    const result = resolveGatewayCredentialsWithSecretInputs({ config, env: {} });
+    const error = await result.then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(GatewaySecretRefUnavailableError);
+    const unavailable = error as GatewaySecretRefUnavailableError;
+    expect(unavailable.cause).toBe(providerFailure);
+    expect(unavailable.message).toContain(
+      'Secret provider "store:default" could not be read: Secret store database is unavailable.',
+    );
+    expect(unavailable.message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(unavailable.message).not.toContain("--token");
   });
 });

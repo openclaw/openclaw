@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { providerResolutionError } from "../secrets/resolve-errors.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
+  GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
   resolveGatewayCredentialsFromValues,
 } from "./credentials.js";
@@ -302,5 +304,54 @@ describe("resolveGatewayCredentialsFromValues", () => {
         passwordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).toEqual(expected);
+  });
+});
+
+describe("GatewaySecretRefUnavailableError", () => {
+  const tokenPath = "gateway.auth.token";
+  const firstLine = `${tokenPath} is configured as a secret reference but is unavailable in this command path.`;
+  const credentialFixAdvice =
+    "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,";
+
+  it("keeps the credential fix advice when no provider failure is attached", () => {
+    const error = new GatewaySecretRefUnavailableError(tokenPath);
+
+    expect(error.message).toBe(
+      [
+        firstLine,
+        "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+        "or run a gateway command path that resolves secret references before credential selection.",
+      ].join("\n"),
+    );
+    expect(error.cause).toBeUndefined();
+  });
+
+  it("reports the provider failure instead of credential-replacement advice", () => {
+    const providerError = providerResolutionError({
+      code: "SECRET_PROVIDER_UNAVAILABLE",
+      source: "store",
+      provider: "default",
+      message: "Secret store database is unavailable.",
+      cause: new AggregateError([new Error("Shared-state read and cleanup failed")]),
+    });
+
+    const error = new GatewaySecretRefUnavailableError(tokenPath, { cause: providerError });
+
+    expect(error.cause).toBe(providerError);
+    expect(error.message).toContain(firstLine);
+    expect(error.message).toContain(
+      'Secret provider "store:default" could not be read: Secret store database is unavailable.',
+    );
+    expect(error.message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(error.message).not.toContain("--token");
+  });
+
+  it("keeps the credential fix advice for non-provider causes", () => {
+    const error = new GatewaySecretRefUnavailableError(tokenPath, {
+      cause: new Error("database engine selection failed"),
+    });
+
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(error.message).toContain(credentialFixAdvice);
   });
 });
