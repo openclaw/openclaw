@@ -563,7 +563,7 @@ describe("OpenAI-compatible agent run terminal metadata", () => {
 
 describe("OpenAI-compatible agent error envelopes", () => {
   const changed = new SessionWorkStartChangedError("changed");
-  const serializedChanged = { ...changed, message: "changed" };
+  const serializedChanged = { code: changed.code, message: "changed" };
   it.each([
     [
       new FailoverError("Connection error.", { reason: "tls_certificate", code: "CERT_REVOKED" }),
@@ -594,7 +594,7 @@ describe("OpenAI-compatible agent error envelopes", () => {
       "SESSION_WORK_START_CHANGED",
     ],
     [serializedChanged, 409, "changed", "SESSION_WORK_START_CHANGED"],
-    [{ ...changed }, 500, "internal error", undefined],
+    [{ code: changed.code }, 500, "internal error", undefined],
   ] as const)("maps %s to HTTP %i", (error, status, message, code) => {
     expect(resolveOpenAiCompatibleAgentError(error)).toEqual({
       status,
