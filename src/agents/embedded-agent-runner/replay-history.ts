@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai/internal/shared";
 import {
   isCompactionReplayCheckpoint,
+  readOpenAIResponsesItemRecoveryAnchor,
   replaceCompactionReplayOwnerContent,
 } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
@@ -341,10 +342,7 @@ function normalizeAssistantReplayMessage(
   const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
   // Token-limited thinking is incomplete provider state. Replaying it can
   // resend a partial signature, while visible text or tool calls remain useful.
-  if (!normalized || isReasoningOnlyLengthAssistantTurn(normalized)) {
-    return null;
-  }
-  return normalized;
+  return normalized && !isReasoningOnlyLengthAssistantTurn(normalized) ? normalized : null;
 }
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
@@ -400,6 +398,14 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       } else {
         normalized = null;
       }
+    }
+    if (
+      !normalized &&
+      message.role === "assistant" &&
+      readOpenAIResponsesItemRecoveryAnchor(message.providerReplay) !== undefined
+    ) {
+      // Discarded content must not discard the provider's durable recovery boundary.
+      normalized = replaceCompactionReplayOwnerContent(message, []);
     }
     if (normalized) {
       out.push(normalized);

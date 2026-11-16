@@ -1,0 +1,2 @@
+# Approved #200020 saved-item recovery: real HTTP/WS retry, durable copied-history receipts, and requester settlement regressions; excludes existing exact-byte prevention coverage.
+665

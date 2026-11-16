@@ -98,6 +98,7 @@ export function buildOpenAIResponsesParams(
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
   retainUserProvenance = false,
+  onItemRecovery?: () => void,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
@@ -114,6 +115,7 @@ export function buildOpenAIResponsesParams(
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,
+    onItemRecovery,
   });
   // The Responses API rejects an empty `input` array; when the only content
   // for this turn was the system prompt (now carried by `instructions`

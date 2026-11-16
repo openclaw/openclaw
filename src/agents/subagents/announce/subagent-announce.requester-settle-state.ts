@@ -29,7 +29,7 @@ export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean 
 
 /**
  * Only a known missing result, or an effect-free run whose transcript write was
- * rejected or aborted, may mint another public continuation; private retries reconcile.
+ * rejected or aborted, or saved-state repair may mint another public continuation; private retries reconcile.
  */
 export function resolveRequesterSettleRetryState(params: {
   state: RequesterSettleWakeBatchState;
@@ -44,6 +44,7 @@ export function resolveRequesterSettleRetryState(params: {
     delivery.disposition !== "retryable" ||
     (!parentOnly &&
       delivery.reason !== "visible_reply_missing" &&
+      delivery.reason !== "requester_state_conflict" &&
       delivery.reason !== "requester_aborted" &&
       delivery.reason !== "requester_transcript_conflict") ||
     delivery.reason === "requester_abandoned" ||

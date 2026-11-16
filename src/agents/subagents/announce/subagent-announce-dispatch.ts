@@ -18,6 +18,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "operator_authority_unavailable"
+  | "requester_state_conflict"
   | "requester_abandoned"
   | "requester_aborted"
   | "requester_transcript_conflict"

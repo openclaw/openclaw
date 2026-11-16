@@ -1,3 +1,4 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -23,6 +24,14 @@ export function resolveCurrentAttemptAssistant(
   // The completed event survives transcript projection and is cleared before a
   // compaction retry. Historical lastAssistant is not evidence of a new response.
   return attempt.currentAttemptAssistant ?? attempt.currentAttemptCompletedAssistant;
+}
+
+/** A prompt error can be flattened; preserve the current provider response's typed failure. */
+export function resolveCurrentAttemptErrorCode(
+  attempt: Parameters<typeof resolveCurrentAttemptAssistant>[0],
+  error: unknown,
+): string | undefined {
+  return extractErrorCode(error) ?? resolveCurrentAttemptAssistant(attempt)?.errorCode;
 }
 
 type ReplayMetadataAttempt = Pick<

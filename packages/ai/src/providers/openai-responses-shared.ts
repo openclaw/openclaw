@@ -16,7 +16,10 @@ import {
   type OpenAIResponsesRequestParams,
 } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
-import { createResponsesStreamWithRecovery } from "../transports/openai-responses-replay-internal.js";
+import {
+  createResponsesStreamWithRecovery,
+  createResponsesItemConflictRecovery,
+} from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
@@ -185,9 +188,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
 }): Promise<void> {
   const { stream, output, options } = params;
 
+  let itemRecovery: ReturnType<typeof createResponsesItemConflictRecovery> | undefined;
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
+    itemRecovery = createResponsesItemConflictRecovery(output, model, options);
+    const recovery = itemRecovery;
     const client = params.createClient(model);
     const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
@@ -228,6 +234,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       model,
       encodeBody,
       buildFullHistoryRequest: () => buildRequest("full-history"),
+      buildItemConflictRequest: () => recovery.retry(buildRequest),
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       canRetryStream: () => output.content.length === 0,
@@ -292,6 +299,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     }
     finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
+    itemRecovery?.reject(error);
     const response = error instanceof ResponsesStreamFailure ? error.response : error;
     const rawError = isRecord(response) && isRecord(response.error) ? response.error : response;
     if (
@@ -315,6 +323,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       error,
     });
   } finally {
+    itemRecovery?.finish();
     firstEventAbort?.dispose();
   }
 }

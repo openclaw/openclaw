@@ -433,6 +433,27 @@ it.each([
     expected: { delivered: false, disposition: "ambiguous" },
   },
   {
+    name: "saved-state conflict with intentional suppression",
+    input: {
+      status: "ok",
+      result: {
+        payloads: [],
+        meta: { error: { kind: "incomplete_turn", code: "item_conflict" } },
+        deliveryStatus: {
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          resultCount: 0,
+        },
+      },
+    },
+    expected: {
+      delivered: false,
+      disposition: "intentional_non_delivery",
+      reason: "delivery_suppressed",
+      terminal: true,
+    },
+  },
+  {
     name: "partial send failure",
     input: Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
     expected: { delivered: false, disposition: "ambiguous" },

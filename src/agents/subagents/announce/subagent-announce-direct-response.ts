@@ -24,6 +24,10 @@ import {
   isGatewayAgentRunPending,
   resolvePrivateCompletionDeliveryResult,
 } from "./subagent-announce-completion-delivery.js";
+import {
+  isAnnounceSavedStateConflict,
+  summarizeDeliveryError,
+} from "./subagent-announce-delivery-retry.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 
@@ -141,16 +145,25 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       const aborted =
         directAnnounceResult?.meta?.aborted === true ||
         (terminal && classifyAgentRunTerminalOutcome(terminal) === "cancellation");
+      const stateConflict =
+        !automaticEvidence.mayHaveSent &&
+        isAnnounceSavedStateConflict(directAnnounceResult?.meta?.error);
       const retryAborted =
         aborted && directAnnounceRecord?.replaySafe === true && !automaticEvidence.mayHaveSent;
       return {
         delivered: false,
         path: "direct",
-        reason: aborted ? "requester_aborted" : "visible_reply_missing",
-        error: aborted
-          ? "completion agent was aborted before delivering a reply"
-          : "completion agent did not produce a visible reply",
-        ...(requesterCompletedSuccessfully || retryAborted
+        reason: stateConflict
+          ? "requester_state_conflict"
+          : aborted
+            ? "requester_aborted"
+            : "visible_reply_missing",
+        error: stateConflict
+          ? summarizeDeliveryError(directAnnounceResult?.meta?.error)
+          : aborted
+            ? "completion agent was aborted before delivering a reply"
+            : "completion agent did not produce a visible reply",
+        ...(requesterCompletedSuccessfully || retryAborted || stateConflict
           ? { disposition: "retryable" as const }
           : {}),
       };

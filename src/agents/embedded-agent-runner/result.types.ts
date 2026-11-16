@@ -187,6 +187,7 @@ export type EmbeddedAgentRunMeta = {
       | "incomplete_turn"
       | "hook_block";
     message: string;
+    code?: string;
     /** True only when model fallback can retry this terminal error without repeating side effects. */
     fallbackSafe?: boolean;
     /** True when the payload includes a trusted structured terminal tool summary. */

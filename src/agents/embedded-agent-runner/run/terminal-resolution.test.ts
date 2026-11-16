@@ -154,6 +154,20 @@ describe("terminal resolution", () => {
     },
   );
 
+  it("preserves a returned saved-state conflict after partial output", async () => {
+    const assistant = textAssistant("Preparing delivery.");
+    assistant.stopReason = "error";
+    assistant.errorCode = "item_conflict";
+    assistant.errorMessage = "Saved conversation state rejected";
+    const resolved = await resolveTerminal({
+      assistant,
+      attemptOverrides: { assistantTexts: ["Preparing delivery."] },
+      runParams: { messageChannel: "internal" },
+    });
+    expectComplete(resolved);
+    expect(resolved.result.meta.error).toMatchObject({ code: "item_conflict" });
+  });
+
   it("keeps real internal provider failures visible", async () => {
     const resolved = await resolveTerminal({
       assistant: emptyAssistant({ stopReason: "error", errorMessage: "Authentication failed" }),

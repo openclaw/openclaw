@@ -82,6 +82,13 @@ export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
+export function isAnnounceSavedStateConflict(error: unknown): boolean {
+  return hasAnnounceErrorMatch(
+    error,
+    (candidate) => asOptionalObjectRecord(candidate)?.code === "item_conflict",
+  );
+}
+
 export function hasAnnounceSendEvidence(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, (candidate) => {
     const record = asOptionalObjectRecord(candidate);

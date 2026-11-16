@@ -226,6 +226,58 @@ describe("requester settle dispatch deadline", () => {
     },
   );
 
+  it.each([
+    { persistent: false, returned: false },
+    { persistent: true, returned: false },
+    { persistent: false, returned: true },
+    { persistent: true, returned: true },
+  ])(
+    "retries saved-state rejection after admission with a bounded budget ($persistent, returned=$returned)",
+    async ({ persistent, returned }) => {
+      const context = createContext();
+      const { child, completeBatch, params } = dispatchFixture();
+      useDirectDelivery();
+      const runIds: string[] = [];
+      startTurn.mockImplementation(async (turn) => {
+        acceptTurn(turn);
+        runIds.push(turn.preflight.request.idempotencyKey);
+        if (persistent || runIds.length === 1) {
+          const error = {
+            kind: "incomplete_turn",
+            code: "item_conflict",
+            message: "Saved conversation state rejected",
+          };
+          if (returned) {
+            turn.io.emitFinal([
+              true,
+              { status: "ok", result: { payloads: [], meta: { error } } },
+              undefined,
+            ]);
+            return;
+          }
+          throw Object.assign(new Error(error.message), error);
+        }
+        finishTurn(turn.io, "Recovered child result.");
+      });
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+      await expect(run()).resolves.toBe(false);
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
+      using clock = vi.spyOn(Date, "now");
+      for (let attempt = 1; child.requesterSettleWake; attempt++) {
+        expect(attempt).toBeLessThan(3);
+        clock.mockReturnValue(child.requesterSettleWake.nextAttemptAt!);
+        await expect(run()).resolves.toBe(!persistent);
+      }
+      expect(runIds).toHaveLength(persistent ? 3 : 2);
+      expect(new Set(runIds).size).toBe(runIds.length);
+      expect(completeBatch).toHaveBeenCalledOnce();
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledTimes(persistent ? 3 : 2);
+    },
+  );
+
   it.each([false, true])(
     "retries proven-safe aborts with a bounded budget (persistent=%s)",
     async (persistent) => {
