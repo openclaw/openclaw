@@ -12,6 +12,8 @@ import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-s
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ShellGatewayOwner } from "../app/app-shell-gateway.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -19,6 +21,17 @@ import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
+
+type OverlapDriver = {
+  app: Pick<ApplicationContext, "gateway" | "theme" | "runtimeConfig">;
+  owner: ShellGatewayOwner;
+  ready: Promise<void>;
+  held: boolean;
+  reads: number;
+  installGate(): void;
+  release(): void;
+  stop(): void;
+};
 
 const suite = createControlUiE2eSuite({
   name: "Saved appearance after real Gateway startup",
@@ -108,6 +121,128 @@ suite.define(() => {
             entries: { "ui.theme": "knot", "ui.themeMode": "dark" },
           }),
         ).toMatchObject({ status: "ok" });
+        // Exercise the generation overlap with genuine server responses. Only delivery
+        // timing is controlled: no preference/catalog response is manufactured.
+        await suite.withPage(
+          { serviceWorkers: "block", permissions: ["local-network-access"] },
+          async ({ page }) => {
+            await page.route("**/theme-owner-proof", (route) =>
+              route.fulfill({
+                contentType: "text/html",
+                body: "<!doctype html><html><body></body></html>",
+              }),
+            );
+            await page.goto(new URL("theme-owner-proof", suite.server.baseUrl).href);
+            const driver = await page.evaluateHandle<OverlapDriver>(`(async () => {
+            // Source-server imports use the same production modules as the shell.
+            const modules = await Promise.all([
+              import("/src/app/gateway-store.ts"), import("/src/app/bootstrap-theme.ts"),
+              import("/src/lib/config/runtime-config-capability.ts"), import("/src/app/settings.ts"),
+              import("/src/app/app-shell-gateway.ts"),
+            ]);
+            const [{ createApplicationGateway }, { createApplicationTheme }, { createRuntimeConfigCapability }, { loadSettings }, { ShellGatewayOwner }] = modules;
+            const settings = { ...loadSettings(), gatewayUrl: ${JSON.stringify(gatewayUrl.href)}, theme: "claw", themeMode: "system" };
+            const gateway = createApplicationGateway(settings);
+            const theme = createApplicationTheme(settings, gateway);
+            const runtimeConfig = createRuntimeConfigCapability(gateway);
+            const app = { gateway, theme, runtimeConfig };
+            const owner = new ShellGatewayOwner({
+              context: app,
+              activeSessionKey: "",
+              lastLocalePrefSignature: null,
+              routeState: {},
+              invalidate() {},
+              outboxStoreImport: { load: async () => undefined },
+              shellNavigation: { recoverDeletedActiveSession() {} },
+            });
+            const stop = app.gateway.subscribeEvents((event) => {
+              if (event.event === "users.prefs.changed") owner.handleGatewayEvent(event);
+            });
+            gateway.start();
+            return {
+              app,
+              owner,
+              ready: Promise.resolve(),
+              held: false,
+              reads: 0,
+              release() {},
+              installGate() {
+                const driver = this;
+                const client = gateway.snapshot.client;
+                const request = client.request.bind(client);
+                let resolve;
+                const gate = new Promise(r => { resolve = r; });
+                driver.release = resolve;
+                client.request = async (method, ...args) => {
+                  const response = await request(method, ...args);
+                  if (method === "users.prefs.get") {
+                    driver.reads++;
+                    if (!driver.held) { driver.held = true; await gate; }
+                  }
+                  return response;
+                };
+              },
+              stop: () => {
+                stop();
+                owner.reset();
+                runtimeConfig.dispose(); theme.dispose(); gateway.stop();
+              },
+            };
+          })()`);
+            try {
+              await expect
+                .poll(
+                  () =>
+                    driver.evaluate(({ app }) => ({
+                      url: app.gateway.connection.gatewayUrl,
+                      phase: app.gateway.snapshot.phase,
+                      error: app.gateway.snapshot.lastError,
+                    })),
+                  { timeout: 15000 },
+                )
+                .toEqual({ url: gatewayUrl.href, phase: "connected", error: null });
+              await expect
+                .poll(() => driver.evaluate(({ app }) => app.gateway.snapshot.selfUser?.id))
+                .toBe(profile.id);
+              await driver.evaluate((probe) => probe.installGate());
+              await client!.request("users.prefs.set", {
+                entries: { "ui.theme": "knot", "ui.themeMode": "dark" },
+              });
+              await expect.poll(() => driver.evaluate(({ held }) => held)).toBe(true);
+              // The event-triggered read is now in flight when config admission
+              // advances the generation. This is the distinct regression boundary.
+              await driver.evaluate((probe) => {
+                probe.ready = probe.owner.ensureRuntimeConfig(
+                  probe.app.gateway.snapshot,
+                  probe.app.runtimeConfig,
+                );
+              });
+              await driver.evaluate((probe) => probe.release());
+              await driver.evaluate((probe) => probe.ready);
+              expect(await driver.evaluate(({ app }) => app.theme.settings.theme)).toBe("knot");
+              await expect
+                .poll(() => page.locator("html").getAttribute("data-theme"))
+                .toBe("openknot");
+              await writeFile(
+                path.join(suite.artifactDir, "generation-overlap.json"),
+                JSON.stringify(
+                  {
+                    transport: "real Gateway WebSocket",
+                    heldPreferenceResponse: await driver.evaluate(({ held }) => held),
+                    preferenceRequests: await driver.evaluate(({ reads }) => reads),
+                    theme: await driver.evaluate(({ app }) => app.theme.settings.theme),
+                  },
+                  null,
+                  2,
+                ),
+              );
+            } finally {
+              await driver.evaluate((probe) => probe.release());
+              await driver.evaluate((probe) => probe.stop());
+              await driver.dispose();
+            }
+          },
+        );
         // A clean browser has no settings record or last-seen profile mirror.
         await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
           const url = new URL("settings/appearance", suite.server.baseUrl);
