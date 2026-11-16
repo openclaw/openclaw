@@ -338,9 +338,14 @@ export async function recoverEmbeddedRunAttempt(input: {
     !input.contextRecoveryState.itemConflictRecoveryAttempted &&
     !terminalInterrupted &&
     !promptError &&
-    isEmbeddedRunReplaySafe(normalizedAttempt.replayState, attempt)
+    isEmbeddedRunReplaySafe(normalizedAttempt.replayState, attempt) &&
+    (await observeReplyDelivery(params.resolveReplyDelivery, 0, (error) =>
+      log.warn(
+        `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+      ),
+    )) === "missing"
   ) {
-    // The transport saved the repair; only execution can prove emitted output had no effects.
+    // The transport saved the repair; execution and delivery owners must both allow replay.
     input.contextRecoveryState.itemConflictRecoveryAttempted = true;
     recordRecoveryDecision("accepted", "item_conflict");
     return retry();

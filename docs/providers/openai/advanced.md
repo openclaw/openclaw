@@ -347,7 +347,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     retry, `/compact`, and model-switch guidance. After output starts, the transport
     saves the repair for the next request (`deferred`). The active runtime retries
     once in the same turn only when its execution evidence proves the entire run
-    is replay-safe, with no potential tool side effects or committed delivery.
+    is replay-safe, with no potential tool side effects and no pending or committed delivery.
     Otherwise the visible failure remains, and the saved repair applies to a later
     request, including a new run or an internal session-effects fork of that history.
     Successful requests that apply a saved repair also log `recovered`. Subagent completion deliveries with a

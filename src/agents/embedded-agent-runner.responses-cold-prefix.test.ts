@@ -38,6 +38,7 @@ it.each([
   "deferred-internal",
   "deferred-after-tool",
   "deferred-exhausted",
+  "deferred-delivered",
 ] as const)(
   "preserves Responses replay across a cold runner reopen (%s)",
   async (mode) => {
@@ -45,6 +46,7 @@ it.each([
     const deferred = mode.startsWith("deferred");
     const unsafe = mode === "deferred-after-tool";
     const exhausted = mode === "deferred-exhausted";
+    const delivered = mode === "deferred-delivered";
     await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
       const sessionId = "responses-cold-prefix";
       const sessionKey = "agent:main:" + sessionId;
@@ -222,6 +224,7 @@ it.each([
         // Hook/skill refresh and warm reuse are covered by embedded-agent-runner.prompt-cache.test.ts.
         for (let turn = 1; turn <= (conflictingReplay ? 3 : 2); turn++) {
           turnRequests = 0;
+          const deliveredBlocks: string[] = [];
           if (turn > 1) {
             clearEmbeddedSessionPromptStates([sessionId]);
             await closeOpenClawAgentDatabasesAsync(state.stateDir);
@@ -273,29 +276,55 @@ it.each([
               runId,
               timeoutMs: 60000,
               prompt: "visible turn " + turn,
+              ...(delivered
+                ? {
+                    blockReplyChunking: { minChars: 1, maxChars: 16 },
+                    onBlockReply: async (payload: { text?: string }) => {
+                      if (payload.text) {
+                        deliveredBlocks.push(payload.text);
+                      }
+                    },
+                    resolveReplyDelivery: async () =>
+                      deliveredBlocks.length ? ("delivered" as const) : ("missing" as const),
+                  }
+                : {}),
             });
             if (mode === "failed-repair" && turn === 2) {
               await expect(run).rejects.toMatchObject({ code: "item_conflict" });
-            } else if ((unsafe || exhausted) && turn === 2) {
+            } else if ((unsafe || exhausted || delivered) && turn === 2) {
+              if (delivered) {
+                await run;
+                expect(deliveredBlocks.join(" ")).toContain("Already started.");
+              }
               expect((await run).meta.error).toMatchObject({ code: "item_conflict" });
-              expect((await run).payloads).toContainEqual(
-                expect.objectContaining({ isError: true }),
-              );
+              if (delivered) {
+                expect(deliveredBlocks.join(" ")).not.toContain("synthetic answer");
+              } else {
+                expect((await run).payloads).toContainEqual(
+                  expect.objectContaining({ isError: true }),
+                );
+              }
             } else {
               expect((await run).meta.error).toBeUndefined();
-              expect((await run).payloads).toContainEqual(
-                expect.objectContaining({ text: "synthetic answer" }),
-              );
+              if (delivered) {
+                expect(deliveredBlocks.join(" ")).toContain("synthetic answer");
+              } else {
+                expect((await run).payloads).toContainEqual(
+                  expect.objectContaining({ text: "synthetic answer" }),
+                );
+              }
             }
             expect(requests).toHaveLength(
-              unsafe || exhausted || mode === "failed-repair"
-                ? [3, 5, 8][turn - 1]!
-                : turn * 3 + (conflictingReplay && turn > 1 ? 1 : 0),
+              delivered
+                ? [3, 4, 7][turn - 1]!
+                : unsafe || exhausted || mode === "failed-repair"
+                  ? [3, 5, 8][turn - 1]!
+                  : turn * 3 + (conflictingReplay && turn > 1 ? 1 : 0),
             );
             expect(readFileSync(effectsFile, "utf8").trim().split("\n")).toHaveLength(
               unsafe
                 ? [2, 3, 5][turn - 1]!
-                : exhausted || mode === "failed-repair"
+                : exhausted || delivered || mode === "failed-repair"
                   ? [2, 2, 4][turn - 1]!
                   : turn * 2,
             );
