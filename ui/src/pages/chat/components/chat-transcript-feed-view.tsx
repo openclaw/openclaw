@@ -40,6 +40,7 @@ import {
 import { projectSubagentCompletions } from "../chat-subagent-completions.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
+import { isExecutedCommandCard } from "./chat-activity-operations.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
@@ -249,11 +250,9 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
     const launches = ownSessionLaunchCalls(props.entry.calls.map(({ card }) => card));
     const ownSessionLaunches = new Set<string>();
     const executedCommands = new Set<string>();
-    const codeExecutions = new Set<string>();
     const subagentCancellations = new Map<string, boolean>();
     const activity = props.entry.calls.map(({ key, card }): AgentActivityItem => {
       const call = unwrapToolCallForDisplay(card);
-      const args = asNullableRecord(call.args);
       const outcome = resolveToolCardOutcome(card, false);
       const cancellation = readSubagentCancellation(card);
       if (cancellation) {
@@ -262,17 +261,7 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
       if (card.callId && launches.has(card.callId)) {
         ownSessionLaunches.add(key);
       }
-      if (
-        call.name.trim().toLowerCase() === "exec" &&
-        !(typeof args?.command === "string" && args.command.trim()) &&
-        [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
-      ) {
-        codeExecutions.add(key);
-      }
-      if (
-        card.exitCode !== undefined ||
-        (codeExecutions.has(key) && card.bridgeDispatchStarted === true)
-      ) {
+      if (isExecutedCommandCard(card)) {
         executedCommands.add(key);
       }
       return {

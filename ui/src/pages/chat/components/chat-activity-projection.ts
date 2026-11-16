@@ -188,13 +188,10 @@ export function collectActivityGroup(
     preparedByCard,
     currentRunActivity,
     activityKeys,
-    activity,
-    projection,
     visibleActivity,
     cardGroups,
     activityOrder,
     actionOrder,
-    representedActivity,
   };
 }
 

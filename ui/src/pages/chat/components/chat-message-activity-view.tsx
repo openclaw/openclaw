@@ -28,7 +28,7 @@ import {
   ChatActivityHeadline,
   createActivityHeadlinePresentation,
 } from "./chat-activity-headline.solid.tsx";
-import { descendantCards } from "./chat-activity-operations.ts";
+import { descendantCards, isExecutedCommandCard } from "./chat-activity-operations.ts";
 import {
   segmentActivityGroup,
   collectActivityGroup,
@@ -64,7 +64,7 @@ function prepareActivityGroup(
   if (!data) {
     return undefined;
   }
-  const { firstGroup, entries, toolContexts, activityKeys, representedActivity } = data;
+  const { firstGroup, entries, toolContexts, activityKeys } = data;
   const cardGroups = source?.cardGroups ?? data.cardGroups;
   const selectedCards = new Set<ToolCard>();
   if (source) {
@@ -152,17 +152,15 @@ function prepareActivityGroup(
     opts.subagents?.subagentSessions,
     opts.subagents?.recordedStopNames,
   );
-  const codeExecutions = new Set<string>();
   const executedCommands = new Set<string>();
   const subagentCancellations = new Map<string, boolean>();
   const interruptedCalls = new Set<string>();
   for (const card of cards) {
     const item = summaryByCard.get(card);
-    const call = unwrapToolCallForDisplay(card);
-    const args = asNullableRecord(call.args);
     if (!item) {
       continue;
     }
+    const call = unwrapToolCallForDisplay(card);
     const key = activityKeys.get(item)!;
     const runId = toolContexts.get(card)?.runId;
     if (
@@ -176,19 +174,9 @@ function prepareActivityGroup(
     if (cancellation) {
       subagentCancellations.set(key, cancellation.stopped);
     }
-    if (resolveToolCallInput(call.name, args).kind !== "command") {
-      continue;
-    }
     if (
-      call.name.trim().toLowerCase() === "exec" &&
-      !(typeof args?.command === "string" && args.command.trim()) &&
-      [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
-    ) {
-      codeExecutions.add(key);
-    }
-    if (
-      card.exitCode !== undefined ||
-      (codeExecutions.has(key) && card.bridgeDispatchStarted === true)
+      resolveToolCallInput(call.name, asNullableRecord(call.args)).kind === "command" &&
+      isExecutedCommandCard(card)
     ) {
       executedCommands.add(key);
     }
@@ -308,13 +296,7 @@ function prepareActivityGroup(
     },
     groupSummaryLabel,
     visibleActivity,
-    unmatchedActivity: [
-      ...new Map(
-        visibleActivity
-          .filter((item) => !representedActivity.has(activityKeys.get(item)))
-          .map((item) => [activityKeys.get(item), item]),
-      ).values(),
-    ],
+    unmatchedActivity: data.unmatchedActivity,
     reviewOutcome,
     approvalReviews,
     activityDisclosureId,

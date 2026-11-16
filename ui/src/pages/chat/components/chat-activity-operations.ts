@@ -29,6 +29,21 @@ export function isStandaloneActivity(card: ToolCard): boolean {
   );
 }
 
+/** A command started: it reported an exit code, or its code reached bridge dispatch. */
+export function isExecutedCommandCard(card: ToolCard): boolean {
+  if (card.exitCode !== undefined) {
+    return true;
+  }
+  const call = unwrapToolCallForDisplay(card);
+  const args = asNullableRecord(call.args);
+  return (
+    card.bridgeDispatchStarted === true &&
+    call.name.trim().toLowerCase() === "exec" &&
+    !(typeof args?.command === "string" && args.command.trim()) &&
+    [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
+  );
+}
+
 export function descendantCards(group: ToolCallGroup<ToolCard>) {
   const cards: ToolCard[] = [];
   const pending = [...group.children];
