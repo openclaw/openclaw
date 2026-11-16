@@ -3,9 +3,7 @@
  * Kept separate from the facade so implementation modules do not import back
  * through the barrel that re-exports them.
  */
-import type { ToolLoopWarning } from "@openclaw/agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { DiagnosticToolTerminalReason } from "../infra/diagnostic-events.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
@@ -47,7 +45,6 @@ export type HookContext = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
-  loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
@@ -90,8 +87,7 @@ export type BeforeToolCallPolicyDiagnosticState = {
 export type HookBlockedReason =
   | "plugin-before-tool-call"
   | "plugin-approval"
-  | "plugin-approval-unavailable"
-  | "tool-loop";
+  | "plugin-approval-unavailable";
 
 type HookBlockedOutcome = {
   blocked: true;
@@ -112,5 +108,4 @@ export type HookOutcome =
       ownerDecision?: true;
       approvalResolution?: PluginApprovalResolution;
       deferredApproval?: DeferredPluginToolApproval;
-      loopWarning?: ToolLoopWarning;
     };

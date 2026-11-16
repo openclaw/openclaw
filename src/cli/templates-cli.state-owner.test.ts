@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import * as prompt from "./prompt.js";
 import { runTemplatesAddCommand } from "./templates-cli.runtime.js";
@@ -117,6 +117,29 @@ describe("Template Add CLI state ownership", () => {
     ]);
     expect(await snapshotTree(root)).toEqual(before);
     expect(fixture.transport.request).not.toHaveBeenCalled();
+  });
+
+  it("previews another Add of a ${VAR} MCP Template once the variable is set", async () => {
+    const statuspage = {
+      command: "npx",
+      args: ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      env: { STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}" },
+    };
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({
+        gateway: { controlUi: { experimental: { templates: true } } },
+        mcp: { servers: { statuspage } },
+      }),
+    );
+    await fs.writeFile(
+      source,
+      `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "demo" }, mcpServers: { statuspage } })}\n---\n`,
+    );
+    vi.stubEnv("STATUSPAGE_TOKEN", "synthetic-token");
+
+    await runTemplatesAddCommand(source, { dryRun: true, json: true });
+    expect(output).toEqual([expect.objectContaining({ blockers: [] })]);
   });
 
   it("adds a ClawHub Template through the running owner without local mutation", async () => {
@@ -279,6 +302,23 @@ describe("Template Add CLI state ownership", () => {
       expect(await snapshotTree(root)).toEqual(before);
     },
   );
+
+  it("names the rerun that continues a kept agent whose setup did not finish", async () => {
+    result = {
+      agentId: "demo",
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      readiness: { ready: false, requirements: [] },
+      error: { code: "template_initialization_failed", message: "Download failed." },
+    };
+    await fixture.startOwner();
+    await runTemplatesAddCommand("@acme/demo", {});
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Rerun with --agent-id demo"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 
   it.each(["none", "capabilities-only", "risk-only", "both", "declined-sibling"])(
     "requires separate exact plugin and skill trust consent: %s",

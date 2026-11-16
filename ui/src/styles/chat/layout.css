@@ -2526,6 +2526,7 @@ openclaw-chat-ci-details {
 .chat-pr__create {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-height: 24px;
   padding: 1px 10px;
   border: 0;
@@ -2537,7 +2538,7 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-pr__create:hover {
+.chat-pr__create:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
 }

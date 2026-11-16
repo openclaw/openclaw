@@ -303,7 +303,9 @@ async function runScenario(params: {
             authProfileIdSource: "auto",
             allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
             isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-            timeoutMs: 250,
+            // Fault ordering must not race the host CPU. Auth deadline enforcement
+            // has fake-clock coverage in run/auth-controller.test.ts; 0 is unlimited.
+            timeoutMs: 0,
             runId: params.runId,
             enqueue: async (task) => await task(),
           }),
@@ -413,7 +415,8 @@ async function expectPreparationInvalidationToDropRoutingWork(
           prompt: "hello",
           provider: "openai",
           model: "mock-1",
-          timeoutMs: 250,
+          // The preparation barrier, not elapsed time, drives admission invalidation.
+          timeoutMs: 0,
           runId,
           enqueue: async (task) => await task(),
         });

@@ -62,6 +62,5 @@ export type PreparedEmbeddedAttemptDispatchInput = {
   observeToolOutcome: ToolOutcomeObserver;
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: NonNullable<EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"]>;
-  getPostCompactionAbortError: () => Error | undefined;
   permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
 };

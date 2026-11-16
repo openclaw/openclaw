@@ -9,10 +9,7 @@ import {
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
-import {
-  blockSubagentCompletionDelivery,
-  reconcileRetiredSubagentCancellation,
-} from "../completion/subagent-completion-admission.store.js";
+import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import { settleSubagentCompletionReservation } from "./subagent-controller-inputs.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
@@ -275,20 +272,6 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (await settleSubagentCompletionReservation(selected, now, params)) {
-          continue;
-        }
-        if (
-          (selected.delivery?.status === "pending" ||
-            selected.delivery?.status === "in_progress") &&
-          !isYieldedSubagentRun(selected) &&
-          subagentRuns.isCompletionAuthorityRetired(selected)
-        ) {
-          await blockSubagentCompletionDelivery({
-            subagent: selected,
-            reason: "store replaced",
-            suspendedReason: "permanent_failure",
-            storeReplaced: true,
-          });
           continue;
         }
         if (
@@ -627,6 +610,7 @@ export function createSubagentRegistrySweeper(params: {
             return {
               value: true,
               postimages: new Map(groupEntries.map(([runId]) => [runId, null])),
+              removalReason: "retention",
             };
           },
           { runs },

@@ -9,6 +9,17 @@ import {
 import { runVitestPairBenchmark } from "./lib/vitest-pair-benchmark.mts";
 
 function parseArgs(argv: string[]) {
+  const knownOptions = new Set([
+    "baseline",
+    "baseline-sha",
+    "candidate",
+    "candidate-sha",
+    "manifest",
+    "output",
+    "pnpm-bin",
+    "run-attempt",
+    "scratch",
+  ]);
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index];
@@ -16,7 +27,14 @@ function parseArgs(argv: string[]) {
     if (!name?.startsWith("--") || value === undefined) {
       throw new Error(`invalid argument near ${name ?? "<end>"}`);
     }
-    values.set(name.slice(2), value);
+    const option = name.slice(2);
+    if (!knownOptions.has(option)) {
+      throw new Error(`unknown option --${option}`);
+    }
+    if (values.has(option)) {
+      throw new Error(`duplicate option --${option}`);
+    }
+    values.set(option, value);
   }
   const required = (name: string) => {
     const value = values.get(name);

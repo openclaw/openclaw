@@ -61,7 +61,7 @@ it.each(["key", "session-id"] as const)(
         toolName: "test",
         level: "warning",
         action: "warn",
-        detector: "generic_repeat",
+        detector: "tool_repeat",
         count: 3,
         message: marker,
       });

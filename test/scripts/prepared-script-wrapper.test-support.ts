@@ -10,6 +10,7 @@ export function testRunnerFixtureEnv(
   delete env.GITHUB_ACTIONS;
   delete env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE;
   delete env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
+  delete env.OPENCLAW_CI_TEST_RUNTIME;
   return { ...env, ...overrides };
 }
 
