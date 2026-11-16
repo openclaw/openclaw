@@ -358,6 +358,18 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
+  it("replies with a completed command's findings when it exits non-zero (#195432)", async () => {
+    const deps = {
+      runPluginsList: vi.fn(async (runtime: RuntimeEnv) => {
+        runtime.log("warning finding");
+        runtime.exit(1);
+      }),
+    };
+    await expect(runRescue("/openclaw plugins list", {}, commandContext(), deps)).resolves.toBe(
+      "warning finding\n\nOpenClaw operation exited with code 1.",
+    );
+  });
+
   it("consumes a pending approval at most once under concurrent approvals", async () => {
     await withRescueStateDir("concurrent-approve-", async () => {
       const cfg: OpenClawConfig = {};
