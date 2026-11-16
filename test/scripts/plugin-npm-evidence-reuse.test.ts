@@ -48,6 +48,9 @@ vi.mock("node:child_process", async (original) => {
       if (file === "unzip") {
         // Fixture the external extractor only; production digest and manifest
         // validators still consume the raw ZIP. No native unzip is required.
+        if (args.length === 1 && args[0] === "-v") {
+          return Buffer.alloc(0);
+        }
         const zipPath = args[0] === "-Z" ? args[2]! : args[1]!;
         const files = inspectActionsArtifactZipWithPolicy(readFileSync(zipPath), {
           minEntries: 1,

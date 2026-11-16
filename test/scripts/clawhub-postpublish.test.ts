@@ -1295,6 +1295,7 @@ function read(path) {
   return metadata.get(path);
 }
 childProcess.execFileSync = (command, args) => {
+  if (command === "unzip" && args.length === 1 && args[0] === "-v") return Buffer.alloc(0);
   if (command !== "gh" || args[0] !== "api") throw new Error("Unexpected CLI fixture command");
   return JSON.stringify(read(args[1].replace("repos/openclaw/openclaw/", "")));
 };
