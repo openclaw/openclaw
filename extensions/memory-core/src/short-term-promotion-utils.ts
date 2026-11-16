@@ -18,6 +18,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
 import {
+  DEFAULT_PROMOTION_MAX_AGE_DAYS,
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
@@ -445,26 +446,70 @@ export function isPromotionOriginBlocked(candidate: {
   return originClass === "untrusted" || originClass === "system";
 }
 
-// Retention must keep the entries the promotion ranker can still act on. Only
-// an interactive recall writes recallCount and userQueryHashes, and the
-// ranker requires uniqueQueries (userQueryHashes) to clear minUniqueQueries,
-// so an entry without recall evidence can never be promoted no matter how
-// often the nightly session ingestion re-stages it. Under store overflow those
-// staged entries were stamped with the sweep time and evicted every entry
-// that had collected real recalls (openclaw/openclaw#150635).
-function hasRecallEvidence(entry: ShortTermRecallEntry): boolean {
-  return entry.recallCount > 0 || (entry.userQueryHashes?.length ?? 0) > 0;
+const SHORT_TERM_RECALL_DAY_MS = 24 * 60 * 60 * 1000;
+
+// Age gate shared by the promotion ranker and the retention policy so the two
+// rules cannot drift. A negative maxAgeDays means no age limit; the shipped
+// deep-dreaming default is DEFAULT_PROMOTION_MAX_AGE_DAYS (30 days).
+export function resolveShortTermRecallAgeDays(
+  lastRecalledAt: string | undefined,
+  nowMs: number,
+): number {
+  const lastRecalledAtMs = Date.parse(lastRecalledAt ?? "");
+  return Number.isFinite(lastRecalledAtMs)
+    ? Math.max(0, (nowMs - lastRecalledAtMs) / SHORT_TERM_RECALL_DAY_MS)
+    : 0;
+}
+
+export function isShortTermRecallWithinMaxAge(ageDays: number, maxAgeDays: number): boolean {
+  if (maxAgeDays < 0) {
+    return true;
+  }
+  return ageDays <= maxAgeDays;
+}
+
+// Retention must keep the entries that carry real recall evidence. Under
+// store overflow the old rule evicted the oldest rows, and the nightly
+// ingestion stamps its staged rows with the sweep time, so the rows that had
+// collected interactive recalls were evicted first and the promotion phase
+// had nothing left to rank (openclaw/openclaw#150635).
+//
+// The protected rule deliberately does not mirror the promotion ranker's count
+// thresholds (minRecallCount / minUniqueQueries) or its score threshold
+// (minScore). Those are promotion-time selection criteria, and applying them
+// to retention would evict exactly the rows that have not accumulated enough
+// evidence to be promoted yet - the decay this policy exists to stop.
+// Upstream reports a maximum recall count of 2 per entry
+// (openclaw/openclaw#150635), so mirroring the count thresholds would protect
+// no row at all in the field.
+type ShortTermRecallRetentionOptions = {
+  nowMs: number;
+  maxAgeDays: number;
+};
+
+// A protected row is only worth a slot while the promotion phase can still act
+// on it, and the deep phase promotes a small number of candidates per night.
+// Reserving a quarter of the window for recall-evidenced rows keeps that queue
+// safe while guaranteeing the rest of the store keeps turning over for fresh
+// staging admission (openclaw/openclaw#150635).
+export const MAX_PROTECTED_RECALL_ENTRIES = Math.floor(SHORT_TERM_RECALL_MAX_ENTRIES / 4);
+
+// Only an interactive recall records userQueryHashes, and a nightly staging row
+// never carries query provenance, so this is the durable signal the retention
+// policy protects.
+function hasInteractiveRecallEvidence(entry: ShortTermRecallEntry): boolean {
+  return entry.recallCount > 0 && (entry.userQueryHashes?.length ?? 0) > 0;
 }
 
 // Protection is only worth a slot while the promotion path could still act on
 // the row. The ranker rejects already promoted rows, blocked origins,
 // contaminated snippets and rows outside the short-term corpus, so protecting
-// them would let dead rows hold every slot and starve fresh staging
-// admission (openclaw/openclaw#150635).
-function isProtectionEligible(entry: ShortTermRecallEntry): boolean {
-  if (!hasRecallEvidence(entry)) {
-    return false;
-  }
+// them would let dead rows hold slots that fresh staging needs
+// (openclaw/openclaw#150635).
+function isProtectionEligible(
+  entry: ShortTermRecallEntry,
+  options: ShortTermRecallRetentionOptions,
+): boolean {
   if (entry.promotedAt) {
     return false;
   }
@@ -474,13 +519,76 @@ function isProtectionEligible(entry: ShortTermRecallEntry): boolean {
   if (!isShortTermMemoryPath(entry.path)) {
     return false;
   }
+  if (
+    !isShortTermRecallWithinMaxAge(
+      resolveShortTermRecallAgeDays(entry.lastRecalledAt, options.nowMs),
+      options.maxAgeDays,
+    )
+  ) {
+    return false;
+  }
+  if (!hasInteractiveRecallEvidence(entry)) {
+    return false;
+  }
   return !isContaminatedDreamingSnippet(entry.snippet, {
     allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
   });
 }
 
-function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
-  const protectionDiff = Number(isProtectionEligible(b)) - Number(isProtectionEligible(a));
+// Stronger recall evidence wins a protected slot: more recalls first, then
+// more distinct interactive queries, then higher average relevance, then the
+// more recently recalled row. The nightly sweep refreshes lastRecalledAt on
+// rows that were never searched, so recency alone would hand the protected
+// slots to the rows the sweep just staged.
+function compareRecallEvidenceStrength(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
+  const recallDiff = b.recallCount - a.recallCount;
+  if (recallDiff !== 0) {
+    return recallDiff;
+  }
+  const queryDiff = (b.userQueryHashes?.length ?? 0) - (a.userQueryHashes?.length ?? 0);
+  if (queryDiff !== 0) {
+    return queryDiff;
+  }
+  const relevanceDiff = averageRecallRelevance(b) - averageRecallRelevance(a);
+  if (relevanceDiff !== 0) {
+    return relevanceDiff;
+  }
+  const lastDiff = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
+  if (lastDiff !== 0) {
+    return lastDiff;
+  }
+  return a.key.localeCompare(b.key);
+}
+
+function averageRecallRelevance(entry: ShortTermRecallEntry): number {
+  const signals = totalSignalCountForEntry(entry);
+  if (signals <= 0) {
+    return 0;
+  }
+  return clampScore(entry.totalScore / signals);
+}
+
+// Protection is resolved once per retention pass: the eligibility rules are
+// not free, and the comparator must not redo them for every comparison. The
+// cap keeps the protected set bounded so staging rows always have room in the
+// window.
+function selectProtectedRecallKeys(
+  entries: Array<[string, ShortTermRecallEntry]>,
+  options: ShortTermRecallRetentionOptions,
+): Set<string> {
+  const eligible = entries.filter(([, entry]) => isProtectionEligible(entry, options));
+  const protectedRows = eligible
+    .toSorted(([, a], [, b]) => compareRecallEvidenceStrength(a, b))
+    .slice(0, MAX_PROTECTED_RECALL_ENTRIES);
+  return new Set(protectedRows.map(([, entry]) => entry.key));
+}
+
+function compareShortTermRecallRetention(
+  a: ShortTermRecallEntry,
+  b: ShortTermRecallEntry,
+  protectedKeys: ReadonlySet<string>,
+): number {
+  const protectionDiff = Number(protectedKeys.has(b.key)) - Number(protectedKeys.has(a.key));
   if (protectionDiff !== 0) {
     return protectionDiff;
   }
@@ -507,13 +615,26 @@ function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRe
   return a.key.localeCompare(b.key);
 }
 
-export function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore): number {
+export function enforceShortTermRecallStoreRetention(
+  store: ShortTermRecallStore,
+  options: {
+    nowMs?: number;
+    maxAgeDays?: number;
+  } = {},
+): number {
   const entries = Object.entries(store.entries);
   if (entries.length <= SHORT_TERM_RECALL_MAX_ENTRIES) {
     return 0;
   }
+  // The age window is the ranker's shipped deep-phase ceiling, so retention
+  // never protects a row the promotion path would refuse for age.
+  const retentionOptions: ShortTermRecallRetentionOptions = {
+    nowMs: options.nowMs ?? Date.now(),
+    maxAgeDays: options.maxAgeDays ?? DEFAULT_PROMOTION_MAX_AGE_DAYS,
+  };
+  const protectedKeys = selectProtectedRecallKeys(entries, retentionOptions);
   const retained = entries
-    .toSorted(([, a], [, b]) => compareShortTermRecallRetention(a, b))
+    .toSorted(([, a], [, b]) => compareShortTermRecallRetention(a, b, protectedKeys))
     .slice(0, SHORT_TERM_RECALL_MAX_ENTRIES);
   store.entries = Object.fromEntries(retained.toSorted(([a], [b]) => a.localeCompare(b)));
   return entries.length - retained.length;

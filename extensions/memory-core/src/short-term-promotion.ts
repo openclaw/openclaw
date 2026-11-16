@@ -16,8 +16,10 @@ import {
   clampScore,
   isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
+  isShortTermRecallWithinMaxAge,
   isShortTermSessionCorpusPath,
   resolvePromotionThresholds,
+  resolveShortTermRecallAgeDays,
   totalSignalCountForEntry,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
@@ -128,11 +130,8 @@ export async function rankShortTermPromotionCandidates(
       continue;
     }
     const diversity = clampScore(uniqueQueries / 5);
-    const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
-    const ageDays = Number.isFinite(lastRecalledAtMs)
-      ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
-      : 0;
-    if (maxAgeDays >= 0 && ageDays > maxAgeDays) {
+    const ageDays = resolveShortTermRecallAgeDays(entry.lastRecalledAt, nowMs);
+    if (!isShortTermRecallWithinMaxAge(ageDays, maxAgeDays)) {
       continue;
     }
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));

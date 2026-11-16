@@ -91,6 +91,11 @@ async function writeShortTermStore(
   });
 }
 
+export function resolveStoreReferenceMs(nowIso: string): number {
+  const parsed = Date.parse(nowIso);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
 export function resolveStorePath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_RECALL_NAMESPACE, workspaceDir);
 }
@@ -107,7 +112,7 @@ export async function readStore(
     await readShortTermStore(workspaceDir, "recall", nowIso),
     nowIso,
   );
-  enforceShortTermRecallStoreRetention(store);
+  enforceShortTermRecallStoreRetention(store, { nowMs: resolveStoreReferenceMs(nowIso) });
   return store;
 }
 
@@ -164,6 +169,6 @@ export async function writePhaseSignalStore(
 
 export async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   enforceShortTermRecallSnippetCap(store);
-  enforceShortTermRecallStoreRetention(store);
+  enforceShortTermRecallStoreRetention(store, { nowMs: resolveStoreReferenceMs(store.updatedAt) });
   await writeShortTermStore(workspaceDir, "recall", store);
 }

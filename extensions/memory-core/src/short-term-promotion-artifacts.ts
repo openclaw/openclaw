@@ -26,6 +26,7 @@ import {
   readStore,
   pruneShortTermStore,
   resolveStorePath,
+  resolveStoreReferenceMs,
   writePhaseSignalStore,
   writeStore,
 } from "./short-term-promotion-store.js";
@@ -207,7 +208,9 @@ export async function repairShortTermPromotionArtifacts(params: {
       for (const key of danglingEntryKeys) {
         delete store.entries[key];
       }
-      removedOverflowEntries = enforceShortTermRecallStoreRetention(store);
+      removedOverflowEntries = enforceShortTermRecallStoreRetention(store, {
+        nowMs: resolveStoreReferenceMs(nowIso),
+      });
       if (removedInvalidEntries > 0 || before !== JSON.stringify(store.entries)) {
         if (removedDanglingEntries > 0) {
           await pruneShortTermStore(workspaceDir, danglingEntryKeys);
