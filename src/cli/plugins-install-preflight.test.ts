@@ -91,6 +91,18 @@ describe("plugin install mutation-free preflight", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "names the typed path when a folder before `..` is missing",
+    async () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-missing-parent-"));
+      fs.mkdirSync(path.join(root, "plugin-b"));
+      await expectRejected(
+        [`${root}/missing/../plugin-b`],
+        `Plugin path not found: ${root}/missing/../plugin-b (ENOENT`,
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "plans the local Git repository a symlinked parent's `..` leads to",
     () => {
       const root = fs.realpathSync(tempDirs.make("plugin-git-symlink-parent-"));

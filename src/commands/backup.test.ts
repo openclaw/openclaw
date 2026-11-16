@@ -64,6 +64,23 @@ describe("backup commands", () => {
     }),
   );
 
+  it.skipIf(process.platform === "win32")(
+    "writes the archive where a symlinked folder's `..` leads, not to the lexical neighbor",
+    backupCase(async () => {
+      await mockStateOnlyBackupPlan(stateDir);
+      const physical = path.join(home, "out-physical");
+      await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+      await fs.symlink(path.join(physical, "nested"), path.join(home, "out-link"));
+      const result = await create({
+        output: `${home}/out-link/../backup.tar.gz`,
+        includeWorkspace: false,
+      });
+      expect(result.archivePath).toBe(path.join(await fs.realpath(physical), "backup.tar.gz"));
+      expect((await fs.stat(result.archivePath)).isFile()).toBe(true);
+      await expect(fs.stat(path.join(home, "backup.tar.gz"))).rejects.toThrow();
+    }),
+  );
+
   async function writeWorkspaceBackupConfig(workspaceDir: string) {
     await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
       agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },

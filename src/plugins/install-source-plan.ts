@@ -7,6 +7,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserFilesystemPath } from "../infra/home-dir.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath } from "../utils.js";
@@ -101,10 +102,12 @@ export function resolvePluginInstallSourcePlan(params: {
   }
   const normalized = fileSpec?.path ?? params.raw;
   let resolved: string | undefined;
+  let untraversable: unknown;
   try {
     resolved = resolveUserFilesystemPath(normalized);
-  } catch {
+  } catch (error) {
     // A spec the filesystem cannot traverse is not a local source; keep classifying it.
+    untraversable = error;
   }
   if (resolved && fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
@@ -186,7 +189,12 @@ export function resolvePluginInstallSourcePlan(params: {
         params.raw.includes("/") ? [] : [".tgz", ".tar.gz", ".tar", ".zip"],
       ))
   ) {
-    return { ok: false, error: `Plugin path not found: ${resolved}` };
+    return {
+      ok: false,
+      error: untraversable
+        ? `Plugin path not found: ${normalized} (${formatErrorMessage(untraversable)})`
+        : `Plugin path not found: ${resolved}`,
+    };
   }
 
   const bundledPlan = resolveBundledInstallPlanBeforeNpm({
