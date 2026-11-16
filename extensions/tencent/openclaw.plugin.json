@@ -112,9 +112,9 @@
             "contextTokens": 983040,
             "maxTokens": 65536,
             "cost": {
-              "input": 0.834,
-              "output": 2.501,
-              "cacheRead": 0.042,
+              "input": 0.07,
+              "output": 0.281,
+              "cacheRead": 0.003,
               "cacheWrite": 0
             },
             "compat": {
@@ -194,9 +194,9 @@
             "contextTokens": 983040,
             "maxTokens": 65536,
             "cost": {
-              "input": 0.834,
-              "output": 2.501,
-              "cacheRead": 0.042,
+              "input": 0.07,
+              "output": 0.281,
+              "cacheRead": 0.003,
               "cacheWrite": 0
             },
             "compat": {
