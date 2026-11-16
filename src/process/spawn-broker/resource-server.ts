@@ -1,8 +1,10 @@
 import { EventEmitter } from "node:events";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { dirname } from "node:path";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
+import { throwCollectedErrors, throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type {
   NativeWorkerResourceModule,
@@ -78,6 +80,7 @@ export async function createBrokerNativeResourceServer(options: {
   canAdmit: () => boolean;
 }) {
   const resources = new Map<number, Resource>();
+  const directory = process.platform === "win32" ? undefined : dirname(options.endpoint);
   const connections = new Set<ResourceSocket>();
   let available = true;
   let sourceSealed = false;
@@ -508,20 +511,44 @@ export async function createBrokerNativeResourceServer(options: {
         }),
       );
       await serverClosed;
+      if (directory) {
+        outcomes.push(
+          ...(await Promise.allSettled([rm(directory, { recursive: true, force: true })])),
+        );
+      }
       throwSettledAggregate(outcomes, "Spawn broker native resource cleanup failed");
       resources.clear();
     });
     disconnect();
     return closePromise;
   }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.endpoint, () => {
-      server.off("error", reject);
-      server.on("error", disconnect);
-      resolve();
+  if (directory) {
+    await mkdir(directory, { mode: 0o700 });
+  }
+  try {
+    if (directory) {
+      await chmod(directory, 0o700);
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(options.endpoint, () => {
+        server.off("error", reject);
+        server.on("error", disconnect);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    const errors = [error];
+    if (directory) {
+      try {
+        await rm(directory, { recursive: true, force: true });
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+    }
+    throwCollectedErrors(errors, "Native resource server startup and cleanup failed");
+    throw error;
+  }
   return {
     receive,
     disconnect,
