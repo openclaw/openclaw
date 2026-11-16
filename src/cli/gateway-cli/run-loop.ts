@@ -5,7 +5,7 @@ import * as restartTrace from "../../gateway/restart-trace.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
-import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import { prepareChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { startDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
@@ -258,30 +258,42 @@ export async function runGatewayLoop(params: {
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
     await cleanup.settleResource("restart.close.signals", () => signals.drain());
-    if (runtimeResourcesRetained) {
-      gatewayLog.warn("shutdown resources remain; refusing in-process restart and exiting");
-      return finishLoopAfterCleanup(0);
-    }
-    if (activeRestartRequest?.restartIntent?.requireFreshProcess) {
-      gatewayLog.error(
-        "Fresh-process restart failed; the unsettled native worker cannot recover in-process. Exiting through the verified service owner.",
-      );
-      return finishLoopAfterCleanup(1);
-    }
-    if (!readChildRuntimeViability().available) {
-      gatewayLog.error(
-        "Fresh-process restart failed; the unavailable child runtime cannot recover in-process. Restart through the service owner after repairing its runtime.",
-      );
-      return finishLoopAfterCleanup(1);
-    }
-    if (foregroundUpdateClosed) {
-      return finishLoopAfterCleanup(1);
-    }
     for (;;) {
+      if (runtimeResourcesRetained) {
+        gatewayLog.warn("shutdown resources remain; refusing in-process restart and exiting");
+        return finishLoopAfterCleanup(0);
+      }
+      if (activeRestartRequest?.restartIntent?.requireFreshProcess) {
+        gatewayLog.error(
+          "Fresh-process restart failed; the unsettled native worker cannot recover in-process. Exiting through the verified service owner.",
+        );
+        return finishLoopAfterCleanup(1);
+      }
+      if (foregroundUpdateClosed) {
+        return finishLoopAfterCleanup(1);
+      }
       if (forcedExitStarted) {
         return;
       }
       const restartRequest = activeRestartRequest;
+      const runtimeViability = await prepareChildRuntimeViability();
+      if (forcedExitStarted || terminalExitCode !== undefined) {
+        return;
+      }
+      if (
+        activeRestartRequest !== restartRequest ||
+        runtimeResourcesRetained ||
+        foregroundUpdateClosed ||
+        restartRequest?.restartIntent?.requireFreshProcess
+      ) {
+        continue;
+      }
+      if (!runtimeViability.publish().available) {
+        gatewayLog.error(
+          "Fresh-process restart failed; the unavailable child runtime cannot recover in-process. Restart through the service owner after repairing its runtime.",
+        );
+        return finishLoopAfterCleanup(1);
+      }
       const restartOwner = restartRequest?.restartIntent?.successorOwner;
       const restoration = sameManagedUpdateOwner(restartOwner, alreadyCancelledOwner)
         ? "restored-in-process"

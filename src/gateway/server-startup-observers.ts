@@ -26,7 +26,7 @@ export async function runGatewayStartupObservers(params: {
   workspaceDir: string;
   getCron: () => PluginHookGatewayCronService | undefined;
   isClosing?: () => boolean;
-  unlockStartupMethods?: () => void;
+  unlockStartupMethods?: () => void | Promise<void>;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (message: string) => void };
   logHooks: {
@@ -71,7 +71,7 @@ export async function runGatewayStartupObservers(params: {
       }
       if (!params.signal.aborted && !params.isClosing?.()) {
         // Retained FIFO inputs must own their ordinary queue slots before reconnecting sends.
-        params.unlockStartupMethods?.();
+        await params.unlockStartupMethods?.();
       }
     },
     "startup:session-resume",

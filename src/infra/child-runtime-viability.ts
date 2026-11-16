@@ -1,5 +1,6 @@
-import { spawnSync, type ChildProcess } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { execFile, spawnSync, type ChildProcess } from "node:child_process";
+import { accessSync, constants, statSync, type Stats } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -21,11 +22,13 @@ const runtime = resolveGlobalSingleton(
   (): {
     initialPath: string;
     initialIdentity?: string;
+    observations: Map<string, Promise<boolean>>;
     execPath?: string;
     failure?: Error;
     recoveryStarted?: boolean;
     recover?: () => Promise<ChildRuntimeRecovery>;
   } => ({
+    observations: new Map(),
     initialPath: process.execPath,
     initialIdentity: executableIdentity(process.execPath),
   }),
@@ -38,28 +41,68 @@ const ambiguousLoaderFailure =
 
 function executableIdentity(execPath: string): string | undefined {
   try {
-    const { dev, ino, size, mtimeMs, mode } = statSync(execPath);
-    return `${dev}:${ino}:${size}:${mtimeMs}:${mode}`;
+    return formatExecutableIdentity(statSync(execPath));
   } catch {
     return undefined;
   }
 }
 
+function formatExecutableIdentity({ dev, ino, size, mtimeMs, mode }: Stats): string {
+  return `${dev}:${ino}:${size}:${mtimeMs}:${mode}`;
+}
+
+function publishRuntimeViability(execPath: string, error?: unknown): ChildRuntimeViability {
+  if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+    recordUnavailableRuntime(execPath, error);
+  }
+  return { execPath, available: !(runtime.execPath === execPath && runtime.failure) };
+}
+
+/** Retained for existing synchronous OOM and SQLite callers. */
 export function readChildRuntimeViability(params?: { execPath?: string }): ChildRuntimeViability {
   const execPath = params?.execPath ?? process.execPath;
   if (runtime.execPath === execPath && runtime.failure) {
     return { execPath, available: false };
   }
-  let available = true;
   try {
     accessSync(execPath, constants.X_OK);
   } catch (error) {
-    available = !(hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR"));
-    if (!available) {
-      recordUnavailableRuntime(execPath, error);
-    }
+    return publishRuntimeViability(execPath, error);
   }
-  return { execPath, available };
+  return publishRuntimeViability(execPath);
+}
+
+/** Observe external runtime replacement without blocking the Gateway thread. */
+export async function prepareChildRuntimeViability(params?: {
+  execPath?: string;
+}): Promise<{ publish: () => ChildRuntimeViability }> {
+  const execPath = params?.execPath ?? process.execPath;
+  let observation = runtime.observations.get(execPath);
+  if (!observation) {
+    // Request cancellation does not own the shared native probe. Retain only
+    // pending work; the next request after settlement observes replacement anew.
+    observation = (async () => {
+      let available = !(runtime.execPath === execPath && runtime.failure);
+      if (available) {
+        try {
+          const probe = await probeChildRuntimeExecutable(execPath);
+          const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
+          available = !classifyRuntimeProbe(execPath, probe, identity, probe.error);
+        } catch (error) {
+          available = publishRuntimeViability(execPath, error).available;
+        }
+      }
+      return available;
+    })().finally(() => runtime.observations.delete(execPath));
+    runtime.observations.set(execPath, observation);
+  }
+  const available = await observation;
+  return {
+    publish: () => ({
+      execPath,
+      available: available && publishRuntimeViability(execPath).available,
+    }),
+  };
 }
 
 /** The run loop owns recovery; runtime observations publish the first diagnosis. */
@@ -101,19 +144,41 @@ function recoverUnavailableRuntime(): void {
   );
 }
 
-/** A bounded bare-runtime probe, shared by diagnosis and restart target verification. */
-export function probeChildRuntimeExecutable(
-  execPath: string,
-  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
-) {
-  return spawnSync(execPath, ["--version"], {
-    encoding: "utf8",
+function runtimeProbeOptions(options: { env?: NodeJS.ProcessEnv; cwd?: string } = {}) {
+  return {
+    encoding: "utf8" as const,
     cwd: options.cwd ?? path.parse(process.execPath).root,
     env: options.env ?? { ...process.env, NODE_OPTIONS: undefined },
     timeout: 1_000,
     maxBuffer: 8_192,
+  };
+}
+
+/** Native launch avoids recursing into the command owner's runtime diagnosis. */
+export function probeChildRuntimeExecutable(
+  execPath: string,
+  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+): Promise<RuntimeProbe> {
+  return new Promise((resolve) => {
+    execFile(execPath, ["--version"], runtimeProbeOptions(options), (error, stdout, stderr) =>
+      resolve({
+        stdout,
+        stderr,
+        error: error ?? undefined,
+        status: error ? (typeof error.code === "number" ? error.code : null) : 0,
+        signal: error?.signal ?? null,
+      }),
+    );
   });
 }
+
+type RuntimeProbe = {
+  stdout: string;
+  stderr: string;
+  error?: Error;
+  status: number | null;
+  signal: NodeJS.Signals | null;
+};
 
 export function formatMissingChildRuntimeWarning(
   viability: ChildRuntimeViability,
@@ -130,13 +195,15 @@ export function assertChildRuntimeAvailable(): void {
   }
 }
 
-function recordUnavailableRuntime(execPath: string, cause?: unknown): Error {
+function recordUnavailableRuntime(execPath: string, cause?: unknown, stderr?: string): Error {
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
   runtime.execPath = execPath;
+  const warning = formatMissingChildRuntimeWarning({ execPath, available: false });
+  const detail = stderr?.trim();
   runtime.failure = Object.assign(
-    new Error(formatMissingChildRuntimeWarning({ execPath, available: false }), { cause }),
+    new Error(detail ? `${warning}\n${detail}` : warning, { cause }),
     { code: "NODE_RUNTIME_UNAVAILABLE" },
   );
   createSubsystemLogger("gateway/runtime").error(runtime.failure.message);
@@ -144,13 +211,45 @@ function recordUnavailableRuntime(execPath: string, cause?: unknown): Error {
   return runtime.failure;
 }
 
-export function classifyChildRuntimeFailure(params: {
+type RuntimeFailure = {
   execPath?: string;
   error?: unknown;
   stderr?: string;
   signal?: NodeJS.Signals | null;
   started?: boolean;
-}): Error | undefined {
+};
+
+function needsRuntimeProbe(params: RuntimeFailure): boolean {
+  return Boolean(
+    params.error || params.signal === "SIGABRT" || ambiguousLoaderFailure.test(params.stderr ?? ""),
+  );
+}
+
+function classifyRuntimeProbe(
+  execPath: string,
+  probe: RuntimeProbe,
+  identity: string | undefined,
+  cause: unknown,
+): Error | undefined {
+  if (runtime.execPath === execPath && runtime.failure) {
+    return runtime.failure;
+  }
+  const changed = execPath !== runtime.initialPath || identity !== runtime.initialIdentity;
+  const unavailable =
+    loaderFailure.test(probe.stderr) ||
+    ambiguousLoaderFailure.test(probe.stderr) ||
+    hasErrnoCode(probe.error, "ENOENT") ||
+    hasErrnoCode(probe.error, "ENOTDIR") ||
+    (changed &&
+      (probe.signal === "SIGABRT" ||
+        hasErrnoCode(probe.error, "ENOEXEC") ||
+        hasErrnoCode(probe.error, "EACCES") ||
+        hasErrnoCode(probe.error, "EPERM")));
+  return unavailable ? recordUnavailableRuntime(execPath, cause, probe.stderr) : undefined;
+}
+
+/** The public synchronous SQLite reader retains immediate failure classification. */
+export function classifyChildRuntimeFailure(params: RuntimeFailure): Error | undefined {
   if (params.started) {
     return undefined;
   }
@@ -158,36 +257,50 @@ export function classifyChildRuntimeFailure(params: {
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
-  let unavailable = loaderFailure.test(params.stderr ?? "");
-  if (params.error && !readChildRuntimeViability({ execPath }).available) {
-    unavailable = true;
-  }
   if (
-    !unavailable &&
-    (params.error ||
-      params.signal === "SIGABRT" ||
-      ambiguousLoaderFailure.test(params.stderr ?? ""))
+    loaderFailure.test(params.stderr ?? "") ||
+    (params.error && !readChildRuntimeViability({ execPath }).available)
   ) {
-    // IPC can fail before startup stderr arrives. Confirm the bare runtime;
-    // ordinary crashes and worker-only native modules must not disable healthy Node.
-    const probe = probeChildRuntimeExecutable(execPath);
-    const changed =
-      execPath !== runtime.initialPath || executableIdentity(execPath) !== runtime.initialIdentity;
-    unavailable =
-      loaderFailure.test(probe.stderr ?? "") ||
-      ambiguousLoaderFailure.test(probe.stderr ?? "") ||
-      hasErrnoCode(probe.error, "ENOENT") ||
-      hasErrnoCode(probe.error, "ENOTDIR") ||
-      (changed &&
-        (probe.signal === "SIGABRT" ||
-          hasErrnoCode(probe.error, "ENOEXEC") ||
-          hasErrnoCode(probe.error, "EACCES") ||
-          hasErrnoCode(probe.error, "EPERM")));
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
-  if (!unavailable) {
+  if (!needsRuntimeProbe(params)) {
     return undefined;
   }
-  return recordUnavailableRuntime(execPath, params.error);
+  const probe = spawnSync(execPath, ["--version"], runtimeProbeOptions());
+  return classifyRuntimeProbe(
+    execPath,
+    probe,
+    execPath === runtime.initialPath ? executableIdentity(execPath) : undefined,
+    params.error,
+  );
+}
+
+export async function prepareChildRuntimeFailure(
+  params: RuntimeFailure,
+): Promise<Error | undefined> {
+  if (params.started) {
+    return undefined;
+  }
+  const execPath = params.execPath ?? process.execPath;
+  if (runtime.execPath === execPath && runtime.failure) {
+    return runtime.failure;
+  }
+  if (
+    loaderFailure.test(params.stderr ?? "") ||
+    (params.error && !(await prepareChildRuntimeViability({ execPath })).publish().available)
+  ) {
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
+  }
+  if (params.error || !needsRuntimeProbe(params)) {
+    return undefined;
+  }
+  // IPC can fail before stderr arrives. Worker-only crashes must not disable healthy Node.
+  const probe = await probeChildRuntimeExecutable(execPath);
+  const identity =
+    execPath === runtime.initialPath
+      ? await fs.stat(execPath).then(formatExecutableIdentity, () => undefined)
+      : undefined;
+  return classifyRuntimeProbe(execPath, probe, identity, params.error);
 }
 
 /** Capture startup evidence; the owner reads the diagnosis after native completion. */

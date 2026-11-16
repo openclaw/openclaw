@@ -11,7 +11,8 @@ import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.te
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker } from "./server/readiness.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
@@ -94,12 +95,12 @@ export function registerGatewayStartupReadinessTests(params: {
     async (updateCanary) => {
       const startup = params.createParams({
         updateCanary,
-        getReadiness: () => ({
+        getReadiness: createPreparedReadinessFixture(() => ({
           ready: false,
           coreReady: false,
           failing: ["agent-database:main"],
           uptimeMs: 0,
-        }),
+        })),
       });
       const runtime = await params.start(startup);
       await runtime.startupSettled;
@@ -127,10 +128,10 @@ export function registerGatewayStartupReadinessTests(params: {
   });
 }
 
-export function expectCoreAgentDatabaseReadiness(
-  getReadiness: ReadinessChecker,
+export async function expectCoreAgentDatabaseReadiness(
+  getReadiness: PreparedReadinessChecker,
   state: OpenClawTestState,
-): void {
+): Promise<void> {
   expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
   try {
     for (const agentId of ["worker", "main", "openclaw", "crestodian"]) {
@@ -141,7 +142,7 @@ export function expectCoreAgentDatabaseReadiness(
       });
       recordAgentDatabaseAdmissions([refusal], { source: "startup", env: state.env });
       const log = { info: vi.fn() };
-      logGatewayReady({ getReadiness, log });
+      await logGatewayReady({ getReadiness, log });
       expect(log.info).toHaveBeenCalledTimes(agentId === "worker" ? 1 : 0);
       expect(getReadiness()).toMatchObject(
         agentId === "worker"

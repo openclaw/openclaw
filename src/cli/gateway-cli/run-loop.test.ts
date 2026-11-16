@@ -822,8 +822,7 @@ describe("runGatewayLoop", () => {
 
       await mocks.withRunningGateway(async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.abortPendingChannelReloads).toHaveBeenCalledOnce();
         expect(mocks.consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
@@ -1094,7 +1093,7 @@ describe("runGatewayLoop", () => {
     await mocks.withRunningGateway(
       async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
           expect.objectContaining({ port: 18789, probeHosts: ["10.0.0.25"] }),

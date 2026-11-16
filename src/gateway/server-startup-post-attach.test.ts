@@ -1,9 +1,9 @@
+import fs from "node:fs";
 /**
  * Gateway post-attach startup task tests.
  */
 import "./server-worker-free.test-support.js";
 import "./server-startup-module-mocks.test-support.js";
-import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -55,12 +55,13 @@ import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-ge
 import { registerGatewayStartupAdmissionTests } from "./server-startup-admission.test-support.js";
 import { restartSentinelMocks } from "./server-startup-background.test-support.js";
 import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
-import "./server-startup-outcomes.test-support.js";
 import {
   createStartupMethodUnlocker,
   registerGatewayStartupReadinessTests,
 } from "./server-startup-readiness.test-support.js";
+import "./server-startup-outcomes.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 const { postAttachMocks: hoisted } = await vi.hoisted(
   () => import("./server-startup-post-attach.mocks.test-support.js"),
@@ -78,7 +79,6 @@ const { startGatewaySidecars: startGatewaySidecarsImpl } =
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-method-policy.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
-type PostAttachRuntimeDeps = GatewayStartupModuleMocks;
 type SidecarPublisher = NonNullable<PostAttachParams["onGatewayLifetimeSidecars"]>;
 type SidecarHandle = Parameters<SidecarPublisher>[number];
 type GatewaySidecarsParams = Parameters<typeof startGatewaySidecarsImpl>[0];
@@ -208,7 +208,7 @@ async function cleanupGatewayTestState(): Promise<void> {
 
 function startGatewayPostAttachRuntime(
   params: PostAttachParams,
-  runtimeDeps?: PostAttachRuntimeDeps,
+  runtimeDeps?: GatewayStartupModuleMocks,
 ) {
   if (runtimeDeps) {
     const refresh = runtimeDeps.refreshLatestUpdateRestartSentinel;
@@ -2676,8 +2676,8 @@ describe("startGatewayPostAttachRuntime", () => {
 });
 
 function createPostAttachRuntimeDeps(
-  overrides: Partial<PostAttachRuntimeDeps> = {},
-): PostAttachRuntimeDeps {
+  overrides: Partial<GatewayStartupModuleMocks> = {},
+): GatewayStartupModuleMocks {
   return {
     logGatewayStartup: hoisted.logGatewayStartup,
     refreshLatestUpdateRestartSentinel: restartSentinelMocks.prepareLatestUpdateRestartSentinel,
@@ -2695,7 +2695,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     minimalTestGateway: false,
     cfgAtStart: cfg,
     getConfig: () => cfg,
-    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
+    getReadiness: createPreparedReadinessFixture(),
     port: 18789,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,
