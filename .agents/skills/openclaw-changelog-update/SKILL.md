@@ -125,7 +125,7 @@ of this skill; initial generation must never overwrite them.
    contribution record remains a strict issue/PR requirement. Confirmed runs
    appear as `workflowRuns` in verification output and the manifest, never as
    PR associations or contributor credit.
-   Only GitHub `NOT_FOUND` references confined to contextual commit-body text, absent from subjects, closing references, provenance, and notes/records, and below the highest resolved number may be omitted and reported as manifest `unavailableReferences` without credit.
+   Only GitHub `NOT_FOUND` references confined to contextual commit-body text, absent from subjects, closing references, provenance, and notes/records, and below the highest resolved number may be omitted and reported as manifest `unavailableReferences` without credit. With explicit maintainer approval, repeat `--allow-unavailable-closing-reference <number>` for an unavailable historical closing issue. The manifest records `acknowledged: true`; subject, PR/provenance, rendered-reference, and non-NOT_FOUND failures remain strict. Preserve verified reporter credit from explicit `Fixes #number, reported by @handle` declarations in the original PR merge message; never infer credit from a backport operator or fabricate the missing issue.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility

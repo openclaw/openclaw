@@ -111,6 +111,9 @@ Options:
                         Unqualified names prefer origin/<ref>, then fall back to a local ref.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
+  --allow-unavailable-closing-reference <number>
+                        Explicitly acknowledge a NOT_FOUND historical closing issue; repeatable.
+                        Does not waive PR, provenance, subject, or rendered reference checks.
   --release-provenance <sha -> #PR[, #PR]>
                         Supply an exact provenance marker; repeatable.
   --regular-stable-version <version>
@@ -126,6 +129,7 @@ export function parseArgs(argv) {
   const options = {
     releaseTags: [],
     releaseProvenance: [],
+    allowedUnavailableClosingReferences: [],
     checkGithub: false,
     help: false,
     json: false,
@@ -155,6 +159,7 @@ export function parseArgs(argv) {
     ["--release-tag", "releaseTags"],
     ["--release-provenance", "releaseProvenance"],
     ["--shipped-ref", "shippedRefs"],
+    ["--allow-unavailable-closing-reference", "allowedUnavailableClosingReferences"],
     ["--github-snapshot", "githubSnapshotPath"],
     ["--main-ref", "mainRef"],
     ["--release-branch", "releaseBranch"],
@@ -208,6 +213,14 @@ export function parseArgs(argv) {
   if (options.noGithubSnapshot && options.refreshGithubSnapshot) {
     fail("--no-github-snapshot cannot be combined with --refresh-github-snapshot");
   }
+  options.allowedUnavailableClosingReferences = options.allowedUnavailableClosingReferences.map(
+    (value) => {
+      if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        fail("--allow-unavailable-closing-reference requires a positive issue number");
+      }
+      return Number(value);
+    },
+  );
   const uniqueShippedRefs = new Set(options.shippedRefs);
   if (uniqueShippedRefs.size !== options.shippedRefs.length) {
     fail("--shipped-ref values must be unique");
@@ -1779,15 +1792,20 @@ export function classifyUnavailableContextualReferences({
   activeCommits,
   protectedReferences,
   highestResolved,
+  allowedClosingReferences = new Set(),
 }) {
   const required = new Set(protectedReferences);
+  const closing = new Set();
   const bodyCommits = new Map();
   for (const commit of activeCommits) {
-    for (const number of [
-      ...referencesIn(commit.subject),
-      ...closingReferencesIn(`${commit.subject}\n${commit.body}`),
-    ]) {
+    for (const number of referencesIn(commit.subject)) {
       required.add(number);
+    }
+    for (const number of closingReferencesIn(`${commit.subject}\n${commit.body}`)) {
+      closing.add(number);
+      if (!allowedClosingReferences.has(number)) {
+        required.add(number);
+      }
     }
     for (const number of referencesIn(commit.body)) {
       const commits = bodyCommits.get(number) ?? new Set();
@@ -1807,6 +1825,7 @@ export function classifyUnavailableContextualReferences({
       unavailable.push({
         number,
         commits: [...bodyCommits.get(number)].toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1)),
+        ...(closing.has(number) ? { acknowledged: true } : {}),
       });
     } else {
       stillUnresolved.push(number);
@@ -2096,6 +2115,7 @@ function thanksFor(node, coauthorHandles) {
     handles.push(node.author.login);
   }
   addHandles(handles, node.recordedThanks ?? []);
+  addHandles(handles, node.acknowledgedReporters ?? []);
   addHandles(handles, coauthorHandles);
   return handles;
 }
@@ -2949,6 +2969,7 @@ function main() {
       ...[...source.provenanceOverrides.values()].flat(),
     ]),
     highestResolved,
+    allowedClosingReferences: new Set(options.allowedUnavailableClosingReferences),
   });
   source.unavailableReferences = unavailable;
   const unavailableNumbers = new Set(unavailable.map((reference) => reference.number));
@@ -3009,6 +3030,24 @@ function main() {
         .map((number) => `#${number}`)
         .join(", ")}`,
     );
+  }
+  // A missing issue cannot supply author data. Preserve only explicit reporter
+  // credit in the original PR merge message, never in a release carrier.
+  for (const node of nodes.values()) {
+    if (node.__typename !== "PullRequest") {
+      continue;
+    }
+    const message = node.mergeCommit?.message ?? "";
+    const reporters = [
+      ...message.matchAll(/(?:fixes|closes|resolves) #([0-9]+), reported by @([a-z0-9-]+)\b/gi),
+    ]
+      .filter((match) =>
+        unavailable.some((ref) => ref.acknowledged && ref.number === Number(match[1])),
+      )
+      .map((match) => match[2]);
+    if (reporters.length > 0) {
+      node.acknowledgedReporters = [...resolveGitHubHandles(reporters).values()];
+    }
   }
   const contributorHandles = [
     ...source.activeCommits.flatMap((commit) => commit.coauthors),

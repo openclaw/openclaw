@@ -457,33 +457,37 @@ describe("release-note verification", () => {
     ).toBe(target);
   });
 
-  it("reports deleted contextual references without rendering or crediting them", () => {
-    const cwd = tempDirs.make("openclaw-release-notes-deleted-ref-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: baseline"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
-    git(cwd, [
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "fix: preserve release references (#156166)",
-      "-m",
-      "#155121 took a similar approach and was closed by its author.",
-    ]);
-    const target = git(cwd, ["rev-parse", "HEAD"]);
-    const gh = join(cwd, "gh");
-    writeFileSync(
-      gh,
-      `#!${process.execPath}
+  it.each([false, true])(
+    "reports unavailable references with explicit closing approval=%s",
+    (approved) => {
+      const cwd = tempDirs.make("openclaw-release-notes-deleted-ref-");
+      git(cwd, ["init", "-q", "-b", "main"]);
+      writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "chore: baseline"]);
+      const base = git(cwd, ["rev-parse", "HEAD"]);
+      git(cwd, [
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "fix: preserve release references (#156166)",
+        "-m",
+        approved
+          ? "Fixes #155121, reported by @reporter."
+          : "#155121 took a similar approach and was closed by its author.",
+      ]);
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}
 const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
 const data = {};
 const errors = [];
 const pullRequest = {
   __typename: "PullRequest", number: 156166, title: "fix: preserve release references",
   baseRefName: "main", mergedAt: "2026-01-01T00:00:00Z",
-  mergeCommit: { oid: ${JSON.stringify(target)} },
+  mergeCommit: { oid: ${JSON.stringify(target)}, message: "Fixes #155121, reported by @reporter." },
   author: { __typename: "User", login: "contributor" },
   closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
 };
@@ -494,35 +498,50 @@ for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
   data[alias] = { issueOrPullRequest: alias === "n156166" ? pullRequest : null };
   if (alias === "n155121") errors.push({ type: "NOT_FOUND", path: [alias, "issueOrPullRequest"], message: "Could not resolve ..." });
 }
+for (const [, alias] of query.matchAll(/(u\\d+): user/g)) data[alias] = { __typename: "User", login: "reporter" };
 console.log(JSON.stringify({ data, errors }));
 process.exitCode = errors.length ? 1 : 0;
 `,
-    );
-    chmodSync(gh, 0o755);
-    splitChangelog({ rootDir: cwd });
-    const manifestPath = join(cwd, "manifest.json");
-    const result = runVerifier(cwd, {
-      base,
-      target,
-      manifest: manifestPath,
-      extraArgs: ["--no-github-snapshot"],
-      env: { PATH: `${cwd}:${process.env.PATH}` },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toBe("unavailable contextual references (GitHub NOT_FOUND): #155121\n");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(manifest.schemaVersion).toBe(3);
-    expect(manifest.unavailableReferences).toEqual([
-      { number: 155121, commits: [target.slice(0, 12)] },
-    ]);
-    expect(manifest.pullRequests).toMatchObject([{ number: 156166, thanks: ["contributor"] }]);
-    expect(manifest.pullRequests).toHaveLength(1);
-    expect(manifest.pullRequests[0].relatedReferences).toEqual([]);
-    expect(JSON.parse(result.stdout).source.references).toBe(1);
-    const record = readFileSync(join(cwd, "CHANGELOG/records/2026.7.1.md"), "utf8");
-    expect(record).toContain("**PR #156166** Thanks @contributor.");
-    expect(record).not.toContain("155121");
-  });
+      );
+      chmodSync(gh, 0o755);
+      splitChangelog({ rootDir: cwd });
+      const manifestPath = join(cwd, "manifest.json");
+      const result = runVerifier(cwd, {
+        base,
+        target,
+        manifest: manifestPath,
+        extraArgs: [
+          "--no-github-snapshot",
+          ...(approved ? ["--allow-unavailable-closing-reference", "155121"] : []),
+        ],
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("unavailable contextual references (GitHub NOT_FOUND): #155121\n");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      expect(manifest.schemaVersion).toBe(3);
+      expect(manifest.unavailableReferences).toEqual([
+        {
+          number: 155121,
+          commits: [target.slice(0, 12)],
+          ...(approved ? { acknowledged: true } : {}),
+        },
+      ]);
+      expect(manifest.pullRequests).toMatchObject([
+        { number: 156166, thanks: approved ? ["contributor", "reporter"] : ["contributor"] },
+      ]);
+      expect(manifest.pullRequests).toHaveLength(1);
+      expect(manifest.pullRequests[0].relatedReferences).toEqual([]);
+      expect(JSON.parse(result.stdout).source.references).toBe(1);
+      const record = readFileSync(join(cwd, "CHANGELOG/records/2026.7.1.md"), "utf8");
+      expect(record).toContain(
+        approved
+          ? "**PR #156166** Thanks @contributor and @reporter."
+          : "**PR #156166** Thanks @contributor.",
+      );
+      expect(record).not.toContain("155121");
+    },
+  );
 
   it.each([
     { name: "unavailable body context with sorted, unique commits", contextual: true },
@@ -537,6 +556,9 @@ process.exitCode = errors.length ? 1 : 0;
     { name: "no resolved references", highestResolved: 0 },
     { name: "no active body occurrence", body: "No contextual reference." },
     { name: "subject reference in another active commit", otherSubject: "fix: #155121" },
+    { name: "approval does not waive subject references", approved: true, subject: "fix: #155121" },
+    { name: "approval does not waive provenance", approved: true, protectedReference: true },
+    { name: "approval does not waive access errors", approved: true, errorType: "FORBIDDEN" },
   ])("classifies contextual references: $name", (scenario) => {
     const number = 155121;
     const response = {
@@ -579,6 +601,7 @@ process.exitCode = errors.length ? 1 : 0;
             ],
         protectedReferences: new Set(scenario.protectedReference ? [number] : []),
         highestResolved: scenario.highestResolved ?? 156166,
+        allowedClosingReferences: new Set(scenario.approved ? [number] : []),
       }),
     ).toEqual(
       scenario.contextual
