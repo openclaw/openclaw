@@ -3,7 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { supportsOscProgress } from "../../packages/terminal-core/src/osc-progress.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { createCliProgress, withProgress } from "./progress.js";
+import { createCliProgress, withProgress, withProgressTotals } from "./progress.js";
 
 const spinnerInstance = vi.hoisted(() => ({ start: vi.fn(), message: vi.fn(), clear: vi.fn() }));
 const spinner = vi.hoisted(() => vi.fn(() => spinnerInstance));
@@ -105,6 +105,37 @@ describe("cli progress", () => {
     reporter.tick();
 
     expect(writes).toEqual(["Indexing memory... 0%\n"]);
+  });
+
+  it("ignores NaN percent updates instead of rendering literal NaN%", () => {
+    const { writes, stream } = captureOutput();
+    const reporter = progress({ label: "Scanning", total: 2, stream, fallback: "line" });
+    reporter.setPercent(Number.NaN);
+    reporter.done();
+
+    expect(writes.join("")).not.toContain("NaN");
+  });
+
+  it("ignores a NaN tick instead of rendering literal NaN%", () => {
+    const { writes, stream } = captureOutput();
+    const reporter = progress({ label: "Scanning", total: 2, stream, fallback: "line" });
+    reporter.tick(Number.NaN);
+    reporter.done();
+
+    expect(writes.join("")).not.toContain("NaN");
+  });
+
+  it("does not render literal NaN% for a totals update with a NaN completed count", async () => {
+    const { writes, stream } = captureOutput(false);
+    await withProgressTotals(
+      { label: "Checking models", total: 2, stream, fallback: "log" },
+      async (update) => {
+        update({ completed: Number.NaN, total: 5 });
+        update({ completed: 3, total: 5 });
+      },
+    );
+
+    expect(writes.join("")).not.toContain("NaN");
   });
 
   it("does not let a finished reporter clear or unlock a newer progress line", () => {

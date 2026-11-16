@@ -209,6 +209,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   };
 
   const setPercent = (nextPercent: number) => {
+    // Math.round/min/max all propagate NaN, so a NaN percentage would render
+    // as literal "NaN%" and emit a malformed OSC progress sequence.
+    if (Number.isNaN(nextPercent)) {
+      return;
+    }
     percent = Math.max(0, Math.min(100, Math.round(nextPercent)));
     indeterminate = false;
     applyState();
