@@ -37,7 +37,7 @@ let provider: Awaited<ReturnType<typeof startWaitClockProvider>>;
 let artifactDir: string;
 const screenshots: string[] = [];
 const proof: Record<string, unknown> = {
-  mode: "confirmed-handoff-lifecycle",
+  mode: "strict-regression",
   gateway: "real isolated Gateway and Chromium; native visible child registry",
   provider: "scripted loopback OpenAI Responses transport; NOT external-provider live proof",
   websocketInterception: false,
@@ -47,7 +47,7 @@ const proof: Record<string, unknown> = {
 const saveProof = () =>
   fs.writeFile(path.join(artifactDir, "proof.json"), JSON.stringify(proof, null, 2) + "\n");
 const suite = createControlUiE2eSuite({
-  name: "Wait clocks through a real Gateway",
+  name: "Child handoff status through a real Gateway",
   startServerBeforeBrowser: true,
   resources: {
     async run(signal) {
@@ -115,7 +115,7 @@ function lifecycle(row: GatewaySessionRow) {
     hasActiveSubagentRun: row.hasActiveSubagentRun,
   };
 }
-function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow) {
+function assertChildContinues(parent: GatewaySessionRow, child: GatewaySessionRow) {
   expect(parent.startedAt).toBeGreaterThan(0);
   expect(parent.endedAt).toBeGreaterThanOrEqual(parent.startedAt!);
   expect(parent.hasActiveSubagentRun).toBe(true);
@@ -124,15 +124,24 @@ function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow
   expect(child.endedAt).toBeUndefined();
   expect(provider.childIsRunning()).toBe(true);
 }
+async function clocks(parent: Locator) {
+  return parent.locator(".chat-working-indicator__elapsed").evaluateAll((elements) =>
+    elements.map((element) => ({
+      sampledAt: Date.now(),
+      text: element.textContent?.trim() ?? "",
+      source: "transcript",
+    })),
+  );
+}
 async function resumedContinuation(parent: Locator) {
   const rule = parent.locator(".chat-handoff-resume__rule").filter({ hasText: "Agent finished" });
   await expect.poll(() => rule.count()).toBe(1);
   await rule.waitFor();
   const label = ((await rule.textContent()) ?? "").replace(/\s+/gu, " ").trim();
   expect(label).toMatch(/^Resumed · \d+[ms](?: \d+s)? later · Agent finished$/u);
-  // The interrupted yield was not a new handoff; completion must not fabricate its child list.
+  // An interrupted yield is not a new confirmed handoff with a child list.
   expect(await parent.locator(".chat-handoff-sessions").count()).toBe(0);
-  return { rule, label };
+  return label;
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
@@ -166,7 +175,7 @@ async function capture(page: Page, parent: Locator, name: string, content: Locat
 }
 
 suite.define(() => {
-  it("keeps confirmed handoff and resume state across updates, reload and child completion", async (test) => {
+  it("keeps child activity through a settled parent update and reload without retaining its handoff wait", async (test) => {
     const started = performance.now();
     await suite.runScenario(test, {
       retainedState: () => instance.stateDir,
@@ -225,14 +234,15 @@ suite.define(() => {
           await expect.poll(() => provider.requests.length).toBeGreaterThan(0);
           await provider.waitForChild(signal);
           await expect.poll(async () => (await rows()).parent.endedAt ?? 0).toBeGreaterThan(0);
-          await expect.poll(() => waiting.textContent()).toContain("Wait for subagents");
-          expect(await parent.locator(".chat-working-indicator__elapsed").count()).toBe(0);
+          await waiting.getByText("Wait for subagents", { exact: true }).waitFor();
+          expect(await waiting.count()).toBe(1);
+          expect(await clocks(parent)).toEqual([]);
           expect(
             await parent.getByRole("paragraph").filter({ hasText: fixture.acknowledgment }).count(),
           ).toBe(1);
           expect(await parent.locator(".agent-chat__composer-run-status").count()).toBe(0);
           const initial = await rows();
-          assertWaitLifecycle(initial.parent, initial.child);
+          assertChildContinues(initial.parent, initial.child);
           const initialHistory = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
@@ -241,7 +251,7 @@ suite.define(() => {
           proof.initial = {
             parent: lifecycle(initial.parent),
             child: lifecycle(initial.child),
-            waiting: (await waiting.textContent())?.trim(),
+            clocks: await clocks(parent),
           };
 
           proof.stage = "parent update while original child continues";
@@ -254,61 +264,59 @@ suite.define(() => {
             .filter({ hasText: fixture.updateReply });
           await expect.poll(() => updateReply.count()).toBe(1);
           await updateReply.waitFor();
-          // already_pending owns no new handoff: a completed update cannot invent a wait.
           await waiting.waitFor({ state: "hidden" });
-          expect(await parent.locator(".chat-working-indicator__elapsed").count()).toBe(0);
           await provider.check();
           const updated = await rows();
-          assertWaitLifecycle(updated.parent, updated.child);
+          assertChildContinues(updated.parent, updated.child);
           expect(updated.parent.startedAt).toBeGreaterThan(initial.parent.endedAt!);
           expect(updated.parent.endedAt).toBeGreaterThan(initial.parent.endedAt!);
           expect(wire.completed.filter((rpc) => rpc.request.method === "chat.send")).toHaveLength(
             2,
           );
           expect(updated.child.startedAt).toBe(initial.child.startedAt);
-          // A user update starts a separate request; it does not resume the original handoff.
+          const updatedClocks = await clocks(parent);
+          expect(updatedClocks).toEqual([]);
+          // The user update starts its own request, not a resume of the original handoff.
           expect(await parent.locator(".chat-handoff-resume").count()).toBe(0);
           proof.updated = {
             parent: lifecycle(updated.parent),
             child: lifecycle(updated.child),
-            waiting: false,
+            clocks: updatedClocks,
           };
           proof.toolReceipts = provider.receipts;
-          await capture(page, parent, "after-parent-update", [
-            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
-          ]);
+          await capture(page, parent, "after-parent-update", [updateReply]);
 
-          proof.stage = "reload persisted completed update";
+          proof.stage = "reload settled parent with child continuing";
           await page.reload();
           await waitForControlUiGatewayReady(page);
+          await expect.poll(() => updateReply.count()).toBe(1);
           await updateReply.waitFor();
           await waiting.waitFor({ state: "hidden" });
-          expect(await parent.locator(".chat-working-indicator__elapsed").count()).toBe(0);
           // Reload can hydrate with chat.history.delta; use a fresh public history RPC
-          // to independently bind the displayed state to the persisted session row.
+          // to independently bind the settled parent to its persisted lifecycle.
           const history = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
           });
           const reloaded = await rows();
-          assertWaitLifecycle(reloaded.parent, reloaded.child);
+          assertChildContinues(reloaded.parent, reloaded.child);
           expect(reloaded.parent.startedAt).toBe(updated.parent.startedAt);
           expect(reloaded.parent.endedAt).toBe(updated.parent.endedAt);
           expect(reloaded.child.startedAt).toBe(initial.child.startedAt);
           expect(history.sessionInfo).toBeDefined();
           expect(history.sessionInfo!.endedAt).toBe(updated.parent.endedAt);
+          const reloadedClocks = await clocks(parent);
+          expect(reloadedClocks).toEqual([]);
           expect(await parent.locator(".chat-handoff-resume").count()).toBe(0);
           expect(JSON.stringify(history.messages)).toContain(fixture.acknowledgment);
           expect(JSON.stringify(history.messages)).toContain("already_pending");
           proof.reloaded = {
             parent: lifecycle(reloaded.parent),
             child: lifecycle(reloaded.child),
-            waiting: false,
+            clocks: reloadedClocks,
             historySessionInfo: history.sessionInfo ? lifecycle(history.sessionInfo) : null,
           };
-          await capture(page, parent, "after-reload", [
-            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
-          ]);
+          await capture(page, parent, "after-reload", [updateReply]);
 
           proof.stage = "actual child completion and parent resume";
           const completionReleasedAt = Date.now();
@@ -327,9 +335,9 @@ suite.define(() => {
           expect(completed.parent.startedAt).toBeGreaterThan(updated.parent.endedAt!);
           expect(completed.parent.endedAt).toBeGreaterThanOrEqual(completed.parent.startedAt!);
           expect(completed.child.endedAt).toBeGreaterThanOrEqual(initial.child.startedAt!);
-          expect(await parent.locator(".chat-working-indicator__elapsed").count()).toBe(0);
-          const completedHandoff = await resumedContinuation(parent);
-          const duration = /Resumed · (.*?) later/u.exec(completedHandoff.label)![1]!;
+          expect(await clocks(parent)).toEqual([]);
+          const completedResume = await resumedContinuation(parent);
+          const duration = /Resumed · (.*?) later/u.exec(completedResume)![1]!;
           const displayedMs = [...duration.matchAll(/(\d+)([ms])/gu)].reduce(
             (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
             0,
@@ -340,9 +348,10 @@ suite.define(() => {
           expect(displayedMs).toBeLessThanOrEqual(Date.now() - updated.parent.endedAt! + 1_000);
           await page.reload();
           await waitForControlUiGatewayReady(page);
+          await expect.poll(() => resumedReply.count()).toBe(1);
           await resumedReply.waitFor();
-          const persistedHandoff = await resumedContinuation(parent);
-          expect(persistedHandoff.label).toBe(completedHandoff.label);
+          const persistedResume = await resumedContinuation(parent);
+          expect(persistedResume).toBe(completedResume);
           await waiting.waitFor({ state: "hidden" });
           expect(provider.parentRequests()).toBe(5);
           await provider.check();
@@ -350,7 +359,7 @@ suite.define(() => {
             parent: lifecycle(completed.parent),
             child: lifecycle(completed.child),
             parentRequests: provider.parentRequests(),
-            resumed: persistedHandoff.label,
+            resumed: persistedResume,
           };
           proof.complete = true;
           proof.stage = "complete";

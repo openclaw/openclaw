@@ -57,13 +57,13 @@ export function registerGatewayStartupReadinessTests(params: {
     async (stop, { signal }) => {
       const entered = createDeferred();
       const release = createDeferred();
-      const access = fs.access;
-      const heldAccess = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      const stat = fs.stat;
+      const heldStat = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
         if (args[0] === process.execPath) {
           entered.resolve();
           await release.promise;
         }
-        return access(...args);
+        return stat(...args);
       });
       let closing = false;
       const log = { info: vi.fn() };
@@ -88,7 +88,7 @@ export function registerGatewayStartupReadinessTests(params: {
         expect(log.info.mock.calls).toEqual(stop ? [] : [["gateway ready"]]);
       } finally {
         release.resolve();
-        heldAccess.mockRestore();
+        heldStat.mockRestore();
         await logging;
       }
     },

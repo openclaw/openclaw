@@ -147,13 +147,6 @@ it.each([
   [390, "rtl"],
   [1440, "ltr"],
 ] as const)("fits and dismisses stacked context at %ipx (%s)", async (width, dir) => {
-  // Prepare the real optional regions before the bounded layout/readiness assertions.
-  await Promise.all([
-    import("./components/chat-composer-reply-preview.tsx"),
-    import("./components/chat-composer-goal-mode-view.tsx"),
-    import("./components/chat-attachment-preview-strip.tsx"),
-    import("./components/composer-editor-mentions.tsx"),
-  ]);
   await resize(width);
   container.dir = dir;
   const dismissed: string[] = [];

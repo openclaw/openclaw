@@ -1,7 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { settleWithCleanup } from "../../infra/error-graph-internal.js";
 import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/path-existence.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";

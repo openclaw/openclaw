@@ -214,6 +214,8 @@ it.for(["readdirSync", "lstatSync", "realpathSync", "escape", "cycle", "nonregul
                 : undefined,
           },
           receipt: createPluginGenerationReceipt(),
+          executionAliases: new Map(),
+          executionSources: new Map(),
           onPackageMetadata() {},
         })(original, directory);
       const realpath = fs.realpathSync;
@@ -332,6 +334,7 @@ it.for(["inspect", "metadata"] as const)(
       const metadata = path.join(root, "package.json");
       const capture = createPluginPackageMetadataCapture({
         sourceForCaptured: () => path.join(original, "package.json"),
+        retainedManifest: () => ({ exports: { "./*": "./*.js" } }),
         packageForFile: () => ({ sourceRoot: original, state: "entry", captureTarget() {} }),
         resolveSource: (source) =>
           prepared
@@ -339,7 +342,6 @@ it.for(["inspect", "metadata"] as const)(
             : undefined,
       });
       capture.record(metadata, () => {});
-      capture.setManifest(metadata, { exports: { "./*": "./*.js" } });
       return capture.prepare();
     };
     for (const prepared of [false, true]) {

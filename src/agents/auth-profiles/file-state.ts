@@ -231,9 +231,10 @@ export async function readAuthProfileDatabaseIdentityAsync(databasePath: string)
   return state.identities.get(databasePath);
 }
 
-export function captureAuthProfileFileIdentity(databasePath: string) {
-  const identity = readAuthProfileDatabaseIdentity(databasePath);
+export async function captureAuthProfileFileIdentityAsync(databasePath: string) {
   const state = directoryState(path.dirname(databasePath));
+  await readAuthProfileDatabaseIdentityAsync(databasePath);
+  const identity = state.identities.get(databasePath);
   return {
     identity,
     assertCurrent() {

@@ -36,7 +36,7 @@ import { captureRequesterContinuationCaller } from "../requester-cron-authority.
 import { transferRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import { reserveSubagentControllerSource } from "./subagent-announce-controller-source.js";
-import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
+import { classifyAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -641,14 +641,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       if (await settleRevokedBatch()) {
         return false;
       }
-      // A transport exception can follow admission; it is recorded once and never replayed.
-      await completeBatch(settledBatch, state, {
-        delivered: false,
+      delivery = classifyAnnounceDeliveryError(error, {
         path: "none",
-        disposition: hasAnnounceSendEvidence(error) ? "ambiguous" : "permanent_failure",
-        error: error instanceof Error ? error.message : String(error),
+        beforeAdmission: !dispatchAccepted && !controllerInput?.custody.rpcAdopted,
       });
-      return false;
     }
     if (delivery.disposition !== "session_queued") {
       retireUnadoptedInput();
@@ -661,25 +657,21 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {
       return false;
     }
-    if (
-      delivery.disposition === "retryable" &&
-      state.status === "pending" &&
-      !dispatchAccepted &&
-      !controllerInput?.custody.rpcAdopted
-    ) {
-      // No turn accepted this attempt. Keep the live obligation for its next attempt.
-      await params.transitionBatch(settledBatch, state, refreshBatch);
-      return false;
-    }
     const retryState = resolveRequesterSettleRetryState({
       state: dispatchState,
       delivery,
       attemptCount,
-      parentOnly,
       now: Date.now(),
     });
     if (!retryState) {
-      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
+      await completeBatch(
+        settledBatch,
+        state,
+        delivery.disposition === "retryable"
+          ? { ...delivery, disposition: "permanent_failure" }
+          : delivery,
+        requesterEntry.sessionId,
+      );
       return false;
     }
     await params.transitionBatch(settledBatch, retryState, refreshBatch);

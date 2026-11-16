@@ -51,7 +51,11 @@ suite.define(() => {
       const steerRunId = String(asOptionalRecord(steer.params)?.idempotencyKey);
       expect(steerRunId).not.toBe(runId);
       await composer.fill("Keep this next message draft.");
-      const successorTool = page.locator(".chat-tool-msg-summary").filter({ hasText: toolText });
+      // The loading placeholder shares the summary class; wait for the resolved command row.
+      const successorTool = page.locator(".chat-tool-msg-summary").filter({
+        has: page.locator(".chat-tool-row__cmd"),
+        hasText: toolText,
+      });
       if (ownership === "unadopted-c") {
         await gateway.emitChatFinal({ runId, text: "Original task completed." });
         await bubble("Original task completed.").waitFor();
@@ -74,9 +78,6 @@ suite.define(() => {
         });
         await successorTool.waitFor();
         expect(await successorTool.count()).toBe(1);
-        // The lazy row replaces its matching placeholder; await its actual command first.
-        await successorTool.locator(".chat-tool-row__cmd").waitFor();
-        await successorTool.scrollIntoViewIfNeeded();
       }
 
       const historyRequests = (await gateway.getRequests("chat.history")).length;

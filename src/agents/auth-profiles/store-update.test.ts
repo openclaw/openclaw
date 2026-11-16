@@ -106,7 +106,7 @@ const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
 async function prepareCredentialReader(env: NodeJS.ProcessEnv, agentDir?: string) {
   const context = captureOpenClawStateWorkerContext({ env });
   const reader = agentDir
-    ? sqliteRead.prepareAgentAuthProfileRowsRead({
+    ? await sqliteRead.prepareAgentAuthProfileRowsRead({
         databasePath: resolveAuthProfileDatabasePath(agentDir),
         agentId: "child",
         env,
@@ -532,8 +532,8 @@ it("does not retain inherited order when a native rotation overtakes state publi
     seedInherited(shared, local, agentDir);
     const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
     let rotated = false;
-    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => {
-      const reader = prepare(options);
+    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(async (options) => {
+      const reader = await prepare(options);
       return {
         ...reader,
         async read() {
