@@ -1010,7 +1010,7 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       sources.selected.readText(
         "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts",
       );
-  }
+    }
     if (consumer === "update-channel-switch") {
       required(sources.selected, "src/cli/update-cli/update-command-target.ts");
       required(sources.selected, "src/infra/update-global.ts");
