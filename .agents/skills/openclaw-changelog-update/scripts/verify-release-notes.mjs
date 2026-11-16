@@ -3045,8 +3045,10 @@ function main() {
         unavailable.some((ref) => ref.acknowledged && ref.number === Number(match[1])),
       )
       .map((match) => match[2]);
+    // The original merge is the historical credit source; a deleted reporter
+    // account must not erase that credit after the closing issue is acknowledged.
     if (reporters.length > 0) {
-      node.acknowledgedReporters = [...resolveGitHubHandles(reporters).values()];
+      node.acknowledgedReporters = reporters.filter(isEligibleHandle);
     }
   }
   const contributorHandles = [

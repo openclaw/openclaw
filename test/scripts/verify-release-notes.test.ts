@@ -498,7 +498,10 @@ for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
   data[alias] = { issueOrPullRequest: alias === "n156166" ? pullRequest : null };
   if (alias === "n155121") errors.push({ type: "NOT_FOUND", path: [alias, "issueOrPullRequest"], message: "Could not resolve ..." });
 }
-for (const [, alias] of query.matchAll(/(u\\d+): user/g)) data[alias] = { __typename: "User", login: "reporter" };
+for (const [, alias] of query.matchAll(/(u\\d+): user/g)) {
+  data[alias] = null;
+  errors.push({ type: "NOT_FOUND", path: [alias], message: "Reporter account is no longer available" });
+}
 console.log(JSON.stringify({ data, errors }));
 process.exitCode = errors.length ? 1 : 0;
 `,
