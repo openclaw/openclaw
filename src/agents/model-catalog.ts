@@ -366,8 +366,8 @@ export async function buildPreparedModelCatalogSnapshot(
         : [],
     ),
   ]);
-  // Runtime declarations describe possible models, not account entitlement.
-  // Only live registry or refreshed rows may publish those provider models.
+  // Runtime chat declarations describe possible models, not account entitlement.
+  // Only live registry or refreshed rows may publish those chat models.
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
   const discoveredByRoute = new Map(
@@ -378,9 +378,10 @@ export async function buildPreparedModelCatalogSnapshot(
   );
   const manifestModels = declaredManifestModels.filter(
     (entry) =>
-      (params.includeProviderPluginAugmentation === false ||
+      (entry.inference?.chat === false && entry.inference.decision !== undefined) ||
+      ((params.includeProviderPluginAugmentation === false ||
         !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id))) &&
-      (!observedProviders.has(entry.provider) || discoveredKeys.has(manifestKeyOf(entry))),
+        (!observedProviders.has(entry.provider) || discoveredKeys.has(manifestKeyOf(entry)))),
   );
   // Static declarations are defaults, not a veto over independently discovered
   // capabilities. Only the exact physical route may replace their inference contract.

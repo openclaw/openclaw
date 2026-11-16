@@ -5,12 +5,18 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeModelCatalogProviderRows } from "../../packages/model-catalog-core/src/model-catalog-normalize.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as harness from "./decision-inference.test-support.js";
+import { createBundledStaticCatalogModelResolver } from "./embedded-agent-runner/model.static-catalog.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import { buildAllowedModelSet } from "./model-selection-shared.js";
+import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 
 function readOpenRouterManifest() {
   const result = loadPluginManifest(
@@ -428,4 +434,51 @@ it("projects declared decision routes without fabricated chat fields", () => {
   });
   expect(conversational.allowedCatalog).toEqual([]);
   expect(conversational.allowedKeys.size).toBe(0);
+});
+
+it("preserves bundled Jev capabilities through configured preparation and chat discovery refresh", async () => {
+  const ref = { provider: "openrouter", modelId: "typesafe/jev-1.14" };
+  const manifest = readOpenRouterManifest();
+  const declared = manifest.modelCatalog?.providers?.openrouter?.models.find(
+    (row) => row.id === ref.modelId,
+  );
+  expect(declared?.inference?.decision).toBeDefined();
+  const config = {
+    plugins: { entries: { openrouter: { enabled: true } } },
+    agents: { defaults: { decisionModel: `openrouter/${ref.modelId}` } },
+  };
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [manifest] });
+  const resolve = createBundledStaticCatalogModelResolver({
+    cfg: config,
+    env: {},
+    metadataSnapshot,
+    includeRuntimeDiscovery: true,
+  });
+  const model = resolve(ref);
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory({}));
+  const captured = prepareCapturedRuntimeFacts({
+    agentFacts: { input: { config, env: {} }, configuredModelRefs: [ref] },
+    workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot },
+    templateModelRegistry: registry,
+    configuredRuntimeModels: model ? [{ ...ref, model }] : [],
+  });
+  const refreshed = await buildPreparedModelCatalogSnapshot({
+    agentDir: "/tmp/openrouter-decision-catalog-test",
+    authCredentials: {},
+    config,
+    env: {},
+    metadataSnapshot,
+    models: registry.getAll(),
+    readOnly: true,
+    providerOutcomes: [{ provider: "openrouter", status: "ready" }],
+  });
+  for (const entries of [
+    captured.modelCatalog.entries,
+    refreshed.entries,
+    refreshed.routeVariants,
+  ]) {
+    const selected = entries.find((row) => row.provider === ref.provider && row.id === ref.modelId);
+    expect(selected?.inference).toEqual(declared?.inference);
+    expect(selected?.api).toBeUndefined();
+  }
 });

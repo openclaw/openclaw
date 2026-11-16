@@ -227,7 +227,7 @@ export function createBundledStaticCatalogModelResolver(
           (params?.includeRuntimeDiscovery &&
             (entry.discovery === "runtime" || entry.discovery === "refreshable"))
         ) {
-          yield* entry.rows;
+          yield* entry.rows.filter((row) => row.inference?.chat !== false);
         }
       }
     }
