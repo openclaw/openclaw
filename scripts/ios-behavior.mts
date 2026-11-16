@@ -429,15 +429,16 @@ let screenCount = 0;
 const screensDir = path.join(outDir, "screens");
 mkdirSync(screensDir, { recursive: true });
 
-// Compiled once per run: the Vision CLI takes ~0.2 s per screenshot in batch.
+// Compiled once per run: the Vision CLI takes ~0.2 s per screenshot in batch; the motion CLI reads
+// every native frame of a recording window (~4 s for a 12 s window).
 const screenTextTool = path.join(outDir, "ios-screen-text");
-run("xcrun", [
-  "swiftc",
-  "-O",
-  "-o",
-  screenTextTool,
-  path.join(repoRoot, "scripts/ios-screen-text.swift"),
-]);
+const screenMotionTool = path.join(outDir, "ios-screen-motion");
+for (const [tool, source] of [
+  [screenTextTool, "ios-screen-text.swift"],
+  [screenMotionTool, "ios-screen-motion.swift"],
+] as const) {
+  run("xcrun", ["swiftc", "-O", "-o", tool, path.join(repoRoot, "scripts", source)]);
+}
 
 type Layout = Omit<ScreenSample, "png">;
 
@@ -552,7 +553,21 @@ function screenGates(read: { png: string; lines: number }[], when: string): Resu
 }
 
 type Metrics = Record<string, number | undefined>;
-type Result = { metrics: Metrics; gates: Record<string, boolean> };
+/**
+ * `drawnMotion`: a window (epoch ms) and screen area (points) to measure on the case's recording
+ * once it is written; `ignoreX` is a column range holding a control that moves by design.
+ */
+type Result = {
+  metrics: Metrics;
+  gates: Record<string, boolean>;
+  drawnMotion?: {
+    from: number;
+    to: number;
+    area: Rect;
+    screenWidth: number;
+    ignoreX?: [number, number];
+  };
+};
 // `guard`: every gate passes in every sample. `bad`: reproduces an open bug, so its setup gates
 // pass and another gate fails in at least one sample; once the fix lands every gate passes and
 // the case becomes a guard. No majority vote: a jump in one sample is a jump users see.
@@ -647,10 +662,29 @@ function streamCase(keyboardUp: boolean): Case {
           },
         };
       }
-      // The one-shot move to the new turn lands within a second; after that the pin must hold.
+      // The one-shot move to the new turn lands within a second; after that the pin must hold. The
+      // gate reads the recording: on the `List` transcript (#192232) the probe also reports cell
+      // layouts of 5–60 pt that never reach the screen, so its drift is reported only. The drawn
+      // window starts once the reply fills the screen: before that, the reply growing moves its
+      // footer row down, which the recording cannot tell from a scroll. The area stops above the
+      // run footer, which appears when the reply ends, and skips the columns of the jump-to-latest
+      // button, which floats over the reply.
       const pinned = motion(window(log, sentAt + 1000, end).frames, { aliases });
       const userKey = userMount?.k;
       const replyHidden = hiddenBelowComposer(last) ?? 0;
+      const layout = readLayout(
+        JSON.parse(run(axe, ["describe-ui", "--udid", sim]).stdout) as AxNode[],
+      );
+      const transcript = layout.transcript ?? fail("no transcript on screen after the reply.");
+      const filled = firstFrame(
+        view.frames,
+        (frame) => (frame.f.live?.[1] ?? 0) > (frame.f.composer?.[0] ?? Infinity),
+      );
+      const bottom = Math.min(
+        transcript.y + transcript.height,
+        ...layout.exclude.filter((rect) => rect.y > transcript.y).map((rect) => rect.y),
+      );
+      const jump = axFrame((node) => node.AXLabel === "Jump to latest reply");
       return {
         metrics: {
           ...common,
@@ -660,10 +694,16 @@ function streamCase(keyboardUp: boolean): Case {
         },
         gates: {
           ...setup,
-          "reply grew past the fold (setup)": replyHidden > 100,
+          "reply grew past the fold (setup)": replyHidden > 100 && filled !== undefined,
           "no teleports": moved.teleports === 0,
-          "sent turn holds still, reply included (≤1 pt)": pinned.maxDriftPt <= 1,
           "no remounts": common.remounts === 0,
+        },
+        drawnMotion: {
+          from: filled ?? end,
+          to: end,
+          area: { ...transcript, height: bottom - transcript.y },
+          screenWidth: layout.screen.width,
+          ignoreX: jump && [jump.x, jump.x + jump.width],
         },
       };
     },
@@ -931,11 +971,23 @@ try {
       const file = path.join(outDir, `${name}-${sample}.jsonl`);
       // Every case is recorded for review and ends with a screen check, so cases that gate on
       // motion are also judged on what is drawn.
-      const video = spawn(
-        "xcrun",
-        ["simctl", "io", sim, "recordVideo", "--force", path.join(outDir, `${name}-${sample}.mp4`)],
-        { stdio: "ignore" },
-      );
+      const recording = path.join(outDir, `${name}-${sample}.mp4`);
+      const video = spawn("xcrun", ["simctl", "io", sim, "recordVideo", "--force", recording], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      // The recording's first frame is drawn when simctl reports the start. Wait for it here: the
+      // cases block the event loop with synchronous commands, which would stamp the line late.
+      const videoStartedAt = await new Promise<number>((resolve) => {
+        const stopped = () =>
+          fail(`the recording of ${name} #${sample} stopped before it started.`);
+        video.once("exit", stopped);
+        video.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+          if (chunk.includes("Recording started")) {
+            video.off("exit", stopped);
+            resolve(Date.now());
+          }
+        });
+      });
       const result = await testCase.run(session, file);
       const settled = screenGates(
         readScreens(await watchScreen(`${name}-end`, 1500)),
@@ -949,6 +1001,23 @@ try {
         await new Promise((resolve) => {
           video.once("exit", resolve);
         });
+      }
+      if (result.drawnMotion) {
+        const { from, to, area, screenWidth, ignoreX } = result.drawnMotion;
+        const measured = JSON.parse(
+          run(screenMotionTool, [
+            recording,
+            ...[(from - videoStartedAt) / 1000, (to - videoStartedAt) / 1000].map(String),
+            ...[area.x, area.y, area.width, area.height, screenWidth, ...(ignoreX ?? [])].map(
+              (value) => String(Math.round(value)),
+            ),
+          ]).stdout,
+        ) as { frames: number; strips: number; maxMovePt: number };
+        result.metrics.drawnMovePt = measured.maxMovePt;
+        // A window outside the recording or a blank area reads as 0 pt without seeing anything.
+        result.gates["recording covers the window with content (setup)"] =
+          measured.frames >= 2 && measured.strips > 0;
+        result.gates["drawn transcript holds still (≤1 pt)"] = measured.maxMovePt <= 1;
       }
       results.push(result);
       console.log(`ios:behavior: ${name} #${sample} ${JSON.stringify(result.metrics)}`);

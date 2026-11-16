@@ -101,66 +101,14 @@ function visibleShift(before: Edges, after: Edges, visibleBottom: number) {
 }
 
 /**
- * A small row move reported no longer than this, then restored, is a layout pass, not a drawn
- * frame. The probe logs only on change, so a reported position "lasts" until the next change.
- */
-const SPIKE_MS = 250;
-/** Larger moves always count: the real ~80 ms flash to top in `stream-follow` moves thousands. */
-const SPIKE_PT = 50;
-
-/**
- * Probe frames where a row sits up to `SPIKE_PT` away from the position it had just before, and
- * within `SPIKE_MS` is back there or gone, replaced by that position. The `List` transcript
- * (#192232) reports such intermediate cell layouts while a reply grows. Checked against native
- * frames of the simulator recordings, the reply's top edge stayed on one pixel row through all of
- * them: 29 moves of 5–37 pt reverting after 17–82 ms in one stream, a 7 pt move reported for
- * 221 ms in another, and a 6 pt move in the live bubble's last frame 28 ms before it unmounted.
- * Accepted edge case: a real move of at most 50 pt that reverts within 250 ms is not counted.
- */
-export function dropLayoutSpikes(frames: ProbeFrame[]) {
-  let dropped = 0;
-  const out = frames.map((frame) => ({ t: frame.t, f: { ...frame.f } }));
-  for (let index = 1; index < out.length - 1; index += 1) {
-    const before = out[index - 1];
-    const frame = out[index];
-    const after = frames[index + 1];
-    if (!before || !frame || !after || after.t - frame.t > SPIKE_MS) {
-      continue;
-    }
-    for (const [key, edges] of Object.entries(frame.f)) {
-      const prior = before.f[key];
-      const next = after.f[key];
-      if (
-        prior &&
-        (next === undefined || Math.abs(prior[0] - next[0]) <= STILL_PT) &&
-        Math.abs(edges[0] - prior[0]) > STILL_PT &&
-        Math.abs(edges[0] - prior[0]) <= SPIKE_PT
-      ) {
-        frame.f[key] = [prior[0], edges[1] - edges[0] + prior[0]];
-        dropped += 1;
-      }
-    }
-  }
-  return { frames: out, dropped };
-}
-
-/**
  * How tagged rows moved between consecutive recorded frames. Any downward step counts as backward
  * motion. A key in `aliases` continues the key it maps to (the final message row replacing the
  * live bubble); in the frame where both exist, the outgoing one is already leaving and is ignored.
- * One-frame layout spikes are dropped first (`dropLayoutSpikes`) and counted in `layoutSpikes`.
  */
 export function motion(
-  recorded: ProbeFrame[],
+  frames: ProbeFrame[],
   options: { aliases?: Record<string, string> } = {},
-): {
-  teleports: number;
-  backwardPt: number;
-  largestStepPt: number;
-  maxDriftPt: number;
-  layoutSpikes: number;
-} {
-  const { frames, dropped } = dropLayoutSpikes(recorded);
+): { teleports: number; backwardPt: number; largestStepPt: number; maxDriftPt: number } {
   const aliases = options.aliases ?? {};
   const rows = (frame: ProbeFrame) => {
     const edges = new Map<string, Edges>();
@@ -224,7 +172,6 @@ export function motion(
     backwardPt: round(backwardPt),
     largestStepPt: round(largestStepPt),
     maxDriftPt: round(maxDriftPt),
-    layoutSpikes: dropped,
   };
 }
 

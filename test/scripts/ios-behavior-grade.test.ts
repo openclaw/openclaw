@@ -144,39 +144,3 @@ describe("transcriptText", () => {
     ).toEqual(messages.map((line) => line.text));
   });
 });
-
-describe("layout spikes", () => {
-  it("drops a one-frame move that snaps back but keeps a jump that lasts", () => {
-    const spike = motion([
-      frame(0, { live: 212 }),
-      frame(17, { live: 175 }),
-      frame(34, { live: 212 }),
-    ]);
-    expect(spike).toMatchObject({ maxDriftPt: 0, layoutSpikes: 1 });
-    const held = motion([
-      frame(0, { live: 212 }),
-      frame(17, { live: 175 }),
-      frame(34, { live: 175 }),
-      frame(200, { live: 212 }),
-    ]);
-    expect(held).toMatchObject({ maxDriftPt: 37, layoutSpikes: 0 });
-    // A flash to the top snaps back just as fast, but moves far more than any layout pass.
-    const flash = motion([
-      frame(0, { live: 700 }),
-      frame(17, { live: 120 }),
-      frame(97, { live: 700 }),
-    ]);
-    expect(flash).toMatchObject({ layoutSpikes: 0, maxDriftPt: 580 });
-    // The live bubble's last frame moves, then the bubble unmounts and its final row lands back.
-    const handoff = motion(
-      [
-        frame(0, { live: 212 }),
-        frame(17, { live: 218 }),
-        frame(45, {}),
-        frame(250, { final: 212 }),
-      ],
-      { aliases: { final: "live" } },
-    );
-    expect(handoff).toMatchObject({ maxDriftPt: 0, layoutSpikes: 1 });
-  });
-});
