@@ -606,10 +606,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
         agentId,
         jobId: job.id,
         runStartedAt: params.evt.runAtMs,
-        conversation: {
-          sessionKey,
-          lifecycleRevision: entry.lifecycleRevision,
-        },
+        conversation: { sessionKey },
         payloads: [
           {
             text: redactSensitiveText(

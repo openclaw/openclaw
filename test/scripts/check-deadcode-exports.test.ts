@@ -276,6 +276,31 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
+  it("models the workflow planner without retaining removed consumers", () => {
+    const file = ".github/workflows/plugin-prerelease.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers.yml;
+    const compiled = compile(source, file);
+    expect(compiled).toContain('"../../scripts/lib/plugin-prerelease-test-plan.mts"');
+    expect(compiled).toContain("planner.resolvePluginPrereleaseExtensionRuntimes");
+    const withoutConsumer = replaceFixture(
+      source,
+      `            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
+            }`,
+      "",
+    );
+    const remaining = compile(withoutConsumer, file);
+    expect(remaining).not.toContain("resolvePluginPrereleaseExtensionRuntimes");
+    expect(remaining).toContain("planner.assertPluginPrereleaseTestPlanComplete");
+    expect(
+      compile(
+        replaceFixture(source, 'targetPlanPath("plugin-prerelease-test-plan")', '"other"'),
+        file,
+      ),
+    ).not.toContain("plugin-prerelease-test-plan.mts");
+  });
+
   it("models named Solid lazy consumers without retaining a deleted loader", () => {
     const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
@@ -797,7 +822,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const compile = knipConfig.compilers.mjs;
     const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
     expect(compiled).toMatch(
-      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0, materializeRuntimeProcessScriptFileAsync as __dynamic\d+_1 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
     );
     expect(compiled).toMatch(
       /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
@@ -815,7 +840,7 @@ function other(lineageCompletion: typeof lineageWriter) {
         [
           [
             "scripts/generate-runtime-script-assets.mjs",
-            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            'import { materializeRuntimeProcessScriptFile, materializeRuntimeProcessScriptFileAsync } from "./src/infra/runtime-process-script-file.ts";',
             "",
           ],
           [

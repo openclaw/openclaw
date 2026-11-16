@@ -32,7 +32,7 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
   const state = {
     currentPull: structuredClone(pullRequest),
     rollout: "enforced" as "enforced" | "grandfathered" | "inactive",
-    role: needsApproval ? "maintain" : "write",
+    role: needsApproval ? "admin" : "write",
     afterPermission: () => {},
   };
   const notice = (marker: string) => ({
@@ -108,6 +108,14 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
     pullRequest,
     pullPath,
     issuePath,
+    membershipApi: {
+      async request(path: string) {
+        expect(path).toMatch(
+          /^\/orgs\/openclaw\/teams\/openclaw-secops\/memberships\/(?:contributor|maintainer)$/u,
+        );
+        throw Object.assign(new Error("Not a SecOps member"), { status: 404 });
+      },
+    },
     api: {
       async request(path: string, options?: unknown) {
         expect(options, "Admission must not publish").toBeUndefined();
@@ -168,7 +176,7 @@ it.each<Projection>([
           context,
           kind: "comment",
           login: "maintainer",
-          role: "maintain",
+          role: "admin",
           sha: head,
           url: f.approval.html_url,
         }))

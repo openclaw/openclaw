@@ -97,7 +97,7 @@ import {
 } from "./update-managed-service-handoff-sentinel.js";
 import {
   resolveGatewayServiceRecovery,
-  admitSystemdUpdate,
+  admitManagedHandoffSupervisor,
   observeManagedServiceUpdateHandoffClose,
   resolveManagedHandoffCommandEnv,
   SYSTEM_SERVICE_UPDATE_SETTLED_MARKER,
@@ -1327,10 +1327,9 @@ export async function startManagedServiceUpdateHandoff(
   ) {
     throw new Error("managed update handoff requires a finite restart deadline");
   }
-  const operatorRestartWarning =
-    !params.foregroundOrigin && params.supervisor === "systemd"
-      ? await admitSystemdUpdate(params.root, params.env)
-      : undefined;
+  const operatorRestartWarning = params.foregroundOrigin
+    ? undefined
+    : await admitManagedHandoffSupervisor(params.supervisor, params.root, params.env);
   if (operatorRestartWarning && params.action) {
     throw new Error(
       "Automatic managed triage requires a Linux user-systemd scope; run openclaw triage manually.",

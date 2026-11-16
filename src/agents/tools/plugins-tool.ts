@@ -267,12 +267,14 @@ export function createPluginsTool(options?: {
         const matching = inventory.plugins.filter(
           (plugin) =>
             !query ||
-            [plugin.id, plugin.name, plugin.description].some((value) =>
+            [plugin.id, plugin.packageName, plugin.name, plugin.description].some((value) =>
               value?.toLowerCase().normalize("NFC").includes(query),
             ),
         );
         return pluginsToolResult({
-          plugins: matching.slice(0, 20).map(({ id, state, version }) => ({ id, state, version })),
+          plugins: matching
+            .slice(0, 20)
+            .map(({ id, packageName, state, version }) => ({ id, packageName, state, version })),
           matching: matching.length,
           omitted: Math.max(0, matching.length - 20),
           mutationAllowed: inventory.mutationAllowed,

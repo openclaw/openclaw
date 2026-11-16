@@ -412,8 +412,6 @@ it.each([
   const visible = ending !== "private" && ending !== "child" && ending !== "session-only";
   if (ending === "private") {
     fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
   }
   if (ending === "child") {
     fixture.params.requesterIsSubagent = true;
@@ -465,6 +463,22 @@ it.each([
 it.each([
   ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
   ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
+  [
+    "saved-state conflict with intentional suppression",
+    {
+      status: "ok",
+      result: {
+        payloads: [],
+        meta: { error: { kind: "incomplete_turn", code: "item_conflict" } },
+        deliveryStatus: {
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          resultCount: 0,
+        },
+      },
+    },
+    { disposition: "intentional_non_delivery", reason: "delivery_suppressed", terminal: true },
+  ],
   [
     "partial send failure",
     Object.assign(new Error("send incomplete"), { sentBeforeError: true }),

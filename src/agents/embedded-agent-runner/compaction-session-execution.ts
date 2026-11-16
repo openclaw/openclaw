@@ -383,7 +383,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           effectiveModel,
           {
             sessionId: params.sessionId,
-            authProfileId: runtimePlan.auth.forwardedAuthProfileId,
             enabled: compactionReplayEnabled,
           },
         );
@@ -467,7 +466,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             replay: {
               model: effectiveModel,
               sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
               enabled: compactionReplayEnabled,
             },
           });
@@ -549,6 +547,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   requestState,
                   manualSummary ? "none" : summaryOutputPolicy,
                   {
+                    // Recovery progress announces diagId; the persisted entry must match it.
+                    itemId: diagId,
                     requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
                     requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,

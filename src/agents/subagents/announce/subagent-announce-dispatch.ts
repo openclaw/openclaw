@@ -19,6 +19,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "operator_authority_unavailable"
   | "requester_abandoned"
+  | "requester_state_conflict"
   | "requester_transcript_conflict"
   | "requester_turn_pending"
   | "source_owner_changed"
@@ -66,8 +67,6 @@ export type SubagentAnnounceDirectParams = {
   inputAttachments?: AgentRunRequest["attachments"];
   expectsCompletionMessage: boolean;
   completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  completionRequesterLifecycleRevision?: string;
   requireVisibleReply?: boolean;
   requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;
