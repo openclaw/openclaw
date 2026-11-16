@@ -101,16 +101,23 @@ export function prependUniqueNativeMessages(messages: unknown[], current: unknow
   const duplicateCounts = new Map<string, number>();
   for (const message of current) {
     const source = nativeHistoryMessageSourceIdentity(message);
-    if (!source || !incomingSources.has(source)) {
+    if (!source) {
       continue;
     }
-    // Most older pages have disjoint sources. Only overlapping rows need
-    // content comparison; keep counts local so hydrated projections stay fresh.
+    // An older page ends where the loaded transcript begins, so overlap can only
+    // lead it. Stop at the first loaded source the page lacks instead of reading
+    // every loaded row; keep counts local so hydrated projections stay fresh.
+    if (!incomingSources.has(source)) {
+      break;
+    }
     const identity = nativeHistoryMessageIdentity(message);
     if (identity) {
       overlappingSources.add(source);
       duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
     }
+  }
+  if (!overlappingSources.size) {
+    return [...messages, ...current];
   }
   const uniqueMessages = messages.filter((message) => {
     const source = nativeHistoryMessageSourceIdentity(message);

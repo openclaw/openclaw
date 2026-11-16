@@ -447,6 +447,34 @@ export function publishChatSessionProjectionMessages(
   return projection;
 }
 
+/** Prepend an older page: classify only its rows and keep every loaded entry as-is. */
+export function prependChatSessionProjectionMessages(
+  owner: ChatSessionProjectionOwner,
+  messages: readonly unknown[],
+): void {
+  const scope = readChatSessionProjectionScope(owner);
+  const current = getChatSessionProjection(owner, scope);
+  if (chatSessionProjections.get(owner)?.projection !== current) {
+    // A changed scope detaches the reducer; republish the whole transcript under it.
+    publishChatSessionProjectionMessages(owner, [...messages, ...owner.chatMessages], { scope });
+    return;
+  }
+  // Entry classification only carries state forward, so older rows cannot
+  // change the loaded entries after them. Pairing media is live-only: loaded
+  // entries keep their own and history rows never carry it, so skip retention.
+  const older = createSessionProjection(scope, messages);
+  publishChatSessionProjection(
+    owner,
+    {
+      ...current,
+      scope: { ...current.scope, ...scope },
+      entries: [...older.entries, ...current.entries],
+      messages: [...older.messages, ...current.messages],
+    },
+    false,
+  );
+}
+
 // History arrays are replaced, never mutated; index each once, not per scroll render.
 const userIdentities = new WeakMap<
   readonly unknown[],
