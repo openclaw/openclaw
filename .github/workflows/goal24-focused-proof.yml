@@ -167,3 +167,47 @@ jobs:
           path: proof-output/
           if-no-files-found: error
           retention-days: 7
+
+  steering-causal:
+    name: steering-causal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout exact steering candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 1fab66039a51c51fe9c6585d2f9b7365461be252
+          path: source
+          persist-credentials: false
+      - name: Checkout original module without executing baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 976a4fb8784a326579108e03d0df4356dad501a3
+          path: baseline
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Execute four steering cases with candidate and original module
+        run: node tooling/scripts/goal24-steering-proof.mjs
+      - name: Preserve synthetic steering evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-steering-${{ github.run_id }}
+          path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
