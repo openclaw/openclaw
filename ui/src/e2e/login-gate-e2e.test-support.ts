@@ -7,6 +7,7 @@ import { expect, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   installMockGateway,
+  startCopiedProductionControlUiE2eServer,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -204,10 +205,12 @@ export function phoneProofIdentity(): Pick<
   };
 }
 
-export async function startPhoneProofServer(buildId: string) {
+export async function startPhoneProofServer(buildId: string, productionRoot?: string) {
   const buildDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-login-gate-e2e-"));
   try {
-    const server = await startProductionControlUiE2eServer(buildDir, buildId);
+    const server = productionRoot
+      ? await startCopiedProductionControlUiE2eServer(productionRoot, buildDir, buildId)
+      : await startProductionControlUiE2eServer(buildDir, buildId);
     return {
       baseUrl: server.baseUrl,
       close: async () => {
