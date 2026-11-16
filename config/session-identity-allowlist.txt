@@ -446,7 +446,7 @@ src/agents/session-maintenance/run.ts	6
 src/agents/session-model-auto-revert.ts	5
 src/agents/session-placement-admission.ts	4
 src/agents/session-placement-computer.ts	4
-src/agents/sessions/agent-session-compaction.ts	1
+src/agents/sessions/agent-session-compaction.ts	2
 src/agents/sessions/agent-session-inspection.ts	5
 src/agents/sessions/auth-storage-oauth-refresh.ts	1
 src/agents/sessions/background-result-placement.ts	2
@@ -580,11 +580,11 @@ src/agents/tools/sessions-operator-authority.ts	1
 src/agents/tools/sessions-resolution.ts	2
 src/agents/tools/sessions-search-tool.ts	12
 src/agents/tools/sessions-send-communication-endpoint.ts	2
-src/agents/tools/sessions-send-communication.ts	52
-src/agents/tools/sessions-send-executor.ts	11
+src/agents/tools/sessions-send-communication.ts	29
+src/agents/tools/sessions-send-executor.ts	10
 src/agents/tools/sessions-send-followup.ts	4
 src/agents/tools/sessions-send-reply-flow.ts	2
-src/agents/tools/sessions-send-resume.ts	7
+src/agents/tools/sessions-send-resume.ts	2
 src/agents/tools/sessions-send-tool.delivery.ts	8
 src/agents/tools/sessions-spawn-cloud.ts	3
 src/agents/tools/sessions-spawn-tool.ts	1
@@ -688,7 +688,6 @@ src/channels/turn/admitting-gateway-delivery.ts	1
 src/channels/turn/direct-delivery-active.ts	2
 src/channels/turn/direct-delivery-custody.ts	1
 src/channels/turn/pending-delivery-notice.ts	5
-src/chat/conversation-skills.ts	4
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/daemon-cli/install-restore-cli.ts	1
 src/cli/daemon-cli/lifecycle-unmanaged.ts	3
@@ -1190,7 +1189,6 @@ src/gateway/session-transcript-entry-message.ts	1
 src/gateway/session-transcript-files.fs.ts	4
 src/gateway/session-transcript-memory-reader.ts	3
 src/gateway/session-transcript-read-kernel.ts	3
-src/gateway/session-transcript-summary.ts	1
 src/gateway/session-transcript-title-reader.worker.ts	4
 src/gateway/session-utils-read-lifetime.ts	4
 src/gateway/sessions-history-http.ts	8
@@ -1368,6 +1366,7 @@ src/infra/outbound/message-action-runner.ts	1
 src/infra/outbound/mirror.ts	1
 src/infra/outbound/prepared-session-binding.ts	1
 src/infra/outbound/source-reply-mirror.ts	4
+src/infra/package-release-slot.ts	1
 src/infra/package-update-activation-custody.ts	2
 src/infra/package-update-activation-immutable-pointer.ts	4
 src/infra/package-update-activation-immutable-recovery.ts	5
@@ -1378,6 +1377,7 @@ src/infra/package-update-integrity.ts	1
 src/infra/package-update-npm-root.ts	1
 src/infra/package-update-publication-owner.ts	1
 src/infra/package-update-publication-tree.ts	1
+src/infra/package-update-release-switch.ts	1
 src/infra/package-update-swap-retirement.ts	1
 src/infra/postgres-sync/transaction.ts	1
 src/infra/push-apns-store.errors.ts	1
@@ -1433,6 +1433,7 @@ src/infra/update-database-generations.ts	2
 src/infra/update-deferred-model-retirement.ts	1
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
+src/infra/update-doctor-result.ts	1
 src/infra/update-doctor-scan-receipts.ts	3
 src/infra/update-failure-report-prepare.ts	2
 src/infra/update-immutable-activation.ts	3
