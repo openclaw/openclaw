@@ -96,18 +96,9 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
               includeEventJson: true,
               afterSeq: options.afterSeq,
             },
-            {
-              consumeInput() {},
-              notify() {},
-              async request(value, transferList) {
-                chunks.push(
-                  structuredClone(value, {
-                    transfer: transferList?.slice(),
-                  }) as SessionTranscriptHydrationChunk,
-                );
-                await options.onChunk?.();
-                return { input: undefined, consumed() {} };
-              },
+            async (value, transferList) => {
+              chunks.push(structuredClone(value, { transfer: transferList.slice() }));
+              await options.onChunk?.();
             },
             {
               signal: new AbortController().signal,

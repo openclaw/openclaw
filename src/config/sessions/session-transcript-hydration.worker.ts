@@ -13,7 +13,6 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
-import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
@@ -29,13 +28,17 @@ import { readTranscriptContextStateInTransaction } from "./session-accessor.sqli
 import { iterateSessionColdRecords } from "./session-cold-storage-chunks.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
+import {
+  createSessionTranscriptHydrationStream,
+  SESSION_TRANSCRIPT_SLICE_BYTES as SLICE_BYTES,
+  type SessionTranscriptHydrationConsumer,
+} from "./session-transcript-hydration-stream.js";
 import type { SessionTranscriptStreamedBoundedResult } from "./session-transcript-hydration.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionHistoryWorkerInput,
-  SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-worker.types.js";
 import {
@@ -43,10 +46,6 @@ import {
   readTranscriptStorageEncoding,
   transcriptEventJsonSql,
 } from "./transcript-payload.js";
-
-const SLICE_BYTES = 64 * 1024;
-const CHUNK_BYTES = 1024 * 1024;
-const CHUNK_FRAMES = 128;
 
 /** Read the compaction owner's session facts inside the transcript's own read snapshot. */
 export function readSessionCompactionPreparation(
@@ -74,10 +73,10 @@ export function readSessionCompactionPreparation(
   return { sessionTarget, entry, runtimeEntry, primaryConversation };
 }
 
-/** One task owns its snapshot through every acknowledged frame and native cleanup. */
+/** One task owns its snapshot through every consumed frame and native cleanup. */
 export async function streamSessionTranscriptHydration(
   request: Extract<SessionHistoryWorkerInput, { kind: "transcript-hydration" }>,
-  channel: WorkerTaskChannel,
+  consume: SessionTranscriptHydrationConsumer,
   control: WorkerTaskControl,
   select?: (
     database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
@@ -289,28 +288,7 @@ export async function streamSessionTranscriptHydration(
           afterSeq = expectDefined(metadata.at(-1), "transcript metadata page").seq;
         }
       }
-      let frames: SessionTranscriptHydrationChunk["frames"] = [];
-      let transfers: ArrayBuffer[] = [];
-      let bytes = 0;
-      let eventCount = 0;
-      const flush = async () => {
-        if (frames.length === 0) {
-          return;
-        }
-        const response = await channel.request(
-          {
-            kind: "transcript-hydration-chunk",
-            encoding,
-            frames,
-          } satisfies SessionTranscriptHydrationChunk,
-          transfers,
-        );
-        response.consumed();
-        frames = [];
-        transfers = [];
-        bytes = 0;
-        control.throwIfCancelled();
-      };
+      const stream = createSessionTranscriptHydrationStream(encoding, consume, control);
       for (const row of readRows()) {
         const initial =
           row.complete ??
@@ -328,30 +306,24 @@ export async function streamSessionTranscriptHydration(
             (offset === 1
               ? initial
               : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row").data);
-          if (bytes + data.byteLength > CHUNK_BYTES) {
-            await flush();
-          }
-          if (owned) {
-            transfers.push(owned.buffer);
-          }
           const endOfEvent = data.byteLength < SLICE_BYTES;
-          frames.push({
-            data,
-            endOfEvent,
-            ...((selected || request.includeEventJson) && endOfEvent ? { seq: row.seq } : {}),
-          });
-          bytes += data.byteLength;
-          if (bytes >= CHUNK_BYTES || frames.length >= CHUNK_FRAMES) {
-            await flush();
+          const pending = stream.writeFrame(
+            {
+              data,
+              endOfEvent,
+              ...((selected || request.includeEventJson) && endOfEvent ? { seq: row.seq } : {}),
+            },
+            owned?.buffer,
+          );
+          if (pending) {
+            await pending;
           }
           if (endOfEvent) {
-            eventCount++;
             break;
           }
         }
       }
-      await flush();
-      control.throwIfCancelled();
+      const eventCount = await stream.finish();
       outcome = {
         value: selected
           ? { kind: "streamed-bounded", ...selected, eventCount }

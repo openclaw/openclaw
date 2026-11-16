@@ -6,6 +6,8 @@ import { assertNoActiveSqliteReaders } from "../../infra/sqlite-reader-lifecycle
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import * as readonlyStore from "../../state/openclaw-agent-db-readonly.js";
+import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { createSessionTranscriptHydrationDecoder } from "./session-transcript-hydration-decoder.js";
 import { streamSessionTranscriptHydration } from "./session-transcript-hydration.worker.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-worker.types.js";
 
@@ -61,17 +63,10 @@ function fixture(
         includeEventJson: true,
         afterSeq,
       },
-      {
-        consumeInput() {},
-        notify() {},
-        async request(value, transferList) {
-          const chunk = structuredClone(value, {
-            transfer: transferList?.slice(),
-          }) as SessionTranscriptHydrationChunk;
-          chunks.push(chunk);
-          await onChunk?.(chunk);
-          return { input: undefined, consumed() {} };
-        },
+      async (value, transferList) => {
+        const chunk = structuredClone(value, { transfer: transferList.slice() });
+        chunks.push(chunk);
+        await onChunk?.(chunk);
       },
       {
         signal: controller.signal,
@@ -186,4 +181,42 @@ it("keeps empty events and applies a negative sequence fence before decoding", a
   expect(frames.map((frame) => frame.seq)).toEqual([-2, 0]);
   expect(frames[0]).toEqual({ data: new Uint8Array(), endOfEvent: true, seq: -2 });
   expect(f.transactionsAtClose).toEqual([false]);
+});
+
+it("decodes complete full-fidelity rows once across native slices", async () => {
+  const event = {
+    type: "message",
+    id: "full-fidelity",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    message: {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "synthetic-call",
+      content: [{ type: "text", text: `HEAD ${"漢字".repeat(40_000)} TAIL` }],
+      details: { retainedStorageFact: "synthetic-private-data" },
+      timestamp: 1,
+    },
+  };
+  const json = JSON.stringify(event);
+  using f = fixture([{ seq: 1, text: json }]);
+  const decoder = createSessionTranscriptHydrationDecoder({ includeEventJson: true });
+  const parse = vi.spyOn(JSON, "parse");
+  let decoded: PreparedSessionTranscriptHydration;
+  let rowDecodes = 0;
+  try {
+    const result = await f.stream(async (chunk) => decoder.accept(chunk));
+    decoded = decoder.finish(result);
+    rowDecodes = parse.mock.calls.filter(([value]) => value === json).length;
+  } finally {
+    parse.mockRestore();
+  }
+  expect(rowDecodes).toBe(1);
+  expect(f.frames().length).toBeGreaterThan(1);
+  expect(decoded.snapshot.events).toEqual([event]);
+  if (decoded.kind !== "full") {
+    throw new Error("Expected full transcript hydration");
+  }
+  expect(decoded.snapshot.eventJson).toEqual([json]);
+  expect(decoded.snapshot.eventSeqs).toEqual([1]);
 });

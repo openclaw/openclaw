@@ -1,6 +1,7 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
+import type { SessionTranscriptHydrationConsumer } from "./session-transcript-hydration-stream.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
@@ -60,6 +61,12 @@ export async function readSessionTranscriptHydrationRequest(
       resolvedScope: request.resolvedScope,
     });
   }
+  const consume: SessionTranscriptHydrationConsumer | undefined = channel
+    ? async (chunk, transfers) => {
+        const response = await channel.request(chunk, transfers);
+        response.consumed();
+      }
+    : undefined;
   const { readSessionTranscriptBoundedActiveContextCore, readSessionTranscriptCompactionPlan } =
     await import("./session-accessor.sqlite-active-context.js");
   const { readSessionCompactionPreparation, streamSessionTranscriptHydration } =
@@ -119,10 +126,10 @@ export async function readSessionTranscriptHydrationRequest(
       ...(compaction ? { compaction } : {}),
     });
     if ("compaction" in request.limits && request.limits.compaction) {
-      if (!channel) {
+      if (!consume) {
         throw new Error("Compaction transcript hydration requires its host channel");
       }
-      return streamSessionTranscriptHydration(request, channel, control, (database) => {
+      return streamSessionTranscriptHydration(request, consume, control, (database) => {
         const snapshot = readSessionTranscriptCompactionPlan(request.target, {
           ...options,
           transaction: database,
@@ -133,8 +140,8 @@ export async function readSessionTranscriptHydrationRequest(
     const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, options);
     return { kind: "bounded" as const, snapshot, ...facts() };
   }
-  if (!channel) {
+  if (!consume) {
     throw new Error("Full transcript hydration requires its host channel");
   }
-  return streamSessionTranscriptHydration(request, channel, control);
+  return streamSessionTranscriptHydration(request, consume, control);
 }
