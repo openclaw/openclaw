@@ -1,6 +1,16 @@
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
 import type { SessionRequestClient } from "./session-capability.ts";
 
+/** Share of billed prompt tokens read from the provider cache; null when nothing was billed. */
+export function promptCacheHitRate(usage: {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+}): number | null {
+  const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
+  return prompt > 0 ? usage.cacheRead / prompt : null;
+}
+
 export type SessionUsageTarget = { key: string; agentId?: string };
 
 export type SessionUsageQuery = {
