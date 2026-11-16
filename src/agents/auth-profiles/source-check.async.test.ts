@@ -50,12 +50,18 @@ async function expectSource(
   calibrate = false,
 ) {
   const sql = observeMainThreadSql();
+  using sourceExists = vi.spyOn(fs, "existsSync");
   try {
     if (calibrate) {
       sql.calibrate();
     }
     expect(await hasSource(agentDir, reader)).toBe(expected);
     sql.expectIdle();
+    expect(
+      sourceExists.mock.calls.filter(([pathname]) =>
+        /(?:^|[/\\])(?:auth-profiles|auth-state|auth|oauth)\.json$/.test(String(pathname)),
+      ),
+    ).toEqual([]);
   } finally {
     sql.restore();
   }
