@@ -71,7 +71,8 @@ const controlUiPerformanceBudgets = {
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
-  newBootJsGzipBytes: 816_160,
+  // Authored agent welcome prompts (#197402): bounded +256 B over the prior cap.
+  newBootJsGzipBytes: 816_416,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
