@@ -81,6 +81,8 @@ function mountPicker(optionsReady = true) {
     flush();
     await new Promise(requestAnimationFrame);
     if (picker.open) {
+      // Settle the first lazy panel import before the fast DOM-only readiness check.
+      await vi.dynamicImportSettled();
       await waitForModelMenu(picker);
       if (params.modelOptions.length) {
         await waitForSolid(() =>
