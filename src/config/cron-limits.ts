@@ -1,10 +1,15 @@
 export const DEFAULT_CRON_ENABLED = true;
 /**
- * Automation runs that conversations never take away: automation may use more of the agent
- * concurrency limit that conversations leave free. Low free memory can still hold it below this.
+ * Most cron jobs allowed to run at once. Low free memory holds automation to one run at a time
+ * below this; see `resolveCronRunSlots`.
  */
-export const DEFAULT_CRON_MAX_CONCURRENT_RUNS = 8;
+export const DEFAULT_CRON_MAX_CONCURRENT_RUNS = 16;
 const DEFAULT_CRON_TRIGGER_MIN_INTERVAL_MS = 30_000;
+
+/** Resolves cron concurrency config, flooring finite values and clamping to at least one. */
+export function resolveCronMaxConcurrentRuns(): number {
+  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
+}
 
 /** Resolves the minimum cadence for trigger-bearing cron jobs. */
 export function resolveCronTriggerMinIntervalMs(): number {

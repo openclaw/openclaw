@@ -241,8 +241,8 @@ function armActor(
       );
     }
   }
-  // A conversation turn ending or memory being freed opens a run slot without any automation
-  // event. While a run is queued or a fired condition waits for a slot, look again within a minute.
+  // Memory being freed opens a run slot without any automation event. While a run is queued or a
+  // fired condition waits for a slot, look again within a minute.
   const awaitingRunSlot = jobs.some(waitsForRunSlot);
   if (!enabled && !awaitingRunSlot) {
     return undefined;

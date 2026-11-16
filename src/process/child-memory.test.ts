@@ -7,23 +7,15 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   getHostExecMemoryBudget,
   readCgroupMemoryUsage,
-  readHostExecMemory,
   watchHostExecMemory,
 } from "./child-memory.js";
-
-type HostExecMemoryOwner = {
-  budget?: { memoryBytes: number; swapBytes: number };
-  commandSamples: unknown[];
-};
 
 const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<string>>(),
   readdir: vi.fn<(path: string) => Promise<string[]>>(),
 }));
 const memoryOwner = vi.hoisted(() => {
-  const state: {
-    current?: HostExecMemoryOwner;
-  } = {};
+  const state: { current?: { budget?: { memoryBytes: number; swapBytes: number } } } = {};
   return state;
 });
 vi.mock("../../node-version.mjs", async (importOriginal) => {
@@ -42,7 +34,7 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
       if (args[0] !== Symbol.for("openclaw.hostExecMemory")) {
         return actual.resolveGlobalSingleton(...args);
       }
-      const create = args[1] as () => HostExecMemoryOwner;
+      const create = args[1] as () => { budget?: { memoryBytes: number; swapBytes: number } };
       const owner = create();
       memoryOwner.current = owner;
       return owner;
@@ -92,7 +84,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   memoryOwner.current!.budget = undefined;
-  memoryOwner.current!.commandSamples = [];
   procfs.readFile.mockReset();
   procfs.readdir.mockReset();
 });
@@ -229,48 +220,6 @@ it("lets one command borrow unused capacity and cancels one large contributor af
   large.stop();
   await vi.advanceTimersByTimeAsync(1000);
   expect(small.onLimit).not.toHaveBeenCalled();
-});
-
-it("remembers the most one command held for the next ten minutes", async () => {
-  const files = {
-    "/proc/100/status": "VmRSS:\t96 kB\n",
-    "/proc/200/status": "VmRSS:\t16 kB\n",
-  };
-  mockFiles(files);
-  const large = watch(100);
-  watch(200);
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(readHostExecMemory()).toMatchObject({
-    usedBytes: 112 * 1024,
-    largestCommandBytes: 96 * 1024,
-  });
-  // The large command ends; later commands are still counted at its size.
-  large.stop();
-  await vi.advanceTimersByTimeAsync(5 * 60_000);
-  expect(readHostExecMemory()).toMatchObject({
-    usedBytes: 16 * 1024,
-    largestCommandBytes: 96 * 1024,
-  });
-  // Ten minutes on, the small command's samples take over.
-  await vi.advanceTimersByTimeAsync(5 * 60_000 + 5000);
-  expect(readHostExecMemory()).toMatchObject({ largestCommandBytes: 16 * 1024 });
-});
-
-it("falls back to a smaller recent command when the largest one expires", async () => {
-  mockFiles({ "/proc/100/status": "VmRSS:\t96 kB\n", "/proc/200/status": "VmRSS:\t48 kB\n" });
-  const large = watch(100);
-  await vi.advanceTimersByTimeAsync(1000);
-  large.stop();
-  await vi.advanceTimersByTimeAsync(3 * 60_000);
-  const smaller = watch(200);
-  await vi.advanceTimersByTimeAsync(1000);
-  smaller.stop();
-  // Ten minutes after the large command, the smaller one is still within its window.
-  await vi.advanceTimersByTimeAsync(7 * 60_000);
-  expect(readHostExecMemory()).toMatchObject({ largestCommandBytes: 48 * 1024 });
-  // Ten minutes after the smaller one, no command is recent.
-  await vi.advanceTimersByTimeAsync(4 * 60_000);
-  expect(readHostExecMemory()).toMatchObject({ largestCommandBytes: 0 });
 });
 
 it.each(["throw", "reject"])(

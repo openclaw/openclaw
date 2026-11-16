@@ -1,8 +1,6 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { readCgroupMemoryHeadroomBytes, readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { readHostExecMemory } from "../../process/child-memory.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { listAgentDatabaseAdmissionRefusals } from "../../state/agent-database-admission.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -18,62 +16,31 @@ export function preparingCronAgentIds(env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Run slots automation may hold right now. Automation shares the agent concurrency limit with
- * conversations and yields to them: every conversation turn in progress takes one slot away, down
- * to the eight automation always keeps. Conversations are never held back by automation. Memory
- * can lower this further, down to one; see {@link resolveCronMemoryRunSlots}.
+ * Free memory below which automation starts no further run while one is going, as GNU parallel's
+ * `--memfree` does. Due jobs often come due together, and a drain starts all it may at once,
+ * before their memory shows, so the threshold holds a full burst: 16 runs at the 256 MiB that
+ * each command took in an 8 GiB container where, on main, eight runs started with about 1 GiB
+ * left and 15 of 16 commands were OOM-killed.
+ */
+const CRON_RUN_MEMFREE_BYTES = DEFAULT_CRON_MAX_CONCURRENT_RUNS * 256 * 1024 ** 2;
+
+/**
+ * Run slots automation may hold right now: the fixed cron limit, or one while free memory is
+ * under {@link CRON_RUN_MEMFREE_BYTES}, so a run always progresses and running ones are never
+ * stopped. Free memory is the least of what the host has free or reclaimable, what the Gateway's
+ * cgroup v2 limits leave (counting every process in them, not inactive file cache), and on Linux
+ * what the exec memory budget leaves. Where the cgroup files cannot be read, as on cgroup v1, the
+ * limit minus the Gateway's own memory stands in, which does not see other processes.
  */
 export function resolveCronRunSlots(): number {
-  const conversations = getCommandLaneSnapshot(CommandLane.Main);
-  return Math.min(
-    Math.max(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-      conversations.maxConcurrent - conversations.activeCount,
-    ),
-    resolveCronMemoryRunSlots(),
-  );
-}
-
-/**
- * The least memory one automation run is taken to use: its agent session, model streams, and the
- * tool processes it starts. When a recent exec command held more, that is the figure instead.
- */
-const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
-
-/**
- * Runs that fit in half of the memory open to automation, at the per-run figure; at least one, so
- * automation always progresses, and runs already going are never stopped. Open memory is what is
- * free plus what running exec commands hold, so it does not depend on how many runs are going:
- * runs that just started, whose commands have not shown up as used yet, cannot use up the other
- * half however many times the queue is drained before they do.
- *
- * Host memory counts reclaimable cache as free. Under a cgroup v2 memory limit, open memory is
- * what the cgroup has left, so processes sharing the Gateway's container count against it too;
- * inactive file cache counts as free, since the kernel reclaims it before killing anything. Where
- * those files cannot be read, as on cgroup v1, the limit minus the Gateway's own memory stands in,
- * which does not see other processes. Commands also stay within the exec memory budget, past
- * which the exec guard kills them.
- *
- * Accepted edge case: after a quiet period no recent command sets the figure, so a burst whose
- * commands are much larger than 256 MiB can still exceed the exec budget. The exec guard then
- * stops the largest command with an error naming the budget.
- */
-function resolveCronMemoryRunSlots(): number {
   const exec = readHostExecMemory();
-  const commands = exec?.usedBytes ?? 0;
-  const cgroupHeadroom = readCgroupMemoryHeadroomBytes();
   const limit = process.constrainedMemory();
-  const open = Math.min(
-    readHostFreeMemoryBytes() + commands,
-    cgroupHeadroom !== undefined
-      ? cgroupHeadroom + commands
-      : limit > 0
-        ? limit - process.memoryUsage.rss()
-        : Infinity,
-    exec ? exec.budgetBytes : Infinity,
+  const free = Math.min(
+    readHostFreeMemoryBytes(),
+    readCgroupMemoryHeadroomBytes() ?? (limit > 0 ? limit - process.memoryUsage.rss() : Infinity),
+    exec ? exec.budgetBytes - exec.usedBytes : Infinity,
   );
-  const perRun = Math.max(RUN_MEMORY_BYTES, exec?.largestCommandBytes ?? 0);
-  return Math.max(1, Math.floor(open / 2 / perRun));
+  return free < CRON_RUN_MEMFREE_BYTES ? 1 : DEFAULT_CRON_MAX_CONCURRENT_RUNS;
 }
 
 /** The conversation a job's run would have to wait for right now, if its turn is still running. */

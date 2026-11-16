@@ -4,11 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { stubFreeMemory } from "../../test/helpers/cron/free-memory.js";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import * as hostMemory from "../infra/host-memory.js";
 import * as childMemory from "../process/child-memory.js";
-import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import * as work from "../process/gateway-work-admission.js";
-import { CommandLane } from "../process/lanes.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
@@ -300,7 +299,9 @@ it("queues a source-less one-shot for its busy session before launching the sess
 it("checks conditions while every run slot is busy and runs a fired payload when one frees", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
-  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
+  const longs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+    dueJob(`long-${index}`, nowMs, dueAtMs),
+  );
   const watchers = ["quiet", "fires"].map((id) =>
     Object.assign(dueJob(id, nowMs, dueAtMs), {
       schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
@@ -334,7 +335,7 @@ it("checks conditions while every run slot is busy and runs a fired payload when
   try {
     nowMs = dueAtMs;
     await running.wake(state);
-    // Eight payloads hold every run slot; both conditions are checked all the same.
+    // Long payloads hold every run slot; both conditions are checked all the same.
     await vi.waitFor(() => expect(evaluated).toEqual(["quiet", "fires"]));
     expect(started.toSorted()).toEqual(longs.map((job) => job.id).toSorted());
     // The fired condition waits for a run slot, holding neither a slot nor a check.
@@ -362,7 +363,9 @@ it.each([
 ])("%s a fired condition's wait for a run slot", async (_name, reload) => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
-  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
+  const longs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+    dueJob(`long-${index}`, nowMs, dueAtMs),
+  );
   const watcher = Object.assign(dueJob("fires", nowMs, dueAtMs), {
     schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
     trigger: { script: "return { fire: true }" },
@@ -417,7 +420,7 @@ it.each([
   }
 });
 
-it("starts fewer automations while free memory is short, and at least one", async () => {
+it("starts no further run while free memory is under 4 GiB, and at least one", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
   const store = await seedJobs(
@@ -435,79 +438,28 @@ it("starts fewer automations while free memory is short, and at least one", asyn
     },
   });
   const gib = 1024 ** 3;
-  stubFreeMemory(0);
-  setCommandLaneConcurrency(CommandLane.Main, 32);
+  stubFreeMemory(3 * gib);
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
-    // No free memory: one run at a time, so automation still progresses.
+    // Under the threshold: one run, so automation still progresses, and no second one.
     nowMs = dueAtMs;
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(1));
     await running.wake(state);
     expect(started).toHaveLength(1);
 
-    // 1 GiB free: half of it holds two runs at 256 MiB each.
-    stubFreeMemory(gib);
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(2));
-    // The runs took that memory: no more start.
-    stubFreeMemory(gib / 2);
-    await running.wake(state);
-    expect(started).toHaveLength(2);
-
-    // The host has memory again, but the jobs' exec commands hold the whole exec budget.
+    // The host has memory again, but the jobs' exec commands leave less than 4 GiB of budget.
     stubFreeMemory(16 * gib);
     const exec = vi
       .spyOn(childMemory, "readHostExecMemory")
-      .mockReturnValue({ budgetBytes: 2 * gib, usedBytes: 2 * gib, largestCommandBytes: gib });
+      .mockReturnValue({ budgetBytes: 6 * gib, usedBytes: 3 * gib });
     await running.wake(state);
-    expect(started).toHaveLength(2);
+    expect(started).toHaveLength(1);
 
-    // The commands end, but one held 8 GiB: the next jobs are counted at that, not 256 MiB.
-    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0, largestCommandBytes: 8 * gib });
-    await running.wake(state);
-    expect(started).toHaveLength(2);
-
-    // Commands are small again: the rest start, up to the agent limit.
-    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0, largestCommandBytes: 0 });
+    // Memory is free: the rest start together.
+    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0 });
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(12));
-  } finally {
-    finish.resolve();
-    await waitForCronRunQueue(state);
-    stop(state);
-  }
-});
-
-it("keeps half of the open memory spare however often the queue is drained", async () => {
-  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
-  const dueAtMs = nowMs + 1_000;
-  const store = await seedJobs(
-    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
-  );
-  const finish = createDeferred();
-  const started: string[] = [];
-  const state = cron.createCronRegressionState({
-    storePath: store.storePath,
-    nowMs: () => nowMs,
-    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
-      started.push(job.id);
-      await finish.promise;
-      return { status: "ok" as const, summary: job.id };
-    },
-  });
-  // 2 GiB free: half of it holds four runs at 256 MiB each.
-  stubFreeMemory(2 * 1024 ** 3);
-  setCommandLaneConcurrency(CommandLane.Main, 32);
-  const running = await captureCronSchedulerWakeForTest(() => start(state));
-  try {
-    nowMs = dueAtMs;
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(4));
-    // The new runs' memory has not shown up yet: further drains start no more.
-    await running.wake(state);
-    await running.wake(state);
-    expect(started).toHaveLength(4);
   } finally {
     finish.resolve();
     await waitForCronRunQueue(state);
@@ -519,7 +471,7 @@ it("counts other processes in the Gateway's cgroup against its memory limit", as
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
   const store = await seedJobs(
-    Array.from({ length: 16 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+    Array.from({ length: 4 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
   );
   const finish = createDeferred();
   const started: string[] = [];
@@ -534,7 +486,8 @@ it("counts other processes in the Gateway's cgroup against its memory limit", as
   });
   const gib = 1024 ** 3;
   // An 8 GiB limit on the Gateway's parent cgroup, holding the 512 MiB Gateway, a 5 GiB peer
-  // process and 1 GiB of reclaimable file cache: 2.5 GiB is actually left.
+  // process and 1 GiB of reclaimable file cache: 2.5 GiB is left, though the limit minus the
+  // Gateway's own memory is 7.5 GiB.
   vi.spyOn(hostMemory, "readCgroupMemoryHeadroomBytes").mockRestore();
   vi.spyOn(process, "constrainedMemory").mockReturnValue(8 * gib);
   vi.spyOn(process.memoryUsage, "rss").mockReturnValue(gib / 2);
@@ -552,126 +505,15 @@ it("counts other processes in the Gateway's cgroup against its memory limit", as
     typeof args[0] === "string" && args[0] in files
       ? files[args[0]]
       : readFileSync(...args)) as typeof fs.readFileSync);
-  setCommandLaneConcurrency(CommandLane.Main, 16);
-  const running = await captureCronSchedulerWakeForTest(() => start(state));
-  try {
-    // Half of the 2.5 GiB left holds five runs at 256 MiB each, not the fifteen that the limit
-    // minus the Gateway's own memory would allow.
-    nowMs = dueAtMs;
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(5));
-    await running.wake(state);
-    expect(started).toHaveLength(5);
-  } finally {
-    finish.resolve();
-    await waitForCronRunQueue(state);
-    stop(state);
-  }
-});
-
-it("runs as many automations as the agent limit leaves free of conversations", async () => {
-  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
-  const dueAtMs = nowMs + 1_000;
-  const store = await seedJobs(
-    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
-  );
-  const release = createDeferred();
-  const finish = createDeferred();
-  const turnEnds = createDeferred();
-  const started: string[] = [];
-  const state = cron.createCronRegressionState({
-    storePath: store.storePath,
-    nowMs: () => nowMs,
-    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
-      await (started.push(job.id) === 1 ? release : finish).promise;
-      return { status: "ok" as const, summary: job.id };
-    },
-  });
-  // An agent limit of twelve with two conversation turns in progress leaves automation ten.
-  setCommandLaneConcurrency(CommandLane.Main, 12);
-  const turns = [turnEnds, finish].map((turn) =>
-    enqueueCommandInLane(CommandLane.Main, async () => await turn.promise),
-  );
-  const running = await captureCronSchedulerWakeForTest(() => start(state));
-  const runningJobs = async () =>
-    (await loadCronStore(store.storePath)).jobs.filter((job) => job.state.runningAtMs).length;
-  try {
-    nowMs = dueAtMs;
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(10));
-    expect(await runningJobs()).toBe(10);
-
-    // A run ends: its slot goes to a queued automation, and the count stays at ten.
-    release.resolve();
-    await vi.waitFor(() => expect(started).toHaveLength(11));
-    expect(await runningJobs()).toBe(10);
-
-    // A conversation turn ends: the next tick gives its slot to the last queued automation.
-    turnEnds.resolve();
-    await turns[0];
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(12));
-  } finally {
-    release.resolve();
-    turnEnds.resolve();
-    finish.resolve();
-    await Promise.all(turns);
-    await waitForCronRunQueue(state);
-    stop(state);
-  }
-});
-
-it("runs a fired payload when a conversation turn ending frees a run slot", async () => {
-  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
-  const dueAtMs = nowMs + 1_000;
-  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
-  const watcher = Object.assign(dueJob("fires", nowMs, dueAtMs), {
-    schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
-    trigger: { script: "return { fire: true }" },
-  });
-  const store = await seedJobs([...longs, watcher]);
-  const finish = createDeferred();
-  const turnEnds = createDeferred();
-  const started: string[] = [];
-  const state = cron.createCronRegressionState({
-    storePath: store.storePath,
-    nowMs: () => nowMs,
-    cronConfig: { triggers: { enabled: true } },
-    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
-      started.push(job.id);
-      if (job.id.startsWith("long-")) {
-        await finish.promise;
-      }
-      return { status: "ok" as const, summary: job.id };
-    },
-    evaluateCronTrigger: async () => ({ kind: "evaluated" as const, fire: true }),
-  });
-  // An agent limit of twelve with four conversation turns in progress leaves automation eight.
-  setCommandLaneConcurrency(CommandLane.Main, 12);
-  const turns = [turnEnds, finish, finish, finish].map((turn) =>
-    enqueueCommandInLane(CommandLane.Main, async () => await turn.promise),
-  );
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
     nowMs = dueAtMs;
     await running.wake(state);
-    await vi.waitFor(async () =>
-      expect(
-        (await loadCronStore(store.storePath)).jobs.find((job) => job.id === "fires")?.state
-          .runSlotWaitReceiptId,
-      ).toEqual(expect.any(String)),
-    );
-    expect(started).not.toContain("fires");
-
-    // Only a conversation turn ends; the next periodic wake gives its slot to the fired payload.
-    turnEnds.resolve();
-    await turns[0];
+    await vi.waitFor(() => expect(started).toHaveLength(1));
     await running.wake(state);
-    await vi.waitFor(() => expect(started).toContain("fires"));
+    expect(started).toHaveLength(1);
   } finally {
-    turnEnds.resolve();
     finish.resolve();
-    await Promise.all(turns);
     await waitForCronRunQueue(state);
     stop(state);
   }

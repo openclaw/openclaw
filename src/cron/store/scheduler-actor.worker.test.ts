@@ -548,7 +548,7 @@ it("looks again within a minute while a run waits for a run slot", async () => {
   const started = scheduler.start(now, { snapshot: immediate(busy.length).snapshot });
   expect(started.launches).toHaveLength(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
   // The next due job is ten hours away; the queued run is looked at again after a minute, since
-  // a conversation turn ending or memory being freed can open a slot.
+  // memory being freed can open a slot.
   expect(started.nextWakeAtMs).toBe(now + 10 * hour);
   await vi.advanceTimersByTimeAsync(minute);
   expect(wakes.posted).toHaveBeenCalledTimes(1);

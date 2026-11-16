@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
   createAgentDatabaseInspectionRefusal,
   readAgentDatabaseAdmissionRefusal,
@@ -227,7 +228,7 @@ it("finishes cron initialization while missed command jobs await their agents", 
 it.for(["manual", "scheduled"] as const)(
   "keeps service-scoped preparing jobs queued while a healthy agent runs: %s",
   async (source, { signal }) => {
-    const slowJobs = Array.from({ length: 8 }, (_, index) => ({
+    const slowJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) => ({
       ...commandJob(`slow-${index}`, NOW),
       agentId: "preparing",
     }));
@@ -595,7 +596,9 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   const capacityFilled = createDeferred();
   const exitAccepted = createDeferred();
   const timerRequested = createDeferred();
-  const blockers = Array.from({ length: 8 }, (_, index) => commandJob(`blocker-${index}`));
+  const blockers = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+    commandJob(`blocker-${index}`),
+  );
   const manual = commandJob("queued-manual");
   const disabled = commandJob("queued-disabled");
   const removed = commandJob("queued-removed");
@@ -677,7 +680,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
         await cron.update(job.id, { enabled: false });
       }
       expect(await sibling.waitForManualRun(ack.runId, 60_000, signal)).toBe(true);
-      expect(active).toBe(8);
+      expect(active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
       expect(executed).toEqual([]);
     }
     const streamRun = sibling.run(stream.id, "force", {
@@ -717,7 +720,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       throw new Error("Expected the accepted manual request ID");
     }
     expect(await cron.waitForManualRun(manualAck.runId, 60_000, signal)).toBe(true);
-    expect(peakActive).toBe(8);
+    expect(peakActive).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
     expect(executed.map((job) => job.id).toSorted()).toEqual(
       [exit.id, manual.id, timed.id].toSorted(),
     );

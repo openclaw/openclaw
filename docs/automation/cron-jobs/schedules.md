@@ -344,10 +344,7 @@ ends it without running the payload. Freed slots go to waiting payloads and queu
 order, so a run due before the condition's check still starts first. A check started by a manual or stream
 run, and the check of a job with a script payload, takes a run slot first.
 
-Run slots come from the agent concurrency limit
-([`agents.defaults.maxConcurrent`](/gateway/config-agents/models)), which automation shares
-with conversations, and from free memory: it uses the slots that conversation turns leave
-free, always keeps at least eight of those, and takes fewer when memory is short. See
+There are 16 run slots. While less than 4 GiB of memory is free, no further run starts, but one may always run. See
 [how automation works](/automation/cron-jobs/how-it-works).
 
 Cold runtime preparation can continue after an evaluation times out, so a later

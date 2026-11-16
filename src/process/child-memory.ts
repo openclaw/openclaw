@@ -158,17 +158,10 @@ const owner = resolveGlobalSingleton(
     timer?: NodeJS.Timeout;
     sampling: boolean;
     assessmentPending: boolean;
-    /**
-     * Command samples within the window, oldest first, each larger than every later one: the
-     * first is the window's largest, and when it expires the next largest takes its place. At
-     * most the samples of ten minutes; usually a few.
-     */
-    commandSamples: Array<{ bytes: number; atMs: number }>;
   } => ({
     watches: new Set(),
     sampling: false,
     assessmentPending: false,
-    commandSamples: [],
   }),
 );
 
@@ -181,53 +174,12 @@ export function getHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
 }
 
 /**
- * How long the most memory one command held stays the figure for the next ones. Long enough to
- * cover the gap between commands of recurring work, short enough that one unusual command does
- * not hold later work back for long.
+ * The exec budget and what watched commands hold now, for work that starts commands later and
+ * must leave them room. Sizes the budget if no command has yet; undefined off Linux.
  */
-const LARGEST_COMMAND_WINDOW_MS = 10 * 60_000;
-
-/**
- * The exec budget, what watched commands hold now, and the most one command has held within the
- * last ten minutes (0 when none has), for work that starts commands later and must leave them
- * room. Sizes the budget if no command has yet; undefined off Linux.
- */
-export function readHostExecMemory():
-  | { budgetBytes: number; usedBytes: number; largestCommandBytes: number }
-  | undefined {
+export function readHostExecMemory(): { budgetBytes: number; usedBytes: number } | undefined {
   const budget = getHostExecMemoryBudget();
-  dropExpiredCommandSamples(performance.now());
-  return (
-    budget && {
-      budgetBytes: budget.memoryBytes,
-      usedBytes: totalUsage().memoryBytes,
-      largestCommandBytes: owner.commandSamples[0]?.bytes ?? 0,
-    }
-  );
-}
-
-function dropExpiredCommandSamples(nowMs: number): void {
-  const samples = owner.commandSamples;
-  let expired = 0;
-  while (expired < samples.length && nowMs - samples[expired]!.atMs > LARGEST_COMMAND_WINDOW_MS) {
-    expired++;
-  }
-  samples.splice(0, expired);
-}
-
-/** A sample replaces the older ones it matches or exceeds, which can no longer be the largest. */
-function recordCommandSample({ pids, extra }: Snapshot): void {
-  let bytes = extra.memoryBytes;
-  for (const usage of pids.values()) {
-    bytes += usage.memoryBytes;
-  }
-  const atMs = performance.now();
-  const samples = owner.commandSamples;
-  while (samples.length > 0 && samples.at(-1)!.bytes <= bytes) {
-    samples.pop();
-  }
-  samples.push({ bytes, atMs });
-  dropExpiredCommandSamples(atMs);
+  return budget && { budgetBytes: budget.memoryBytes, usedBytes: totalUsage().memoryBytes };
 }
 
 function formatLimit(observed: HostExecMemoryUsage, budget: HostExecMemoryBudget): string {
@@ -491,7 +443,6 @@ export function watchHostExecMemory(
         }
         const previousPids = watch.snapshot.pids;
         watch.snapshot = snapshot;
-        recordCommandSample(snapshot);
         intervalMs = 5000;
         if (
           Array.from(snapshot.pids.keys()).some(
