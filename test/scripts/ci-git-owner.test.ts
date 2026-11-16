@@ -345,6 +345,29 @@ exec "$REAL_GIT" "$@"`,
   },
 );
 
+releasePolicyIt(
+  "recovers stalled shallow hydration without changing the pinned ancestry proof",
+  ({ command }) => {
+    const fixture = createAncestryFixture(command, 8, 220);
+    // Replay the observed no-progress fetch; recovery and ancestry use real Git.
+    const proxy = writeGitProxy(
+      fixture,
+      "recoverable-no-progress-git",
+      `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", proxyEnvironment(proxy)),
+      "merge-base",
+    );
+    expect(fixtureGit(checkout, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+    expect(fixtureGit(checkout, ["rev-parse", remoteMain])).toBe(fixture.target);
+  },
+);
+
 releasePolicyIt.for([false, true])(
   "rejects unprovable release history (stalled=%s)",
   (stalled, { command }) => {
@@ -353,7 +376,7 @@ releasePolicyIt.for([false, true])(
       ? writeGitProxy(
           fixture,
           "no-progress-git",
-          `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* ]]; then
+          `if [[ " $* " == *" fetch "* && ( " $* " == *" --deepen=128 "* || " $* " == *" --unshallow "* ) ]]; then
   exit 0
 fi
 exec "$REAL_GIT" "$@"`,
