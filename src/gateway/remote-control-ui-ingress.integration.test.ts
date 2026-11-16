@@ -16,6 +16,7 @@ import type {
   GatewayControlUiIngressFactoryV2,
   GatewayControlUiIngressV2,
 } from "../plugins/gateway-ingress.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { uploadUserBackground } from "../state/user-background.js";
 import {
@@ -37,6 +38,7 @@ import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import { defineIdMemberPluginHttpTests } from "./remote-control-ui-ingress-http.test-support.js";
 import {
   connect,
   request,
@@ -66,6 +68,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-met
 import { usersHandlers } from "./server-methods/users.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
@@ -131,6 +134,7 @@ describe("remote Control UI ingress production composition", () => {
   const lifetime = new AbortController();
   const grantLifetime = new AbortController();
   const clients = new GatewayClientRegistry();
+  const pluginRegistry = createEmptyPluginRegistry();
   let listener: Awaited<
     ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
   >;
@@ -276,6 +280,11 @@ describe("remote Control UI ingress production composition", () => {
       getRuntimeConfig: () => config,
       getGatewayRequestContext: () => requestContext as never,
       handleHooksRequest: async () => false,
+      handlePluginRequest: createGatewayPluginRequestHandler({
+        registry: pluginRegistry,
+        log: logger,
+        getGatewayRequestContext: () => gatewayContext,
+      }),
     });
     listener = await reserveTestPortListener({
       offsets: [0],
@@ -775,6 +784,15 @@ describe("remote Control UI ingress production composition", () => {
       }
     }
   });
+
+  defineIdMemberPluginHttpTests(() => ({
+    factory,
+    pluginRegistry,
+    workspaceDir: state.workspaceDir,
+    options: openOptions,
+    foreignSessionKey: OWNER_SESSION_KEY,
+    configureAuth,
+  }));
 
   it("uses the original ID membership for roleless app RPC, browser access, and recovery", async () => {
     await configureAuth(TOKEN_AUTH, {

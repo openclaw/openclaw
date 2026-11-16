@@ -114,6 +114,7 @@ export function authorizeControlUiPluginCookieRequest(
         ok: true as const,
         profile: {
           authenticatedUserProfile: principal.authenticatedUserProfile,
+          openclawIdPrincipal: principal.openclawIdPrincipal,
           operatorRolePolicy: principal.operatorRolePolicy,
           operatorRoleActor: principal.operatorRoleActor,
           operatorAccessAuthority: principal.operatorAccessAuthority,
