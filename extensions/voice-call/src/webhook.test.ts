@@ -696,19 +696,18 @@ it("coalesces starts, reuses its listening URL, and restarts after stop", async 
 });
 
 it.each([
-  ["named in streaming.provider", "openai", true],
-  ["left to automatic selection", undefined, false],
-])("tells a transcription provider whether it is %s", async (_name, named, expected) => {
-  const isConfiguredAsync = vi.fn<NonNullable<typeof mocks.stt.isConfiguredAsync>>(
-    async () => true,
-  );
-  mocks.stt.isConfiguredAsync = isConfiguredAsync;
+  ["starts when streaming.provider names it", "openai", true],
+  ["stays off under automatic selection", undefined, false],
+])("media streaming with a provider that is ready only when named %s", async (_name, named, on) => {
+  // Ready only once named, like a provider whose one key is a saved key.
+  mocks.stt.isConfiguredAsync = async (ctx) => ctx.selectedExplicitly === true;
   onTestFinished(() => {
     delete mocks.stt.isConfiguredAsync;
   });
   const config = { provider: "twilio", streaming: { enabled: true, provider: named } };
-  await fixture(config, streamingProvider()).server.start();
-  expect(isConfiguredAsync.mock.calls.map(([ctx]) => ctx.selectedExplicitly)).toEqual([expected]);
+  const { server } = fixture(config, streamingProvider());
+  await server.start();
+  expect(server.getMediaStreamHandler() !== null).toBe(on);
 });
 
 it("logs transcript counts without disclosing inactive-stream speech", async () => {
