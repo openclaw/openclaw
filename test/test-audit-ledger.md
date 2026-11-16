@@ -1030,6 +1030,20 @@ line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
 and local ClawSweeper report no actionable findings. The shared cleanup helper
 is unchanged and retains its prior 11-pass / one-Windows-skip proof.
 
+### Agent startup fixture cleanup custody
+
+At `33d26e441f91c3d2534071a8d36e8aa9d146d07f`, the agent startup timing fixture clears
+its directory tracker before asynchronous removal succeeds. A failed removal
+therefore leaves the root untracked. Delegate cleanup to the existing shared
+owner, preserving the order: flush timeline, restore stubbed environment, remove
+tracked roots. The single declaration / expanded case and all timeline-content
+assertions remain; production and shared-helper code are unchanged.
+
+Direct execution of the original hook with an injected removal failure preserves
+the error and preceding flush/environment restoration, but forgets the failed
+root and makes no removal attempt on retry. Actual Vitest-hook fault/retry proof
+and clean consumer qualification are pending in the native PR workspace.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
