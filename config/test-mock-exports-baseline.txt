@@ -3054,7 +3054,6 @@
 ["src/cli/update-cli/update-command-execution.test-support.ts","../../commands/doctor/shared/missing-configured-plugin-install.targets.js","e7333552b9bf16e7cb2c4830fac4b952c7f0e5f6f899ed26ef28b78dbe617e02",1]
 ["src/cli/update-cli/update-command-execution.test-support.ts","./update-command-plugin-preflight.js","a5f37596f0be4a0c2d4fdc7e5d5916e78f15a4238aad2fa45a7c74c72adf1728",1]
 ["src/cli/update-cli/update-command-execution.test-support.ts","./update-command-service.js","3b49f1c9c9896cb4bcff8832063bbe13014a341109f9870701d6b7d2c50b4bc1",1]
-["src/cli/update-cli/update-command-executor-settlement.test.ts","../../infra/update-install-root.js","57bc6c44c602d7fa110282dc643a9d7eab6092025a6dc3c2314c33bce79cb4f9",1]
 ["src/cli/update-cli/update-command-executor-settlement.test.ts","../../infra/update-managed-service-handoff-database.js","c442c1c0b2cc57af96a409d6a7f10cfe14e21acac6ac02531092ec3f96c8344c",1]
 ["src/cli/update-cli/update-command-executor-settlement.test.ts","./update-command-identity-warning.js","202263a9498a96c73f3f424d006638699e2775e04ba3322a1504b64bac3ed52c",1]
 ["src/cli/update-cli/update-command-finalize-refusal.test.ts","../../daemon/service-operation-lock.js","d2ae846be403ef623d76369d1460d88b2b55986edb22e988cd173bc39450755f",1]
