@@ -685,8 +685,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   background: linear-gradient(var(--bg-accent), var(--bg-accent)) no-repeat;
 }
 
-.agents-home__template-loading .plugin-catalog-section__view-all {
-  visibility: hidden;
+/* Featured, search results and loading placeholders have no "View all" action;
+   keep their header as tall as the shelves that do. */
+.agents-home__explore .plugin-catalog-section__header {
+  min-height: 28px;
 }
 
 .agents-home__template-loading h2 {

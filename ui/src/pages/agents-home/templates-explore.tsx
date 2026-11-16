@@ -156,16 +156,6 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
           >
             <header class="plugin-catalog-section__header">
               <h2>{"\u00a0"}</h2>
-              {/* Overview shelves size their header from this button. */}
-              <Show when={props.overview}>
-                <button
-                  type="button"
-                  class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-                  disabled
-                >
-                  {t("templatesCatalog.viewAll")}
-                </button>
-              </Show>
             </header>
             <div class="plugin-catalog-grid">
               <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
