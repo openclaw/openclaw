@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { REPEATED_TOOL_ERROR_CODE } from "../../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
@@ -252,7 +252,7 @@ export function buildEmbeddedRunPayloads(params: {
     const rawErrorMessage = lastAssistantNeedsErrorSurface
       ? normalizeOptionalString(assistantForPayload?.errorMessage)
       : undefined;
-    const repeatedToolError = assistantForPayload?.errorCode === REPEATED_TOOL_ERROR_CODE;
+    const repeatedToolError = assistantForPayload?.errorCode === TOOL_REPEAT_LIMIT_CODE;
     const oauthRefreshFailure =
       rawErrorMessage && !repeatedToolError ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
     const providerLoginRecovery = buildProviderLoginRecovery({

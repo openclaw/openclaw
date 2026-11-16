@@ -19,6 +19,7 @@ function toolDefinitionMetadata<TParams extends TSchema>(
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
     interruptible: tool.interruptible,
+    repeatable: tool.repeatable,
     ...(tool.async === false ? { async: false as const } : {}),
   };
 }

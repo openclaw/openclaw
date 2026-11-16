@@ -679,8 +679,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       placement?.assertCurrent();
       return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
     });
-  } catch (err) {
-    throw input.getPostCompactionAbortError() ?? err;
   } finally {
     attemptControls.close();
     try {
@@ -699,10 +697,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     }
   }
 
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }

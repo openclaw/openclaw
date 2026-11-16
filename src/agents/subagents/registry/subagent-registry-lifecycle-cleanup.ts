@@ -92,6 +92,7 @@ export function isSubagentCompletionDeliveryAllowed(
   observedEntry: SubagentRunRecord,
   cleanupGeneration: number,
   committedDeliveryOwner: SubagentRunRecord | undefined,
+  onStoreReplaced: () => void,
 ): boolean {
   const entry = getCurrentSubagentRunOwner(context.options.runs, observedEntry);
   if (!entry) {
@@ -124,6 +125,7 @@ export function isSubagentCompletionDeliveryAllowed(
     return allowed;
   }
   if (entry.expectsCompletionMessage === true) {
+    onStoreReplaced();
     subagentRuns.retireCompletionAuthority(entry);
   }
   return false;

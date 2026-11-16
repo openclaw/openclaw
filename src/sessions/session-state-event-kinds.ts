@@ -10,6 +10,7 @@ export type SessionStateEventKind =
   | "run_completed"
   | "run_failed"
   | "child_spawned"
+  | "child_delivery_removed"
   | "goal_changed"
   | "upstream_missing"
   | "compacted";
@@ -25,5 +26,6 @@ export const NOTIFY_BY_SESSION_STATE_EVENT_KIND: Record<SessionStateEventKind, b
   run_completed: false,
   run_failed: false,
   child_spawned: false,
+  child_delivery_removed: false,
   compacted: false,
 };

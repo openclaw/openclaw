@@ -385,7 +385,6 @@ describe("terminal resolution", () => {
       });
       expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
       expect(input.sessionPromptState.suppressNextUserMessagePersistence).toBe(false);
-      expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
       expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
       expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
       expect(onSuccessfulAuthProfile).not.toHaveBeenCalled();
@@ -990,7 +989,6 @@ describe("terminal resolution", () => {
     expect(input.sessionPromptState.activateCompactionContinuation).toHaveBeenCalledWith(
       expect.stringContaining("Continue from the compacted transcript"),
     );
-    expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
   });
 
   it("reports exhausted finalization as a failed required reply", async () => {

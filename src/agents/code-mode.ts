@@ -29,7 +29,6 @@ import {
   readRunId,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
-import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
@@ -273,13 +272,10 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       terminalBatchStatus: result.status,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
-    return recordCodeModeToolOutcome(
-      copyInternalToolResultState(controlResult, {
-        ...controlResult,
-        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      }),
-      result,
-    );
+    return copyInternalToolResultState(controlResult, {
+      ...controlResult,
+      ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+    });
   };
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
@@ -319,6 +315,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
     hideFromChannelProgress: true,
+    repeatable: true,
     description:
       'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
     parameters: CODE_MODE_WAIT_PARAMETERS,

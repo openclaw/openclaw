@@ -1,9 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  REPETITIVE_OUTPUT_ERROR_MESSAGE,
-  REPEATED_TOOL_ERROR_CODE,
-  REPEATED_TOOL_ERROR_MESSAGE,
-} from "../../../packages/agent-core/src/errors.js";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
@@ -52,10 +49,11 @@ import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
 } from "../sandbox/runtime-status.js";
-import { readRepeatedToolErrorSummary } from "../tool-error-summary.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
+const TOOL_REPEAT_LIMIT_FALLBACK =
+  "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
@@ -328,8 +326,14 @@ export function formatUserFacingAssistantErrorText(
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
   }
-  if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
-    return readRepeatedToolErrorSummary(msg.errorMessage) ?? REPEATED_TOOL_ERROR_MESSAGE;
+  if (msg.errorCode === TOOL_REPEAT_LIMIT_CODE) {
+    // Show only the agent-core template; never arbitrary text carried under this code.
+    return msg.errorMessage &&
+      /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
+        msg.errorMessage,
+      )
+      ? msg.errorMessage
+      : TOOL_REPEAT_LIMIT_FALLBACK;
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {
