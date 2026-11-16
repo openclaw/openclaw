@@ -10,12 +10,27 @@ import {
 } from "../../test/helpers/gateway/chat-display-replay.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { loadPersistedPluginModelCatalogs } from "../agents/plugin-model-catalog-execution.js";
+import * as catalogWorker from "../agents/prepared-model-catalog-worker.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+} from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import * as backoff from "../infra/backoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
+import * as sharingAuthorization from "./session-sharing-authorization-async.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "./session-sharing-preparation.js";
+import type {
+  PreparedSessionSourceFacts,
+  SessionFactsRead,
+} from "./session-sharing-target.types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildOpenAiResponsesTestModel } from "./test-openai-responses-model.js";
 
@@ -107,6 +122,63 @@ it(
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
+    const discoveryStarted = createDeferred();
+    const releaseDiscovery = createDeferred();
+    const discoveryCompleted = createDeferred();
+    void discoveryCompleted.promise.catch(() => {});
+    let fallbackCatalogLoads = 0;
+    const createWorker = catalogWorker.createPreparedModelCatalogWorker;
+    vi.spyOn(catalogWorker, "createPreparedModelCatalogWorker").mockImplementation((params) => {
+      const worker = createWorker(params);
+      if (params.agentFacts.input.agentId !== "fallback") {
+        return worker;
+      }
+      return {
+        ...worker,
+        async loadCatalog(...args: Parameters<typeof worker.loadCatalog>) {
+          fallbackCatalogLoads += 1;
+          discoveryStarted.resolve();
+          // Hold discovery before its network budget starts; static Gateway readiness must proceed.
+          await releaseDiscovery.promise;
+          try {
+            const catalog = await worker.loadCatalog(...args);
+            discoveryCompleted.resolve();
+            return catalog;
+          } catch (error) {
+            discoveryCompleted.reject(error);
+            throw error;
+          }
+        },
+      };
+    });
+    const authorize = sharingAuthorization.resolveSessionMutationAuthorizationAsync;
+    vi.spyOn(sharingAuthorization, "resolveSessionMutationAuthorizationAsync").mockImplementation(
+      async (params) => {
+        const result = await authorize(params);
+        if (
+          params.method === "chat.send" &&
+          isRecord(params.requestParams) &&
+          params.requestParams.sessionKey === "agent:fallback:xai-fallback" &&
+          params.requestParams.idempotencyKey === "xai-fallback"
+        ) {
+          try {
+            expect(result.error).toBeNull();
+            expect(result.authorization).toBeDefined();
+            await withinTest(discoveryStarted.promise, signal);
+            expect(fallbackCatalogLoads).toBe(1);
+            releaseDiscovery.resolve();
+            // Publish the real saved catalog while the request retains its original session facts.
+            await withinTest(discoveryCompleted.promise, signal);
+            expect(fallbackCatalogLoads).toBe(1);
+          } catch (error) {
+            result.authorization?.release?.();
+            throw error;
+          }
+        }
+        return result;
+      },
+    );
+    let negativeWitness: SessionFactsRead<PreparedSessionSourceFacts> | undefined;
     await Promise.all([state, workspace].map((directory) => fs.mkdir(directory)));
     for (const name of scenarios) {
       const agentDir = path.join(state, "agents", name, "agent");
@@ -322,6 +394,13 @@ it(
       );
       expect(installed?.pluginId).toBe("xai");
       expect(typeof installed?.provider.classifyFailoverReason).toBe("function");
+      negativeWitness = await prepareSessionMutationFacts({
+        cfg: getRuntimeConfig(),
+        sessionKey: "agent:fallback:xai-fallback",
+        agentId: "fallback",
+        allowMissing: true,
+      });
+      expect(negativeWitness.readCurrent(getRuntimeConfig()).target).toBeNull();
       for (const selected of scenarios) {
         scenario = selected;
         const check = (actual: unknown) => expect.soft(actual, scenario);
@@ -370,6 +449,19 @@ it(
         const history = await gateway.client.request<{
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });
+        if (scenario === "fallback") {
+          // A separate negative reader must still reject the real session creation.
+          expect(() => negativeWitness!.readCurrent(getRuntimeConfig())).toThrow(
+            SessionMutationFactsUnavailableError,
+          );
+          const catalogs = await loadPersistedPluginModelCatalogs(
+            path.join(state, "agents", "fallback", "agent"),
+            ["xai"],
+          );
+          expect(catalogs.find(({ pluginId }) => pluginId === "xai")?.contents).toContain(
+            primaryModel,
+          );
+        }
         const assistant = history.messages.findLast((message) => message.role === "assistant");
         const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
@@ -435,6 +527,8 @@ it(
         }
       }
     } finally {
+      releaseDiscovery.resolve();
+      negativeWitness?.release();
       try {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);

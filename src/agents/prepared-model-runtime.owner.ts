@@ -6,14 +6,21 @@ import {
   hashRuntimeConfigValue,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { readAuthProfileDatabaseIdentityAsync } from "./auth-profiles/file-state.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
 } from "./auth-profiles/path-resolve.js";
+import {
+  resolveAuthProfileDatabaseOwnerId,
+  resolveAuthProfileDatabasePath,
+} from "./auth-profiles/sqlite.js";
 import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,
@@ -507,7 +514,29 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       isGenerationCurrent,
       retirementSignal: capturePreparedModelRuntimeGeneration(owner),
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,
-      onBeforeAuthCapture: () => {
+      onBeforeAuthCapture: async (signal?: AbortSignal) => {
+        if (
+          gatewayLifecycleActive &&
+          owner.provenance === "configured" &&
+          !input.readOnly &&
+          getDatabaseEngineInput("agent") === undefined
+        ) {
+          const pathname = resolveAuthProfileDatabasePath(input.agentDir);
+          const identity = await readAuthProfileDatabaseIdentityAsync(pathname);
+          if (identity?.key.startsWith("path:")) {
+            // Settle first birth inside the build before publishing request-visible facts.
+            await prepareOpenClawAgentDatabaseExecution(
+              {
+                agentId: resolveAuthProfileDatabaseOwnerId(input.agentDir),
+                path: pathname,
+                env: input.env ?? process.env,
+              },
+              () =>
+                assertPreparedModelRuntimeInputCurrent(input, params.isBuildCurrent ?? isCurrent),
+              signal,
+            );
+          }
+        }
         if (owner.generation === generation) {
           owner.authCaptureStarted = true;
         }

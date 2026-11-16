@@ -103,7 +103,7 @@ export async function prepareWorkspaceBuildGroup(
     onStage?: (stage: string) => void;
     signal?: AbortSignal;
     assertCurrent?: (input: PreparedModelRuntimeInput) => void;
-    onBeforeAuthCapture?: (input: PreparedModelRuntimeInput) => void;
+    onBeforeAuthCapture?: (input: PreparedModelRuntimeInput) => void | Promise<void>;
     registryResources?: PreparedModelRuntimeBuildResources;
     loadRuntimeRegistry?: PreparedModelRuntimeBuildResources["load"];
   } = {},
@@ -370,7 +370,7 @@ export async function prepareWorkspaceBuildGroup(
     for (const candidate of inputs) {
       await nextTurn();
       options.assertCurrent?.(candidate);
-      options.onBeforeAuthCapture?.(candidate);
+      await options.onBeforeAuthCapture?.(candidate);
       agentBaseFacts.push(
         await prepareAgentFacts(
           candidate,
