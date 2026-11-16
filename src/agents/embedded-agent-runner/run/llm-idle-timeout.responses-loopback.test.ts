@@ -37,6 +37,7 @@ describe("Responses watchdog through the loopback transport", () => {
     ["empty reasoning", delta(""), 29, 60_000, false],
     ["repeated snapshot", snapshot, 29, 60_000, false],
     ["hidden reasoning", delta("Synthetic hidden progress"), 32, 60_000, true],
+    ["output limit", delta("Synthetic hidden progress"), 17, 60_000, false],
     ["short bookkeeping", bookkeeping, 8, 60_000, true],
     ["long idle budget", bookkeeping, 39, 1_200_000, false],
     ["network silence", bookkeeping, 1, 60_000, false],
@@ -163,7 +164,7 @@ describe("Responses watchdog through the loopback transport", () => {
           } as Parameters<StreamFn>[2]);
           for await (const event of stream) {
             if (event.type === "error") {
-              throw new Error(event.error.errorMessage);
+              throw Object.assign(new Error(event.error.errorMessage), { cause: event.error });
             }
           }
           return stream.result();
@@ -176,11 +177,23 @@ describe("Responses watchdog through the loopback transport", () => {
         });
         const consuming = consume();
         const recovered = consuming.catch(async (error: unknown) => {
-          expect(resolveFailoverReasonFromError(error, "openai")).toBe("timeout");
+          if (activity === "output limit") {
+            expect(error).toMatchObject({ cause: { errorCode: "incomplete_tool_call" } });
+          } else {
+            expect(resolveFailoverReasonFromError(error, "openai")).toBe("timeout");
+          }
           if (
             await retryController.maybeRetryTransient({
-              reason: "timeout",
-              onRetry: () => retryScheduled.resolve(),
+              reason: activity === "output limit" ? "output_limit" : "timeout",
+              onRetry: async () => {
+                retryScheduled.resolve();
+                // Cross a watchdog tick before retry admission, as cleanup/status work can.
+                if (activity === "output limit") {
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, 1_100);
+                  });
+                }
+              },
             })
           ) {
             return consume();
@@ -229,15 +242,53 @@ describe("Responses watchdog through the loopback transport", () => {
         expect(stop).not.toHaveBeenCalled();
         expect(onTimeout).not.toHaveBeenCalled();
         if (!completes) {
-          const remainingMs = activity === "network silence" ? idleMs : stepMs;
-          await vi.advanceTimersByTimeAsync(remainingMs - 1);
-          expect(onTimeout).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-          expect(onTimeout).toHaveBeenCalledOnce();
-          await expect(within(consuming)).rejects.toThrow(
-            activity === "network silence" ? /no response from model/ : /no model progress/,
-          );
-          expect(response.writableEnded).toBe(false);
+          if (activity === "output limit") {
+            const partialCall = {
+              type: "function_call",
+              id: "fc_synthetic",
+              call_id: "call_synthetic",
+              name: "synthetic_tool",
+              arguments: '{"value":"unfinished',
+              status: "incomplete",
+            };
+            send(response, {
+              type: "response.output_item.added",
+              output_index: 1,
+              item: { ...partialCall, arguments: "", status: "in_progress" },
+            });
+            send(response, {
+              type: "response.function_call_arguments.delta",
+              output_index: 1,
+              item_id: partialCall.id,
+              delta: partialCall.arguments,
+            });
+            send(response, {
+              type: "response.incomplete",
+              response: {
+                id: "resp_synthetic",
+                status: "incomplete",
+                incomplete_details: { reason: "max_output_tokens" },
+                output: [reasoning, partialCall],
+              },
+            });
+            response.end();
+            await expect(within(consuming)).rejects.toMatchObject({
+              cause: { errorCode: "incomplete_tool_call" },
+            });
+            expect(activeWatchdog.snapshot().semanticProgressAtMs).toBeLessThan(
+              Date.now() - 360_000,
+            );
+          } else {
+            const remainingMs = activity === "network silence" ? idleMs : stepMs;
+            await vi.advanceTimersByTimeAsync(remainingMs - 1);
+            expect(onTimeout).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(onTimeout).toHaveBeenCalledOnce();
+            await expect(within(consuming)).rejects.toThrow(
+              activity === "network silence" ? /no response from model/ : /no model progress/,
+            );
+            expect(response.writableEnded).toBe(false);
+          }
           await within(
             awaitGateBeforeSettlement(
               retryScheduled.promise,
@@ -245,7 +296,8 @@ describe("Responses watchdog through the loopback transport", () => {
               "stream settled before retry admission",
             ),
           );
-          await vi.advanceTimersByTimeAsync(2_000);
+          await vi.advanceTimersByTimeAsync(3_000);
+          expect(stop).not.toHaveBeenCalled();
           expect(retryController.transientRetryCount).toBe(1);
         }
         // The controlled deadline and retry admission are proven. Restore real
