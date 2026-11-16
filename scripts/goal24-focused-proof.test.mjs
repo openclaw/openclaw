@@ -177,21 +177,27 @@ for (const scenario of [
   "setup",
   "wrong-stack",
   "completed-control",
+  "nonreproducing-control",
 ]) {
   test("permission causal evidence gate: " + scenario, () => {
     const source = fs.readFileSync(driver, "utf8");
-    const start = source.indexOf("    const started = records.filter(");
-    const end = source.indexOf("    summary.permissionRegression = id;", start);
+    const start = source.indexOf("    const functionIds = new Set(");
+    const end = source.indexOf('\n  }\n  summary.outcome = "pass";', start);
     assert.ok(start >= 0 && end > start);
     const variant = scenario === "candidate" ? "candidate" : "legacy-control";
-    const records = [{ kind: "event", payload: { kind: "testStarted", testID: "off-main" } }];
+    const records = [
+      { kind: "test", payload: { kind: "function", id: "off-main" } },
+      { kind: "test", payload: { kind: "suite", id: "suite" } },
+      { kind: "event", payload: { kind: "testStarted", testID: "suite" } },
+      { kind: "event", payload: { kind: "testStarted", testID: "off-main" } },
+    ];
     if (scenario === "zero") {
       records.length = 0;
     }
     if (scenario === "extra") {
-      records.push(records[0]);
+      records.push(records.at(-1));
     }
-    if (["candidate", "completed-control"].includes(scenario)) {
+    if (["candidate", "completed-control", "nonreproducing-control"].includes(scenario)) {
       records.push({ kind: "event", payload: { kind: "testEnded", testID: "off-main" } });
       records.push({ kind: "event", payload: { kind: "runEnded" } });
     }
@@ -209,7 +215,7 @@ for (const scenario of [
         records,
         variant,
         id: "off-main",
-        permissionExit: variant === "candidate" ? 0 : 1,
+        permissionExit: ["candidate", "nonreproducing-control"].includes(scenario) ? 0 : 1,
         summary: {},
         fs: { readFileSync: () => log },
         path,

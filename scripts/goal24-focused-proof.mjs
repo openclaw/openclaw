@@ -243,7 +243,8 @@ try {
     const variant = process.env.GOAL24_PERMISSION_VARIANT;
     assert.ok(["candidate", "legacy-control"].includes(variant), "unknown permission variant");
     summary.permissionVariant = variant;
-    summary.evidenceKind = "candidate versus legacy-callback negative control; not baseline build";
+    summary.evidenceKind =
+      "Swift-seam negative control; not original framework boundary or baseline build";
     if (variant === "legacy-control") {
       const permissionFile = path.join(
         source,
@@ -256,8 +257,8 @@ try {
             }`;
       assert.equal(original.split(fixed).length, 2, "exactly one fixed callback required");
       fs.writeFileSync(permissionFile, original.replace(fixed, legacy));
-      // Keep the production owner, request seam, and regression unchanged; restore
-      // only the original actor-inheriting callback and too-late main-queue hop.
+      // Restore the legacy callback shape inside the unchanged Swift request seam.
+      // This does not restore the original imported Objective-C API call boundary.
       const patch = capture("git", [
         "diff",
         "--",
@@ -343,15 +344,32 @@ try {
     );
     assert.equal(tests.length, 1, "exact PermissionManager regression not discovered");
     const id = tests[0].payload.id;
+    const functionIds = new Set(
+      records
+        .filter((record) => record.kind === "test" && record.payload.kind === "function")
+        .map((record) => record.payload.id),
+    );
     const started = records.filter(
-      (record) => record.kind === "event" && record.payload.kind === "testStarted",
+      (record) =>
+        record.kind === "event" &&
+        record.payload.kind === "testStarted" &&
+        functionIds.has(record.payload.testID),
     );
     const ended = records.filter(
-      (record) => record.kind === "event" && record.payload.kind === "testEnded",
+      (record) =>
+        record.kind === "event" &&
+        record.payload.kind === "testEnded" &&
+        functionIds.has(record.payload.testID),
     );
     assert.equal(started.length, 1, "exactly one selected test must start");
     assert.equal(started[0].payload.testID, id);
+    summary.permissionStarted = started.length;
+    summary.permissionCompleted = ended.length;
+    summary.permissionRegression = id;
     if (variant === "legacy-control") {
+      if (permissionExit === 0) {
+        summary.outcome = "control-not-reproduced";
+      }
       assert.notEqual(permissionExit, 0, "legacy callback must fail");
       assert.equal(ended.length, 0, "legacy callback must trap before test completion");
       const log = fs.readFileSync(path.join(output, "permissions-test.log"), "utf8");
@@ -378,9 +396,6 @@ try {
         records.some((record) => record.kind === "event" && record.payload.kind === "runEnded"),
       );
     }
-    summary.permissionStarted = started.length;
-    summary.permissionCompleted = ended.length;
-    summary.permissionRegression = id;
   }
   summary.outcome = "pass";
 } catch (error) {
