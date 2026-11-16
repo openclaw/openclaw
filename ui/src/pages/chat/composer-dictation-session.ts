@@ -215,12 +215,24 @@ export class ComposerDictationSession {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
-  async finish(): Promise<string> {
+  async finish(options: { requireTranscript?: boolean } = {}): Promise<string> {
     const transcript =
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
     // Bound admission separately; a started close uses the media provider timeout.
     void this.stopAndClose(true).catch(() => undefined);
-    return transcript;
+    const text = await transcript;
+    // Composer dictation needs a visible outcome; split Talk can quietly listen again.
+    // Cancellation and already-reported provider failures keep their existing outcomes.
+    if (options.requireTranscript && !text && !this.discarded && !this.failed) {
+      this.reportFailure(
+        t(
+          this.gatewayDisconnected
+            ? "chat.composer.dictationDisconnected"
+            : "chat.composer.dictationFailed",
+        ),
+      );
+    }
+    return text;
   }
 
   async cancel(): Promise<void> {

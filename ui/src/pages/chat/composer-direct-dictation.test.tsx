@@ -15,6 +15,7 @@ const dictationHarness = vi.hoisted(() => {
     active = false;
     connecting = false;
     finalizing = false;
+    transcribing = false;
     transcript = "";
 
     get locksComposer() {
@@ -236,6 +237,24 @@ describe("DirectDictationControl", () => {
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     expect(controller.finishActive).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the lazy status visible after Stop until transcription settles", async () => {
+    const { control } = fixture();
+    control.prepare("agent-a");
+    const controller = expectDefined(dictationHarness.controllers[0], "dictation owner");
+    const { container, update } = mountControl(control, true);
+    controller.transcribing = true;
+    update();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toMatch(
+        /Finishing|Transcribing/,
+      ),
+    );
+    expect(container.querySelector('[data-status="thinking"]')).not.toBeNull();
+    controller.transcribing = false;
+    update();
+    expect(container.querySelector(".agent-chat__dictation-status")).toBeNull();
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {

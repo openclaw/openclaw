@@ -644,6 +644,49 @@ describe("ComposerDictationOwner", () => {
     );
   });
 
+  it("publishes pending transcription without locking the composer", async () => {
+    const { controller, onCommit } = createHarness();
+    await startDirect(controller);
+    const changed = vi.fn();
+    const unsubscribe = controller.subscribe(changed);
+    const finished = controller.finishActive();
+    expect(controller).toMatchObject({ active: false, locksComposer: false, transcribing: true });
+    expect(changed).toHaveBeenCalled();
+    changed.mockClear();
+    transcript("Final words");
+    emit({ type: "close", reason: "completed" });
+    await expect(finished).resolves.toBe(true);
+    expect(controller).toMatchObject({ transcribing: false });
+    expect(changed).toHaveBeenCalled();
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("Final words", true);
+    unsubscribe();
+  });
+
+  it.each(["completed", "timeout", "disconnect"])(
+    "reports an empty %s drain once",
+    async (outcome) => {
+      const { controller, options, onError, onCommit } = createHarness();
+      await startDirect(controller);
+      const finished = controller.finishActive();
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "completed") {
+        emit({ type: "close", reason: "completed" });
+      } else if (outcome === "disconnect") {
+        controller.update({ ...options, connected: false });
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      await expect(finished).resolves.toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        outcome === "disconnect"
+          ? "Dictation stopped because the Gateway disconnected."
+          : "Couldn’t transcribe your voice.",
+        { kind: "interrupted", preservesText: false },
+      );
+    },
+  );
+
   it.each([
     ["", "error"],
     ["Keep the preview", "error"],
