@@ -1,11 +1,23 @@
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "node-host");
+const workspaceUrl = resolveRuntimeWorkerUrl(entrypoint("node-worker-workspace"));
+const commandsUrl = resolveRuntimeWorkerUrl(entrypoint("node-worker-workspace-commands"));
+const stateUrl = resolveRuntimeWorkerUrl(
+  entrypoint("../state/openclaw-state-db", "state/openclaw-state-db.js"),
+);
+const singletonUrl = resolveRuntimeWorkerUrl(
+  entrypoint("../shared/global-singleton", "shared/global-singleton.js"),
+);
 
 const preparedWorkspaceChildScript = `
           import fs from 'node:fs';
-          import { NodeWorkerWorkspaceRuntime } from './src/node-host/node-worker-workspace.ts';
-          import { captureManifest, readWorkspaceManifest } from './src/node-host/node-worker-workspace-commands.ts';
-          import { closeOpenClawStateDatabaseAsync } from './src/state/openclaw-state-db.ts';
-          import { drainGlobalSingletonLifecycleState } from './src/shared/global-singleton.ts';
+          import { NodeWorkerWorkspaceRuntime } from ${JSON.stringify(workspaceUrl.href)};
+          import { captureManifest, readWorkspaceManifest } from ${JSON.stringify(commandsUrl.href)};
+          import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(stateUrl.href)};
+          import { drainGlobalSingletonLifecycleState } from ${JSON.stringify(singletonUrl.href)};
           try {
             const { action, input, deferRegistrationVerification = true } = JSON.parse(fs.readFileSync(0, 'utf8'));
             if (action === 'capture') {

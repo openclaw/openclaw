@@ -48,6 +48,14 @@ it("verifies transferred objects once and reuses completed worker objects with p
     const operation = await f.preparedOperation(undefined, { project });
     try {
       const result = await operation.project.prepare(f);
+      const prepared = result.preparedWorkspace;
+      if (!prepared) {
+        throw new Error("Expected the completed prepared repository workspace");
+      }
+      expect(prepared.baseCommit).toBe(project.baseCommit);
+      expect(await requireGit(prepared.workspaceDir, ["rev-parse", "HEAD"])).toBe(
+        prepared.baseCommit,
+      );
       expect.soft(fscks).toBe(expectedFscks);
       expect.soft(result.recipePreparation?.phaseDurationsMs).toMatchObject({
         inspection: expect.any(Number),

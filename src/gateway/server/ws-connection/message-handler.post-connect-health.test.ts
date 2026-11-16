@@ -50,10 +50,7 @@ import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import {
-  expectAuthenticatedOwnerReconnect,
-  expectEphemeralOwnerConnect,
-} from "./message-handler.owner-reconnect.test-support.js";
+import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
 import {
   attachGatewayHarness,
   BACKEND_CONNECT_PARAMS,
@@ -267,35 +264,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(connections[0]).toContain(`mode=${mode} role=operator`);
   });
 
-  it("prewarms cold session history for an admitted operator without delaying hello", async () => {
-    const prewarm = createGatewayHarnessGate();
-    const prewarmStarted = createGatewayHarnessGate();
-    const helloSent = createGatewayHarnessGate();
-    prewarmGatewaySessionHistoryMock.mockImplementationOnce(() => {
-      prewarmStarted.resolve();
-      return prewarm.promise;
-    });
-    const harness = connectTrustedProxyUser(loadConfigMock, "history-prewarm");
-    harness.socketSend.mockImplementation((_payload, callback) => {
-      callback?.();
-      helloSent.resolve();
-    });
-    try {
-      await harness.whenAttached;
-      await Promise.all([prewarmStarted.promise, helloSent.promise]);
-      expect(prewarmGatewaySessionHistoryMock).toHaveBeenCalledWith(
-        loadConfigMock(),
-        expect.objectContaining({ isCancelled: expect.any(Function) }),
-      );
-      expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
-        ok: true,
-        payload: { type: "hello-ok" },
-      });
-    } finally {
-      prewarm.resolve();
-    }
-  });
-
   it("keeps one editable owner profile across shared-secret and device-token reconnects", async () => {
     await withGatewayTestState({ label: "gateway-owner-reconnect" }, async () => {
       let profileId: string | undefined;
@@ -412,25 +380,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         expect(client.connect.scopes).toEqual([]);
         expect(client.internal?.operatorRoleActor).toEqual(owner ? { kind: "system" } : undefined);
       });
-    },
-  );
-
-  it.each([
-    ["cli", "token"],
-    ["backend", "token"],
-    ["probe", "token"],
-    ["probe", "none"],
-  ] as const)(
-    "keeps %s admission and identity independent of presence (auth: %s)",
-    async (mode, authMethod) => {
-      await withOpenClawTestState(
-        { label: "gateway-owner-ephemeral", prepareProfileCatalog: true },
-        async () => {
-          await expectEphemeralOwnerConnect(mode, authMethod);
-          expect(upsertPresenceMock).not.toHaveBeenCalled();
-          expect(prewarmGatewaySessionHistoryMock).not.toHaveBeenCalled();
-        },
-      );
     },
   );
 

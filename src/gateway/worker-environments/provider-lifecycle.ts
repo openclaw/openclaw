@@ -704,13 +704,7 @@ export function createWorkerProviderLifecycle(
     }
   };
 
-  const {
-    createWithProfile,
-    prepareIntent,
-    prepareRetention,
-    assertPreparedIntentCurrent,
-    preparedRepositorySource,
-  } = createWorkerProviderIntent({
+  const providerIntent = createWorkerProviderIntent({
     ...options,
     providerFor,
     resumeProvision,
@@ -726,11 +720,11 @@ export function createWorkerProviderLifecycle(
     },
     getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
     clearDedicatedNodeLeases: () => dedicatedLeases.clear(),
-    createWithProfile,
-    prepareIntent,
-    prepareRetention,
-    assertPreparedIntentCurrent,
-    preparedRepositorySource,
+    createWithProfile: providerIntent.createWithProfile,
+    prepareIntent: providerIntent.prepareIntent,
+    prepareRetention: providerIntent.prepareRetention,
+    assertPreparedIntentCurrent: providerIntent.assertPreparedIntentCurrent,
+    preparedRepositorySource: providerIntent.preparedRepositorySource,
     resumePrepared: createPreparedWorkerRecovery({
       ...options,
       expirePrepared,
