@@ -3,16 +3,17 @@
 // [<ignore from x> <ignore to x>], all lengths in points. Each native frame in the window is
 // compared with a key frame: the rect is cut into horizontal strips, and for every vertical shift
 // of up to 400 points (the probe's teleport threshold, which covers bigger jumps) the tool counts
-// the changed strips that the shift brings back to the key frame's content. A scroll moves every
-// strip by the same amount, so the right shift brings back most of them; repeated wording fits
-// one strip at a time, and a strip that gained text fits no shift. The key frame is replaced
-// every 250 ms, carrying the offset measured at that moment, so streaming text barely changes it
-// while slow drift of a point at a time still adds up. A frame where most content strips changed
-// and no vertical shift explains them (content redrawn in place, or moved sideways) counts as
-// unexplained instead of still. Prints one JSON object: frames read, strips with content, the
-// largest distance from the starting position with its time, and the unexplained frames with the
-// first one's time. The ignored columns hold floating controls that move by design, like the
-// jump-to-latest button.
+// the changed strips that the shift brings back to the key frame's content, searched in the
+// screen around the rect as well, so a small rect still finds content a jump carried out of it.
+// A scroll moves every strip by the same amount, so the right shift brings back most of them;
+// repeated wording fits one strip at a time, and a strip that gained text fits no shift. The key
+// frame is replaced every 250 ms, carrying the offset measured at that moment, so streaming text
+// barely changes it while slow drift of a point at a time still adds up. A frame where most
+// content strips changed and no vertical shift explains them (content redrawn in place, or moved
+// sideways) counts as unexplained instead of still. Prints one JSON object: frames read, strips
+// with content, the largest distance from the starting position with its time, and the
+// unexplained frames with the first one's time. The ignored columns hold floating controls that
+// move by design, like the jump-to-latest button.
 // The view tree and the DEBUG probe report layout passes that never reach the screen (#192232);
 // this reads what was drawn.
 import AVFoundation
@@ -42,6 +43,12 @@ let width = Int(rectW)
 let height = Int(rectH)
 /// Every other column of the rect, minus the ignored ones.
 let columns = stride(from: 0, to: width, by: 2).filter { !ignored.contains(rectX + Double($0)) }
+/// Rows read per frame: the rect plus up to `maxShift` above and below it, within the screen, so
+/// a strip of the rect still finds its content after a jump carries it outside the rect. Set from
+/// the first frame; `pad` is the rect's first row in this range.
+var gridTop = 0
+var gridHeight = 0
+var pad = 0
 
 let asset = AVURLAsset(url: URL(fileURLWithPath: args[1]))
 guard let track = asset.tracks(withMediaType: .video).first,
@@ -59,19 +66,25 @@ reader.timeRange = CMTimeRange(
 reader.add(output)
 reader.startReading()
 
-/// Luma of the rect on a one-point grid: each point averages its block of pixels.
+/// Luma of the read rows on a one-point grid: each point averages its block of pixels.
 func lumaGrid(_ buffer: CVPixelBuffer) -> [Float] {
     CVPixelBufferLockBaseAddress(buffer, .readOnly)
     defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
     let scale = Double(CVPixelBufferGetWidth(buffer)) / screenWidth
+    if gridHeight == 0 {
+        let screenHeight = Int(Double(CVPixelBufferGetHeight(buffer)) / scale)
+        gridTop = max(0, Int(rectY) - maxShift)
+        gridHeight = min(screenHeight, Int(rectY) + height + maxShift) - gridTop
+        pad = Int(rectY) - gridTop
+    }
     let block = max(1, Int(scale.rounded()))
     let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
     let pixels = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
     let maxX = CVPixelBufferGetWidth(buffer) - block
     let maxY = CVPixelBufferGetHeight(buffer) - block
-    var grid = [Float](repeating: 0, count: width * height)
-    for gy in 0..<height {
-        let py = min(maxY, Int((rectY + Double(gy)) * scale))
+    var grid = [Float](repeating: 0, count: width * gridHeight)
+    for gy in 0..<gridHeight {
+        let py = min(maxY, Int(Double(gridTop + gy) * scale))
         for gx in 0..<width {
             let px = min(maxX, Int((rectX + Double(gx)) * scale))
             var sum = 0
@@ -102,11 +115,11 @@ func difference(_ a: [Float], _ b: [Float], top: Int, shift: Int) -> Float {
 /// How long a key frame stays the reference before the current frame replaces it.
 let keyFrameSeconds = 0.25
 
-/// Strips with content: plain background matches every shift, so it cannot show motion.
+/// Strips of the rect with content: plain background matches every shift, so it cannot show motion.
 func contentStrips(_ grid: [Float]) -> [Int] {
     // The content test compares each row with the one below, so the last strip leaves one row.
-    stride(from: 0, through: height - stripPt - 1, by: stripPt).filter { top in
-        difference(grid, grid, top: top, shift: 1) > 2
+    stride(from: pad, through: min(pad + height, gridHeight - 1) - stripPt, by: stripPt).filter {
+        difference(grid, grid, top: $0, shift: 1) > 2
     }
 }
 
@@ -122,7 +135,7 @@ func bestShift(_ key: [Float], _ grid: [Float], strips: [Int]) -> (shift: Int, u
     var bestCount = 1
     for shift in -maxShift...maxShift where shift != 0 {
         let count = changed.filter { strip in
-            strip.top + shift >= 0 && strip.top + shift + stripPt <= height
+            strip.top + shift >= 0 && strip.top + shift + stripPt <= gridHeight
                 && difference(key, grid, top: strip.top, shift: shift) < strip.still * moveRatio
         }.count
         // A tie keeps the smaller shift.
