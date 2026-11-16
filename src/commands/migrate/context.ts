@@ -7,6 +7,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { resolveHomeDir } from "../../utils.js";
 
 /** Builds a migration logger that keeps JSON stdout machine-readable. */
 export function createMigrationLogger(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
@@ -30,6 +31,15 @@ export function buildMigrationReportDir(
 ): string {
   const stamp = timestampMsToIsoFileStamp(nowMs);
   return path.join(stateDir, "migration", providerId, stamp);
+}
+
+/**
+ * Pre-migration backup directory for imports that the user did not start from a shell
+ * (Gateway, Control UI, onboarding). The CLI keeps `openclaw backup create`'s cwd default;
+ * a service's cwd is incidental, so use the home folder the backup already falls back to.
+ */
+export function resolveUnattendedMigrationBackupOutput(): string {
+  return `${resolveHomeDir() ?? path.dirname(resolveStateDir())}${path.sep}`;
 }
 
 /** Resolves an explicit migration owner without allowing typo-created agent stores. */
