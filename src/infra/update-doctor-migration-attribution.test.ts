@@ -299,6 +299,45 @@ it.each(["different content", "same content"])(
   },
 );
 
+it("migrates after a no-write WAL index rebuild while the parent's restore stays refused", async () => {
+  const { root, pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  // A status reader outlives the parent's last ledger commit, so capture binds live WAL evidence.
+  const reader = new DatabaseSync(pathname, { readOnly: true });
+  reader.prepare("SELECT value FROM retained").all();
+  const writer = new DatabaseSync(pathname);
+  writer.exec("INSERT INTO retained VALUES (8);");
+  writer.close();
+  const captured = readUpdateDatabaseGenerations([pathname]);
+  reader.close();
+  // The next native open after the readers leave rebuilds the index without a commit.
+  const rebuilt = new DatabaseSync(pathname, { readOnly: true });
+  rebuilt.prepare("SELECT value FROM retained").all();
+  rebuilt.close();
+  const admitted = readUpdateDatabaseGenerations([pathname]);
+  expect(admitted).not.toEqual(captured);
+
+  const { receipt, warnings } = await withCapture(env, captured, async () => {
+    using database = new DatabaseSync(pathname);
+    migrate(database, pathname);
+  });
+  expect(warnings).toEqual([
+    "Databases changed after the updater captured them; automatic database restoration is unavailable for this update.",
+  ]);
+  expect(receipt).toMatchObject({ unchanged: false, fromGenerations: admitted });
+  const backup: UpdateDatabaseBackup = {
+    directory: root,
+    databases: [],
+    missingPaths: [],
+    sourcePaths: [pathname],
+    sourceGenerations: captured,
+    warnings: [],
+  };
+  recordUpdateDatabaseWrites(backup, receipt, { name: "openclaw doctor" });
+  expect(backup.restoreRefusal).toBe(
+    "databases changed after snapshot capture; the writer is unknown",
+  );
+});
+
 // Published v2026.9.34's unversioned wire format, independent of the current digest owner.
 function legacyGeneration(file: string): string {
   const fingerprint = (pathname: string) => {
@@ -349,17 +388,12 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
       if (change === "same-content commit") {
         writer.exec("UPDATE retained SET value = 7;");
       }
+      // The outside writer is gone once Doctor holds maintenance custody.
+      writer.close();
     }
     const { receipt, warnings } = await withCapture(env, generations, async () => {
       using database = new DatabaseSync(pathname);
-      if (change === "unchanged") {
-        migrate(database, pathname);
-        expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
-      } else {
-        expect(() => migrate(database, pathname)).toThrow(
-          "SQLite migration source changed after update capture:",
-        );
-      }
+      migrate(database, pathname);
     });
     expect(receipt?.unchanged).toBe(change === "unchanged");
     if (change === "unchanged") {
@@ -368,6 +402,12 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
         fromGenerations: generations,
         generations: { [pathname]: legacyGeneration(pathname), [missing]: null },
       });
+    } else {
+      // Changed before admission: the parent's restore stays refused; Doctor still migrates.
+      expect(receipt?.fromGenerations).not.toEqual(generations);
+      expect(warnings).toEqual([
+        "Databases changed after the updater captured them; automatic database restoration is unavailable for this update.",
+      ]);
     }
   },
 );

@@ -319,6 +319,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           physical = true;
           expectedGenerations = observation.committed;
         }
+        const first = !admitted;
         admitted = true;
         const generations = observation.committed;
         historicalScans.admit(generations);
@@ -328,6 +329,16 @@ export function createUpdateDoctorDatabaseWriteCapture(
         fromGenerations ??= matches ? incoming : generations;
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= matches;
+        if (!matches && first) {
+          // A capture already stale when Doctor starts: the parent's restore is refused by
+          // the same comparison, and a published parent's forward recovery would migrate
+          // unattributed. Attribute this Doctor's writes from what it admitted; writes after
+          // admission still refuse. A no-write WAL index rebuild after capture lands here.
+          expectedGenerations = { ...generations };
+          options.warn(
+            "Databases changed after the updater captured them; automatic database restoration is unavailable for this update.",
+          );
+        }
       }
     },
     async settle() {
