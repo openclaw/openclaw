@@ -89,7 +89,7 @@ export function sidebarViewForPage(
   if (section) {
     return section;
   }
-  if (route === "plugin" && pluginSection) {
+  if (pluginSection) {
     return "plugin";
   }
   // Systems lists its machines in the Sessions view of the sidebar; the Sessions page sits

@@ -186,7 +186,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   // A page that lives only in the "more" menu (not pinned) marks the menu as where it is.
   const moreHoldsPage = createMemo(() => {
     const route = host.activeRouteId;
-    if (route === "plugin") {
+    // Plugin pages, including those on a native route like Workboard, carry their plugin key.
+    if (host.activePluginTabId) {
       const key = host.activePluginTabId;
       return (
         key !== "" && !USERS_SECTION_PLUGIN_PAGES.has(key) && !pins().includes(`plugin:${key}`)

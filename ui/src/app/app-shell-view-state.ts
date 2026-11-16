@@ -16,7 +16,7 @@ import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginPageLabel } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
-import { navigationSectionForPage } from "../plugins/navigation-sections.ts";
+import { navigationSectionForPage, pluginPageKeyForRoute } from "../plugins/navigation-sections.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
@@ -132,6 +132,12 @@ export function readShellView(host: ShellViewHost) {
           context.basePath,
         )
       : null;
+  // Plugin pages on native routes (Workboard) carry their plugin key like plugin tabs do.
+  const activePluginKey = pluginPageKeyForRoute(
+    activeRoute,
+    activePluginRef ? pluginTabKey(activePluginRef) : undefined,
+    gatewaySnapshot.hello?.controlUiTabs ?? [],
+  );
   const workboardLayout =
     activeRoute === "workboard" ||
     (activePluginRef !== null &&
@@ -202,13 +208,9 @@ export function readShellView(host: ShellViewHost) {
     !settingsTakeover &&
     sidebarViewForPage(
       activeRoute,
-      activePluginRef ? pluginTabKey(activePluginRef) : undefined,
+      activePluginKey,
       Boolean(
-        activePluginRef &&
-        navigationSectionForPage(
-          context.plugins.registrations("navigation"),
-          pluginTabKey(activePluginRef),
-        ),
+        navigationSectionForPage(context.plugins.registrations("navigation"), activePluginKey),
       ),
     ) === undefined;
   const navCollapsed = () =>
@@ -274,7 +276,7 @@ export function readShellView(host: ShellViewHost) {
     basePath: context.basePath,
     activeRouteId: activeRoute,
     router: runtime.router,
-    activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
+    activePluginTabId: activePluginKey ?? "",
     enabledRouteIds:
       isTemplatesAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
