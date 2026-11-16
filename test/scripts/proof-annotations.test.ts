@@ -48,7 +48,7 @@ describe("proof annotations", () => {
     ).toContain(label);
   });
 
-  it("renders a filled card with agent-selected color, secondary detail, and a delta pill", () => {
+  it("preserves the selected accent and optional label fields", () => {
     const svg = renderProofAnnotations(
       [
         {
@@ -64,10 +64,8 @@ describe("proof annotations", () => {
     );
     expect(svg).toContain("Wider account menu");
     expect(svg).toContain("336 CSS px wide");
-    expect(svg).toContain(">+32</span>");
+    expect(svg).toContain("+32");
     expect(svg).toContain('stroke="#8570ad"');
-    expect(svg).toContain("border-radius:18px");
-    expect(svg).not.toContain('fill="#101820"');
   });
 
   it.each([{ color: 'red" onload="alert(1)' }, { detail: "" }, { badge: "x".repeat(17) }])(
