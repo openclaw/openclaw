@@ -69,15 +69,15 @@ it("disables its action with the mutation reason", () => {
 });
 
 it("renders a standard primary action with progress feedback", () => {
-  const title = "This task was interrupted by a restart.";
-  const text = "Your transcript is safe. Resume to continue in this session.";
-  const busyLabel = "Resuming…";
+  const title = "This session is archived.";
+  const text = "Unarchive this session to continue.";
+  const busyLabel = "Restoring…";
   const { banner, action } = drawBanner({
     title,
     text,
     tone: "neutral",
     icon: "warning",
-    actionLabel: "Resume",
+    actionLabel: "Unarchive",
     actionStyle: "primary",
     busy: true,
     busyLabel,

@@ -12,11 +12,9 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   expandExplicitSkillReferences,
@@ -47,13 +45,18 @@ import {
   resolveReplyDirectiveCommand,
 } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
-import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
+import {
+  clearExecInlineDirectives,
+  clearInlineDirectives,
+  resolveModelSelectionErrorReply,
+} from "./get-reply-directives-utils.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions } from "./mentions.js";
+import { prepareInlineModelDirectiveMatcher } from "./model-selection-directive.js";
 import { createModelSelectionState } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
@@ -262,15 +265,39 @@ export async function resolveReplyDirectives(params: {
     explicitDirectiveCommand
       ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
       : undefined;
+  let preparedModelCatalog = params.preparedModelCatalog;
+  let isKnownInlineModel: ((raw: string) => boolean) | undefined;
   const parseDirectives = (text: string) =>
     parseInlineSessionDirectives(text, {
       modelAliases: configuredAliases,
+      isKnownInlineModel,
       allowStatusDirective: canInterpretMessageDirectives,
       command: routingCommand,
     });
   const cleanStatus = (text: string) =>
     canInterpretMessageDirectives ? stripInlineStatus(text).cleaned : text;
   let directives = parseDirectives(directiveCommandText);
+  const rawModel = directives.rawModelDirective?.trim();
+  if (
+    canInterpretMessageDirectives &&
+    !isDirectiveOnly({ directives, cleanedBody: directives.cleaned, ctx, cfg, agentId, isGroup }) &&
+    directives.hasModelDirective &&
+    directives.modelDirectiveSource === "model" &&
+    rawModel &&
+    !rawModel.includes("/") &&
+    !["default", "list", "status"].includes(rawModel.toLowerCase())
+  ) {
+    ({ preparedModelCatalog, isKnownInlineModel } = await prepareInlineModelDirectiveMatcher({
+      cfg,
+      agentId,
+      defaultProvider,
+      defaultModel,
+      aliasIndex: params.aliasIndex,
+      preparedModelCatalog,
+    }));
+    // Qualify before sender projection and reuse the decision when stripping that span.
+    directives = parseDirectives(directiveCommandText);
+  }
   const hasInlineStatus = directives.hasStatusDirective && directives.cleaned.trim().length > 0;
   if (hasInlineStatus) {
     directives = { ...directives, hasStatusDirective: false };
@@ -540,21 +567,14 @@ export async function resolveReplyDirectives(params: {
       model,
       hasModelDirective: directives.hasModelDirective,
       hasResolvedTurnModelOverride,
-      preparedModelCatalog: params.preparedModelCatalog,
+      preparedModelCatalog,
       operatorAuthority: opts?.operatorAuthority,
     });
   } catch (error) {
-    if (
-      !(error instanceof ModelSelectionLockedError) &&
-      !isSessionWorkStartInvalidatedError(error)
-    ) {
-      throw error;
-    }
+    const { reply, preRunRejection } = resolveModelSelectionErrorReply(error);
     typing.cleanup();
-    if (error instanceof ModelSelectionLockedError) {
-      recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
-    }
-    return { kind: "reply" as const, reply: { text: error.message, isError: true } };
+    recordReplyPreRunRejection(resolveReplyOperationRunState(opts), preRunRejection);
+    return { kind: "reply" as const, reply };
   }
   ({ provider, model } = modelState);
 

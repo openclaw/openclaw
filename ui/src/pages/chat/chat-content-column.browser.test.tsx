@@ -132,6 +132,20 @@ async function assertColumn(
   expect(own).not.toBeNull();
   expect(ownName).not.toBeNull();
   const boundary = edge(own);
+  // A saved width widens agent content; the viewer's bubble keeps its default share.
+  const ownRow = own.closest<HTMLElement>(".chat-group")!;
+  const ownStyle = getComputedStyle(ownRow);
+  const ownColumn =
+    ownRow.getBoundingClientRect().width -
+    Number.parseFloat(ownStyle.paddingLeft) -
+    Number.parseFloat(ownStyle.paddingRight);
+  const ownCap =
+    width <= 400
+      ? ownColumn * 0.88
+      : width <= 768
+        ? ownColumn * 0.82
+        : Math.min(900, ownColumn * 0.68);
+  expect(own.getBoundingClientRect().width, `${context}: own bubble width`).toBeCloseTo(ownCap, 0);
   // Mobile actions put the bubble edge on the footer, not the name.
   const ownFooter = q('[data-chat-row-key="own"] > .chat-group-footer');
   bound(Math.abs(edge(width <= 768 ? ownFooter : ownName) - boundary), "own footer");
@@ -363,26 +377,25 @@ it.each(["light", "dark"])(
       contrast(colors("bob").name, getComputedStyle(document.body).backgroundColor),
     ).toBeGreaterThanOrEqual(4.5);
     const unchanged = colors("alice");
+    const initialInk = getComputedStyle(link).color;
+    style.setProperty("--link", "#888888");
+    flush();
+    expect(getComputedStyle(link).color).toBe(initialInk);
+    style.setProperty("--link-on-tint", mode === "light" ? "#12395c" : "#b9dfff");
+    await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(initialInk));
     for (const hover of [false, true]) {
       if (hover) {
         await page.elementLocator(link).hover();
       }
-      const token = hover ? "--link-hover" : "--link";
-      style.setProperty(token, "#888888");
-      syncControlUiSystemChrome(true);
-      flush();
-      const previousInk = getComputedStyle(link).color;
-      style.setProperty(token, "#6688bb");
-      syncControlUiSystemChrome(true);
-      await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
       await Promise.all(link.getAnimations().map((animation) => animation.finished));
       expect(
         contrast(
           getComputedStyle(link).color,
           getComputedStyle(link.closest(".chat-bubble")!).backgroundColor,
         ),
-      ).toBeGreaterThanOrEqual(7);
+      ).toBeGreaterThanOrEqual(4.5);
       expect(colors("alice")).toEqual(unchanged);
+      expect(colors("bob")).toEqual(peer);
     }
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
   },

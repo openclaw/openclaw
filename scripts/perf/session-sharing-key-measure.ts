@@ -152,7 +152,9 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
         client,
         isMember: () => member,
       });
-      const key = sharing.getCacheKey(revision);
+      // Older owners use a row revision; connection-owned keys no longer need it.
+      const keyOwner: { getCacheKey(revision?: object): string } = sharing;
+      const key = keyOwner.getCacheKey(revision);
       const role = sharing.roleForTarget(target);
       assert.equal(role, values["shared-owner"] ? "admin" : member ? "member" : "viewer");
       checksum += key.length + role.length;

@@ -25,6 +25,11 @@ plugins and connected apps remain available under the configured policy; owners 
 still browse and install plugins with `/codex plugins available` and
 `/codex plugins install <plugin>@<marketplace>`.
 
+Settled plugin metadata is cached in memory for up to one hour, measured by
+elapsed time rather than the host's wall clock. A clock correction does not
+force an early refresh or extend freshness. Runtime and marketplace scopes,
+explicit invalidation, and failed-catalog handling remain unchanged.
+
 ## Requirements
 
 - The agent runtime must be the native Codex harness.
@@ -709,13 +714,14 @@ Destructive plugin elicitations are allowed by default for configured Codex
 plugins, while unsafe schemas and ambiguous ownership are rejected:
 
 Set `read_only: true` on a configured plugin entry to limit its connected apps
-to tools explicitly marked read-only by `app/read`. Missing tool metadata and
-disabled tools fail closed. OpenClaw projects this restriction into native Codex
-tool permissions, including on thread recovery and side questions; an old saved
-tool grant cannot enable a write. All eligible read tools are available. This
-does not restrict individual actions within a tool or configure unrelated
-`mcp_servers` entries. If multiple enabled plugins own the same app, a read-only
-restriction from any owner remains in force. The default is `false`.
+to enabled actions that both `app/read` and the hosted MCP server mark read-only.
+OpenClaw binds each grant to the exact MCP tool name for that app and action.
+Missing or inconsistent metadata leaves the tool disabled. Thread recovery and
+side questions recheck the grants against the current inventory. The setting
+applies to whole tools within the plugin's connected apps. Separate MCP servers
+have their own `mcp_servers` configuration. If multiple enabled plugins own the
+same app, a read-only restriction from any owner remains in force. The default is
+`false`.
 
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for

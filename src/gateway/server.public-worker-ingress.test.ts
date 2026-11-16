@@ -20,6 +20,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createWorkerConnection } from "../worker/worker-connection.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createGatewayHttpServer } from "./server-http.js";
@@ -176,7 +177,7 @@ class PublicWorkerHarness {
   readonly admitWorker: ReturnType<typeof vi.fn<WorkerConnectionService["admitWorker"]>>;
   port = 0;
 
-  constructor(options: { rateLimitMaxAttempts?: number } = {}) {
+  constructor(options: { rateLimitMaxAttempts?: number; tunnel?: boolean } = {}) {
     const nowMs = Date.now();
     const environment = {
       environmentId: "worker-public",
@@ -235,6 +236,15 @@ class PublicWorkerHarness {
       handleHooksRequest: async () => false,
       resolvedAuth: RESOLVED_AUTH,
     });
+    if (options.tunnel) {
+      this.httpServer.prependListener("upgrade", (req) => {
+        markGatewayIngressTransport(req, {
+          kind: "openclaw-id-tunnel",
+          peerKey: `iroh:${"a3".repeat(32)}`,
+          clientIp: "fd69:726f:6800::3",
+        });
+      });
+    }
   }
 
   async start(): Promise<void> {
@@ -308,8 +318,8 @@ async function withHarness(
   });
 }
 
-it("admits the production worker client on the reserved public path without a gateway challenge", () =>
-  withHarness({}, async (harness) => {
+it.each([false, true])("admits the production worker on its own credential (tunnel=%s)", (tunnel) =>
+  withHarness({ tunnel }, async (harness) => {
     const client = createWorkerConnection({
       endpoint: { kind: "websocket", url: harness.url() },
       connectParams: workerConnect(harness.credential),
@@ -328,7 +338,8 @@ it("admits the production worker client on the reserved public path without a ga
     } finally {
       await client.stop();
     }
-  }));
+  }),
+);
 
 it("rejects an admitted worker before hello when the receiver payload limit is unusable", () =>
   withHarness({}, async (harness) => {

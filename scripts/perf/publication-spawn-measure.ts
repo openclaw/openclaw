@@ -7,6 +7,10 @@
  * Repeat separately with --allocation for collected-object sampling. For promotion:
  * node --trace-gc-nvp --import ./scripts/tsx.mjs scripts/perf/publication-spawn-measure.ts \
  *   --state-dir /absolute/new-traced-fixture --operations 200 --resident-mib 4096
+ * For the settled-snapshot owner (real Git, synthetic repository), pass
+ * --snapshot-files 5000 --operations 200; compare --transport-owner <baseline sibling>
+ * with the candidate in alternating serial arms. This includes staging/index copies,
+ * filter validation and external attributes; stdout bytes count all child output.
  * Capture stdout/stderr together; sum promoted bytes between MEASURE_START/MEASURE_END.
  * Traced results have their own baseline and cannot supply timing gates. GC, allocation,
  * and promotion describe the parent; parent+broker CPU excludes Git subprocess CPU.
@@ -14,10 +18,11 @@
 import assert from "node:assert/strict";
 import { ChildProcess, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, utimes, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import {
   constants,
@@ -37,6 +42,7 @@ const { values } = parseArgs({
     "spawn-broker": { type: "boolean", default: false },
     "resident-mib": { type: "string", default: "0" },
     operations: { type: "string", default: "2000" },
+    "snapshot-files": { type: "string", default: "0" },
     "start-at": { type: "string", default: "0" },
     allocation: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
@@ -58,6 +64,16 @@ const operations = parseStrictIntegerOption({
   min: 200,
   fallback: 2000,
 });
+const snapshotFiles = parseStrictIntegerOption({
+  raw: values["snapshot-files"],
+  label: "snapshot-files",
+  min: 0,
+  fallback: 0,
+});
+assert(
+  !snapshotFiles || !values["spawn-broker"],
+  "Snapshot output attribution requires direct spawning",
+);
 const startAt = parseStrictIntegerOption({
   raw: values["start-at"],
   label: "start-at",
@@ -104,7 +120,21 @@ git(["init", "--initial-branch=main"]);
 git(["config", "user.name", "Synthetic Fixture"]);
 git(["config", "user.email", "fixture@example.invalid"]);
 await writeFile(path.join(repository, "fixture.txt"), "synthetic publication fixture\n");
-git(["add", "fixture.txt"]);
+if (snapshotFiles) {
+  await mkdir(path.join(repository, "nested"));
+  for (let index = 0; index < snapshotFiles; index++) {
+    const file = path.join(repository, "nested", `source-${index}.txt`);
+    await writeFile(file, "synthetic\n");
+    await utimes(file, 1_600_000_000, 1_600_000_000);
+  }
+  await writeFile(path.join(repository, ".gitattributes"), "*.txt text\n");
+  await writeFile(path.join(repository, "nested", ".GITATTRIBUTES"), "*.dat -text\n");
+  // Avoid timing-dependent racy-clean rereads when the snapshot rounds index mtime down.
+  for (const file of ["fixture.txt", ".gitattributes", "nested/.GITATTRIBUTES"]) {
+    await utimes(path.join(repository, file), 1_600_000_000, 1_600_000_000);
+  }
+}
+git(["add", "-A"]);
 git(["-c", "commit.gpgsign=false", "commit", "-m", "Synthetic fixture"]);
 const head = git(["rev-parse", "HEAD"]);
 
@@ -128,7 +158,7 @@ if (values["transport-owner"]) {
     },
   });
 }
-const { runPublicationCommand } =
+const { runPublicationCommand, captureSettledGitHubPublicationWorkspaceSnapshot } =
   await import("../../src/gateway/github-publication-git-transport.js");
 const { setDiagnosticsEnabledForProcess } = await import("../../src/infra/diagnostic-events.js");
 setDiagnosticsEnabledForProcess(true);
@@ -143,6 +173,12 @@ const commands = [
   { args: ["show", "HEAD:fixture.txt"], expected: "synthetic publication fixture" },
 ];
 const operation = async (index: number) => {
+  if (snapshotFiles) {
+    const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot({ cwd: repository });
+    assert.equal(snapshot.sourceHeadCommit, head);
+    assert.equal(snapshot.workspaceTree, snapshot.sourceIndexTree);
+    return;
+  }
   const command = commands[index % commands.length]!;
   const result = await runWithSpawnBroker(broker, () =>
     runPublicationCommand(["git", ...command.args], { cwd: repository }),
@@ -163,7 +199,7 @@ try {
     Symbol.for("openclaw.perf.publicationResident"),
     Array.from({ length: residentMiB }, () => Buffer.alloc(1024 * 1024, 1)),
   );
-  for (let index = 0; index < 100; index++) {
+  for (let index = 0; index < (snapshotFiles ? 1 : 100); index++) {
     await operation(index);
   }
 
@@ -212,6 +248,7 @@ try {
   observer = new PerformanceObserver((list) => observeGc(list.getEntries()));
   observer.observe({ entryTypes: ["gc"] });
   const samplingInterval = 32768;
+  let stdoutBytes = 0;
   const spawnTimes: number[] = [];
   const spawnCpuTimes: number[] = [];
   Object.defineProperty(ChildProcess.prototype, "spawn", {
@@ -221,7 +258,13 @@ try {
         const before = performance.now();
         const cpuBefore = process.threadCpuUsage();
         try {
-          return Reflect.apply(target, receiver, args);
+          const result: unknown = Reflect.apply(target, receiver, args);
+          if (receiver instanceof ChildProcess) {
+            receiver.stdout?.on("data", (chunk: Buffer) => {
+              stdoutBytes += chunk.byteLength;
+            });
+          }
+          return result;
         } finally {
           const cpu = process.threadCpuUsage(cpuBefore);
           spawnTimes.push(performance.now() - before);
@@ -281,9 +324,11 @@ try {
     console.error("MEASURE_START");
   }
   loop.enable();
+  const hostLoadBefore = os.loadavg();
   const startedAtEpochMs = Date.now();
   const threadBefore = process.threadCpuUsage();
   const processBefore = process.cpuUsage();
+  stdoutBytes = 0;
   started = performance.now();
   try {
     for (let index = 0; index < operations; index++) {
@@ -296,6 +341,7 @@ try {
     loop.disable();
     Object.defineProperty(ChildProcess.prototype, "spawn", spawnDescriptor);
   }
+  const measuredStdoutBytes = stdoutBytes;
   const threadCpu = process.threadCpuUsage(threadBefore);
   const processCpu = process.cpuUsage(processBefore);
   if (traced) {
@@ -323,7 +369,12 @@ try {
   observer.disconnect();
   const totalGc = summary(Object.values(pauses).flat());
   const result = {
-    workload: "publication-transport",
+    workload: snapshotFiles ? "publication-settled-snapshot" : "publication-transport",
+    snapshotFiles,
+    stdoutBytesPerOperation: measuredStdoutBytes / operations,
+    hostLoadBefore,
+    hostLoadAfter: os.loadavg(),
+    memory: process.memoryUsage(),
     mode: values.allocation
       ? "allocation"
       : values["cpu-profile"]

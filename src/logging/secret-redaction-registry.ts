@@ -74,6 +74,14 @@ export function captureSecretRedactionRegistrySnapshot(): SecretRedactionRegistr
   return { values: [...state.registeredValues.keys()] };
 }
 
+/** Install the request's already-expanded membership in an isolated redaction worker. */
+export function installSecretRedactionRegistrySnapshot(
+  snapshot: SecretRedactionRegistrySnapshot,
+): void {
+  state.registeredValues = new Map(snapshot.values.map((value) => [value, true]));
+  invalidateMatcher();
+}
+
 /** Replaces registered exact values while preserving the caller's mask convention. */
 export function redactRegisteredSecretValues(
   text: string,

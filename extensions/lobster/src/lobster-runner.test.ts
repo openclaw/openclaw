@@ -17,8 +17,9 @@ async function createWorkflow() {
 }
 
 it("resolves relative Lobster paths inside the repo root", () => {
-  const relative = "extensions/lobster";
-  expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
+  for (const relative of ["extensions/lobster", "demo ", " demo", "demo\t"]) {
+    expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
+  }
 });
 
 describe("createEmbeddedLobsterRunner", () => {
@@ -47,10 +48,21 @@ describe("createEmbeddedLobsterRunner", () => {
 
   it("applies a numeric-string output limit through the tool to embedded workflows", async () => {
     runRequest.mockResolvedValue({ ...success, output: ["x".repeat(1024)] });
-    const { filePath } = await createWorkflow();
-    await expect(run({ pipeline: filePath, maxStdoutBytes: "1024" })).rejects.toThrow(
-      "lobster runtime result exceeded maxStdoutBytes",
-    );
+    const { cwd } = await createWorkflow();
+    await fs.writeFile(path.join(cwd, " workflow.lobster"), "steps: []\n");
+    const currentDirectory = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      for (const pipeline of ["workflow.lobster", " workflow.lobster"]) {
+        await expect(run({ pipeline, maxStdoutBytes: "1024" })).rejects.toThrow(
+          "lobster runtime result exceeded maxStdoutBytes",
+        );
+        expect(runRequest).toHaveBeenLastCalledWith(
+          expect.objectContaining({ filePath: path.join(cwd, pipeline) }),
+        );
+      }
+    } finally {
+      currentDirectory.mockRestore();
+    }
   });
 
   it("runs inline pipelines with file-like arguments through the embedded runtime", async () => {

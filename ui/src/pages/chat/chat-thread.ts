@@ -11,15 +11,22 @@ import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normal
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import type { InlineCommandDisclosurePolicy } from "./chat-inline-command-presentation.ts";
 import {
   messageRecoveryKey,
   type AssistantMessageExpansionState,
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
+import type { SystemEventRenderItem } from "./chat-system-event-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
+import type { ChatItemsFacts } from "./chat-thread-facts.ts";
+import { sameChatItemsStructuralInput, sameEntries } from "./chat-thread-input-match.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
+import type { PrependFacts } from "./chat-thread-prepend.ts";
+import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -28,12 +35,35 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
+    /** Before first text, the builder's seed occupies the indicator's insertion slot. */
+    onset?: Extract<ChatItem, { kind: "stream" }>;
     identity: string;
     prefix: string | null;
+    ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
+  /** Facts of the history behind items. */
+  facts?: PrependFacts;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+
+type PrependRuntime = Awaited<ReturnType<typeof importPrependRuntime>>;
+let prependRuntime: PrependRuntime | undefined;
+let prependLoading: Promise<unknown> | undefined;
+
+async function importPrependRuntime() {
+  const { prependOlderChatItems } = await import("./chat-thread-prepend.ts");
+  return { prependOlderChatItems };
+}
+
+/** Older-page reuse stays out of chat boot; prepends take the full build until it loads. */
+function loadedPrependRuntime() {
+  prependLoading ??= importPrependRuntime().then(
+    (loaded) => (prependRuntime = loaded),
+    () => (prependLoading = undefined),
+  );
+  return prependRuntime;
+}
 
 type ToolCardExpansionState = {
   expanded: Map<string, boolean>;
@@ -45,8 +75,11 @@ type ToolCardExpansionState = {
   lastSync?: {
     // The scan memo must not retain messages after their owning pane releases them.
     items: WeakRef<readonly RenderChatItem[]>;
+    transcriptItems?: WeakRef<readonly SystemEventRenderItem[]>;
+    bubbleMode: boolean;
     isFilteredProjection: boolean;
     autoExpandToolCalls: boolean;
+    inlineCommands: InlineCommandDisclosurePolicy | undefined;
   };
 };
 
@@ -94,6 +127,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+    previous.replyPreviousMessageId === next.replyPreviousMessageId &&
     previous.replyShared === next.replyShared &&
     sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
@@ -173,6 +207,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+        previous.replyPreviousMessageId === next.replyPreviousMessageId &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -284,74 +319,6 @@ function stabilizeChatItems(
   return sameEntries(stabilized, previous) ? previous : stabilized;
 }
 
-function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
-  return (
-    previous === next ||
-    (previous !== undefined &&
-      next !== undefined &&
-      previous.length === next.length &&
-      previous.every((entry, index) => entry === next[index]))
-  );
-}
-
-function sameChatItemsStructuralInput(
-  previous: BuildChatItemsProps,
-  next: BuildChatItemsProps,
-): boolean {
-  const previousReasoning = previous.reasoning?.items;
-  const nextReasoning = next.reasoning?.items;
-  const previousActive = activeChatReasoning(previous.reasoning);
-  const nextActive = activeChatReasoning(next.reasoning);
-  return (
-    previous.sessionKey === next.sessionKey &&
-    previous.archiveNotice?.key === next.archiveNotice?.key &&
-    previous.archiveNotice?.label === next.archiveNotice?.label &&
-    previous.runId === next.runId &&
-    previous.compactionStatus === next.compactionStatus &&
-    previous.locale === next.locale &&
-    previous.messages === next.messages &&
-    previous.toolMessages === next.toolMessages &&
-    previous.guardianNotices === next.guardianNotices &&
-    previous.streamSegments === next.streamSegments &&
-    previous.streamStartedAt === next.streamStartedAt &&
-    previous.reasoning?.runId === next.reasoning?.runId &&
-    previous.showReasoning === next.showReasoning &&
-    previousReasoning?.length === nextReasoning?.length &&
-    (previousReasoning?.every(
-      (item, index) =>
-        item === nextReasoning?.[index] ||
-        (item === previousActive &&
-          nextReasoning?.[index] === nextActive &&
-          sameFields(previousActive, nextActive, ["itemId", "startedAt"])),
-    ) ??
-      true) &&
-    previous.queue === next.queue &&
-    previous.initialTurnId === next.initialTurnId &&
-    // renderChat derives this list of immutable Gateway records on every render,
-    // including scroll-driven ones; identity would rebuild all loaded history.
-    sameEntries(previous.pendingInputs, next.pendingInputs) &&
-    previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
-    previous.workerSetupPending === next.workerSetupPending &&
-    previous.showToolCalls === next.showToolCalls &&
-    previous.persistCommentary === next.persistCommentary &&
-    previous.runWorking === next.runWorking &&
-    previous.runFinalizing === next.runFinalizing &&
-    previous.runActive === next.runActive &&
-    previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
-    previous.subagentWait?.runId === next.subagentWait?.runId &&
-    (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
-    previous.questionPrompts === next.questionPrompts &&
-    previous.loading === next.loading &&
-    sameEntries(previous.replyPeople, next.replyPeople) &&
-    previous.replyLocalPerson === next.replyLocalPerson &&
-    previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery &&
-    previous.messageRecovery?.messages === next.messageRecovery?.messages &&
-    previous.messageRecovery?.revision === next.messageRecovery?.revision &&
-    previous.messageRecovery?.agentId === next.messageRecovery?.agentId
-  );
-}
-
 function liveStreamIdentity(input: BuildChatItemsProps): string {
   return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
 }
@@ -359,7 +326,7 @@ function liveStreamIdentity(input: BuildChatItemsProps): string {
 function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsProps): boolean {
   const reasoning = activeChatReasoning(input.reasoning);
   const live = cached.liveStream;
-  const item = live ? cached.items[live.index] : undefined;
+  const item = live?.onset ?? (live ? cached.items[live.index] : undefined);
   if (
     (input.stream === null && !reasoning) ||
     !live ||
@@ -369,11 +336,23 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
+  const text = stripOwnedCanvasShortcodes(
+    trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix),
+    item.runId,
+    live.ownedCanvas,
+  );
   if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
-  cached.items[live.index] = { ...item, text, thinking: reasoning?.text };
+  const next = { ...item, text, thinking: reasoning?.text };
+  if (live.onset) {
+    // Keep the prior projection intact while the new stream changes row membership.
+    cached.items = cached.items.toSpliced(live.index, input.runFinalizing ? 1 : 0, next);
+    live.onset = undefined;
+    chatItemsGenerations.set(cached.items, ++cached.generation);
+  } else {
+    cached.items[live.index] = next;
+  }
   return true;
 }
 
@@ -420,10 +399,27 @@ export function buildCachedChatItems(
   });
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
-  if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
+  const previousInput = cached.input;
+  // The first answer also retires its working indicator; all other facts must match.
+  const finalizingOnset =
+    cached.liveStream?.onset &&
+    previousInput !== null &&
+    input.runWorking !== true &&
+    input.runFinalizing === true &&
+    input.runActive === true &&
+    previousInput.stream !== input.stream;
+  if (
+    previousInput &&
+    sameChatItemsStructuralInput(
+      previousInput,
+      input,
+      finalizingOnset,
+      cached.facts?.hasContentBeforeProgress,
+    )
+  ) {
     if (
-      cached.input.stream === input.stream &&
-      activeChatReasoning(cached.input.reasoning)?.text ===
+      previousInput.stream === input.stream &&
+      activeChatReasoning(previousInput.reasoning)?.text ===
         activeChatReasoning(input.reasoning)?.text
     ) {
       return cached.items;
@@ -433,20 +429,52 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input, projections.inputOrder));
+  const previous = cached.input;
+  const added = previous ? input.messages.length - previous.messages.length : 0;
+  // Only a page in front of retained history loads the reuse runtime.
+  const prepended =
+    previous &&
+    cached.facts &&
+    added > 0 &&
+    added < input.messages.length &&
+    input.messages[added] === previous.messages[0] &&
+    sameChatItemsStructuralInput(previous, { ...input, messages: previous.messages })
+      ? loadedPrependRuntime()?.prependOlderChatItems(
+          { messages: previous.messages, items: cached.items, facts: cached.facts },
+          input,
+          projections.inputOrder,
+          sameChatItem,
+        )
+      : null;
+  const facts: ChatItemsFacts = { firsts: new Map(), indexedDividers: [] };
+  const items = prepended
+    ? [
+        ...stabilizeChatItems(cached.items.slice(0, prepended.retainedFrom), prepended.head),
+        ...cached.items.slice(prepended.retainedFrom),
+      ]
+    : stabilizeChatItems(
+        cached.items,
+        buildChatItems(input, projections.inputOrder, "transcript", facts),
+      );
+  cached.facts = prepended?.facts ?? facts;
   // A rebuild can retain every row and the array. Consumers still need to
   // observe the structural pass; text-only slot replacements do not advance it.
   chatItemsGenerations.set(items, ++cached.generation);
   cached.input = input;
   cached.items = items;
-  const liveStreamIndex = findLiveStreamIndex(items);
+  const onset = cached.facts.streamOnset;
+  const liveStreamIndex = onset
+    ? items.findIndex((item) => item.kind === "reading-indicator" && item.key === onset.key)
+    : findLiveStreamIndex(items);
   cached.liveStream =
     liveStreamIndex < 0
       ? null
       : {
           index: liveStreamIndex,
+          onset,
           identity: liveStreamIdentity(input),
           prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+          ownedCanvas: collectOwnedCanvasPreviews(items),
         };
   return items;
 }
@@ -467,9 +495,19 @@ export function subscribeExpansionState(
   };
 }
 
-function writeExpansionState<T>(values: Map<string, T>, key: string, value: T): boolean {
-  if (values.has(key) && values.get(key) === value) {
+function writeExpansionState<T>(
+  values: Map<string, T>,
+  key: string,
+  value: T,
+  explicit = false,
+): boolean {
+  const choices = explicitToolExpansions.get(values);
+  const newChoice = explicit && choices !== undefined && !choices.has(key);
+  if (!newChoice && values.has(key) && values.get(key) === value) {
     return false;
+  }
+  if (newChoice) {
+    choices.add(key);
   }
   values.set(key, value);
   expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
@@ -477,17 +515,31 @@ function writeExpansionState<T>(values: Map<string, T>, key: string, value: T): 
 }
 
 export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
-  explicitToolExpansions.get(values)?.add(key);
-  if (writeExpansionState(values, key, value)) {
+  if (writeExpansionState(values, key, value, true)) {
     for (const notify of expansionListeners.get(values) ?? []) {
       notify();
     }
   }
 }
 
+export function toggleExpansionState(
+  values: Map<string, boolean>,
+  key: string,
+  expanded = values.get(key) ?? false,
+): void {
+  setExpansionState(values, key, !expanded);
+}
+
+export function getExplicitToolExpansion(values: ReadonlyMap<string, boolean>, key: string) {
+  return explicitToolExpansions.get(values)?.has(key) ? values.get(key) : undefined;
+}
+
 function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
+  const previous = values.get(key);
   if (values.delete(key)) {
-    expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    if (previous !== false) {
+      expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    }
   }
 }
 
@@ -538,54 +590,24 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-/**
- * A run that ends or hands off swaps its live tool rows for their stored
- * copies, which arrive under other message keys. Disclosure ids stay scoped to
- * their message, so what the reader had opened is carried across by tool call,
- * and only where one disclosure names that call on each side.
- */
-function carryMovedDisclosures(
-  state: ToolCardExpansionState,
-  previous: ReadonlyMap<string, string> | undefined,
-  current: ReadonlyMap<string, string>,
-): void {
-  if (!previous) {
-    return;
-  }
-  const { expanded, explicit } = state;
-  const single = (calls: ReadonlyMap<string, string>) => {
-    const ids = new Map<string, string | null>();
-    for (const [id, call] of calls) {
-      ids.set(call, ids.has(call) ? null : id);
-    }
-    return ids;
-  };
-  const targets = single(current);
-  for (const [call, source] of single(previous)) {
-    const target = targets.get(call);
-    const open = source ? expanded.get(source) : undefined;
-    if (!source || !target || current.has(source) || explicit.has(target) || open === undefined) {
-      continue;
-    }
-    writeExpansionState(expanded, target, open);
-    if (explicit.has(source)) {
-      explicit.add(target);
-    }
-  }
-}
-
 export function syncToolCardExpansionState(
   sessionKey: string,
   items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
   isFilteredProjection = false,
+  inlineCommands?: InlineCommandDisclosurePolicy,
+  transcriptItems?: readonly SystemEventRenderItem[],
+  bubbleMode = false,
 ): void {
   const state = getToolCardExpansionState(sessionKey);
   const { expanded, initialized, explicit, lastSync } = state;
   if (
     lastSync?.items.deref() === items &&
     lastSync.isFilteredProjection === isFilteredProjection &&
-    lastSync.autoExpandToolCalls === autoExpandToolCalls
+    lastSync.autoExpandToolCalls === autoExpandToolCalls &&
+    lastSync.inlineCommands === inlineCommands &&
+    lastSync.transcriptItems?.deref() === transcriptItems &&
+    lastSync.bubbleMode === bubbleMode
   ) {
     return;
   }
@@ -598,7 +620,12 @@ export function syncToolCardExpansionState(
     }
     if (!initialized.has(id)) {
       if (!explicit.has(id)) {
-        writeExpansionState(expanded, id, autoExpandToolCalls);
+        if (autoExpandToolCalls) {
+          writeExpansionState(expanded, id, true);
+        } else {
+          // Closed is already the rendering default; discovering it changes only inventory.
+          expanded.set(id, false);
+        }
       }
       initialized.add(id);
     }
@@ -611,25 +638,40 @@ export function syncToolCardExpansionState(
     for (const entry of item.messages) {
       const cards = extractToolCardsCached(entry.message);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        groupCallId ??= cards[cardIndex]?.callId;
-        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`, cards[cardIndex]?.callId, "card");
+        const card = cards[cardIndex]!;
+        groupCallId ??= card.callId;
+        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`, card.callId, "card");
       }
       if (!isStandaloneToolMessageForDisplay(entry.message)) {
         continue;
       }
       retainDisclosure(`toolmsg:${entry.key}`, cards[0]?.callId, "message");
     }
-    if (groupCallId) {
+    if (groupCallId && (!inlineCommands || !transcriptItems)) {
       calls.set(`activity:${item.key}`, `activity:${groupCallId}`);
     }
   }
+  if (inlineCommands && transcriptItems) {
+    for (const [id, call] of inlineCommands.inlineActivityDisclosureCalls(
+      transcriptItems,
+      bubbleMode,
+    )) {
+      calls.set(id, call);
+    }
+  }
   if (!isFilteredProjection) {
-    carryMovedDisclosures(state, state.calls, calls);
-    state.calls = calls;
+    carryMovedDisclosures(state, state.calls, calls, writeExpansionState);
+    // Reconnect temporarily clears live rows before restoring stored history.
+    // Keep their call associations with the explicit choices retained below.
+    if (calls.size > 0) {
+      state.calls = calls;
+    }
   }
   if (autoExpandToolCalls && !lastSync?.autoExpandToolCalls) {
-    for (const toolCardId of initialized) {
-      writeExpansionState(expanded, toolCardId, true);
+    for (const id of initialized) {
+      if (!explicit.has(id)) {
+        writeExpansionState(expanded, id, true);
+      }
     }
   }
   // A render reconciles its own history without notifying sibling panes. Their
@@ -645,7 +687,10 @@ export function syncToolCardExpansionState(
   }
   state.lastSync = {
     items: new WeakRef(items),
+    transcriptItems: transcriptItems ? new WeakRef(transcriptItems) : undefined,
+    bubbleMode,
     isFilteredProjection,
     autoExpandToolCalls,
+    inlineCommands,
   };
 }

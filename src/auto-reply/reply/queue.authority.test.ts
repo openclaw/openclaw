@@ -94,36 +94,6 @@ function prepareOperatorAdmission(run: FollowupRun, runId: string) {
 }
 
 describe("followup queue authority", () => {
-  it.each(["collect", "overflow"] as const)(
-    "keeps restart-restricted input separate through a %s drain",
-    async (mode) => {
-      const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
-      const admissionConfigs = [{ tools: { deny: ["write"] } }, { tools: { deny: ["exec"] } }];
-      for (const restricted of [true, false]) {
-        const run = webchatRun(restricted ? "interrupted task" : "new task");
-        run.readAdmissionConfig = () => admissionConfigs[restricted ? 0 : 1]!;
-        if (restricted) {
-          run.forceRestartSafeTools = true;
-          run.forceCodeModeTools = true;
-        }
-        q.add(run);
-      }
-      q.start();
-      await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
-      expect(q.calls).toHaveLength(2);
-      expect(q.calls.map((run) => run.readAdmissionConfig?.())).toEqual(admissionConfigs);
-      expect(q.calls[0]?.prompt).toContain("interrupted task");
-      expect(q.calls[0]?.prompt).not.toContain("new task");
-      expect(q.calls[0]).toMatchObject({
-        forceRestartSafeTools: true,
-        forceCodeModeTools: true,
-      });
-      expect(q.calls[1]?.prompt).toContain("new task");
-      expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
-      expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
-    },
-  );
-
   it.each([false, true])(
     "keeps different requesters separate when requests are identical=%s",
     async (identical) => {

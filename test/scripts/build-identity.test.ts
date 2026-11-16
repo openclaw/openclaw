@@ -16,14 +16,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const sha = (digit: string) => digit.repeat(40);
 
-function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env) {
+function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env, gitCwd?: string) {
   const result = spawnSync(
     testNodeExecPath,
     [
       ...resolveRuntimeWorkerArgv(buildIdentityUrl, testNodeExecPath).slice(0, -1),
       "--input-type=module",
       "--eval",
-      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl.href)}); process.stdout.write(JSON.stringify(readCurrentGitCommit()));`,
+      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl.href)}); process.stdout.write(JSON.stringify(readCurrentGitCommit(${JSON.stringify(gitCwd)})));`,
     ],
     {
       cwd,
@@ -38,7 +38,7 @@ function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env)
   return JSON.parse(result.stdout) as string | null;
 }
 
-it("reads HEAD from the inherited cwd and returns null when Git cannot resolve it", () => {
+it("reads HEAD from the selected cwd and returns null when Git cannot resolve it", () => {
   const root = tempDirs.make("openclaw-build-identity-");
   const repo = join(root, "repo");
   const outsideRepo = join(root, "outside");
@@ -53,6 +53,8 @@ it("reads HEAD from the inherited cwd and returns null when Git cannot resolve i
 
   expect(readGitCommitInChild(repo)).toBe(expected);
   expect(readGitCommitInChild(outsideRepo)).toBeNull();
+  expect(readGitCommitInChild(outsideRepo, process.env, repo)).toBe(expected);
+  expect(readGitCommitInChild(repo, process.env, outsideRepo)).toBeNull();
 
   const envWithoutGit = {
     ...Object.fromEntries(

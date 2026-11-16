@@ -7,7 +7,6 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import type { SessionConfig } from "../types.base.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
-import { createRestartRecoveryTombstoneFixture } from "./main-session-recovery-fixtures.test-support.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
@@ -15,7 +14,6 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
-import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 
 it.each([
   ["linux", "legacy:session", "/state/agents/main/agent/openclaw-agent.sqlite"],
@@ -36,15 +34,6 @@ it.each([
     ).toEqual({ agentId: "main", sessionId, storePath });
   },
 );
-
-it("merges bounded restart tombstones without evicting fresh-only ids", () => {
-  const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
-  expect(mergeRestartRecoveryTerminalRunIds(existing, [...existing.slice(1), "run-new"])).toEqual([
-    ...existing.slice(1),
-    "run-new",
-  ]);
-  expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
-});
 
 type EntryFields = Record<string, unknown>;
 type NormalizationCase = [
@@ -74,6 +63,16 @@ const pendingDelivery = {
 };
 
 it.each<NormalizationCase>([
+  [
+    "retained ISO endedAt with an explicit offset and exact millisecond precision",
+    { endedAt: "2026-06-11T19:50:58.538000+02:00" },
+    { endedAt: 1_781_200_258_538 },
+  ],
+  [
+    "retained ISO endedAt at the Unix epoch without fractional seconds",
+    { endedAt: "1970-01-01T00:00:00Z" },
+    { endedAt: 0 },
+  ],
   [
     "legacy numeric strings",
     { spawnDepth: "2", inputTokens: "32", runtimeMs: "0", estimatedCostUsd: "0.25" },
@@ -337,22 +336,4 @@ it("fails closed while trusted session initialization is pending", () => {
     "still initializing",
   );
   expect(resolveSessionWorkStartError(key, entry)).toBeUndefined();
-});
-
-it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
-  const entry = {
-    sessionId: "failed-session",
-    mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
-  };
-
-  const key = "agent:main:matrix:channel:room-a";
-  expect([
-    resolveSessionWorkStartError(key, entry),
-    resolveSessionWorkStartError(key, { ...entry, modelSelectionLocked: true }),
-    resolveSessionWorkStartError(key, entry, { allowRestartTombstoneReplacement: true }),
-  ]).toEqual([
-    expect.stringContaining("ended during restart recovery"),
-    expect.stringContaining("Open it in WebChat and use Resume."),
-    undefined,
-  ]);
 });

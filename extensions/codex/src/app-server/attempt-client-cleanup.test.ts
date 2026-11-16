@@ -19,8 +19,8 @@ import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 type Harness = ReturnType<typeof createClientHarness>;
 const harnesses: Harness[] = [];
-function trackedHarness() {
-  const harness = createClientHarness();
+function trackedHarness(options: Parameters<typeof createClientHarness>[0] = {}) {
+  const harness = createClientHarness(options);
   harnesses.push(harness);
   return harness;
 }
@@ -141,6 +141,41 @@ it("reports a terminal that remains running after termination", async () => {
   await expect(terminateCodexBackgroundTerminals({ request } as never, "thread-1")).rejects.toThrow(
     "Codex background-terminal cleanup failed",
   );
+});
+
+it("rechecks cleanup authority before terminating each inventoried process", async () => {
+  let current = true;
+  const revoked = new Error("Native child authority was revoked");
+  const harness = trackedHarness({
+    onWrite(line, send) {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "thread/backgroundTerminals/list") {
+        send({ id: request.id, result: { data: [{ processId: "10" }, { processId: "20" }] } });
+      } else {
+        current = false;
+        send({ id: request.id, result: { terminated: true } });
+      }
+    },
+  });
+  await expect(
+    terminateCodexBackgroundTerminals(harness.client, "thread-1", false, undefined, () => {
+      if (!current) {
+        throw revoked;
+      }
+    }),
+  ).rejects.toMatchObject({
+    cause: expect.objectContaining({ cause: revoked }),
+  });
+  expect(harness.writes.map((line) => JSON.parse(line))).toEqual([
+    expect.objectContaining({
+      method: "thread/backgroundTerminals/list",
+      params: { threadId: "thread-1" },
+    }),
+    expect.objectContaining({
+      method: "thread/backgroundTerminals/terminate",
+      params: { threadId: "thread-1", processId: "10" },
+    }),
+  ]);
 });
 
 it("keeps strict startup retirement failures visible to lifecycle owners", async () => {

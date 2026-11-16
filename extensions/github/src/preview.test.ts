@@ -236,6 +236,7 @@ describe("loadControlUiGitHubPreview", () => {
     vi.useFakeTimers();
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const refresh = createDeferred<Response>();
     const refreshStarted = createDeferred<void>();
     const identity = managedIdentity("stale-preview");
@@ -480,6 +481,7 @@ describe("loadControlUiGitHubPreview", () => {
     vi.useFakeTimers();
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const f = conditionalPreviewFixture("pull", 940001, { authors: [["Ada", 20]] });
     const { state, avatars, refreshed, load } = f;
     const first = await load(false);

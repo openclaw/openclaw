@@ -19,28 +19,20 @@ afterEach(() => {
 });
 
 describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
-  it("keeps diary dates visible and clickable while a long entry scrolls", async () => {
+  it("keeps the page's width at phone size with many diary dates and a long entry", async () => {
     host = document.createElement("div");
-    host.style.height = "420px";
-    host.style.width = "760px";
-    host.style.overflow = "hidden";
+    host.style.width = "358px";
     document.body.append(host);
 
     const viewState = createDreamingViewState();
-    viewState.activeSubTab = "diary";
-    viewState.activeDiarySubTab = "dreams";
     const props: Parameters<typeof renderDreaming>[0] = createDreamingViewProps(viewState, {
       access: { ...fullDreamingViewAccess },
       dreamDiaryContent: [
         "# Dream Diary",
-        "---",
-        "*January 1, 2026*",
-        "The earlier diary entry remains available.",
-        "---",
-        "*January 2, 2026*",
         ...Array.from(
-          { length: 24 },
-          (_, index) => `Long diary paragraph ${index + 1}: ${"a visible memory ".repeat(8)}`,
+          { length: 30 },
+          (_, index) =>
+            `---\n\n*October ${index + 1}, 2026, 3:00 AM*\n\n${"A long dream that keeps going ".repeat(20)}`,
         ),
       ].join("\n\n"),
       memoryWikiEnabled: false,
@@ -51,33 +43,14 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
     });
     renderDreamingView(props, host);
 
-    const diary = host.querySelector<HTMLElement>(".dreams-diary");
-    const navigation = host.querySelector<HTMLElement>(".dreams-diary__daychips");
-    expect(diary).not.toBeNull();
-    expect(navigation).not.toBeNull();
-    expect(getComputedStyle(diary!).overflowY).toBe("auto");
-    expect(getComputedStyle(navigation!.parentElement!).position).toBe("sticky");
-    expect(diary!.scrollHeight).toBeGreaterThan(diary!.clientHeight);
-
-    diary!.scrollTop = 500;
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-
-    const olderDate = expectDefined(
-      navigation!.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")[1],
-      "older diary date button",
+    const page = expectDefined(host.querySelector<HTMLElement>(".dreams-page"), "dreams page");
+    expect(page.scrollWidth).toBeLessThanOrEqual(page.clientWidth);
+    const dates = expectDefined(
+      host.querySelector<HTMLElement>(".dreams-diary__dates"),
+      "diary dates",
     );
-    expect(diary!.scrollTop).toBeGreaterThan(100);
-    expect(olderDate.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      diary!.getBoundingClientRect().top,
+    expect(dates.getBoundingClientRect().right).toBeLessThanOrEqual(
+      host.getBoundingClientRect().right,
     );
-    expect(olderDate.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      diary!.getBoundingClientRect().bottom,
-    );
-
-    olderDate.click();
-    expect(viewState.diaryPage).toBe(1);
-    expect(host.querySelector(".dreams-diary__date")?.textContent).toBe("January 1, 2026");
   });
 });

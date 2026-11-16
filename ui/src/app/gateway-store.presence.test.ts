@@ -102,10 +102,13 @@ describe("Gateway presence delivery", () => {
     current.request.mockReturnValue(recovery.promise);
     const events = vi.fn();
     store.gateway.subscribeEvents(events);
+    expect(store.gateway.readPresence?.()).toBeUndefined();
     send(reset(2));
+    expect(store.gateway.readPresence?.()).toEqual([first]);
     send(delta(9));
     current.testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
     current.testOptions.onHello?.(hello());
+    expect(store.gateway.readPresence?.()).toBeUndefined();
     recovery.resolve(reset(10, [second], ["second-key"]));
     await recovery.promise;
     expect(events).toHaveBeenCalledTimes(1);
@@ -118,5 +121,6 @@ describe("Gateway presence delivery", () => {
       }),
     );
     expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second] });
+    expect(store.gateway.readPresence?.()).toEqual([second]);
   });
 });

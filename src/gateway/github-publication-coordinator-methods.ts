@@ -10,13 +10,13 @@ import type {
   GitHubPublicationRow as PublicationRow,
   RepositoryGitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
+import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
-  type PublicationSessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -35,6 +35,7 @@ import {
   type GitHubPublicationRequester,
   type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
@@ -328,7 +329,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       workspaceTree: string;
     }): Promise<PublicationRow> => {
       const now = Date.now();
-      const requestId = randomUUID();
+      const requestId = input.requester.snapshot.origin
+        ? deriveGitHubPublicationTaskId(input.requester.snapshot.origin, input.idempotencyKey)
+        : randomUUID();
       assertRequester();
       {
         worktreeOwner.assertCurrent();
@@ -413,14 +416,27 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     async resumeSessionRequests(
       isStopping?: () => boolean,
       isPendingEmpty?: () => boolean,
+      requestId?: string,
     ): Promise<void> {
       if (isStopping?.()) {
         return;
       }
-      const rows = isPendingEmpty?.()
+      const pendingRows = isPendingEmpty?.()
         ? []
         : await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
-      params.recovery?.shared.retain(rows.map((row) => row.request_id));
+      const selectedIndex = requestId
+        ? pendingRows.findIndex((row) => row.request_id === requestId)
+        : -1;
+      const selected = pendingRows[selectedIndex];
+      // Selected recovery may not overtake earlier unfinished work on this checkout.
+      const earlier =
+        selected &&
+        pendingRows.slice(0, selectedIndex).some((row) => row.worktree_id === selected.worktree_id);
+      const rows = requestId ? (selected && !earlier ? [selected] : []) : pendingRows;
+      // A selected observer cannot retire another request’s recovery backoff.
+      if (!requestId) {
+        params.recovery?.shared.retain(rows.map((row) => row.request_id));
+      }
       params.assertCurrent();
       if (isStopping?.() || rows.length === 0) {
         return;
@@ -597,4 +613,48 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return row ? publicationResult(row) : undefined;
     },
   };
+}
+
+/** Resume native queues without letting a selected shared request visit another owner. */
+export async function resumeGitHubPublicationSessionRequests(params: {
+  shared: Pick<
+    ReturnType<typeof createGitHubPublicationCoordinatorMethods>,
+    "resumeSessionRequests"
+  >;
+  repository: { resumeSessionRequests(isStopping?: () => boolean): Promise<void> };
+  isStopping?: () => boolean;
+  isPendingEmpty?: (kind: "shared" | "repository") => boolean;
+  sharedRequestId?: string;
+}) {
+  const failures: unknown[] = [];
+  for (const coordinator of [params.shared, params.repository]) {
+    if (params.isStopping?.()) {
+      break;
+    }
+    if (
+      coordinator === params.repository &&
+      (params.sharedRequestId || params.isPendingEmpty?.("repository"))
+    ) {
+      continue;
+    }
+    try {
+      if (coordinator === params.shared) {
+        await params.shared.resumeSessionRequests(
+          params.isStopping,
+          () => params.isPendingEmpty?.("shared") ?? false,
+          params.sharedRequestId,
+        );
+      } else {
+        await params.repository.resumeSessionRequests(params.isStopping);
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      failures.map((error) => (error instanceof Error ? error.message : String(error))).join("; "),
+    );
+  }
 }

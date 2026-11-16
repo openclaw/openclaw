@@ -4,10 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import * as agentDb from "./openclaw-agent-db.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "./openclaw-agent-db.test-support.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -46,9 +48,12 @@ it.each(["writable", "readonly", "async"] as const)(
       ]);
     }
 
-    expect(() => agentDb.openOpenClawAgentDatabase(options)).toThrow(
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(databasePath);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+    expect(() => maintenance.run(() => agentDb.openOpenClawAgentDatabase(options))).toThrow(
       /foreign_key_check failed.*session_windows row 1 references session_nodes \(foreign key 1\)/iu,
     );
+    await maintenance.close();
     if (admission === "readonly") {
       const failure = new Error("foreign_key_check failed before external repair");
       failure.name = "SqliteIntegrityError";

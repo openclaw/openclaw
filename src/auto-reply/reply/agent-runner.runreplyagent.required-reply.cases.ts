@@ -1,5 +1,6 @@
 import { expect, it, vi, type Mock } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRunParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { mockAcceptedWaitingStatusRun } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -110,6 +111,30 @@ export function registerRequiredReplyCompletionCases({
       }),
     );
   });
+
+  it.each([
+    { mode: "message_tool_only", reportsEarly: true },
+    { mode: "automatic", reportsEarly: false },
+  ] as const)(
+    "reports a message-tool source reply mid-run only in $mode delivery: $reportsEarly",
+    async ({ mode, reportsEarly }) => {
+      const onObservedReplyDelivery = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        const operation = findSessionControllerOperationByRunId(params.runId);
+        expect(operation).toBeDefined();
+        operation?.markSourceReplyDelivered();
+        // Channel progress UI must stop before later tool events of this run render.
+        expect(onObservedReplyDelivery).toHaveBeenCalledTimes(reportsEarly ? 1 : 0);
+        return { payloads: [], meta: {} };
+      });
+      const { run } = createMinimalRun({
+        opts: { sourceReplyDeliveryMode: mode, onObservedReplyDelivery },
+        runOverrides: { sourceReplyDeliveryMode: mode },
+      });
+
+      await run();
+    },
+  );
 
   it("surfaces a marked fallback for an empty message-tool-only completion", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });

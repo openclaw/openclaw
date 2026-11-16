@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -241,6 +242,14 @@ export const UpdateRunRecordSchema = z.object({
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
+    managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
+    packageStage: z
+      .object({
+        prefix: z.string().max(4096),
+        packageRoot: z.string().max(4096),
+        identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }),
+      })
+      .optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
@@ -265,6 +274,7 @@ export const UpdateRunRecordSchema = z.object({
     campaignId: text.optional(),
     doctorHint: text.optional(),
     nextAction: text.optional(),
+    cause: z.enum(UPDATE_RUN_CAUSES).optional(),
   }),
   target: z.object({
     channel: text.optional(),

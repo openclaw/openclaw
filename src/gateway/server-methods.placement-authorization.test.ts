@@ -16,7 +16,7 @@ const folder = {
 };
 const placementCases = [
   ["writer device dispatch", "dispatch", { key, deviceId: "device-1" }, writer, true],
-  ["writer profile dispatch", "dispatch", { key, profileId: "development" }, writer, false],
+  ["writer profile dispatch", "dispatch", { key, profileId: "development" }, writer, true],
   ["writer gateway move", "move", move({ kind: "gateway" }), writer, true],
   ["writer profile move", "move", profileMove, writer, false],
   ["admin profile move", "move", profileMove, ["operator.admin"], true],
@@ -39,7 +39,7 @@ it.each(placementCases)(
   "authorizes %s before the handler",
   async (_name, operation, params, scopes, allowed) => {
     const { handler, respond } = await dispatch(`sessions.${operation}`, params, scopes);
-    // The handler owns node validation and persistence, so a refusal here precedes both.
+    // The handler owns profile authorization, node validation, and persistence.
     expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
     if (allowed) {
       expect(respond).toHaveBeenCalledWith(true, { reached: true });

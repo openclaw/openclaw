@@ -201,9 +201,7 @@ export function registerRequesterAutomationCustodyTests({
                   sourceSessionKey: subagentRuns.get(runId)!.childSessionKey,
                   sourceTool: "subagent_settle",
                 },
-                hasRestoredCronContinuation: false,
                 isOneShotModelRun: false,
-                isRestartRecoveryResumeRun: false,
               }),
             ).toBeUndefined();
             return { delivered: true, path: "direct" };

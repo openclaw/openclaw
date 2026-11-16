@@ -16,7 +16,7 @@ import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-age
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
@@ -182,7 +182,7 @@ export function holdControlSessionPublication<Consumer>(options: {
     options.afterReleased?.();
     return value;
   };
-  const wrap = (execution: OpenClawAgentDatabaseExecution) => {
+  const wrap = <Execution extends OpenClawAgentDatabaseExecution>(execution: Execution) => {
     if (!producerScope.getStore()) {
       return execution;
     }
@@ -222,9 +222,9 @@ export function holdControlSessionPublication<Consumer>(options: {
   vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation((...args) =>
     wrap(capture(...args)),
   );
-  const prepare = executionOwner.captureOpenClawAgentDatabasePreparationExecution;
-  vi.spyOn(executionOwner, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
-    (...args) => wrap(prepare(...args)),
+  const captureAsync = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
+  vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+    async (...args) => wrap(await captureAsync(...args)),
   );
   return {
     producerScope,

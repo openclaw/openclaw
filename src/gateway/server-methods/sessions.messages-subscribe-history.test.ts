@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import { SerializedJsonArray } from "../serialized-json.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -67,7 +68,7 @@ it.each(["ready", "busy", "failed"] as const)(
       const readHistory = historyPages.readChatHistoryPage;
       let observedDuringRead = false;
       const read = vi.spyOn(historyPages, "readChatHistoryPage").mockImplementation((...args) => {
-        observedDuringRead = subscribers.get(scope.sessionKey).has(client.connId);
+        observedDuringRead = subscribers.getLiveToolOutput(scope.sessionKey).has(client.connId);
         if (outcome !== "ready") {
           throw new WorkerTaskError(
             "synthetic history failure",
@@ -87,6 +88,7 @@ it.each(["ready", "busy", "failed"] as const)(
             params: {
               key: scope.sessionKey,
               subscriptionId: "foreground",
+              includeLiveToolOutput: true,
               initialHistory: { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 },
             },
           },
@@ -123,8 +125,10 @@ it.each(["ready", "busy", "failed"] as const)(
           undefined,
         );
         expect(subscribers.get(scope.sessionKey)).toEqual(new Set([client.connId]));
+        expect(subscribers.getLiveToolOutput(scope.sessionKey)).toEqual(new Set([client.connId]));
         subscribers.unsubscribe(client.connId, scope.sessionKey, "foreground");
         expect(subscribers.get(scope.sessionKey).size).toBe(0);
+        expect(subscribers.getLiveToolOutput(scope.sessionKey).size).toBe(0);
       } finally {
         read.mockRestore();
         await disposeSessionReadContexts();
@@ -174,6 +178,7 @@ it.each(["unchanged", "sharing", "replay"] as const)(
             },
           };
         },
+        readChatStartupProjection: async () => ({ metadata: { swarmEnabled: false } }),
       });
       prepareGatewayRecipientProfile(client);
       expect(client.preparedSessionProfile?.role).toBe("view");
@@ -215,6 +220,7 @@ it.each(["unchanged", "sharing", "replay"] as const)(
           respond,
           isWebchatConnect: () => false,
           extraHandlers: sessionSubscriptionHandlers,
+          acceptsSerializedJson: true,
         });
         expect(read, JSON.stringify(respond.mock.calls)).toHaveBeenCalledOnce();
         expect(observedDuringRead).toBe(true);
@@ -223,7 +229,10 @@ it.each(["unchanged", "sharing", "replay"] as const)(
             true,
             expect.objectContaining({
               approvalReplay: expect.objectContaining({ sessionKey: scope.sessionKey }),
-              initialHistory: expect.objectContaining({ ok: true }),
+              initialHistory: expect.objectContaining({
+                ok: true,
+                payload: expect.objectContaining({ messages: expect.any(SerializedJsonArray) }),
+              }),
             }),
             undefined,
           );

@@ -602,7 +602,7 @@ it.each(["sharing", "list"] as const)(
     }),
 );
 
-it.each(["selected", "orphans"] as const)(
+it.each(["selected", "listing"] as const)(
   "preserves listing validation of dirty siblings in %s worker reads",
   (mode) =>
     withDatabase(async (database, env) => {
@@ -612,12 +612,11 @@ it.each(["selected", "orphans"] as const)(
         writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
       }
       const read = async () =>
-        mode === "orphans"
+        mode === "listing"
           ? readSessionEntrySummariesInWorker({
               agentId: "main",
               storePath: database.path,
               env,
-              mainSessionRecovery: "orphans",
             })
           : (
               await readSessionEntriesFromStoreInWorker({
@@ -628,7 +627,7 @@ it.each(["selected", "orphans"] as const)(
                 projection: "list",
               })
             ).entries;
-      expect(await read()).toHaveLength(mode === "orphans" ? 0 : 1);
+      expect(await read()).toHaveLength(mode === "listing" ? 2 : 1);
       markCanonicalSessionValidationPending(database, [sibling]);
       database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
         JSON.stringify({
@@ -771,13 +770,18 @@ it("keeps durable delivery generations live only through same-generation writes"
       } finally {
         queries.restore();
       }
-      await expect(
-        prepareSessionDeliveryGeneration({ ...descriptor, storePath: other.path }),
-      ).rejects.toThrow(revoked);
+      // A revisionless descriptor links the chat by key: each store resolves its own entry.
+      const otherStore = await prepareSessionDeliveryGeneration({
+        ...descriptor,
+        storePath: other.path,
+      });
+      otherStore.assertCurrent();
+      otherStore.release();
       authority.assertCurrent();
       replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
       expect(authority.assertCurrent).toThrow(revoked);
-      await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
+      // A revisionless descriptor is key-linked, so a fresh lease follows the reset chat.
+      (await prepareSessionDeliveryGeneration(descriptor)).release();
       const replay = await prepareSessionDeliveryGeneration({
         ...descriptor,
         lifecycleRevision: "reset-generation",
@@ -792,7 +796,7 @@ it("keeps durable delivery generations live only through same-generation writes"
           toDatabaseOptions(resolveSqliteScope(scope)),
         );
         expect(replay.assertCurrent).toThrow(revoked);
-        await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
+        (await prepareSessionDeliveryGeneration(descriptor)).release();
         const replacement = await prepareSessionDeliveryGeneration({
           ...descriptor,
           sessionId: "replacement",

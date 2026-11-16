@@ -108,6 +108,8 @@ export async function withTransferredUpdateHandoff(
   const managerStatePath = path.join(root, "manager-state.json");
   const managerPath = path.join(root, "manager.cjs");
   const managerPreloadPath = path.join(root, "manager-preload.cjs");
+  const managerEntryPath = path.join(root, "manager-entry.cjs");
+  const managerUsedPath = path.join(root, "manager-used");
   await fs.writeFile(
     updaterPath,
     `
@@ -157,34 +159,49 @@ export async function withTransferredUpdateHandoff(
       managerPreloadPath,
       `
     const children = require("node:child_process");
+    const fs = require("node:fs");
     const spawn = children.spawn;
-    children.spawn = (command, args, options) => command === "launchctl"
-      ? spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options)
-      : spawn(command, args, options);
+    children.spawn = (command, args, options) => {
+      if (command !== "launchctl") return spawn(command, args, options);
+      fs.writeFileSync(${JSON.stringify(managerUsedPath)}, "launchctl");
+      return spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options);
+    };
   `,
     );
+    await fs.writeFile(
+      managerEntryPath,
+      `require(${JSON.stringify(managerPreloadPath)});
+process.argv.splice(1, 1);
+require(process.argv[1]);`,
+    );
+    const workerRuntime = await import("../../infra/runtime-worker-url.js");
+    const resolveRuntimeArgs = workerRuntime.resolveRuntimeArgs;
     startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
-      helper = await handoff.startManagedServiceUpdateHandoff({
-        ...params,
-        root,
-        supervisor: "launchd",
-        env: {
-          ...process.env,
-          NODE_OPTIONS:
-            `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(managerPreloadPath)}`.trim(),
-        },
-        parentPid,
-        execPath: process.execPath,
-        argv1: updaterPath,
-        runId: undefined,
-        meta: {},
-        beforePark: async () => {
-          await params.beforePark?.();
-          await onNotice(params.runId!);
-          expect(parent.exitCode).toBeNull();
-        },
-      });
-      return helper;
+      // The helper resolves its launch argv before building the updater commands.
+      const launch = vi
+        .spyOn(workerRuntime, "resolveRuntimeArgs")
+        .mockImplementationOnce((execPath) => [...resolveRuntimeArgs(execPath), managerEntryPath]);
+      try {
+        helper = await handoff.startManagedServiceUpdateHandoff({
+          ...params,
+          root,
+          supervisor: "launchd",
+          env: { ...process.env },
+          parentPid,
+          execPath: process.execPath,
+          argv1: updaterPath,
+          runId: undefined,
+          meta: {},
+          beforePark: async () => {
+            await params.beforePark?.();
+            await onNotice(params.runId!);
+            expect(parent.exitCode).toBeNull();
+          },
+        });
+        return helper;
+      } finally {
+        launch.mockRestore();
+      }
     });
     transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
       handoff.transferManagedServiceUpdateHandoff,
@@ -198,6 +215,7 @@ export async function withTransferredUpdateHandoff(
       },
       { timeout: 5_000 },
     );
+    expect(await fs.readFile(managerUsedPath, "utf8")).toBe("launchctl");
     parent.stdin?.end();
     await vi.waitFor(() => fs.access(updatedPath), { timeout: 5_000 });
   } finally {
@@ -245,10 +263,10 @@ export const scheduleGatewayRestartMock = vi.fn(
   }),
 );
 
-const readGatewayOwnerLeaseMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
+const readGatewayOwnerLeaseAsyncMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLeaseAsync>(),
 );
-export { readGatewayOwnerLeaseMock };
+export { readGatewayOwnerLeaseAsyncMock };
 
 export type UpdateRunPayload = {
   runId: string;
@@ -373,7 +391,7 @@ vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
 
 vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-owner-lease.js")>()),
-  readGatewayOwnerLease: readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsync: readGatewayOwnerLeaseAsyncMock,
 }));
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", async (importOriginal) => ({
@@ -491,7 +509,7 @@ beforeEach(() => {
   }));
   scheduleGatewayRestartMock.mockClear();
   scheduleGatewayRestartMock.mockReturnValue({ scheduled: true });
-  readGatewayOwnerLeaseMock.mockReset().mockImplementation(() =>
+  readGatewayOwnerLeaseAsyncMock.mockReset().mockImplementation(async () =>
     detectRespawnSupervisorMock.mock.results.at(-1)?.value
       ? undefined
       : {

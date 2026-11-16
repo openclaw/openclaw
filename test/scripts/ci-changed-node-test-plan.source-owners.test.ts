@@ -1,10 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
-import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  hasBuildArtifactAffectingChange,
+  resolveChangedNodeTestTargets,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
@@ -17,27 +19,21 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   gatewayCallsitesGuard,
+  createFixtureGit,
   createChangedNodeTestShards,
   materializeGatewayCallsitesFixture,
   selectedFiles,
   fallbackGroups,
   expectProtectedOwnerExpansion,
+  writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
 const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
-
-function writeFiles(cwd: string, files: Record<string, string>) {
-  for (const [file, source] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), source);
-  }
-}
 
 function createSourceFixture(prefix: string, files: Record<string, string>) {
   const cwd = argvTempDirs.make(prefix);
@@ -86,22 +82,7 @@ function createErasedCoreSourceFixture() {
     "src/example/runtime-before.ts": "export const value = 1;\n",
   });
   materializeGatewayCallsitesFixture(cwd);
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = createFixtureGit(cwd);
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture baseline");
@@ -127,6 +108,104 @@ function createErasedCoreSourceFixture() {
 }
 
 describe("CI changed Node test plan", () => {
+  it.each([
+    [
+      "qa/scenarios/runtime/cloud-worker-admission-authority.yaml",
+      ["extensions/qa-lab/src/coverage-report.test.ts"],
+    ],
+    ["taxonomy.yaml", ["extensions/qa-lab/src/coverage-report.test.ts"]],
+    ["apps/macos/Sources/OpenClaw/DebugSettings.swift", ["test/scripts/native-app-i18n.test.ts"]],
+    ["apps/ios/WatchApp/Sources/WatchInboxView.swift", ["test/scripts/native-app-i18n.test.ts"]],
+    [
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      ["test/scripts/native-app-i18n.test.ts"],
+    ],
+    [
+      "apps/android/app/src/main/java/ai/openclaw/app/Screen.kt",
+      ["test/scripts/native-app-i18n.test.ts"],
+    ],
+    ["apps/android/app/src/play/res/values/strings.xml", ["test/scripts/native-app-i18n.test.ts"]],
+    [
+      "apps/android/app/src/thirdParty/res/values/strings.xml",
+      ["test/scripts/native-app-i18n.test.ts"],
+    ],
+    ["apps/android/wear/src/main/res/values/strings.xml", ["test/scripts/native-app-i18n.test.ts"]],
+    ["apps/macos/README.md", []],
+    ["apps/android/app/src/test/Screen.kt", []],
+  ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
+    const readers = [
+      "extensions/qa-lab/src/coverage-report.test.ts",
+      "extensions/github-copilot/replay-policy.test.ts",
+      "test/scripts/native-app-i18n.test.ts",
+    ];
+    const cwd = createSourceFixture("changed-inventory-owner-", {
+      [input]: "export {};\n",
+      ...Object.fromEntries(readers.map((file) => [file, "export {};\n"])),
+      "src/other/unrelated.test.ts": "export {};\n",
+      "test/scripts/unrelated.test.ts": "export {};\n",
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    const targets = resolveChangedNodeTestTargets([input], {
+      cwd,
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(targets.toSorted()).toEqual([...owners].toSorted());
+  });
+
+  it("retains the three-hop Copilot replay consumer without widening import depth", () => {
+    const consumer = "extensions/github-copilot/replay-policy.test.ts";
+    const source = "src/plugins/provider-replay-helpers.ts";
+    const cwd = createSourceFixture("changed-replay-consumer-", {
+      [source]: "export const policy = {};\n",
+      "src/plugin-sdk/provider-model-shared.ts":
+        'export * from "../plugins/provider-replay-helpers.js";\n',
+      "extensions/github-copilot/replay-policy.ts":
+        'import "../../src/plugin-sdk/provider-model-shared.js";\n',
+      [consumer]: 'import "./replay-policy.js";\n',
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    expect(
+      resolveChangedNodeTestTargets([source], {
+        cwd,
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      }),
+    ).toEqual([consumer]);
+  });
+
+  it("packs the native inventory reader without a whole tooling family", () => {
+    const reader = "test/scripts/native-app-i18n.test.ts";
+    const shards = createChangedNodeTestShards(
+      ["apps/macos/Sources/OpenClaw/DebugSettings.swift"],
+      {
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      },
+    );
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain(reader);
+    const owners = shards?.filter((shard) => selectedFiles([shard]).includes(reader));
+    expect(owners).toHaveLength(1);
+    expect(owners?.[0]?.requiresDist).toBe(false);
+    expect(selectedFiles(owners ?? [])).toEqual([reader]);
+  });
+
+  it.each([
+    ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
+    ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
+  ])("keeps the declared file reader when %s changes", (input, reader) => {
+    const cwd = createSourceFixture("changed-declared-input-", {
+      [input]: "{}\n",
+      [reader]: "export {};\n",
+    });
+    expectFiles(createChangedNodeTestShards([input], { cwd }), [reader]);
+    expect(resolvePolicyTestTargets([`${input}.unrelated`], { cwd })).not.toContain(reader);
+  });
+
   it.each([
     ["extensions/copilot/index.ts", ["extensions/copilot/index.test.ts"]],
     ["extensions/copilot/harness.ts", ["extensions/copilot/harness.test.ts"]],
@@ -195,7 +274,11 @@ describe("CI changed Node test plan", () => {
     },
     {
       source: "extensions/anthropic/openclaw.plugin.json",
-      targets: ["src/agents/model-ref-shared.test.ts"],
+      targets: [
+        "src/agents/model-ref-shared.test.ts",
+        "src/plugins/bundled-plugin-icons.test.ts",
+        "src/plugins/bundled-plugin-categories.test.ts",
+      ],
       areas: ["extensions/anthropic", "src/config"],
     },
     {
@@ -218,6 +301,7 @@ describe("CI changed Node test plan", () => {
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
         "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
         "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
+        "src/gateway/operator-run-recovery.channel.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
@@ -444,12 +528,7 @@ describe("CI changed Node test plan", () => {
     ]);
     // Local explicit selection still runs only the requested file.
     expect(buildVitestRunPlans([target])).toMatchObject([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        includePatterns: [target],
-        forwardedArgs: [],
-        watchMode: false,
-      },
+      runPlan("test/vitest/vitest.boundary.config.ts", target),
     ]);
   });
 
@@ -566,9 +645,7 @@ describe("CI changed Node test plan", () => {
 
     const sourceInventories = [
       "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
       "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
       lintSuppressionInventory,
@@ -583,6 +660,36 @@ describe("CI changed Node test plan", () => {
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
+
+    const restartRegression = "test/scripts/update-restart-module-outcome.test.ts";
+    const fixtureInputs = [
+      ["scripts/tests/update-restart-module-outcome.mjs", "realNames", "src/cli/update-cli"],
+      ["scripts/tests/update-restart-swap-fixture.mjs", "files", "src"],
+    ].flatMap(([file, list, root]) => {
+      const fixtureSource = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+      const names = expectDefined(
+        fixtureSource.match(new RegExp(`const ${list} = \\[([\\s\\S]*?)\\];`)),
+        `fixture input inventory: ${file}`,
+      )[1]!;
+      return [...names.matchAll(/"([^"]+)"/g)].map(([, name]) =>
+        path.posix.normalize(`${root}/${name}.ts`),
+      );
+    });
+    for (const input of [
+      ...fixtureInputs,
+      "src/infra/package-update-integrity-hasher.worker.ts",
+      "src/infra/runtime-process-url.ts",
+      "runtime-process-bootstrap.generated.mjs",
+      "package.json",
+    ]) {
+      expect(resolvePolicyTestTargets([input], { cwd }), input).toContain(restartRegression);
+    }
+    for (const input of [
+      "src/agents/example.ts",
+      "src/gateway/server-methods/chat-send-request.ts",
+    ]) {
+      expect(resolvePolicyTestTargets([input], { cwd }), input).not.toContain(restartRegression);
+    }
   });
 
   it.each([
@@ -703,76 +810,78 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it.each([
-    ...[
-      "src/secrets/runtime-auth-store-admission.ts",
-      "src/agents/prepared-model-runtime.configured.ts",
-    ].map((changedPath) => ({
-      changedPath,
-      expected: ["src/gateway/server.agents.config-readiness.test.ts"],
-    })),
-    {
-      changedPath: "src/gateway/config-reload.ts",
-      expected: [
-        "src/gateway/server.config-patch.test.ts",
-        "src/gateway/server.agents.config-readiness.test.ts",
+  it.each(
+    Array.of<[string[], string[]]>(
+      [
+        [
+          "src/secrets/runtime-auth-store-admission.ts",
+          "src/agents/prepared-model-runtime.configured.ts",
+        ],
+        ["src/gateway/server.agents.config-readiness.test.ts"],
       ],
-    },
-    ...["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"].map((changedPath) => ({
-      changedPath,
-      expected: [
-        "src/gateway/server.agent-execution-shutdown.test.ts",
-        "src/gateway/server.agent-late-admission.test.ts",
-        "test/gateway-session-end-shutdown.e2e.test.ts",
+      [
+        ["src/gateway/config-reload.ts"],
+        [
+          "src/gateway/server.config-patch.test.ts",
+          "src/gateway/server.agents.config-readiness.test.ts",
+        ],
       ],
-    })),
-    // Child-process E2Es: the import graph reaches only the test-instance helper.
-    {
-      changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/process/command-queue.capacity-groups.ts",
-      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/sessions/session-controller.steer.ts",
-      expected: [
-        "test/gateway-background-process-restart.e2e.test.ts",
-        "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+      [
+        ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
+        [
+          "src/gateway/server.agent-execution-shutdown.test.ts",
+          "src/gateway/server.agent-late-admission.test.ts",
+          "test/gateway-session-end-shutdown.e2e.test.ts",
+        ],
       ],
-    },
-    {
-      changedPath: "src/auto-reply/reply/queue/drain.ts",
-      expected: ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
-    },
-    {
-      changedPath: "node-runtime-recovery.mjs",
-      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/auto-reply/reply/abort.test.ts",
-      expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
-    },
-    {
-      changedPath: "scripts/lib/ci-proof-test-inventory.mts",
-      expected: ["test/vitest-pr-exempt-retention.test.ts"],
-    },
-    {
-      changedPath: "src/plugins/plugin-instance.ts",
-      expected: [
-        "test/scripts/eager-import-closure.test.ts",
-        "test/scripts/pr-worktree-provision.test.ts",
+      // Child-process E2Es: the import graph reaches only the test-instance helper.
+      [["src/gateway/server-startup-observers.ts"], ["test/gateway-restart-resume.e2e.test.ts"]],
+      [
+        ["src/process/command-queue.capacity-groups.ts"],
+        ["test/gateway-hook-concurrency.e2e.test.ts"],
       ],
-    },
-    {
-      changedPath: "scripts/e2e/lib/upgrade-survivor/run.sh",
-      expected: [
-        "test/scripts/package-acceptance-workflow.test.ts",
-        "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+      [
+        ["src/sessions/session-controller.steer.ts"],
+        [
+          "test/gateway-restart-resume.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+        ],
       ],
-    },
-  ])(
+      [
+        ["src/auto-reply/reply/queue/drain.ts"],
+        ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
+      ],
+      [["node-runtime-recovery.mjs"], ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"]],
+      [["src/auto-reply/reply/abort.test.ts"], ["test/scripts/tsgo-core-test-shards.test.ts"]],
+      [["scripts/lib/ci-proof-test-inventory.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
+      [
+        ["src/plugins/plugin-instance.ts"],
+        ["test/scripts/eager-import-closure.test.ts", "test/scripts/pr-worktree-provision.test.ts"],
+      ],
+      [
+        ["scripts/e2e/lib/upgrade-survivor/run.sh"],
+        [
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+        ],
+      ],
+      [
+        [
+          "scripts/lib/check-limits.mts",
+          "scripts/lib/release-context.mjs",
+          "scripts/lib/release-version.mjs",
+        ],
+        [
+          "test/scripts/ocm-npm-workspace-deps.test.ts",
+          "test/scripts/control-ui-performance.test.ts",
+        ],
+      ],
+      [
+        ["src/plugins/official-runtime-plugins.ts"],
+        ["src/node-host/codex-node-plugin.integration.test.ts"],
+      ],
+    ).flatMap(([paths, expected]) => paths.map((changedPath) => ({ changedPath, expected }))),
+  )(
     "retains explicit policy guards for $changedPath in automatic CI",
     ({ changedPath, expected }) => {
       const importer = "src/agents/live-model-filter.test.ts";
@@ -792,16 +901,18 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          // Gateway owner watches must survive the default aggressive PR selection.
-          selectionMode: changedPath.startsWith("src/gateway/") ? "aggressive" : "full",
+          // Explicit owner watches must survive the default aggressive PR selection.
+          selectionMode: "aggressive",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
         const files = selectedFiles(shards);
+        const unrelated = resolvePolicyTestTargets(["unrelated/path.ts"]);
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
+          expect(unrelated).not.toContain(guard);
         }
         expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
           expected.includes("test/vitest-pr-exempt-retention.test.ts"),
@@ -998,5 +1109,36 @@ describe("CI changed Node test plan", () => {
         "test/scripts/ci-node-test-plan.commands.test.ts",
       ]),
     );
+  });
+  it.each([
+    [
+      "extensions/new-provider/openclaw.plugin.json",
+      ["src/plugins/bundled-plugin-icons.test.ts", "src/plugins/bundled-plugin-categories.test.ts"],
+    ],
+    ["extensions/new-provider/assets/icon.png", ["src/plugins/bundled-plugin-icons.test.ts"]],
+    ["extensions/new-provider/assets/activity.svg", ["src/plugins/bundled-plugin-icons.test.ts"]],
+    ["extensions/new-provider/assets/README.md", []],
+  ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
+    const readers = [
+      "src/plugins/bundled-plugin-icons.test.ts",
+      "src/plugins/bundled-plugin-categories.test.ts",
+    ];
+    const cwd = createSourceFixture("changed-inventory-owner-", {
+      [input]: "export {};\n",
+      ...Object.fromEntries(readers.map((file) => [file, "export {};\n"])),
+      "src/other/unrelated.test.ts": "export {};\n",
+      "test/scripts/unrelated.test.ts": "export {};\n",
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    if (input.endsWith("activity.svg")) {
+      rmSync(path.join(cwd, input));
+    }
+    const targets = resolveChangedNodeTestTargets([input], {
+      cwd,
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(targets.toSorted()).toEqual([...owners].toSorted());
   });
 });

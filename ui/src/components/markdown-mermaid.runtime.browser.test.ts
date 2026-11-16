@@ -114,8 +114,7 @@ it("keeps wide proportional-font labels inside their nodes", async () => {
 });
 
 it("preserves quoted host font stacks in the standalone SVG", async () => {
-  const family =
-    '"Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const family = '"Instrument Sans", Arial, Helvetica, "Segoe UI", Roboto, sans-serif';
   const root = parsePassiveSvg(
     await renderMermaidSvg("flowchart LR\nA[Quoted font] --> B[Ready]", {
       ...theme,

@@ -318,7 +318,30 @@ const ModelProviderLocalServiceSchema = z
   })
   .optional();
 
+const ModelProviderIconSchema = z.discriminatedUnion("source", [
+  z.strictObject({ source: z.literal("file"), path: z.string().trim().min(1).max(4096) }),
+  z.strictObject({
+    source: z.literal("url"),
+    url: z
+      .string()
+      .url()
+      .max(4096)
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return url.protocol === "https:" && !url.username && !url.password && !url.hash;
+        } catch {
+          return false;
+        }
+      }, "Provider icon URL must use HTTPS without credentials or a fragment"),
+  }),
+  z.strictObject({ source: z.literal("builtin"), name: z.string().trim().min(1).max(100) }),
+]);
+
 const ModelProviderSchema = z.strictObject({
+  /** Display-only metadata; never changes provider identity or model routing. */
+  name: z.string().trim().min(1).max(100).optional(),
+  icon: ModelProviderIconSchema.optional(),
   // Bundled provider overlays are materialized with an empty-string sentinel.
   // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
   baseUrl: z.string().optional(),
@@ -332,6 +355,7 @@ const ModelProviderSchema = z.strictObject({
       z.literal("oauth"),
       z.literal("token"),
       z.literal("none"),
+      z.literal("native-command"),
     ])
     .optional(),
   /** Default API adapter for models under this provider. */
@@ -348,6 +372,8 @@ const ModelProviderSchema = z.strictObject({
   agentRuntime: AgentRuntimePolicySchema,
   /** Optional local service to start before calling this provider. */
   localService: ModelProviderLocalServiceSchema,
+  /** Override locality for watchdog timing only, including localService-managed relays. */
+  remote: z.boolean().optional(),
   /** Secret-bearing headers merged into provider requests. */
   headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
   /** Whether default Authorization header injection is enabled. */

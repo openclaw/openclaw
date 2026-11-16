@@ -73,7 +73,6 @@ export async function observeInterruptedUpdateGateway(
       probeContext: context,
       expectedVersion: candidate.version,
       expectedBuildId: candidate.buildId,
-      requirePluginHealth: true,
       requireChannelHealth: false,
     };
     const servingMatches = (health: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>) =>

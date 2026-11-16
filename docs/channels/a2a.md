@@ -96,6 +96,10 @@ If `message.taskId` is supplied, unknown, expired, or other peers' task IDs retu
 
 To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
 
+When another turn is active in the same context, the new task queues behind it. Its reply
+and terminal state remain attached to the original task ID, so the peer can keep polling
+`GetTask`. Queued replies do not require an outbound peer URL or start a reverse-direction message.
+
 Older clients can use `message/send` as an alias for `SendMessage`.
 
 ## Poll a task

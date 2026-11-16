@@ -526,7 +526,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect((await restarted.store.getPeriod("day", "2026-08-20"))?.report.status).toBe("closed");
   });
 
-  it("rejects a concurrent manual run and defers an intraday tick without overlapping collectors", async () => {
+  it("rejects concurrent manual work and retries a deferred tick across a wall-clock rewind", async () => {
     vi.setSystemTime(new Date("2026-08-20T03:54:00Z"));
     const { scheduler, store, github, nextRun } = await setup({
       schedule: { intradayEveryHours: 4 },
@@ -544,7 +544,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(github.collect).toHaveBeenCalledOnce();
     expect((await runById(store, id))?.status).toBe("running");
     blocked.resolve(healthy);
-    await nextRun();
+    await nextRun().then(() => vi.setSystemTime(Date.now() - 3_600_000));
     expect((await runById(store, id))?.status).toBe("ok");
     await vi.advanceTimersByTimeAsync(60_000);
     await nextRun();

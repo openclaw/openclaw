@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import { settleRepositoryDiskGatewayMove } from "./placement-dispatch-pending-move.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerPlacementReclaimBarriers,
@@ -162,6 +163,57 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
             .catch(() => undefined);
           return completed;
         }
+        if (workspace.kind === "repository" && workspace.repository.diskAuthority) {
+          if (moveIntent?.target.kind !== "gateway" || moveIntent.abandonSource) {
+            throw new Error(
+              "This repository disk requires an explicit Move to Gateway; the original disk is preserved",
+            );
+          }
+          const claimId = "reclaim-" + randomUUID();
+          const claim = await placements.claimReclaimWorkspaceResult(
+            {
+              sessionId: current.sessionId,
+              sessionKey: current.sessionKey,
+              agentId: current.agentId,
+              claimId,
+              runId: claimId,
+              owner: placementTurnOwner(current),
+            },
+            undefined,
+            reauthorize,
+          );
+          try {
+            const completed = await options.withPreparedRecovery(
+              current,
+              () => {
+                reauthorize?.();
+                if (!placements.validateWorkspaceResultClaim(claim)) {
+                  throw new Error("Repository disk move lost its durable result owner");
+                }
+              },
+              (recovery) =>
+                options.workspaceOperations.run(current.environmentId, () =>
+                  settleRepositoryDiskGatewayMove({
+                    deps: options,
+                    placement: current,
+                    turnClaim: claim,
+                    workspace: recovery.workspace,
+                    assertCurrent: recovery.assertCurrent,
+                  }),
+                ),
+            );
+            reportPlacementTransition(onTransition, completed);
+            return completed;
+          } catch (error) {
+            if (
+              !(error instanceof AcceptedWorkspacePublicationIndeterminateError) &&
+              (await findPendingWorkerWorkspaceResult(placements, claim))
+            ) {
+              await placements.handoffWorkspaceResultRecovery(claim);
+            }
+            throw error;
+          }
+        }
         const root = sessionWorkspaceRoot(workspace);
         const journalPlacement = { ...current };
         const reclaimClaimId = `reclaim-${randomUUID()}`;
@@ -289,7 +341,10 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     }
                   };
                   assertCurrent();
-                  const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+                  const quiescence = await tunnel.quiesceWorkspace(
+                    current.remoteWorkspaceDir,
+                    assertCurrent,
+                  );
                   try {
                     assertCurrent();
                     const reconciliation = await tunnel.reconcileWorkspace(
@@ -373,6 +428,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                             sessionKey: current.sessionKey,
                             agentId: current.agentId,
                             assertCurrent,
+                            quiescence,
                           });
                           assertCurrent();
                         }

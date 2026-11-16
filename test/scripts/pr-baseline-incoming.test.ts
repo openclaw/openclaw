@@ -1,19 +1,18 @@
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import {
   createBaselineFixture,
   failRestore,
+  reuseBaselineFixture,
   signBaselineRequest,
 } from "./pr-baseline-native.test-support.js";
 import { reviewWithFinding } from "./pr-correction-preparation.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function fixture() {
-  const f = createBaselineFixture(dirs.make("openclaw-pr-incoming-baseline-"), 1);
+const fixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 1);
   const source = f.publish();
   const historicalReview = f.readLocal("correction-review.json");
   f.writeLocal("pr-meta.json", JSON.stringify({ ...f.meta, headRefOid: source }));
@@ -42,7 +41,7 @@ function fixture() {
     expect(f.git(f.repo, "rev-parse", "topic")).toBe(source);
   };
   return { ...f, source, baseline, incomingReview, expectReviews, expectUnreviewed };
-}
+});
 
 function expectUnchanged(f: ReturnType<typeof fixture>) {
   expect(f.prepGit("rev-parse", "HEAD")).toBe(f.source);

@@ -10,7 +10,7 @@ import { ingestMemoryWikiSource } from "./ingest.js";
 import { importMemoryWikiOkfBundle } from "./okf.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createChatGptConversation, createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const securityRuntimeMock = vi.hoisted(() => ({
   failReadTextOnceFor: undefined as string | undefined,
@@ -24,6 +24,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
     ...actual,
+    readRegularFile: async (params: Parameters<typeof actual.readRegularFile>[0]) => {
+      injectPageReadFailure(params.filePath);
+      return actual.readRegularFile(params);
+    },
     root: async (...args: Parameters<typeof actual.root>) => {
       const vault = await actual.root(...args);
       return new Proxy(vault, {
@@ -32,17 +36,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
             return Reflect.get(target, prop, receiver);
           }
           return async (relativePath: string) => {
-            if (securityRuntimeMock.failReadTextAlwaysFor === relativePath) {
-              securityRuntimeMock.readTextFailureInjected = true;
-              throw securityRuntimeMock.readTextError;
-            }
-            if (
-              securityRuntimeMock.failReadTextOnceFor === relativePath &&
-              !securityRuntimeMock.readTextFailureInjected
-            ) {
-              securityRuntimeMock.readTextFailureInjected = true;
-              throw securityRuntimeMock.readTextOnceError;
-            }
+            injectPageReadFailure(relativePath);
             return target[prop](relativePath);
           };
         },
@@ -61,19 +55,18 @@ async function addNotes(pagePath: string, note: string) {
   await fs.writeFile(pagePath, page, "utf8");
 }
 
-function failPageReads(pagePath: string, error: Error, once = false) {
-  const readFile = fs.readFile.bind(fs);
-  let injected = false;
-  vi.spyOn(fs, "readFile").mockImplementation(
-    async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-      if (args[0] === pagePath && (!once || !injected)) {
-        injected = true;
-        throw error;
-      }
-      return readFile(...args);
-    },
-  );
-  return { readFile, injected: () => injected };
+function injectPageReadFailure(pagePath: string) {
+  if (securityRuntimeMock.failReadTextAlwaysFor === pagePath) {
+    securityRuntimeMock.readTextFailureInjected = true;
+    throw securityRuntimeMock.readTextError;
+  }
+  if (
+    securityRuntimeMock.failReadTextOnceFor === pagePath &&
+    !securityRuntimeMock.readTextFailureInjected
+  ) {
+    securityRuntimeMock.readTextFailureInjected = true;
+    throw securityRuntimeMock.readTextOnceError;
+  }
 }
 
 async function createImportedFixture() {
@@ -139,26 +132,13 @@ async function createSynthesisFixture(initialBody: string) {
   return { pagePath: path.join(rootDir, "syntheses", "release-plan.md"), update };
 }
 
-async function createChatGptImportFixture() {
+async function createChatGptImportFixture(assistant = "Noted.") {
   const { rootDir, config } = await createVault({ prefix: "memory-wiki-chatgpt-retry-" });
   const exportDir = path.join(rootDir, "chatgpt-export");
   await fs.mkdir(exportDir, { recursive: true });
   await fs.writeFile(
     path.join(exportDir, "conversations.json"),
-    `${JSON.stringify([
-      {
-        conversation_id: "12345678-1234-1234-1234-1234567890ab",
-        title: "Travel preference check",
-        create_time: 1_712_363_200,
-        update_time: 1_712_366_800,
-        current_node: "assistant-1",
-        mapping: {
-          root: {},
-          "user-1": chatNode("root", "user", "I prefer aisle seats."),
-          "assistant-1": chatNode("user-1", "assistant", "Noted."),
-        },
-      },
-    ])}\n`,
+    `${JSON.stringify([createChatGptConversation("I prefer aisle seats.", assistant)])}\n`,
     "utf8",
   );
   await importChatGptConversations({
@@ -181,25 +161,22 @@ async function createChatGptImportFixture() {
   };
 }
 
-function chatNode(parent: string, role: string, text: string) {
-  return { parent, message: { author: { role }, content: { parts: [text] } } };
-}
-
 describe("memory-wiki existing-page read retry", () => {
   it.each(["opening", "closing", "both"])(
     "refuses ChatGPT re-import when handwritten Notes are missing the %s marker",
     async (missing) => {
-      const { config, exportDir, pagePath } = await createChatGptImportFixture();
-      let page = (await fs.readFile(pagePath, "utf8")).replace(
-        "<!-- openclaw:human:end -->",
-        "Keep this handwritten note.\n<!-- openclaw:human:end -->",
+      const { config, exportDir, pagePath } = await createChatGptImportFixture(
+        "```html\n<!-- openclaw:human:start -->\nExample\n<!-- openclaw:human:end -->\n```",
       );
-      if (missing !== "closing") {
-        page = page.replace("<!-- openclaw:human:start -->", "");
-      }
-      if (missing !== "opening") {
-        page = page.replace("<!-- openclaw:human:end -->", "");
-      }
+      const page = (await fs.readFile(pagePath, "utf8")).replace(
+        "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        [
+          "## Notes",
+          ...(missing === "closing" ? ["<!-- openclaw:human:start -->"] : []),
+          "Keep this handwritten note.",
+          ...(missing === "opening" ? ["<!-- openclaw:human:end -->"] : []),
+        ].join("\n"),
+      );
       await fs.writeFile(pagePath, page);
 
       await expect(importChatGptConversations({ config, exportPath: exportDir })).rejects.toThrow(
@@ -297,13 +274,12 @@ describe("memory-wiki existing-page read retry", () => {
     const userNote = "KEY INSIGHT: covers the Q2 roadmap";
     await addNotes(pagePath, userNote);
     await changeSource();
-    const error = new Error("transient existing-page read failure");
-    const failure = failPageReads(pagePath, error, true);
+    securityRuntimeMock.failReadTextOnceFor = pagePath;
 
     await update();
 
-    const after = await failure.readFile(pagePath, "utf8");
-    expect(failure.injected()).toBe(true);
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
     expect(after).toContain("v2 content updated");
     expect(after).toContain(userNote);
   });
@@ -335,11 +311,13 @@ describe("memory-wiki existing-page read retry", () => {
     const before = await fs.readFile(pagePath, "utf8");
     await changeSource();
     const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
-    const failure = failPageReads(pagePath, error);
+    securityRuntimeMock.failReadTextAlwaysFor = pagePath;
+    securityRuntimeMock.readTextError = error;
 
-    await expect(update()).rejects.toMatchObject({ code: "EBUSY" });
+    await expect(update()).rejects.toMatchObject({ cause: error });
 
-    await expect(failure.readFile(pagePath, "utf8")).resolves.toBe(before);
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {
@@ -405,15 +383,21 @@ describe("memory-wiki existing-page read retry", () => {
     await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(before);
   });
 
-  it("preserves chatgpt conversation notes containing dollar sequences and marker examples", async () => {
-    const { config, exportDir, pagePath } = await createChatGptImportFixture();
+  it("refreshes ChatGPT code examples while preserving handwritten Notes verbatim", async () => {
+    const transcript = (version: string) =>
+      `~~~html\n<!-- openclaw:human:start -->\nCode ${version}\n<!-- openclaw:human:end -->\n~~~`;
+    const { config, exportDir, pagePath } = await createChatGptImportFixture(transcript("v1"));
     const userNote = [
       "Energy identity $$E=mc^2$$ and match $& and prefix $` and suffix $' end.",
       "Example marker: <!-- openclaw:human:end -->",
       "Keep this trailing handwritten note.",
     ].join("\n");
     await addNotes(pagePath, userNote);
-
+    const exportPath = path.join(exportDir, "conversations.json");
+    await fs.writeFile(
+      exportPath,
+      (await fs.readFile(exportPath, "utf8")).replace("Code v1", "Code v2"),
+    );
     const second = await importChatGptConversations({
       config,
       exportPath: exportDir,
@@ -421,7 +405,17 @@ describe("memory-wiki existing-page read retry", () => {
     });
 
     const after = await fs.readFile(pagePath, "utf8");
-    expect(second).toMatchObject({ createdCount: 0, updatedCount: 0, skippedCount: 1 });
+    expect(second).toMatchObject({ createdCount: 0, updatedCount: 1, skippedCount: 0 });
+    expect(after).toContain(transcript("v2"));
+    expect(after).not.toContain("Code v1");
     expect(after).toContain(userNote);
+    await expect(
+      importChatGptConversations({ config, exportPath: exportDir }),
+    ).resolves.toMatchObject({
+      createdCount: 0,
+      updatedCount: 0,
+      skippedCount: 1,
+    });
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(after);
   });
 });

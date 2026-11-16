@@ -49,6 +49,17 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         }
     }
 
+    var statusTitle: LocalizedStringResource {
+        // Missing execution status is not missing output. Keep unknown outcomes
+        // neutral while allowing the recorded result to be opened.
+        if self.displayState == .unavailable,
+           self.resultText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            return "Outcome unknown"
+        }
+        return self.displayState.title
+    }
+
     var isError: Bool {
         self.displayState == .failed
     }
@@ -75,6 +86,34 @@ extension ChatToolActivityItem {
 }
 
 enum ChatToolActivity {
+    static func items(
+        message: OpenClawChatMessage,
+        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
+    {
+        // Results normally merge into their calling assistant message. Keep
+        // orphan results visible when the calling message is outside history.
+        if message.isToolResult {
+            let text = ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            return [ChatToolActivityItem(
+                id: message.toolCallId ?? message.content.first?.id ?? message.id.uuidString,
+                name: message.toolName,
+                arguments: nil,
+                details: message.details,
+                resultText: text,
+                state: self.resultIsError(message.isError, text: text) ? .failed : .finished,
+                liveDiffStat: nil,
+                activity: message.activity?.first,
+                activityPrepared: message.activity != nil)]
+        }
+        guard message.role.lowercased() == "assistant" else { return [] }
+        return self.items(
+            calls: message.content.filter(\.isToolCall),
+            results: message.content.filter(\.isToolResult),
+            recordedResults: message.presentationRecordedToolResults,
+            activity: message.activity,
+            liveTools: liveTools)
+    }
+
     static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
         if let flag { return flag }
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
@@ -97,6 +136,7 @@ enum ChatToolActivity {
     static func items(
         calls: [OpenClawChatMessageContent],
         results: [OpenClawChatMessageContent],
+        recordedResults: [OpenClawChatMessageContent] = [],
         activity: [OpenClawAgentActivityItem]? = nil,
         liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
     {
@@ -107,9 +147,12 @@ enum ChatToolActivity {
                 remainingResults.firstIndex { _, result in result.id == callID }
             }
             let result = resultIndex.map { remainingResults.remove(at: $0).element }
+            // Resolve status against the whole source envelope, but show a result's
+            // details only at its own content position (possibly after narration).
+            let outcome = result ?? recordedResults.first { $0.id != nil && $0.id == call.id }
             // History owns recorded inputs; live activity supplies status until
             // the result arrives, never replacing already-recorded arguments.
-            let live = result == nil
+            let live = outcome == nil
                 ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
 
             return ChatToolActivityItem(
@@ -118,7 +161,7 @@ enum ChatToolActivity {
                 arguments: call.arguments ?? live?.arguments,
                 details: result?.details,
                 resultText: result?.text,
-                state: result
+                state: outcome
                     .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
                     live?.state ?? .unavailable,
                 liveDiffStat: live?.liveDiffStat,
@@ -186,7 +229,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        let status = String(localized: self.item.displayState.title)
+        let status = String(localized: self.item.statusTitle)
         return self.detailLine.map { "\(status), \($0)" } ?? status
     }
 
@@ -274,6 +317,10 @@ private struct ChatToolActivityRowContent: View {
                             .textSelection(.enabled)
                     }
 
+                    Text(self.item.statusTitle)
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
+
                     if self.isResultTruncated {
                         Button {
                             self.showsFullResult.toggle()
@@ -342,9 +389,9 @@ private struct ChatToolActivityRowContent: View {
 
             Spacer(minLength: 0)
 
-            // The local title replaces the Gateway warning, so unknown outcomes still need a visible cue.
+            // Preserve the native collapsed cues when a local title replaces the Gateway warning.
             if self.isDesktopLayout || self.item.displayState == .unavailable {
-                Text(self.item.displayState.title)
+                Text(self.item.statusTitle)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
                     .fixedSize()
@@ -517,11 +564,16 @@ struct ChatToolActivityList: View {
             }
             let quiet = self.items.indices.filter { !self.items[$0].isVisible }
             if !quiet.isEmpty {
-                DisclosureGroup("Tool details") {
+                DisclosureGroup {
                     ForEach(quiet, id: \.self) { index in
                         ChatToolActivityRow(item: self.items[index]).equatable()
                     }
+                } label: {
+                    Text("Tool details")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .tint(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,11 +1,11 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
@@ -19,17 +19,23 @@ import {
   extractToolPreview,
   type CanvasToolPreview,
 } from "../../lib/chat/tool-cards.ts";
-import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
   messageRecoveryKey,
-  resolveCappedMessageId,
-  resolveSourceMessageId,
+  resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
+
+export {
+  buildMessageItems,
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  transcriptMessageSourceKey,
+} from "./chat-thread-item-identity.ts";
 
 export function appendCanvasBlockToAssistantMessage(
   message: unknown,
@@ -69,29 +75,56 @@ export function appendCanvasBlockToAssistantMessage(
   return projection;
 }
 
-export function messageMatchesSearchQuery(
-  message: unknown,
+export function createChatSearchMatcher(
   query: string,
   recovery?: ChatMessageRecovery,
-): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+): (message: unknown) => boolean {
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
-    return true;
+    return () => true;
   }
-  const messageId = recovery && resolveSourceMessageId(message);
-  const expansion =
-    recovery && messageId
-      ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
+  const phrase = phraseQueryPattern(query);
+  const sourceMatches = (markdown: string | null) =>
+    normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
+  return (message) => {
+    const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
+    const expansion = recovery
+      ? resolveFullMessageRecovery(message, role, {
+          displayFacts: recovery.displayFacts,
+          canFetchFullMessage: recovery.canFetchFullMessage ?? true,
+          getAssistantMessageExpansion: (id) =>
+            recovery.messages.get(messageRecoveryKey(recovery.agentId, id)),
+        })?.state
       : undefined;
-  if (expansion?.status === "loaded") {
-    const role = normalizeRoleForGrouping(normalizeMessage(message).role);
-    if (resolveCappedMessageId(message, role)) {
-      return normalizeLowercaseStringOrEmpty(
-        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
-      ).includes(normalizedQuery);
+    // Keep source syntax and link destinations searchable, then compare the same
+    // display preparation used by message rendering.
+    if (expansion?.status === "loaded") {
+      const markdown =
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
+      const recovered = expansion.message ? prepareChatMessageRender(expansion.message) : undefined;
+      return (
+        sourceMatches(markdown) ||
+        (phrase !== null &&
+          markdownVisibleText(expansion, markdown, {
+            mode: "document",
+            humanMentions:
+              recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
+            assistantTranscriptRoleHeaders: role === "assistant",
+          }).search(phrase) >= 0)
+      );
     }
-  }
-  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
+    if (sourceMatches(extractTextCached(message))) {
+      return true;
+    }
+    const prepared = prepareChatMessageRender(message);
+    return (
+      phrase !== null &&
+      markdownVisibleText(message, prepared.displayMarkdown, {
+        humanMentions: prepared.humanMentions,
+        assistantTranscriptRoleHeaders: prepared.normalizedMessage.role === "assistant",
+      }).search(phrase) >= 0
+    );
+  };
 }
 
 type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;
@@ -294,10 +327,6 @@ export function resolveToolBlockId(
   return resolveToolUseId(block) ?? resolveMessageToolUseId(message);
 }
 
-export function isPendingSendMessage(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
-}
-
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
@@ -333,87 +362,6 @@ export function readPendingSendStatus(message: unknown): {
   };
 }
 
-export function persistedMessageEntryId(message: unknown): string | null {
-  const id = readChatThreadMessageIdentity(message)?.id;
-  return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? null
-    : (id ?? null);
-}
-
-function transcriptMessageSourceKey(message: unknown): string | null {
-  // Send identity outranks transcript ids: the same submit is re-projected with
-  // different id/seq metadata across the pending -> history handoff, and a key
-  // change there remounts the bubble (visible flicker).
-  const identity = readChatThreadMessageIdentity(message);
-  if (identity?.sendId) {
-    return `send:${identity.sendId}`;
-  }
-  if (identity?.isImported) {
-    if (identity.externalSource) {
-      return `import:${identity.externalSource}`;
-    }
-    return identity.sequence === null ? null : `import-seq:${identity.sequence}`;
-  }
-  if (identity?.id) {
-    return `id:${identity.id}`;
-  }
-  return identity?.sequence == null ? null : `seq:${identity.sequence}`;
-}
-
-const messageProjectionDigests = new WeakMap<object, string>();
-
-function messageProjectionDigest(message: unknown): string {
-  if (message && typeof message === "object") {
-    const cached = messageProjectionDigests.get(message);
-    if (cached) {
-      return cached;
-    }
-  }
-  const record = asRecord(message);
-  const source = [
-    typeof record?.role === "string" ? record.role : "",
-    typeof record?.toolCallId === "string" ? record.toolCallId : "",
-    record ? extractTextCached(message) : "",
-  ].join("\u0000");
-  const digest = `p${fnv1aUtf16(source).toString(36)}${source.length.toString(36)}`;
-  if (message && typeof message === "object") {
-    messageProjectionDigests.set(message, digest);
-  }
-  return digest;
-}
-
-export function buildMessageItems<Message>(
-  messages: Message[],
-  resolveSourceKey: (message: Message) => string | null = transcriptMessageSourceKey,
-): Array<Extract<ChatItem, { kind: "message" }> & { message: Message }> {
-  const sourceKeys = messages.map(resolveSourceKey);
-  const sourceCounts = new Map<string, number>();
-  for (const sourceKey of sourceKeys) {
-    if (sourceKey) {
-      sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1);
-    }
-  }
-  const projectionOccurrences = new Map<string, number>();
-  return messages.map((message, index) => {
-    const sourceKey = sourceKeys[index];
-    const needsProjectionIdentity = sourceKey == null || (sourceCounts.get(sourceKey) ?? 0) > 1;
-    const projectionKey = needsProjectionIdentity
-      ? `${sourceKey ?? "legacy"}:projection:${messageProjectionDigest(message)}`
-      : (sourceKey ?? "legacy");
-    const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
-    projectionOccurrences.set(projectionKey, occurrence + 1);
-    const record = asRecord(message);
-    const callId = typeof record?.toolCallId === "string" ? record.toolCallId : "";
-    const role = typeof record?.role === "string" ? record.role : "unknown";
-    const transcriptKey = `${projectionKey}:${occurrence}`;
-    return {
-      kind: "message",
-      key: callId ? `tool:${role}:${callId}:${transcriptKey}` : `msg:${transcriptKey}`,
-      message,
-    };
-  });
-}
-
 export function hasRenderableNormalizedMessage(
   message: unknown,
   normalized = safeNormalizeMessage(message),
@@ -442,6 +390,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
   return buildLocalUserMessage({
     text: item.text,
     workContext: item.workContext,
+    appContext: item.appContext,
     mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,
@@ -516,6 +465,21 @@ export function insertionIndexesForBounds(
     minimum: afterIndex + 1,
     maximum: beforeIndex >= 0 ? beforeIndex : items.length,
   };
+}
+
+export function appendActiveRunItem(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+  item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+): void {
+  // Queued custody is a ceiling for the whole live response, not just its text.
+  // Moving its working indicator past that ceiling splits and remeasures the run.
+  if (bounds) {
+    const { maximum } = insertionIndexesForBounds(items, bounds);
+    items.splice(maximum, 0, item);
+  } else {
+    items.push(item);
+  }
 }
 
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {

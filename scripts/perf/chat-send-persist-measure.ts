@@ -14,7 +14,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -22,6 +22,7 @@ import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionPendingInputAuthorityFacts } from "../../src/config/sessions/session-pending-input-authority.js";
 import type { SessionMutationAuthorization } from "../../src/gateway/server-methods/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -161,9 +162,6 @@ function quantiles(samples: number[]) {
     p99: p(0.99),
     max: sorted.at(-1) ?? 0,
   };
-}
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
 }
 async function measure() {
   try {
@@ -315,7 +313,7 @@ async function measure() {
       totalUsed = process.cpuUsage(total);
     const sampledBytes =
       values.mode === "allocation"
-        ? allocated((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+        ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
         : undefined;
     await setImmediate();
     observer.disconnect();

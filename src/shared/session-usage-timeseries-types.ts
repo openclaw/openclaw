@@ -22,8 +22,6 @@ export type SessionUsageTimePoint = {
 
 /** Downsampled usage series returned for a single session when requested. */
 export type SessionUsageTimeSeries = {
-  /** Unavailable samples are omitted; remaining points are known subtotals. */
-  usageReport?: { state: "available" | "unavailable" };
   /** Session id for the series when loaded from a known session record. */
   sessionId?: string;
   /** Ordered samples for charting usage over time. */

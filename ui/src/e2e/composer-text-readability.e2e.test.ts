@@ -27,7 +27,7 @@ suite.define(() => {
       const scrollTop = () => textarea.evaluate((el) => el.scrollTop);
       const mac = process.platform === "darwin";
       const lines = Array.from(
-        { length: 20 },
+        { length: 40 },
         (_, index) => `Line ${index + 1}: Keep text readable`,
       );
       await textarea.fill(lines.slice(0, 2).join("\n"));

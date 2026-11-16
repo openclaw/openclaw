@@ -10,10 +10,8 @@ import {
 } from "./agent-tool-source-execution-guard.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import {
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-} from "./subagents/registry/subagent-registry.js";
+import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
+import { getSwarmRunByLaunchReplayKey } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -139,6 +137,9 @@ async function runAgentSpawnBridge(params: {
     ...(label ? { label } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(options.cyberAccessProgram != null
+      ? { cyberAccessProgram: options.cyberAccessProgram }
+      : {}),
     ...(agentId ? { agentId } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),
@@ -147,7 +148,7 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = await getSwarmRunByLaunchReplayKey(
+  const existing = await getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
     params.ctx.agentId,
@@ -156,21 +157,8 @@ async function runAgentSpawnBridge(params: {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
       throw new ToolInputError("agents.run replay request does not match the persisted collector.");
     }
-    if (existing.swarmLaunchPending === true) {
-      if (!existing.queuedLaunch) {
-        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
-      }
-      // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      await initSubagentRegistry();
-      existing =
-        (await getSwarmRunByLaunchReplayKey(
-          idempotencyKey,
-          requesterSessionKey,
-          params.ctx.agentId,
-        )) ?? existing;
-      if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
-        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
-      }
+    if (existing.swarmLaunchPending === true && !isSubagentRunQueued(existing)) {
+      throw new ToolInputError("agents.run launch is no longer active; start a new request.");
     }
     const replay = existing;
     return await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {

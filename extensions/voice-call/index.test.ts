@@ -422,6 +422,21 @@ it("does not expose requester session identity to the model", () => {
   expect(JSON.stringify(setup().tool().parameters)).not.toContain("requesterSessionKey");
 });
 
+it("tells the initiating model where to put an ongoing call task", () => {
+  expect(setup().tool().parameters).toMatchObject({
+    anyOf: expect.arrayContaining([
+      expect.objectContaining({
+        properties: expect.objectContaining({
+          action: expect.objectContaining({ const: "initiate_call" }),
+          message: expect.objectContaining({
+            description: expect.stringContaining("put the ongoing task in brief.task"),
+          }),
+        }),
+      }),
+    ]),
+  });
+});
+
 it.each([true, false])("tool get_status uses persisted fallback (found=%s)", async (found) => {
   runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () =>
     found ? completedCall() : undefined,
@@ -495,7 +510,12 @@ it("starts and polls delegated gateway continue operations", async () => {
     tts: { timeoutMs: 30000 },
   });
   expectCliGatewayCall("voicecall.continue.start", { callId: "call-1", message: "Hello" }, "35000");
-  expectCliGatewayCall("voicecall.continue.result", { operationId: "op-1" }, "5000");
+  expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+    "voicecall.continue.result",
+    { json: true, timeout: "5000" },
+    { operationId: "op-1" },
+    { progress: false, signal: expect.any(AbortSignal) },
+  );
   expect(createVoiceCallRuntime).not.toHaveBeenCalled();
   expect(output).toContain('"transcript": "gateway hello"');
 });

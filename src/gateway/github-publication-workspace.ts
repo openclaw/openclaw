@@ -4,6 +4,7 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import {
   bindAcceptedGitHubPublicationClaimSnapshotAsync,
   listGitHubPublicationsForClaimAsync,
+  listSharedGitHubPublicationsAsync,
 } from "./github-publication-store-async.js";
 import type {
   WorkerSessionPlacementStore,
@@ -27,7 +28,16 @@ export async function prepareGitHubPublicationClaimWorkspace(
   claim: WorkerSessionTurnClaim,
 ): Promise<void> {
   await params.placements.closeWorkerTurnToolAdmission(claim);
-  const rows = await listGitHubPublicationsForClaimAsync(claim, { pendingOnly: true });
+  const rows = [
+    ...(await listGitHubPublicationsForClaimAsync(claim, { pendingOnly: true })),
+    ...(
+      await listSharedGitHubPublicationsAsync({
+        sessionId: claim.sessionId,
+        claimNull: true,
+        status: "requested",
+      })
+    ).filter((row) => !row.workspace_tree),
+  ];
   if (rows.length === 0) {
     return;
   }
@@ -74,18 +84,25 @@ export async function prepareGitHubPublicationClaimWorkspace(
       return;
     }
   }
-  const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
-    cwd: worktree.path,
-    assertCurrent: () => {
-      worktreeOwner.assertCurrent();
-      if (!params.placements.validateWorkspaceResultClaim(claim)) {
-        throw new Error("GitHub publication lost its workspace result claim during snapshot.");
+  const snapshot = bound
+    ? {
+        sourceHeadCommit: bound.source_head_commit!,
+        sourceIndexTree: bound.source_index_tree!,
+        workspaceTree: bound.workspace_tree!,
       }
-    },
-  });
+    : await captureGitHubPublicationWorkspaceSnapshot({
+        cwd: worktree.path,
+        assertCurrent: () => {
+          worktreeOwner.assertCurrent();
+          if (!params.placements.validateWorkspaceResultClaim(claim)) {
+            throw new Error("GitHub publication lost its workspace result claim during snapshot.");
+          }
+        },
+      });
   for (const row of rows) {
     await bindAcceptedGitHubPublicationClaimSnapshotAsync({ row, claim, ...snapshot }, () => {
       params.assertCurrent();
+      worktreeOwner.assertCurrent();
       if (!params.placements.validateWorkspaceResultClaim(claim)) {
         throw new Error("GitHub publication lost its workspace result claim.");
       }

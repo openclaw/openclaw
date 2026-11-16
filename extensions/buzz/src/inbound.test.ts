@@ -317,6 +317,7 @@ it.each(["off", "all"] as const)("routes replies and typing with replyToMode=%s"
   );
   const dispatch = firstDispatch();
   expect(dispatch.ctxPayload).toMatchObject({
+    SessionKey: `agent:main:buzz:group:buzz:${ROOM_ID}:thread:event-root`,
     MessageSid: "event-reply",
     MessageThreadId: "event-root",
     ReplyToId: "event-reply",
@@ -338,7 +339,6 @@ it.each(["off", "all"] as const)("routes replies and typing with replyToMode=%s"
   await dispatch.delivery.deliver({ text: "threaded reply to @Alice" }, { kind: "final" });
   expect(bus.sendText).toHaveBeenCalledWith({ ...target, text: "threaded reply to @Alice" });
   const typing = dispatch.replyPipeline?.typing;
-  expect(typing?.keepaliveIntervalMs).toBe(3_000);
   await typing?.start();
   expect(bus.sendTyping).toHaveBeenCalledWith(target);
   expect(() => dispatch.delivery.onError?.("send failed", { kind: "final" })).toThrow(

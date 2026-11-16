@@ -20,6 +20,7 @@ import {
   type SubmittedWorktreePreference,
 } from "./draft-preference-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import type { ModelSelectionChange } from "./model-selection.ts";
 import {
   acquirePaletteIdentityPreferences,
   type PaletteIdentityPreferences,
@@ -177,7 +178,7 @@ export class DraftGatewayState {
           })
         : requestPlaceCatalog(client, runtimeId).then((placeCatalog) => ({
             ...placeCatalog,
-            profiles: isAdmin ? placeCatalog.profiles : [],
+            profiles: placeCatalog.profiles,
             suggestedProfile: isAdmin ? placeCatalog.suggestedProfile : undefined,
           }));
     this.cloudProfileComplete = result
@@ -406,9 +407,6 @@ export class DraftGatewayState {
     this.gatewayRecoveryScopeValue = recoveryScope;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
-    if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
-      this.callbacks.onVisibilityRetired();
-    }
     if (
       gatewayUrlChanged ||
       gatewayBootChanged ||
@@ -607,6 +605,11 @@ export class DraftGatewayState {
       return undefined;
     }
     return this.preferences.capturePreferenceConsumption(agentId, workspace, expected);
+  }
+
+  persistModelPreference(agentId: string, patch: Parameters<ModelSelectionChange>[0]) {
+    // Model defaults are shared with /new; palette placement remains opt-in and separate.
+    return this.preferences.persistPreference(agentId, undefined, patch);
   }
 
   persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {

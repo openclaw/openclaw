@@ -72,12 +72,10 @@ export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   );
 }
 
-export function isStaleUnendedSubagentRun(
-  entry: SubagentRunLivenessRecord,
-  now = Date.now(),
-): boolean {
+/** Last instant covered by registration grace, independent of live execution custody. */
+export function getSubagentRunStaleAt(entry: SubagentRunLivenessRecord): number {
   if (hasSubagentRunEnded(entry)) {
-    return false;
+    return Infinity;
   }
   // Creation bounds stale admission, but must not become a displayed execution start.
   const startedAt = getSubagentSessionStartedAt(entry) ?? entry.createdAt;
@@ -86,14 +84,18 @@ export function isStaleUnendedSubagentRun(
     !Number.isFinite(startedAt) ||
     startedAt < MIN_REALISTIC_RUN_TIMESTAMP_MS
   ) {
-    return false;
+    return Infinity;
   }
   const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
   const cutoffMs =
     durationMs === undefined
       ? STALE_UNENDED_SUBAGENT_RUN_MS
       : Math.max(STALE_UNENDED_SUBAGENT_RUN_MS, durationMs + EXPLICIT_TIMEOUT_STALE_GRACE_MS);
-  return now - startedAt > cutoffMs;
+  return startedAt + cutoffMs;
+}
+
+function isStaleUnendedSubagentRun(entry: SubagentRunLivenessRecord, now = Date.now()): boolean {
+  return now > getSubagentRunStaleAt(entry);
 }
 
 /** Admission/display retention includes current owners and a bounded registration grace.

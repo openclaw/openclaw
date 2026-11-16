@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import {
   isCompletionReportInputProvenance,
   isCronExecutionInputProvenance,
@@ -31,6 +32,7 @@ import {
   isProjectedForwardedMessage,
   isForwardedUserMessage,
   isCronRunMessage,
+  userMessageStartsDisplayTurn,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
@@ -99,7 +101,9 @@ export function createSubagentCoordinationHistoryProjection(
         }
         return message;
       }
-      if (record.display === false) {
+      // A delivery mirror records a reply the run sent to the human, such as a
+      // message(action=send) from a private coordination turn; it is the outcome.
+      if (record.display === false || isOpenClawDeliveryMirrorAssistantMessage(record)) {
         return message;
       }
       if (
@@ -376,6 +380,18 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   return isOpenClawRuntimeContextCustomMessage(message);
 }
 
+function isDisplayHeartbeatAcknowledgement(
+  message: RoleContentMessage,
+  allowTruncated = false,
+): boolean {
+  // Model history ignores reasoning when classifying no-op heartbeats. Chat
+  // displays reasoning-only items, so empty answer text cannot hide those rows.
+  return (
+    (!hasAssistantNonTextContent(message) || Boolean(extractAssistantPhaseText(message))) &&
+    isHeartbeatOkResponse(message, undefined, allowTruncated)
+  );
+}
+
 function shouldHideProjectedHistoryMessage(
   message: Record<string, unknown>,
   roleContent: RoleContentMessage | null,
@@ -395,6 +411,7 @@ function shouldHideProjectedHistoryMessage(
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
     (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "restart" ||
       provenance.sourceTool === "cron_failure_repair" ||
       provenance.sourceTool === "tool_handoff")
   ) {
@@ -422,11 +439,11 @@ function shouldHideProjectedHistoryMessage(
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  return heartbeatUser || isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isDisplayHeartbeatAcknowledgement(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
-export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
+function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   const record = readRecord(message);
   if (!record || isForwardedUserMessage(record)) {
     return false;
@@ -435,16 +452,34 @@ export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
 }
 
-function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
-  const metadata = readRecord(message["__openclaw"]);
-  if (metadata?.turnBoundary === true) {
-    return message;
+export function projectedHistoryTurnBoundary(message: unknown): PendingTurnBoundary {
+  if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
+    return true;
   }
+  const record = readRecord(message);
+  if (!record || isForwardedUserMessage(record) || asRoleContentMessage(record)?.role !== "user") {
+    return false;
+  }
+  const { kind, sourceTool } = normalizeInputProvenance(record.provenance) ?? {};
+  if (kind === "internal_system" && (sourceTool === "exec" || sourceTool === "restart")) {
+    return sourceTool;
+  }
+  return kind === "inter_session" && sourceTool === "subagent_settle" ? "subagent" : false;
+}
+
+function attachProjectedTurnBoundary(
+  message: Record<string, unknown>,
+  boundary: Exclude<PendingTurnBoundary, false>,
+): Record<string, unknown> {
+  const metadata = readRecord(message["__openclaw"]);
   return {
     ...message,
     __openclaw: {
       ...metadata,
-      turnBoundary: true,
+      // Exec and restart rows kept `turnBoundary` for clients that read only it;
+      // the continuation fact tells the Control UI the turn goes on.
+      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
+      ...(boundary === true ? {} : { continuation: { source: boundary } }),
     },
   };
 }
@@ -524,10 +559,10 @@ export function toProjectedMessages(messages: unknown[]): Array<Record<string, u
 
 export function filterVisibleProjectedHistoryMessages(
   messages: Array<Record<string, unknown>>,
-  turnBoundaryPending = false,
+  turnBoundaryPending: PendingTurnBoundary = false,
 ): {
   messages: Array<Record<string, unknown>>;
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
 } {
   if (messages.length === 0) {
     return { messages, turnBoundaryPending };
@@ -550,9 +585,8 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(
+      isDisplayHeartbeatAcknowledgement(
         nextRoleContent,
-        undefined,
         Boolean(
           currentRoleContent &&
           isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),
@@ -567,7 +601,8 @@ export function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
+      // The latest wake decides: a heartbeat after a resumed command starts its own turn.
+      pendingTurnBoundary = projectedHistoryTurnBoundary(current) || pendingTurnBoundary;
       continue;
     }
     const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
@@ -577,8 +612,17 @@ export function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
-      visible.push(attachProjectedTurnBoundary(current));
+    if (
+      pendingTurnBoundary &&
+      currentRoleContent?.role === "user" &&
+      userMessageStartsDisplayTurn(current)
+    ) {
+      // Plain user text already starts the next turn. Drop the boundary so
+      // this turn's assistant stays with that user.
+      pendingTurnBoundary = false;
+      visible.push(current);
+    } else if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
+      visible.push(attachProjectedTurnBoundary(current, pendingTurnBoundary));
       pendingTurnBoundary = false;
       changed = true;
     } else {

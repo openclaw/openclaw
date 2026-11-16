@@ -110,18 +110,25 @@ it("rejects caller replacement during initial authorization without an expected 
   const { successor: replacement } = bindProfile(fixture);
   const entered = createDeferred();
   const release = createDeferred();
-  const read = sessionSharingFacts.readSessionSharingFactsInWorker;
+  const acquire = sessionSharingFacts.createSessionSharingFactAcquisition;
   let held = false;
   const sharingRead = vi
-    .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
-    .mockImplementation(async (input, prepareSource) => {
-      const result = await read(input, prepareSource);
-      if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return result;
+    .spyOn(sessionSharingFacts, "createSessionSharingFactAcquisition")
+    .mockImplementation((params) => {
+      const acquisition = acquire(params);
+      const read = acquisition.read;
+      return {
+        ...acquisition,
+        async read(input, publishSource) {
+          const result = await read(input, publishSource);
+          if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        },
+      };
     });
   const request = fixture.send(undefined, {});
   try {
@@ -357,7 +364,7 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
       items: [
         {
           id: pending.items[0]?.id,
-          state: "interrupted",
+          state: "cancelled",
           message: pending.items[0]?.message,
         },
       ],

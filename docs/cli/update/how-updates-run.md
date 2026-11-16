@@ -349,17 +349,50 @@ checks without reopening migrated state through its older schema. A successful
 migration proceeds to finalization; it still prohibits code-only rollback.
 
 For versions that support checks before installation, the old Gateway keeps serving through `staging` and
-`validating`. The updater uses the new version to run health checks
-(`doctor --lint --json --severity-min error`), config validation, and read-only
-plugin resolution and compatibility planning. It also tests migrations and
-boots a test Gateway with copied configuration and verified SQLite snapshots in an
-isolated temporary state directory. The copied database registry points to the
-copied agent databases. Installed plugin payloads and their dependencies are also
-copied; the copied install records point to those copies, and their OpenClaw
-host links target the staged installation. Literal imports, `require()` calls, and
-literal dynamic imports to shared source modules include those modules and their
-package metadata in the private copy. Unrelated repository files remain outside
-the snapshot.
+`validating`. During `validating`, the updater runs the new version's recovery
+worker once (`update-migrated-finalize --check`, recorded as `candidate-recovery`).
+This loads the new version's complete recovery code and reports the database
+schema versions and update contract it supports, without reading or copying
+state. A candidate whose recovery code cannot load, or that does not report its
+database versions, is refused with `runtime-verification-failed` before anything
+changes. Candidates without this worker finish through the installed updater's
+existing path and record a `candidate-runtime-unavailable` advisory.
+
+The updater does not copy state, run Doctor, or start a test Gateway before
+activation. Doctor, configuration validation, plugin loading, and Gateway startup
+run once, on real state, after activation. Before activation the updater captures
+a database baseline of every SQLite schema it may migrate. If activation Doctor or
+the restarted Gateway fails, the updater restores the previous release and that
+baseline. With `--no-restart`, the updater starts the activated release once on a
+private loopback port (`activated-gateway-startup`) with channels, providers, cron,
+and other side services disabled, and rolls back when it does not become ready.
+It skips this boot when another Gateway still owns the state, for remote-only
+profiles, and for TLS Gateways; the result records why.
+
+Before staging changes anything, `snapshot-space-preflight` measures the known
+SQLite families and refuses only when the activation database backup or rollback
+cannot fit. When recovery copies from earlier updates could free that space, the
+cleanup offer described below applies.
+
+#### Private rehearsal by older installed updaters
+
+Installed updaters released before this change rehearse the candidate on private
+copies of state while the old Gateway serves. They run the new version's health
+checks (`doctor --lint --json --severity-min error`), config validation,
+read-only plugin resolution, and a repair Doctor, then boot a test Gateway in an
+isolated temporary state directory. The new version keeps the candidate-side
+support those updaters call: its state-copy worker, rehearsal-aware Doctor, and
+`--update-canary` startup progress. The rest of this subsection describes that
+rehearsal. "The updater" means the older installed updater running it.
+
+The copied database registry points to the copied agent databases. Installed
+plugin payloads and their dependencies are also copied, including plugins
+discovered in the global `extensions` directory without install records or
+explicit load paths. The copied install records point to those copies, and their
+OpenClaw host links target the staged installation. Literal imports, `require()`
+calls, and literal dynamic imports to shared source modules include those modules
+and their package metadata in the private copy. Unrelated repository files remain
+outside the snapshot.
 
 Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
 may add or remove hard links while the old Gateway serves; link-only metadata
@@ -433,9 +466,9 @@ readiness verification as active steps. `openclaw update status`, including `--j
 shows the recorded operation, wait reason, start time, and budget. Readiness observations
 refresh at most every 30 seconds within each check stage. Verification checks the managed
 service, listener identity, installed version/build, health RPC, and HTTP readiness.
-Its implicit allowance is ten times the canary startup duration, with a five-minute minimum
-and one-hour ceiling; an explicit `--timeout` takes precedence. The ceiling preserves
-headroom for slow hardware while bounding observation of the already-serving Gateway.
+Older updaters allow ten times the canary startup duration, with a five-minute minimum
+and one-hour ceiling. Current updaters allow five minutes (90 minutes on Windows);
+an explicit `--timeout` takes precedence.
 Expiry records a warning and continues with previous-Gateway readiness unverified;
 automatic rollback cannot restart an unverified previous Gateway. Run
 `openclaw gateway status --deep --require-rpc` to inspect it.
@@ -605,7 +638,19 @@ The update report records the measured SQLite and plugin sizes, the total
 required space, the checked destinations and their available space, and the
 selected location and reason. If none fits, snapshot preparation refuses before
 copying with `snapshot-capacity-insufficient` and explains how to free space or
-set `TMPDIR`. A path that cannot be allocated is recorded and skipped; if all
+set `TMPDIR`.
+
+When space is short and [`update cleanup`](/cli/update/repair-and-recovery#update-cleanup)
+already counts some recovery copies from earlier updates as retirable, an
+interactive `openclaw update` lists them with their sizes and asks whether to
+remove them permanently, defaulting to no. On yes, the running Gateway, or the
+updater itself when no Gateway runs, retires them and the update checks space
+again before it changes anything. `--yes`, `--json`, updates without a terminal,
+and Control UI updates never remove them; their refusal names the reclaimable
+size and the next step instead. Git updates make this offer before they start;
+their later pre-staging check still decides whether to refuse.
+
+A path that cannot be allocated is recorded and skipped; if all
 fitting paths are unusable, `snapshot-location-unavailable` names their path or
 permission errors. Capacity checks do not reserve space against concurrent writes.
 The copy worker uses the inventoried plugin plan. If an install record, plugin
@@ -651,6 +696,8 @@ time, and the next action. Check access to the named path, concurrent writers,
 and storage performance before retrying. Older candidate workers that cannot
 report their current database identify the known scope instead.
 
+#### Inspection before staging
+
 If the initial config inspection encounters SQLite lock contention or a changing
 snapshot source, the updater repeats that read once. A successful read records a
 warning and lets target selection continue. Corruption and other inspection errors
@@ -664,12 +711,11 @@ installation's [manual update method](/install/updating/update-methods), then ru
 `openclaw update repair` from the updated installation.
 
 Before stopping the previous Gateway, the updater waits for affirmative readiness.
-Its observation window uses the canary's measured startup time with headroom for
-slow hardware, or the explicit per-step timeout. A transient readiness miss does
+Its observation window is five minutes (90 minutes on Windows), or the explicit per-step timeout. A transient readiness miss does
 not discard the previous generation's rollback eligibility. Native service and
 Gateway boot identities must still match through the final observation.
 
-The test Gateway binds a free loopback port and must report `/startupz` as `started`,
+An older updater's test Gateway binds a free loopback port and must report `/startupz` as `started`,
 then `/readyz` as ready within the runtime validation allowance. Plugin-resolution
 errors attributed to a named plugin are recorded without rejecting the update.
 An invalid plugin inventory, an unattributed registry error, or failure to meet
@@ -737,6 +783,13 @@ Successful recovery completes with a warning and retains package backups for
 you to `openclaw update repair` and `openclaw gateway status --deep`.
 Only named data risks, such as unsettled Doctor writers or unverified migrated
 state, instruct you to keep the Gateway stopped.
+
+On Windows, recovery re-enables the Scheduled Task before starting the Gateway
+and retains that recovery handle until final readiness verification completes.
+Re-enabling autostart alone does not count as a Gateway start. This also applies
+when post-update verification fails during a same-version npm reinstall. The
+running updater must contain this fix; installing a newer candidate cannot
+change an older updater's recovery orchestration.
 
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
@@ -1201,8 +1254,8 @@ The wait leaves Doctor time to finish within the default 30-minute update step
 allowance, counted from Doctor's own start. Installed updaters run activation
 Doctor without a step timeout unless the update was started with `--timeout`, and
 they don't pass that value to Doctor, so Doctor applies the default instead. It
-reserves twice the time this update's migration rehearsal (`candidate-doctor` in
-the update run) took,
+reserves twice the time an older updater's migration rehearsal (`candidate-doctor` in
+the update run) took, when one ran,
 and at least 10 minutes (about twice the slowest measured update Doctor, 258 s on
 1 CPU with 10 MB/s disk), and waits only until the rest is used. By default that
 is up to 20 minutes, less the time Doctor already spent. All of Doctor's waits for
@@ -1316,7 +1369,7 @@ the sentinel.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
 
-    Git fetches and remote-ref probes, including dry runs, retry once after a transient transport failure or incomplete ref advertisement. The retry shares an explicit timeout budget; omitted work deadlines remain unbounded. Cancellation, authentication failures, and ref-lock conflicts are not retried. This behavior belongs to the installed updater, so an older updater may still need a manual retry to obtain the fix.
+    Update Git fetches and transactional clones retry transient transport failures (including EOF, connection resets, timeouts, and HTTP 5xx) after 1, 5, and 15 seconds, for at most four attempts. Remote-ref probes and dry runs retain one retry. All attempts share the original explicit timeout budget; omitted fetch deadlines remain unbounded. A failed clone is cleaned before a new attempt; uncertain cleanup stops retries with a warning. Cancellation, authentication, certificate, integrity, and ref-lock failures are not retried. Each retry logs a warning. This behavior belongs to the installed updater, so an older updater may still need a manual retry to obtain the fix.
 
     An explicit detached full commit ID already present locally skips optional remote discovery. This does not skip candidate validation or promise an offline update: missing tree/blob objects in partial clones are still hydrated privately before activation. Symbolic and tracked targets retain their remote freshness and ancestry checks.
 
@@ -1327,6 +1380,10 @@ the sentinel.
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    Dev skips local commit replay with a warning when shallow boundaries or unrelated history hide a shared ancestor with the target. Optional local checkout and rebase each have a ten-minute deadline, shortened by an explicit `--timeout`. If replay times out, that candidate is validated without local replay; conflicts retain the existing walk back through older candidates, and interruption stops the attempt.
+
+    Before moving `main`, commits outside the validated candidate are kept at `refs/openclaw/update-preserved/main-<sha>`. The warning names the ref and its inspection/removal commands. If the ref cannot be written, activation uses a detached HEAD and leaves `main` unchanged; interruption is not downgraded to this fallback. The installed updater must contain this fix: candidate code cannot repair an older updater's already-running preflight.
 
     When switching a package installation to a new Git checkout, POSIX builds use artifact storage inside the private clone transaction on the destination filesystem. Publishing the checkout leaves the build directory in place until runtime preparation and cleanup finish.
 
@@ -1463,6 +1520,15 @@ use `openclaw doctor --fix` for load problems.
 A failed plugin operation retains previous payloads and install records where
 possible and preserves registry choices, plugin settings, enable/disable choices,
 and active slots. A plugin can remain unavailable until repaired.
+
+Plugin finalization re-reads config under the config write lock and retries
+publication up to five times. It preserves unrelated edits and accepts changes
+that are already applied. If a field being finalized conflicts with another edit,
+or publication keeps racing another writer, finalization rolls back its pending
+plugin transaction and records a warning with `openclaw plugins doctor` and
+`openclaw doctor --fix` follow-up guidance. That warning does not fail the core
+update or prevent Gateway recovery. The candidate must contain this repair;
+older candidates retain their previous finalization behavior.
 
 After installing the core and before restarting the managed Gateway,
 `openclaw update` runs mandatory **post-core convergence**: it repairs missing

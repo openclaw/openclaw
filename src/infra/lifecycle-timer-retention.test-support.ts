@@ -40,8 +40,6 @@ function sweeperFixture() {
     clearPendingLifecycleTimeout: unexpected,
     sweepPendingLifecycle: unexpected,
     completeSubagentRunWithRecovery: unexpected,
-    getGatewayRecoveryRuntime: unexpected,
-    finalizeInterruptedSubagentRun: unexpected,
     startSubagentAnnounceCleanupFlow: unexpected,
     completeCleanupBookkeeping: unexpected,
     resumeRequesterSettleWake: unexpected,

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../model-auth-markers.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
@@ -19,6 +20,7 @@ import {
 } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
+import { readModelRegistryPluginCatalogs } from "./model-registry-sources.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import {
   installModelRegistryTestFixtures,
@@ -59,6 +61,26 @@ const capturedRegistry = (
   });
 
 describe("ModelRegistry", () => {
+  it("retains command-auth models without borrowing a bearer credential", async () => {
+    const registry = capturedRegistry(
+      {
+        custom: providerConfig([{ id: "native" }], {
+          auth: "native-command",
+          api: "openai-responses",
+        }),
+      },
+      apiKeyAuth("custom", "synthetic-ambient-key"),
+    );
+    const model = registry.find("custom", "native")!;
+    expect(model).toBeDefined();
+    expect(registry.hasConfiguredAuth(model)).toBe(false);
+    expect(await registry.getApiKeyForProvider("custom")).toBeUndefined();
+    expect(await registry.getApiKeyAndHeaders(model)).toEqual({
+      ok: false,
+      error: "Native command auth requires the Codex runtime.",
+    });
+  });
+
   const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
   const { writeModelsJson, writeModelsJsonWithPluginCatalog, writeModelsJsonWithPluginCatalogs } =
@@ -297,9 +319,14 @@ describe("ModelRegistry", () => {
     }
   });
 
-  it("loads only lifecycle-captured generated catalogs when the root catalog is absent", () => {
+  it("loads only lifecycle-captured generated catalogs when the root catalog is absent", async () => {
     const modelsPath = writeRoot();
     rmSync(modelsPath);
+    {
+      using filesystem = observeMainThreadFs();
+      expect(await readModelRegistryPluginCatalogs(modelsPath, {})).toEqual({ catalogs: [] });
+      expect(filesystem.calls()).toEqual({});
+    }
     const pluginMetadataSnapshot = ownerSnapshot("zai", "other");
     const registry = createRegistry(modelsPath, {
       modelsJsonContents: null,

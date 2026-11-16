@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  parseStrictInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
 import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
@@ -17,6 +13,7 @@ import {
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
+import { parseLaunchctlJob, type LaunchctlPrintInfo } from "./launchctl-job.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -66,53 +63,6 @@ export type LoadedLaunchAgentState = GatewayServiceState & {
     readonly environment: Readonly<Record<string, string>>;
   };
 };
-
-/** Parse only the selected job's root fields; nested jobs and environments are not its identity. */
-export function parseLaunchctlJob(output: string, serviceTarget: string) {
-  if (!output.startsWith(`${serviceTarget} = {\n`)) {
-    throw new Error(`Cannot parse launchd job ${serviceTarget}`);
-  }
-  const fields = new Map<string, string>();
-  for (const [, name, value] of output.matchAll(/^\t([^\t\n=]+) = (.+)$/gm)) {
-    if (fields.has(name!)) {
-      throw new Error(`Duplicate launchd job field ${name}`);
-    }
-    fields.set(name!, value!);
-  }
-  const block = (name: string) =>
-    output.match(new RegExp(`^\\t${name} = \\{\\n([\\s\\S]*?)^\\t\\}`, "m"))?.[1];
-  const runtime: LaunchctlPrintInfo = {};
-  const state = fields.get("state")?.trim();
-  if (state) {
-    runtime.state = state;
-  }
-  const pid = parseStrictPositiveInteger(fields.get("pid"));
-  if (pid !== undefined) {
-    runtime.pid = pid;
-  }
-  const status = parseStrictInteger(fields.get("last exit status"));
-  if (status !== undefined) {
-    runtime.lastExitStatus = status;
-  }
-  const exitReason = fields.get("last exit reason")?.trim();
-  if (exitReason) {
-    runtime.lastExitReason = exitReason;
-  }
-  return {
-    fields,
-    runtime,
-    arguments: block("arguments")
-      ?.split("\n")
-      .filter((line) => line.startsWith("\t\t"))
-      .map((line) => line.slice(2)),
-    environment: block("environment") ?? "",
-    environmentBlocks: [
-      ...output.matchAll(/^\t(?:inherited |default )?environment = \{\n([\s\S]*?)^\t\}/gm),
-    ]
-      .map((match) => match[1] ?? "")
-      .join("\n"),
-  };
-}
 
 /** Observe the discovered job's loaded command and runtime without granting lifecycle authority. */
 export async function readLoadedLaunchAgentState(
@@ -443,12 +393,6 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     );
   }
 }
-type LaunchctlPrintInfo = {
-  state?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-};
 
 export function parseLaunchAgentEnabled(output: string, label: string): boolean {
   const labelPrefix = `"${label}"`;

@@ -30,18 +30,33 @@ export function readMockSubagentCompletion(
   label: "qa-sidecar" | "qa-fork-context",
 ) {
   const currentTurn = extractLastMatchingUserTurn(input);
-  const { current } = splitMockConversationContext(currentTurn?.text ?? "");
+  const { current, history } = splitMockConversationContext(currentTurn?.text ?? "");
   const currentInput = [
     current,
     extractAllRequestTexts(input.slice(currentTurn ? currentTurn.index + 1 : input.length), {}),
   ].join("\n");
+  const priorItems = input.slice(0, currentTurn?.index ?? 0);
+  const activeTurnItems = priorItems.slice(
+    priorItems.findLastIndex((item) => item.role === "user") + 1,
+  );
+  const latestFunctionCall = activeTurnItems.findLast((item) => item.type === "function_call");
+  const hasYieldedHandoff =
+    latestFunctionCall?.name === "sessions_yield" &&
+    activeTurnItems.some(
+      (item) =>
+        item.type === "function_call_output" &&
+        item.call_id === latestFunctionCall.call_id &&
+        typeof item.output === "string" &&
+        parseToolOutputJson(item.output)?.status === "yielded",
+    );
   const settled = new RegExp(
     `(?:^|\\n)\\d+\\. Child task[^\\n]*\\n<prompt-data>\\n${label}\\n<\\/prompt-data>\\nstatus: ([^\\n]+)\\nChild result[^\\n]*\\n<prompt-data>\\n([\\s\\S]*?)\\n<\\/prompt-data>`,
   ).exec(current);
   if (
     settled &&
     isMockSubagentSettledWake(current) &&
-    currentInput.includes("sourceTool=subagent_settle")
+    (currentInput.includes("sourceTool=subagent_settle") ||
+      (history === "" && currentTurn?.text === current && hasYieldedHandoff))
   ) {
     return { ok: settled[1] === "ok", result: normalizeChildResult(settled[2] ?? "") };
   }

@@ -17,6 +17,8 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
@@ -31,10 +33,10 @@ import {
   type OpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
 import {
   deleteRepairJournal,
   readReservedIncognitoKeyRepairState,
@@ -80,13 +82,15 @@ export async function repairReservedIncognitoSessionKeys(params: {
   targets?: readonly ExistingAgentDatabaseTarget[];
   integrityCheck?: "quick" | "full";
 }): Promise<ReservedIncognitoKeyRepairReport> {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
   const targets = (params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)).map(
     (target) => ({
       target,
       databaseOptions: resolveTargetSqliteOptions(target, params.env),
     }),
   );
-  const sharedState = withExistingOpenClawStateDatabaseReadOnly(
+  const sharedState = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
     (database) => readReservedIncognitoKeyRepairState(database.db),
     { env: params.env },
   );
@@ -95,15 +99,18 @@ export async function repairReservedIncognitoSessionKeys(params: {
   let hasPostgresAgent = agentEngineInput() !== undefined;
   let inspectionFailed = false;
   for (const { target, databaseOptions } of targets) {
-    const operation = runDoctorAgentDatabaseOperation({
+    const operation = await runDoctorAgentDatabaseOperationAsync({
       agentId: target.agentId,
       path: target.sqlitePath,
-      run: () =>
-        withOpenClawAgentDatabaseReadOnly((database) => {
+      run: async () => {
+        await prepareArtifactPreservingSqliteRead(target.sqlitePath, signal);
+        return withOpenClawAgentDatabaseReadOnly((database) => {
           hasPostgresAgent ||= isPostgresSqlConnection(database.db);
           return collectOccupiedSessionKeys(database.db);
-        }, databaseOptions),
+        }, databaseOptions);
+      },
     });
+    signal?.throwIfAborted();
     if (!operation.ok) {
       inspectionFailed = true;
     } else if (operation.value.found) {

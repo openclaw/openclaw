@@ -1,4 +1,5 @@
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
@@ -12,6 +13,7 @@ export type SessionEntryCurrentFacts = {
   agentHarnessId?: SessionEntry["agentHarnessId"];
   agentRuntimeOverride?: SessionEntry["agentRuntimeOverride"];
   initializationPending?: SessionEntry["initializationPending"];
+  templateInitialization?: SessionEntry["templateInitialization"];
   execHost?: SessionEntry["execHost"];
   execNode?: SessionEntry["execNode"];
   deviceFolder?: SessionEntry["deviceFolder"];
@@ -46,10 +48,6 @@ export type SessionEntryCurrentFacts = {
   delegatedToolPolicy?: unknown;
   skillLibrarySelections?: unknown;
   executionPolicy?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &
@@ -58,6 +56,7 @@ export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &
     sessionKey: string;
     sessionIdLookup?: string;
     projection?: "capability";
+    readCustody?: SessionStoreReadCustody;
   }>;
 
 /** A current-row restriction; the caller's existing admission still supplies authority. */

@@ -114,7 +114,12 @@ export async function readSubagentRunFinalAnswerUsing(
     const scope = { agentId, storePath: sourcePath, sessionKey };
     const found =
       sessionId && (source || !isIncognitoSessionKey(sessionKey))
-        ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
+        ? await deps.findTranscriptEvent(
+            { ...scope, sessionId },
+            { kind: "visible-final", runId },
+            undefined,
+            "subagent-final-answer",
+          )
         : undefined;
     let event: unknown = found?.event;
     if (!event && !isIncognitoSessionKey(sessionKey)) {
@@ -150,10 +155,6 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     const error = outcome?.error?.trim();
     return error ? `cancelled: ${error}` : "cancelled";
   }
-  if (child.execution.interruptionReason === "gateway-restart") {
-    const error = outcome?.error?.trim();
-    return error ? `interrupted by gateway restart: ${error}` : "interrupted by gateway restart";
-  }
   if (!outcome) {
     return "unknown";
   }
@@ -172,10 +173,7 @@ export type ChildCompletionRow = Pick<
   "childSessionKey" | "task" | "taskName" | "label" | "createdAt" | "endedReason"
 > & {
   announceResult?: string;
-  execution: Pick<
-    SubagentRunRecord["execution"],
-    "endedAt" | "outcome" | "transcriptTarget" | "interruptionReason"
-  >;
+  execution: Pick<SubagentRunRecord["execution"], "endedAt" | "outcome" | "transcriptTarget">;
   completion?: Partial<
     Pick<
       NonNullable<SubagentRunRecord["completion"]>,

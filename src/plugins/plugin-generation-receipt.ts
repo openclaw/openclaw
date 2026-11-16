@@ -3,6 +3,8 @@ import {
   createRootFileOpenBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
+import { drainPluginGenerationSteps } from "./plugin-generation-steps.js";
 import { hashPluginSourceFile } from "./plugin-source-file.js";
 import type { PluginCapturedSourceFact as PluginSourceContent } from "./plugin-source-verification.js";
 
@@ -49,6 +51,11 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
         "Plugin source changed while preparing its reload; retry after the edit finishes.",
       );
     }
+    const metrics = getPluginGenerationMetrics();
+    if (metrics) {
+      metrics.receiptFileReads++;
+      metrics.receiptReadBytes += content.sizeBytes;
+    }
     publishContent(file, content);
   };
   const inputSignature = () => {
@@ -93,24 +100,37 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       }
     },
     finish(): PluginGenerationReceipt {
+      return drainPluginGenerationSteps(this.finishSteps());
+    },
+    *finishSteps(): Generator<void, PluginGenerationReceipt, void> {
       if (finished) {
         return finished;
+      }
+      const metrics = getPluginGenerationMetrics();
+      if (metrics) {
+        metrics.receiptPasses++;
       }
       const signature = inputSignature();
       const receipt =
         signature !== undefined && prepared?.signature === signature
           ? undefined
           : createHash("sha256");
-      using opened = createRootFileOpenBatchSync();
-      const openFile = opened.openFile.bind(opened);
-      for (const event of events) {
-        if (typeof event === "string") {
-          receipt?.update(event);
-        } else if (receipt || !event.content || !event.native) {
-          // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
-          // destinations even on a receipt hit; misses also replay native raw bytes.
-          readContent(event, receipt, event.content, openFile);
+      for (let offset = 0; offset < events.length; offset += 32) {
+        {
+          using opened = createRootFileOpenBatchSync();
+          const openFile = opened.openFile.bind(opened);
+          for (const event of events.slice(offset, offset + 32)) {
+            if (typeof event === "string") {
+              receipt?.update(event);
+            } else if (receipt || !event.content || !event.native) {
+              // Copied facts supply bytes, not pathname admission. Recheck ordinary
+              // destinations even on a receipt hit; misses also replay native raw bytes.
+              readContent(event, receipt, event.content, openFile);
+            }
+          }
         }
+        // Release pinned roots before the asynchronous host yields to foreground work.
+        yield;
       }
       finished = {
         signature: signature ?? inputSignature()!,

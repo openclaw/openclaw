@@ -2,9 +2,12 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
+import { expectCollected, forceFullGc } from "../test-utils/retention.js";
+import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
+  markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -49,8 +52,7 @@ it("releases superseded catalog inventories across neutral reloads", async () =>
   }
   for (let attempt = 0; attempt < 20; attempt++) {
     await setImmediate();
-    // queryObjects performs a full collection without V8-only flag mutation.
-    queryObjects(WeakRef);
+    forceFullGc();
     if (inventories.slice(0, -1).every((inventory) => inventory.deref() === undefined)) {
       break;
     }
@@ -60,4 +62,30 @@ it("releases superseded catalog inventories across neutral reloads", async () =>
     ...Array.from({ length: generations - 1 }, () => false),
     true,
   ]);
+});
+
+it("releases the reload caller while a superseded acquisition signal remains retained", async () => {
+  class ReloadCaller {
+    readonly fixtureLabel = "ReloadCaller";
+  }
+  mocks.configuredAgentIds = ["default"];
+  await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" });
+  const { signal } = mocks.prepareStaticCatalog.mock.lastCall![0] as Parameters<
+    typeof prepareImplicitProviderStaticCatalog
+  >[0];
+  expect(signal).toBeDefined();
+  function commitReload() {
+    const caller = new ReloadCaller();
+    const commit = () => {
+      markPreparedModelRuntimeSnapshotsStale("retention fixture superseded");
+      return caller;
+    };
+    commit();
+    return new WeakRef(caller);
+  }
+  const caller = commitReload();
+  vi.clearAllMocks();
+  await expectCollected(caller);
+  expect(signal!.aborted).toBe(true);
+  expect(signal!.reason).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
 });

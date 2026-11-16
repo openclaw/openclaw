@@ -46,6 +46,7 @@ async function inspectAudioPage(
       `(${meetStatusScript({
         allowMicrophone: true,
         autoJoin: false,
+        captionSessionId: "session-1",
         captureCaptions: false,
         guestName: "OpenClaw Agent",
         readOnly: options.readOnly,
@@ -142,6 +143,7 @@ it.each([
     },
   );
   expect(health).toMatchObject({
+    inCall: true,
     audioInputRouted: verified,
     audioOutputRouted: true,
     micMuted: !verified,
@@ -170,7 +172,10 @@ it.each([true, false])("requires current Meet capture ownership (%s)", async (ow
   const result = runInNewContext(`(${source})()`, {
     URL,
     location: { href: url },
-    window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
+    window: {
+      __openclawMeetAudioSession: owns ? "session-1" : "session-2",
+      __openclawMeetPlayback: { early: true },
+    },
     document: {
       querySelectorAll: () => [
         { getAttribute: (name: string) => (name === "aria-label" ? "Leave call" : null) },

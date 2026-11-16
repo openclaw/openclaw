@@ -12,7 +12,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -21,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -32,7 +32,7 @@ const { values } = parseArgs({
 assert(values.owner && values.output, "--owner and --output required");
 assert(values.mode === "timing" || values.mode === "allocation");
 assert(global.gc, "--expose-gc required");
-const { resolveCronJobBoundSessionKeys }: typeof import("../../src/cron/job-session-bindings.js") =
+const { resolveCronJobSessionBindings }: typeof import("../../src/cron/job-session-bindings.js") =
   await import(pathToFileURL(values.owner).href);
 const contexts: { cfg: OpenClawConfig; defaultAgentId: string }[] = [
   { cfg: { session: { mainKey: "home" } }, defaultAgentId: "ops" },
@@ -57,8 +57,8 @@ const read = (index: number) => {
   const opts = contexts[index % contexts.length]!;
   let matches = 0;
   for (const job of jobs) {
-    if (resolveCronJobBoundSessionKeys(job, opts).has("agent:ops:shared")) {
-      assert(resolveCronJobBoundSessionKeys(job, opts).has("agent:ops:shared"));
+    if (resolveCronJobSessionBindings(job, opts).has("agent:ops:shared")) {
+      assert(resolveCronJobSessionBindings(job, opts).has("agent:ops:shared"));
       matches++;
     }
   }
@@ -118,13 +118,10 @@ const memory = process.memoryUsage();
 await nextTurn();
 await nextTurn();
 observer.disconnect();
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 let sampledBytes: number | undefined;
 if (values.mode === "allocation") {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  sampledBytes = allocated(profile.head);
+  sampledBytes = sumSampledHeapBytes(profile.head);
   inspector.disconnect();
 }
 await writeFile(

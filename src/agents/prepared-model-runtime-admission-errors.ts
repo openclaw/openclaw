@@ -1,3 +1,5 @@
+import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
+
 export class PreparedModelRuntimeOwnerNotPublishedError extends Error {
   readonly admissionBlocked: boolean;
 
@@ -20,4 +22,16 @@ export class PreparedModelRuntimeRecoveryError extends PreparedModelRuntimeOwner
       options,
     );
   }
+}
+
+export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
+
+export class PreparedModelRuntimePluginGenerationRetiredError extends Error {}
+
+export function isPreparedModelRuntimePluginLifecycleFailure(error: unknown): boolean {
+  return (
+    error instanceof PluginInstanceUnavailableError ||
+    error instanceof PreparedModelRuntimePluginGenerationRetiredError ||
+    error instanceof PreparedModelRuntimePublicationSupersededError
+  );
 }

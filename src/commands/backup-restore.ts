@@ -3,7 +3,10 @@ import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -11,10 +14,9 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   BACKUP_MAX_DECOMPRESSION_RATIO,
-  buildBackupArchivePath,
   canonicalizePathForContainment,
   resolveBackupAgentRoots,
-  resolveRequiredBackupPath,
+  resolveBackupArchivePath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -37,7 +39,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     canonicalizePathForContainment(resolveStateDir()),
   ]);
   if (isPathInside(canonicalStateDir, canonicalTarget)) {
-    throw new Error(
+    throwExpectedCliError(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
   }
@@ -49,7 +51,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
     if (isPathInside(sourcePath, canonicalTarget)) {
-      throw new Error(
+      throwExpectedCliError(
         `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
       );
     }
@@ -60,10 +62,10 @@ async function prepareRestoreTarget(targetPath: string): Promise<{ created: bool
   try {
     const stat = await fs.lstat(targetPath);
     if (!stat.isDirectory()) {
-      throw new Error(`Backup restore target must be a directory: ${targetPath}`);
+      throwExpectedCliError(`Backup restore target must be a directory: ${targetPath}`);
     }
     if ((await fs.readdir(targetPath)).length > 0) {
-      throw new Error(`Backup restore target directory must be empty: ${targetPath}`);
+      throwExpectedCliError(`Backup restore target directory must be empty: ${targetPath}`);
     }
     return { created: false };
   } catch (error) {
@@ -89,7 +91,7 @@ function assertRestoreCapacity(targetPath: string, extractionBytes: number): voi
     path.resolve(targetPath) === path.resolve(diskSpace.checkedPath)
       ? targetPath
       : `${targetPath} (volume checked at ${diskSpace.checkedPath})`;
-  throw new Error(
+  throwExpectedCliError(
     `Backup restore requires ${formatDiskSpaceBytes(requiredBytes)} of free space at ${location} (${formatDiskSpaceBytes(extractionBytes)} archive data plus ${formatDiskSpaceBytes(BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES)} reserve), but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available. Choose a target on a volume with enough free space.`,
   );
 }
@@ -146,6 +148,7 @@ async function restorePostgresExports(
   recoveryConfigContextPath: string | undefined,
   archiveRoot: string,
   publishCompanions?: () => void,
+  postgresConnectionEnv?: string,
 ): Promise<void> {
   if (candidates.length === 0) {
     publishCompanions?.();
@@ -248,6 +251,7 @@ async function restorePostgresExports(
     {
       configPath: path.join(targetPath, recoveryConfigContextPath ?? recoveryConfigPath),
       configSourcePath: configPath,
+      ...(postgresConnectionEnv ? { postgresConnectionEnv } : {}),
       env: {
         ...process.env,
         OPENCLAW_INCLUDE_ROOTS: path.join(targetPath, archiveRoot, "payload"),
@@ -266,6 +270,12 @@ function formatRestoreResult(result: BackupRestoreResult): string {
     terminalText`Verified archive: ${shortenHomePath(result.archivePath)}`,
     terminalText`Archive root: ${result.archiveRoot}`,
     terminalText`Archive entries restored: ${result.entryCount}`,
+    ...(result.postgresConnectionEnv
+      ? [
+          terminalText`PostgreSQL stores imported through: $${result.postgresConnectionEnv}`,
+          "The restored config keeps the archived PostgreSQL connection; point it at the same server before activation.",
+        ]
+      : []),
     "",
     "Rollback warnings:",
     ...result.warnings.map((warning) => terminalText`- ${warning}`),
@@ -277,9 +287,28 @@ function formatRestoreResult(result: BackupRestoreResult): string {
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
 export async function backupRestoreCommand(
   runtime: RuntimeEnv,
-  options: { archive: string; target?: string; json?: boolean },
+  options: {
+    archive: string;
+    target?: string;
+    json?: boolean;
+    sourceEngine?: "sqlite";
+    localCompanion?: boolean;
+    /** Import PostgreSQL stores through the DSN in this environment variable. */
+    postgresConnectionEnv?: string;
+  },
 ) {
-  const targetPath = resolveRequiredBackupPath(options.target, "--target");
+  const postgresConnectionEnv = options.postgresConnectionEnv;
+  if (postgresConnectionEnv !== undefined) {
+    if (!isValidEnvSecretRefId(postgresConnectionEnv)) {
+      throwExpectedCliError("--postgres-connection-env requires an environment variable name.");
+    }
+    if (!process.env[postgresConnectionEnv]?.trim()) {
+      throwExpectedCliError(
+        `--postgres-connection-env: ${postgresConnectionEnv} is not set; nothing was restored.`,
+      );
+    }
+  }
+  const targetPath = resolveBackupArchivePath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {
     result: verified,
@@ -291,6 +320,24 @@ export async function backupRestoreCommand(
     recoveryConfigContextPath,
     manifest,
   } = await prepareBackupArchive(options.archive);
+  if (
+    options.sourceEngine === "sqlite" &&
+    (databaseRestoreCandidates.length > 0 || (manifest.postgresAnchors?.length ?? 0) > 0)
+  ) {
+    throw new Error(
+      "This restore requires a SQLite-only archive; PostgreSQL namespaces were not imported.",
+    );
+  }
+  if (options.localCompanion && manifest.profile !== "local-companion") {
+    throwExpectedCliError(
+      "--local-companion requires a local-companion checkpoint; no PostgreSQL data was imported.",
+    );
+  }
+  if (postgresConnectionEnv !== undefined && databaseRestoreCandidates.length === 0) {
+    throwExpectedCliError(
+      "--postgres-connection-env requires an archive with PostgreSQL stores; nothing was restored.",
+    );
+  }
   assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
 
@@ -317,6 +364,7 @@ export async function backupRestoreCommand(
       recoveryConfigContextPath,
       verified.archiveRoot,
       restoreClientCredentials,
+      postgresConnectionEnv,
     );
   } catch (extractionError) {
     try {
@@ -339,8 +387,15 @@ export async function backupRestoreCommand(
   const result = {
     ...verified,
     targetPath,
+    ...(postgresConnectionEnv === undefined ? {} : { postgresConnectionEnv }),
     warnings: [
-      ...BACKUP_RESTORE_WARNINGS,
+      ...(manifest.profile === "local-companion"
+        ? [
+            "Local files roll back to the checkpoint; PostgreSQL rows do not. This checkpoint is not disaster recovery.",
+            ...BACKUP_RESTORE_WARNINGS.slice(1, 2),
+            ...BACKUP_RESTORE_WARNINGS.slice(3),
+          ]
+        : BACKUP_RESTORE_WARNINGS),
       ...(verified.warnings ?? []),
       ...(verified.externalSymbolicLinks ?? []).map(
         ({ entryPath, linkpath }) =>

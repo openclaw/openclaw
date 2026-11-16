@@ -215,10 +215,8 @@ async function runFixture(
   extraArgs: string[] = [],
 ) {
   return await runNodeScript(
-    [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/bench-gateway-startup.ts",
+    (workerArgv) => [
+      ...workerArgv(new URL("../../scripts/bench-gateway-startup.ts", import.meta.url)),
       "--installed-cohort",
       target.input,
       "--output",

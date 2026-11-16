@@ -28,22 +28,25 @@ describe("memory scenario completed reply", () => {
   const { state, transport, runtime } = channel;
   let bus: Awaited<ReturnType<typeof startQaBusServer>>;
   let running: ReturnType<typeof channel.start>;
-  let observeAcknowledgment = (_cursor: number) => {};
-  let observeCompletionRead = (_accountId: string | undefined, _cursor: number) => {};
+  let observeCompletion = (_cursors: number[]) => {};
+  let observeCompletionRead = (
+    _accountId: string | undefined,
+    _cursor: number,
+    _completed: boolean,
+  ) => {};
 
   beforeAll(async () => {
     bus = await startQaBusServer({ state });
-    const resolvePollCursor = state.resolvePollCursor.bind(state);
-    vi.spyOn(state, "resolvePollCursor").mockImplementation((input) => {
-      const cursor = resolvePollCursor(input);
-      observeAcknowledgment(input?.acknowledgedCursor ?? 0);
-      return cursor;
+    const recordPollReceipts = state.recordPollReceipts.bind(state);
+    vi.spyOn(state, "recordPollReceipts").mockImplementation((input) => {
+      recordPollReceipts(input);
+      observeCompletion(input?.completedEventCursors ?? []);
     });
-    const getAcknowledgedPollCursor = state.getAcknowledgedPollCursor.bind(state);
-    vi.spyOn(state, "getAcknowledgedPollCursor").mockImplementation((accountId) => {
-      const cursor = getAcknowledgedPollCursor(accountId);
-      observeCompletionRead(accountId, cursor);
-      return cursor;
+    const hasCompletedInboundEvent = state.hasCompletedInboundEvent.bind(state);
+    vi.spyOn(state, "hasCompletedInboundEvent").mockImplementation((accountId, cursor) => {
+      const completed = hasCompletedInboundEvent(accountId, cursor);
+      observeCompletionRead(accountId, cursor, completed);
+      return completed;
     });
     running = channel.start(bus.baseUrl);
     await running.ready;
@@ -62,19 +65,20 @@ describe("memory scenario completed reply", () => {
     const acknowledged = createDeferred<void>();
     const waitingForCompletion = createDeferred<"waiting">();
     let inboundCursor = 0;
-    observeAcknowledgment = (cursor) => {
-      if (inboundCursor > 0 && cursor >= inboundCursor) {
+    observeCompletion = (cursors) => {
+      if (inboundCursor > 0 && cursors.includes(inboundCursor)) {
         acknowledged.resolve();
       }
     };
-    observeCompletionRead = (accountId, cursor) => {
-      if (accountId === "default" && inboundCursor > 0 && cursor < inboundCursor) {
+    observeCompletionRead = (accountId, cursor, completed) => {
+      if (accountId === "default" && inboundCursor > 0 && cursor === inboundCursor && !completed) {
         waitingForCompletion.resolve("waiting");
       }
     };
     vi.mocked(
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     ).mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+      await replyOptions?.turnAdoptionLifecycle?.onAdopted?.();
       await replyOptions?.onPartialReply?.({ text: "You usually want" });
       previewSent.resolve();
       await releaseFinal.promise;
@@ -129,7 +133,7 @@ describe("memory scenario completed reply", () => {
     try {
       await previewSent.promise;
       expect(await Promise.race([waitingForCompletion.promise, result])).toBe("waiting");
-      expect(state.getAcknowledgedPollCursor("default")).toBeLessThan(inboundCursor);
+      expect(state.hasCompletedInboundEvent("default", inboundCursor)).toBe(false);
     } finally {
       releaseFinal.resolve();
       await acknowledged.promise;

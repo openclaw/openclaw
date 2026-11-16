@@ -1,5 +1,3 @@
-/** Runs complete model-catalog discovery outside the Gateway event loop. */
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
@@ -26,12 +24,16 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
+/** Runs complete model-catalog discovery outside the Gateway event loop. */
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
+import { preparePluginModelCatalogSave } from "./plugin-model-catalog-save.js";
 import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import {
   CatalogWorkerTaskPool,
@@ -64,6 +66,35 @@ import {
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
+const WATCHDOG_TICK_MS = 1_000;
+
+/**
+ * Calls `expire` once the catalog budget of running time passes without `refresh`. A tick that
+ * arrives long after it was due means the host slept or the process was stopped. Nothing could
+ * progress while frozen, so that time does not count toward the budget.
+ */
+function startCatalogWatchdog(expire: () => void) {
+  let idleMs = 0;
+  let lastTickAt = performance.now();
+  const tick = () => {
+    const now = performance.now();
+    idleMs += Math.min(now - lastTickAt, 2 * WATCHDOG_TICK_MS);
+    lastTickAt = now;
+    if (idleMs >= PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS) {
+      expire();
+    } else {
+      timer = setTimeout(tick, WATCHDOG_TICK_MS);
+    }
+  };
+  let timer = setTimeout(tick, WATCHDOG_TICK_MS);
+  return {
+    refresh: () => {
+      idleMs = 0;
+      lastTickAt = performance.now();
+    },
+    stop: () => clearTimeout(timer),
+  };
+}
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 // Acknowledgements contain no payloads and expire with the physical singleton pool.
 const acknowledgedContexts = new WeakMap<CatalogPool, Map<string | undefined, string>>();
@@ -399,13 +430,15 @@ export function createPreparedModelCatalogWorker(
   ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
     let message: PreparedModelWorkerResult;
     let requestPool: typeof pool;
+    let requestOwner: GatewayCatalogPool | undefined;
+    let acceptResult: typeof validate | undefined;
     let pending: Promise<PreparedModelWorkerResult> | undefined;
     let credentials: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
     const controller = new AbortController();
     let progress: NativeReferenceProgress | undefined;
     let expire = () => controller.abort(new WorkerTaskError("worker task timed out", "timeout"));
-    const timeout = setTimeout(() => expire(), PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
+    const watchdog = startCatalogWatchdog(() => expire());
     try {
       assertCurrent();
       releaseProcessLifetime ??= registerPreparedModelRuntimeClose(stop);
@@ -473,19 +506,14 @@ export function createPreparedModelCatalogWorker(
         ? await getGatewayCatalogPool(workerInput, metadataSnapshot, environmentFingerprint)
         : undefined;
       if (shared) {
-        sharedOwner = shared;
+        sharedOwner = requestOwner = shared;
         shared.borrowers.add(borrower);
       }
       requestPool = pool =
         shared?.pool ??
         pool ??
         new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
-      let acknowledged = acknowledgedContexts.get(requestPool);
-      if (!acknowledged) {
-        acknowledged = new Map();
-        acknowledgedContexts.set(requestPool, acknowledged);
-      }
-      const contexts = acknowledged;
+      const contexts = getOrCreateWeakOwnerMap(acknowledgedContexts, requestPool);
       pending = requestPool.run(
         () => {
           assertCurrent();
@@ -504,17 +532,19 @@ export function createPreparedModelCatalogWorker(
               .close(failure)
               .catch((error: unknown) => process.emitWarning(String(error)));
           };
-          timeout.refresh();
+          watchdog.refresh();
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
+            templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+              env: input.env,
+            }),
           };
           const publication = beginAuthProfileCredentialBatch(
             captureOpenClawStateWorkerContext({ env: input.env }),
           );
           credentials = publication;
-          receiveResult = (result) => {
+          acceptResult = receiveResult = (result) => {
             // Even a failed or retired catalog may have committed a credential refresh.
             publication.committed(result.authCredentials);
             publication.finish(true);
@@ -536,12 +566,12 @@ export function createPreparedModelCatalogWorker(
             // SAFETY: The native verifier is the sole producer on this task's private channel.
             const next = notification as NativeReferenceProgress;
             if (!progress || next.completed > progress.completed) {
-              timeout.refresh();
+              watchdog.refresh();
             }
             progress = next;
           },
           onRequest: async () => {
-            clearTimeout(timeout);
+            watchdog.stop();
             return {
               input: !stoppedError && params.isCurrent(),
               timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
@@ -581,12 +611,20 @@ export function createPreparedModelCatalogWorker(
       await stop(failure);
       throw error;
     } finally {
+      // Failed transport replies skip validation and can dispatch the next task immediately.
+      // Release only this request's callback, never the successor's publication.
+      if (receiveResult === acceptResult) {
+        receiveResult = validate;
+      }
+      if (requestOwner && requestOwner.validate === acceptResult) {
+        requestOwner.validate = undefined;
+      }
       credentials?.finish(false);
       task.onRecovery = undefined;
       if (pending) {
         tasks.delete(pending);
       }
-      clearTimeout(timeout);
+      watchdog.stop();
     }
     if (message.status === "failed") {
       throw new Error(message.error);
@@ -596,9 +634,17 @@ export function createPreparedModelCatalogWorker(
 
   return {
     loadCatalog: async (providerIds, onRecovery, refresh) => {
+      const { input, env } = params.agentFacts;
+      const saveCatalogs = input.readOnly
+        ? undefined
+        : await preparePluginModelCatalogSave(input.agentDir, env);
       const message = await request({ kind: "catalog", providerIds, refresh }, onRecovery);
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
+      }
+      if (saveCatalogs) {
+        await saveCatalogs(message.pluginCatalogs);
+        assertCurrent();
       }
       const modelCatalog = markPreparedModelCatalogFull(message.snapshot);
       setPreparedModelFullCatalogAuth(modelCatalog, {

@@ -1,4 +1,5 @@
-import { visitTextDiff, type DiffLine } from "./tool-call-diff.ts";
+import { visitTextDiff } from "../text-diff.ts";
+import type { DiffLine } from "./tool-call-diff.ts";
 
 export type SessionSplitDiffRow =
   | { kind: "pair"; left?: DiffLine; right?: DiffLine }

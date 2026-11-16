@@ -2,20 +2,33 @@ import type { BigIntStats } from "node:fs";
 import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import type { SqliteIntegrityCheckOptions } from "./sqlite-integrity.js";
+import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
+type SqliteSnapshotStage =
+  | "source-acquisition"
+  | "source-integrity"
+  | "online-copy"
+  | "vacuum"
+  | "hash"
+  | "published-integrity";
+
 export type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
-  /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
+  /** Only in an isolated child: acquire or take custody of the same operation's private image. */
   sourceAcquisition?: {
     mode: "isolated-process";
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
+    preparedSource?: PreparedSqliteSnapshotSource;
+    /** Candidate updates keep cleanup warnings separate from backup validation failures. */
+    cleanupFailure?: "warn";
   };
   onProgress?: (progress: BackupProgressInfo) => void;
+  onStage?: (stage: SqliteSnapshotStage, phase: "start" | "done", bytes: number) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;

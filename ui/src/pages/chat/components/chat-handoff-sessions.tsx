@@ -10,6 +10,7 @@ import type {
   ChatSubagentWait,
   HandoffSessionLinks,
 } from "../chat-subagent-wait.ts";
+import type { ProjectedContinuationSource } from "../chat-turn-boundary.ts";
 
 function needsInputLabel(count: number) {
   return count === 1
@@ -31,6 +32,22 @@ function HandoffSessionName(props: { session: ChatHandoffSession; links?: Handof
         </a>
       )}
     </Show>
+  );
+}
+
+/** A sentence with one child's name in it, linked like the list rows. */
+function NamedSentence(props: {
+  text: string;
+  session: ChatHandoffSession;
+  links?: HandoffSessionLinks;
+}) {
+  const parts = createMemo(() => props.text.split("\u0000"));
+  return (
+    <span>
+      {parts()[0]}
+      <HandoffSessionName session={props.session} links={props.links} />
+      {parts()[1] ?? ""}
+    </span>
   );
 }
 
@@ -68,7 +85,7 @@ function Chevron(props: { open: boolean }) {
  * The working line while a handoff waits on its children: one child is named
  * in place; several get a list, open until the reader closes it.
  */
-export function ChatSubagentWaitLine(props: {
+function HandoffWaitLine(props: {
   wait: ChatSubagentWait;
   startMs: number;
   links?: HandoffSessionLinks;
@@ -78,14 +95,15 @@ export function ChatSubagentWaitLine(props: {
   const only = createMemo(() =>
     props.wait.sessions.length === 1 ? props.wait.sessions[0] : undefined,
   );
-  const attention = createMemo(
-    () => props.wait.sessions.filter((session) => session.status === "attention").length,
-  );
+  const count = (status: ChatHandoffSession["status"]) =>
+    props.wait.sessions.filter((session) => session.status === status).length;
+  const attention = createMemo(() => count("attention"));
+  const paused = createMemo(() => count("paused"));
   const elapsed = () => (
-    <>
+    <Show when={!props.wait.pausedOnly}>
       <span aria-hidden="true">·</span>{" "}
       <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.startMs} />
-    </>
+    </Show>
   );
   return (
     <div class="chat-subagent-wait">
@@ -109,6 +127,10 @@ export function ChatSubagentWaitLine(props: {
                   {needsInputLabel(attention())}
                 </span>{" "}
               </Show>
+              <Show when={paused() > 0}>
+                <span aria-hidden="true">·</span>{" "}
+                <span>{t("chat.sessionsPaused", { count: String(paused()) })}</span>{" "}
+              </Show>
               {elapsed()}
               <Chevron open={open()} />
             </button>
@@ -118,50 +140,92 @@ export function ChatSubagentWaitLine(props: {
           </>
         }
       >
-        {(session) => {
-          const [before, after = ""] = t("chat.waitingOnSubagent", { name: "\u0000" }).split(
-            "\u0000",
-          );
-          return (
-            <span class="chat-working-indicator__status">
-              <span>
-                {before}
-                <HandoffSessionName session={session()} links={props.links} />
-                {after}
+        {(session) => (
+          <span class="chat-working-indicator__status">
+            <NamedSentence
+              text={t("chat.waitingOnSubagent", { name: "\u0000" })}
+              session={session()}
+              links={props.links}
+            />{" "}
+            <Show
+              when={
+                session().status === "attention" ||
+                session().status === "paused" ||
+                session().status === "background"
+              }
+            >
+              <span aria-hidden="true">·</span>{" "}
+              <span
+                class={{ "chat-subagent-wait__attention": session().status === "attention" }}
+                title={session().note}
+              >
+                {t(`chat.handoffSessionStatus.${session().status}`)}
               </span>{" "}
-              <Show when={session().status === "attention"}>
-                <span aria-hidden="true">·</span>{" "}
-                <span class="chat-subagent-wait__attention" title={session().note}>
-                  {t("chat.handoffSessionStatus.attention")}
-                </span>{" "}
-              </Show>
-              {elapsed()}
-            </span>
-          );
-        }}
+            </Show>
+            {elapsed()}
+          </span>
+        )}
       </Show>
     </div>
   );
 }
 
 /**
- * Where a resumed handoff picks up again: how long it waited, and the children
- * it waited on, closed until asked for.
+ * The handoff's line under the transcript. After the parent resumes with only
+ * paused children left, nothing is working: a quiet note names them instead.
+ */
+export function ChatSubagentWaitLine(props: {
+  wait: ChatSubagentWait;
+  startMs: number;
+  links?: HandoffSessionLinks;
+}) {
+  const only = () => (props.wait.sessions.length === 1 ? props.wait.sessions[0] : undefined);
+  return (
+    <Show
+      when={props.wait.pausedNote}
+      fallback={<HandoffWaitLine wait={props.wait} startMs={props.startMs} links={props.links} />}
+    >
+      <div class="chat-subagent-wait">
+        <span class="chat-working-indicator__status">
+          <Show
+            when={only()}
+            fallback={t("chat.sessionsPausedNote", { count: String(props.wait.sessions.length) })}
+          >
+            {(session) => (
+              <NamedSentence
+                text={t("chat.sessionPausedNote", { name: "\u0000" })}
+                session={session()}
+                links={props.links}
+              />
+            )}
+          </Show>
+        </span>
+      </div>
+    </Show>
+  );
+}
+
+/**
+ * Where a resumed handoff picks up again: how long it waited, what woke it, and
+ * the children it waited on, closed until asked for.
  */
 export function ChatHandoffResume(props: {
   handoff: HandoffDisplay & { resumedAt: number };
   sessions: readonly ChatHandoffSession[];
   links?: HandoffSessionLinks;
+  source?: ProjectedContinuationSource;
 }) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
-  const label = () =>
-    t("chat.handoffResumed", {
+  const label = () => {
+    const resumed = t("chat.handoffResumed", {
       duration:
         formatDurationCompact(Math.max(1_000, props.handoff.resumedAt - props.handoff.yieldedAt), {
           includeSeconds: true,
         }) ?? "",
     });
+    return props.source ? `${resumed} · ${t(`chat.continuationSource.${props.source}`)}` : resumed;
+  };
   const count = () =>
     props.sessions.length === 1
       ? t("chat.handoffSessionsOne")

@@ -230,10 +230,10 @@ export class InstantThreadHandoff {
       draft: this.draft,
       search: this.returnLocation.search ?? "",
       owns: () => active.get(this.context) === this && !this.disposed && this.sameIdentity(),
-      // Recheck at render time too: authentication can change while the
-      // rollback route is loading, or while its data remains in router cache.
+      // Retain the restored form across transport loss, but retire it when its
+      // presentation identity changes while loading or cached by the router.
       canDisplay: () =>
-        this.sameIdentity() && this.context.agentSelection.state.selectedId === restoredAgentId,
+        this.canDisplay() && this.context.agentSelection.state.selectedId === restoredAgentId,
     };
     let clearRestore = () => {};
     if (sameOwner) {

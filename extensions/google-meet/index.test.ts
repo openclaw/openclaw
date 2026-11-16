@@ -1236,7 +1236,10 @@ describe("google-meet plugin", () => {
 
   it("exports artifact bundles through the tool", async () => {
     stubMeetArtifactsApi();
-    const outputDir = path.join(createIsolatedTestDir("openclaw-google-meet-export-"), "bundle");
+    const outputDir = path.join(
+      createIsolatedTestDir("openclaw-google-meet-export-"),
+      process.platform === "win32" ? "bundle" : "bundle ",
+    );
     const result = await getMeetTool(setup()).execute("id", {
       action: "export",
       accessToken: "token",

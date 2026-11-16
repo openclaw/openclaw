@@ -8,6 +8,7 @@ import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
+  getActiveTranscriptKysely,
   selectActiveTranscriptIdentityRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
@@ -61,6 +62,37 @@ export function readActivePathEntryRelationFromProjection(
     return projection.state.leafEventId === entryId ? "exact" : "off-path";
   }
   return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
+}
+
+/**
+ * True when a navigation control landed after the caller's displayed leaf.
+ *
+ * Rewind and branch switch append a `leaf` control to the existing transcript
+ * instead of rotating the session id, so an ancestor relation alone no longer
+ * proves the caller saw the branch its message would land on. An unknown anchor
+ * fails closed.
+ */
+export function readActivePathNavigationMovedFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string | null,
+): boolean {
+  const anchorSeq =
+    entryId === null ? -1 : readActiveTranscriptEntryIdentityInSnapshot(projection, entryId)?.seq;
+  if (anchorSeq === undefined) {
+    return true;
+  }
+  return (
+    executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      getActiveTranscriptKysely(projection.database)
+        .selectFrom("transcript_event_identities")
+        .select("event_id")
+        .where("session_id", "=", projection.resolved.sessionId)
+        .where("event_type", "=", "leaf")
+        .where("seq", ">", anchorSeq)
+        .limit(1),
+    ) !== undefined
+  );
 }
 
 /** The caller owns admission; anchor and source authority share the current statement snapshot. */
@@ -344,6 +376,40 @@ export function readTranscriptMessageAppendMetadataBatchInTransaction(
     }
   }
   return result;
+}
+
+/** Only the append owner can supply these identities and accepted projection positions. */
+export function createTranscriptMessageAppendMetadataFromWrites(
+  database: TranscriptEntryRead["database"],
+  resolved: ResolvedTranscriptScope,
+  messages: readonly {
+    messageId: string;
+    message: unknown;
+    parentId: string | null;
+    seq: number;
+    messagePosition: number;
+  }[],
+  version: { generation: string; rawSeq: number; updatedAt: number | null },
+) {
+  const revision = getSqliteReadScopeRevision(database.db);
+  return new Map(
+    messages.map((message) => [
+      message.messageId,
+      createTranscriptMessageAppendMetadata(
+        { database, resolved, entryId: message.messageId, message: message.message },
+        {
+          seq: message.seq,
+          parent_id: message.parentId,
+          message_idempotency_key: null,
+          message_position: message.messagePosition,
+          generation: version.generation,
+          latestSeq: version.rawSeq,
+          transcriptUpdatedAt: version.updatedAt,
+        },
+        revision,
+      ),
+    ]),
+  );
 }
 
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */

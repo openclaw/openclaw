@@ -1,4 +1,8 @@
 import { Type } from "typebox";
+import {
+  bindCreatedGoalContinuation,
+  releaseCompletedGoalContinuation,
+} from "../../auto-reply/reply/goal-continuation-return.js";
 import { SessionGoalTransitionError } from "../../config/sessions/goals-transitions.js";
 import {
   createSessionGoal,
@@ -19,6 +23,7 @@ import {
 } from "./common.js";
 
 type GoalToolOptions = {
+  runId?: string;
   agentSessionKey?: string;
   runSessionKey?: string;
   sessionAgentId?: string;
@@ -71,14 +76,22 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "get_goal",
     displaySummary: "Get the current thread goal",
     description:
-      "Get the current session goal, including its full objective, status, token usage, and optional budget.",
+      "Get the current session goal, including its full objective, status, token usage, and optional budget. Inactive goal status stops automatic pursuit, not work authorized by the current user request; do not require Goal Resume before continuing that work within its actual permissions.",
     parameters: GetGoalToolSchema,
     execute: async () => {
       const snapshot = await getSessionGoal({
         ...resolveGoalSessionScope(options),
         persist: false,
       });
-      return jsonResult(snapshot);
+      return jsonResult({
+        ...snapshot,
+        ...(snapshot.goal && snapshot.goal.status !== "active"
+          ? {
+              nextAction:
+                "This goal is not being pursued automatically. Continue work authorized by the current user request within its actual permissions; Goal Resume is not a prerequisite for this turn. Do not resume the goal merely to execute this turn. Do not open a blocking question for Goal Resume: native session controls may require this run to finish first.",
+            }
+          : {}),
+      });
     },
   };
 }
@@ -89,7 +102,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "create_goal",
     displaySummary: "Create a thread goal",
     description:
-      "Create a goal only when explicitly requested by the user or system instructions. Set a positive token_budget only when a budget is explicitly requested; otherwise omit it or pass null. Fails if a goal already exists; the user must clear it before starting another.",
+      "Create a goal only when explicitly requested by the user or system instructions. Set a positive token_budget only when a budget is explicitly requested; otherwise omit it or pass null. A completed goal is replaced with a fresh active goal and fresh accounting. Fails if an unfinished goal exists; do not complete or clear unfinished work to replace it.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -104,6 +117,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
+      bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
       return jsonResult({ status: "created", goal });
     },
   };
@@ -137,6 +151,9 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           status,
           ...(note ? { note } : {}),
         });
+        if (goal.status === "complete") {
+          releaseCompletedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
+        }
         return jsonResult({
           status: "updated",
           goal,

@@ -1,5 +1,7 @@
 export type SettingsToggleControl = {
   checked: boolean;
+  /** Initial read: reserve the native control geometry without presenting a value. */
+  pending?: boolean;
   disabled?: boolean;
   /** Block activation during a save without removing keyboard focus. Native disabled wins. */
   saving?: boolean;
@@ -34,7 +36,6 @@ export type SettingsSegmentedProps<T extends string, Label> = {
     }
   | {
       mode: "buttons";
-      variant?: "accent" | "primary" | "compact";
       onClick?: (event: MouseEvent, value: T) => void;
       onChange: (value: T) => void;
       onReselect?: (value: T) => void;

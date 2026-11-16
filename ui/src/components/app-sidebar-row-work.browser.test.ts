@@ -32,6 +32,7 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
   sidebar.style.cssText = "display:block;width:320px;height:600px";
   const viewport = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
   viewport.style.cssText = "height:500px;flex:none;overflow:auto";
+  sidebar.setSessionSortMode("created");
   sidebar.connected = true;
   sidebar.sessionsShowPreview = true;
   const owner = getAppSidebarOwner(sidebar.hostElement)!;
@@ -44,6 +45,17 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
     );
   });
   await settleLitElement(sidebar);
+  // Measure from a settled window: the virtual list may grow by one row after its
+  // first layout pass, which is not work caused by the publications below.
+  let mounted = -1;
+  await waitForSolid(async () => {
+    await new Promise(requestAnimationFrame);
+    await settleLitElement(sidebar);
+    const count = sidebar.querySelectorAll("[data-session-key]").length;
+    const settled = count === mounted;
+    mounted = count;
+    expect(settled).toBe(true);
+  });
   const publishList = (result: SessionsListResult) => {
     sessions.publishList({ result });
     publishSidebarSessionList(owner.sessionData, {

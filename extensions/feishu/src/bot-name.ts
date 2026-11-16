@@ -17,6 +17,7 @@ const MAX_CACHE_ENTRIES = 5_000;
 const LOOKUP_BACKOFF_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 1_500;
 
+// Process-local deadlines use elapsed time, never persisted epochs.
 const cache = new Map<string, CacheEntry>();
 const backoffUntilByAccount = new Map<string, number>();
 const inflight = new Map<string, Promise<string | undefined>>();
@@ -26,7 +27,7 @@ function readCache(key: string): CacheEntry | undefined {
   if (!entry) {
     return undefined;
   }
-  if (entry.expiresAt <= Date.now()) {
+  if (entry.expiresAt <= performance.now()) {
     cache.delete(key);
     return undefined;
   }
@@ -52,7 +53,7 @@ export async function resolveFeishuBotName(params: {
   }
   const backoffUntil = backoffUntilByAccount.get(params.account.accountId);
   if (backoffUntil !== undefined) {
-    if (backoffUntil > Date.now()) {
+    if (backoffUntil > performance.now()) {
       return undefined;
     }
     backoffUntilByAccount.delete(params.account.accountId);
@@ -94,14 +95,14 @@ export async function resolveFeishuBotName(params: {
     }
     if (!result) {
       // Optional names use one short cooldown, not an hour-long failure circuit.
-      backoffUntilByAccount.set(account.accountId, Date.now() + LOOKUP_BACKOFF_MS);
+      backoffUntilByAccount.set(account.accountId, performance.now() + LOOKUP_BACKOFF_MS);
       return undefined;
     }
 
     const name = result.data?.bots?.[openId]?.name?.trim();
     writeCache(key, {
       ...(name ? { name } : {}),
-      expiresAt: Date.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS),
+      expiresAt: performance.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS),
     });
     return name;
   })();

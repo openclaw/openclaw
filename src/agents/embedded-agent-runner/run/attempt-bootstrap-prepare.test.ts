@@ -30,6 +30,14 @@ async function makeWorkspace(label: string, files: Record<string, string> = {}):
   return workspace;
 }
 
+/** Minimal linked-checkout metadata: the checkout shares the source repository's common dir. */
+async function linkCheckout(source: string, checkout: string) {
+  const gitDir = path.join(source, ".git", "worktrees", path.basename(checkout));
+  await fs.mkdir(gitDir, { recursive: true });
+  await fs.writeFile(path.join(gitDir, "commondir"), path.join(source, ".git"));
+  await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${gitDir}\n`);
+}
+
 describe("prepareEmbeddedAttemptBootstrap", () => {
   async function prepare(
     agentWorkspace: string,
@@ -91,6 +99,8 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       expect(result).toMatchObject({
         bootstrapMode,
         shouldRecordCompletedBootstrapTurn: completion,
+        // Pending setup must not add a commit policy to ordinary workspace edits.
+        workspaceNotes: [],
       });
       expect(result.contextFiles.some((file) => file.content === "Workspace instructions")).toBe(
         injected,
@@ -154,47 +164,106 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     },
   );
 
-  it("layers execution project instructions after agent bootstrap files", async () => {
-    const agentWorkspace = await makeWorkspace("agent-workspace", {
-      "AGENTS.md": "Canonical agent instructions",
-      "SOUL.md": "Canonical agent soul",
-    });
-    const sessionWorkspace = await makeWorkspace("session-workspace", {
-      "AGENTS.md": "Execution project context",
-      "SOUL.md": "Execution soul must stay private",
-    });
+  it.each(["unrooted", "project worktree", "workspaceOnly"] as const)(
+    "layers execution project instructions after agent bootstrap files (%s)",
+    async (kind) => {
+      const agentWorkspace = await makeWorkspace("agent-workspace", {
+        "AGENTS.md": "Canonical agent instructions",
+        "SOUL.md": "Canonical agent soul",
+      });
+      const sessionWorkspace = await makeWorkspace("session-workspace", {
+        "AGENTS.md": "Execution project context",
+        "SOUL.md": "Execution soul must stay private",
+      });
 
-    const result = await prepare(agentWorkspace, sessionWorkspace);
-    const executionAgentsIndex = result.contextFiles.findIndex(
-      (file) => file.path === path.join(sessionWorkspace, "AGENTS.md"),
-    );
-    const lastAgentFileIndex = result.contextFiles.findLastIndex((file) =>
-      file.path.startsWith(`${agentWorkspace}${path.sep}`),
-    );
+      const result = await prepare(agentWorkspace, sessionWorkspace, {
+        attempt:
+          kind === "project worktree"
+            ? { sessionRoot: sessionWorkspace, requireWorkspaceOnly: true }
+            : kind === "workspaceOnly"
+              ? {
+                  config: {
+                    agents: { entries: { main: { workspace: agentWorkspace } } },
+                    tools: { fs: { workspaceOnly: true } },
+                  },
+                }
+              : {},
+      });
+      const executionAgentsIndex = result.contextFiles.findIndex(
+        (file) => file.path === path.join(sessionWorkspace, "AGENTS.md"),
+      );
+      const lastAgentFileIndex = result.contextFiles.findLastIndex((file) =>
+        file.path.startsWith(`${agentWorkspace}${path.sep}`),
+      );
 
-    expect(executionAgentsIndex).toBeGreaterThan(lastAgentFileIndex);
-    expect(
-      result.bootstrapInjectionStats.filter((file) => file.name === "AGENTS.md"),
-    ).toMatchObject([
-      {
-        path: path.join(agentWorkspace, "AGENTS.md"),
-        origin: { kind: "agent-workspace", rootPath: agentWorkspace },
-      },
-      {
-        path: path.join(sessionWorkspace, "AGENTS.md"),
-        origin: { kind: "execution-project", rootPath: sessionWorkspace },
-      },
-    ]);
-    expect(result.contextFiles[executionAgentsIndex]).toEqual(
-      instructions(sessionWorkspace, "Execution project context"),
-    );
-    expect(result.contextFiles).toContainEqual(
-      contextFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent soul"),
-    );
-    expect(result.contextFiles).not.toContainEqual(
-      expect.objectContaining({ path: path.join(sessionWorkspace, "SOUL.md") }),
-    );
-  });
+      expect(executionAgentsIndex).toBeGreaterThan(lastAgentFileIndex);
+      expect(
+        result.bootstrapInjectionStats.filter((file) => file.name === "AGENTS.md"),
+      ).toMatchObject([
+        {
+          path: path.join(agentWorkspace, "AGENTS.md"),
+          origin: { kind: "agent-workspace", rootPath: agentWorkspace },
+        },
+        {
+          path: path.join(sessionWorkspace, "AGENTS.md"),
+          origin: { kind: "execution-project", rootPath: sessionWorkspace },
+        },
+      ]);
+      expect(result.contextFiles[executionAgentsIndex]).toEqual(
+        instructions(sessionWorkspace, "Execution project context"),
+      );
+      expect(result.contextFiles).toContainEqual(
+        contextFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent soul"),
+      );
+      expect(result.contextFiles).not.toContainEqual(
+        expect.objectContaining({ path: path.join(sessionWorkspace, "SOUL.md") }),
+      );
+    },
+  );
+
+  it.each(["present", "missing", "symlink"] as const)(
+    "keeps a rooted checkout of the agent workspace inside that checkout (%s)",
+    async (agents) => {
+      const shared = await makeWorkspace("shared", {
+        "AGENTS.md": "SHARED INSTRUCTIONS MUST NOT LEAK",
+        "SOUL.md": "SHARED SOUL MUST NOT LEAK",
+      });
+      const worktree = await makeWorkspace("worktree", {
+        ...(agents === "present" ? { "AGENTS.md": "Branch instructions" } : {}),
+        "SOUL.md": "Branch soul",
+      });
+      await linkCheckout(shared, worktree);
+      if (agents === "symlink") {
+        await fs.symlink(path.join(shared, "AGENTS.md"), path.join(worktree, "AGENTS.md"));
+      }
+      const result = await prepare(shared, agents === "missing" ? shared : worktree, {
+        attempt: {
+          sessionRoot: worktree,
+          requireWorkspaceOnly: true,
+          cwd: path.join(worktree, "..", path.basename(shared)),
+        },
+      });
+
+      expect(result.contextFiles).toContainEqual(
+        contextFile(path.join(worktree, "SOUL.md"), "Branch soul"),
+      );
+      expect(
+        result.contextFiles.every((file) => file.path.startsWith(`${worktree}${path.sep}`)),
+      ).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("MUST NOT LEAK");
+      expect(result.contextFiles).toContainEqual(
+        instructions(
+          worktree,
+          agents === "present"
+            ? "Branch instructions"
+            : expect.stringContaining("[MISSING] Expected at:"),
+        ),
+      );
+      expect(
+        result.bootstrapInjectionStats.find((file) => file.name === "AGENTS.md")?.missing,
+      ).toBe(agents !== "present");
+    },
+  );
 
   it.each(["none", "full"])("withholds completion for unreadable AGENTS.md (%s)", async (mode) => {
     const unreadable = "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1);

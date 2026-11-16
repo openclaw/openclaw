@@ -41,7 +41,10 @@ export async function verifyBuzzAfterSetup(params: {
 }): Promise<void> {
   try {
     const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
-    const reloadDeadline = Date.now() + GATEWAY_RELOAD_WAIT_MS;
+    // The reload budget is consumed by sleep polls on the monotonic clock; the
+    // deadline must live there too, or a wall-clock step (NTP correction, VM
+    // resume) keeps polling the Gateway past the configured reload window.
+    const reloadDeadline = performance.now() + GATEWAY_RELOAD_WAIT_MS;
     let reloadPending = false;
     while (true) {
       try {
@@ -71,7 +74,7 @@ export async function verifyBuzzAfterSetup(params: {
           throw error;
         }
       }
-      const remainingMs = reloadDeadline - Date.now();
+      const remainingMs = reloadDeadline - performance.now();
       if (remainingMs <= 0) {
         throw new Error(
           `Gateway did not apply the saved Buzz configuration within ${GATEWAY_RELOAD_WAIT_MS / 1000} seconds`,

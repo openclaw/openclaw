@@ -89,6 +89,31 @@ final class GatewayConnectionStateUITests: XCTestCase {
         self.capture(app, named: "connection-node-pairing-actionable")
     }
 
+    /// An automatic reconnect keeps its handoff pending for as long as the saved Gateway
+    /// never answers. Chat must still offer the toolbar route to Gateway settings.
+    func testToolbarStaysUsableWhileReconnectingToUnreachableGateway() {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        // Argument defaults save a manual Gateway at an unroutable TEST-NET-1 address.
+        app.launchArguments = [
+            "--openclaw-initial-tab", "chat", "--openclaw-initial-destination", "chat", "-AppleLanguages", "(en)",
+            "-gateway.onboardingComplete", "YES", "-gateway.hasConnectedOnce", "YES",
+            "-onboarding.quickSetupDismissed", "YES", "-gateway.autoconnect", "YES",
+            "-gateway.manual.enabled", "YES", "-gateway.manual.host", "192.0.2.10", "-gateway.manual.port", "18789",
+        ]
+        app.launch()
+        let status = app.buttons["chat-agent-identity"]
+        XCTAssertTrue(status.waitForExistence(timeout: 15))
+        XCTAssertTrue(status.label.contains("Gateway: Connecting"), status.label)
+        XCTAssertFalse(app.textViews["chat-message-input"].isEnabled, "The chat surface waits out the handoff")
+
+        for control in [app.buttons["RootTabs.Sidebar.Show"], status, app.buttons["Chat actions"]] {
+            XCTAssertTrue(control.isEnabled, "\(control.identifier) \(control.label) must stay enabled")
+        }
+        app.buttons["Chat actions"].tap()
+        XCTAssertTrue(app.buttons["chat-gateway-settings"].waitForExistence(timeout: 5))
+    }
+
     private func launchConnectionApp(_ app: XCUIApplication, setupCode: String) {
         addUIInterruptionMonitor(withDescription: "Local network access") { alert in
             guard alert.buttons["Allow"].exists else { return false }

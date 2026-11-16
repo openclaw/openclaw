@@ -95,7 +95,7 @@ export function resolveAssistantAttachmentAvailability(
       cached.mediaTicketExpiresAt <= now
     ) {
       const unavailable = createUnavailableAssistantAttachment(
-        "Attachment unavailable",
+        t("chat.attachments.unavailable"),
         resource.retryAttempted,
         { unconfirmed: true },
       );

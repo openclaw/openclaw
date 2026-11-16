@@ -1,6 +1,8 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -90,7 +92,7 @@ type RateLimitAuthProfileContext = {
 export function createEmbeddedRunFailoverRetryController(input: {
   runInput: Pick<
     PreparedEmbeddedRunInput,
-    "runParams" | "globalLane" | "agentDir" | "fallbackConfigured"
+    "runParams" | "globalLane" | "agentDir" | "fallbackConfigured" | "startedAtMs"
   >;
   preparedRuntime: Pick<
     PreparedRuntime,
@@ -107,6 +109,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
 }) {
   const { runInput, preparedRuntime } = input;
   const { runParams: params, globalLane, agentDir, fallbackConfigured } = runInput;
+  // Project the epoch-valued run origin once, before later wall-clock corrections.
+  const fallbackRunStartMonotonicMs = fallbackConfigured
+    ? monotonicNow() - (Date.now() - runInput.startedAtMs)
+    : 0;
   const { provider, modelId } = preparedRuntime;
   const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
@@ -115,6 +121,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   let rateLimitSeen = false;
   let sharedTpmFallback = false;
   let transientRetryBudget: number | undefined;
+  let providerRequestTimeoutExplicit = false;
   let rateLimitRetriesExhausted: number | undefined;
   // Consecutive outages count failed-request time as well as backoff. A completed
   // successful model response ends the outage and replenishes its retry budget.
@@ -238,10 +245,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
     observeAttempt: (
       attempt: Pick<
         EmbeddedRunAttemptResult,
-        "providerRetryMaxRetries" | "hasSuccessfulModelResponse"
+        "providerRetryMaxRetries" | "providerRequestTimeoutExplicit" | "hasSuccessfulModelResponse"
       >,
     ) => {
       transientRetryBudget = attempt.providerRetryMaxRetries;
+      providerRequestTimeoutExplicit = attempt.providerRequestTimeoutExplicit === true;
       rateLimitRetriesExhausted = undefined;
       if (attempt.hasSuccessfulModelResponse) {
         transientRetryCount = 0;
@@ -378,8 +386,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "non_transient");
         return false;
       }
-      // Bound replay-safe waits; the failover owner rotates credentials, tries
-      // configured models, or surfaces the existing error after exhaustion.
+      // Bound every rate-limit wait; replay safety still controls whether the
+      // caller may rotate credentials or models instead of surfacing the error.
       const retryDelayCapMs =
         retry.maxRetryDelayMs !== undefined &&
         Number.isFinite(retry.maxRetryDelayMs) &&
@@ -388,14 +396,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
           : undefined;
       if (
         rateLimit &&
-        retry.failoverEligible !== false &&
         retryDelayCapMs !== undefined &&
         retry.retryAfterMs !== undefined &&
         retry.retryAfterMs > retryDelayCapMs
       ) {
         recordDecision("rejected", "retry_delay_exceeds_cap");
         log.warn(
-          `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over`,
+          `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; ${retry.failoverEligible === false ? "ending replay-unsafe attempt" : "failing over"}`,
         );
         return false;
       }
@@ -423,7 +430,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         });
         return false;
       }
-      const nowMs = Date.now();
+      const nowMs = monotonicNow();
       const retryWindowStartMs = transientRetryWindowStartMs ?? nowMs;
       if (retry.reason !== "output_limit") {
         transientRetryWindowStartMs = retryWindowStartMs;
@@ -440,7 +447,22 @@ export function createEmbeddedRunFailoverRetryController(input: {
             ? undefined
             : nowMs - retryWindowStartMs,
       });
-      if (delayMs === undefined) {
+      // Count the initial request too. A retry already in flight keeps its own
+      // timeout, but defaults must leave a bounded run an opportunity to fall back.
+      const reserveFallback =
+        fallbackConfigured &&
+        params.isFinalFallbackAttempt !== true &&
+        retry.failoverEligible !== false &&
+        retry.reason !== "output_limit" &&
+        transientRetryBudget === undefined &&
+        !providerRequestTimeoutExplicit &&
+        !preparedRuntime.snapshot().pluginHarnessOwnsTransport &&
+        params.timeoutMs > 0 &&
+        params.timeoutMs < MAX_TIMER_TIMEOUT_MS;
+      const remainingRetryMs = reserveFallback
+        ? params.timeoutMs / 2 - (nowMs - fallbackRunStartMonotonicMs)
+        : Infinity;
+      if (delayMs === undefined || delayMs >= remainingRetryMs) {
         recordDecision("rejected", "retry_delay_unavailable");
         // Explain why recovery stopped before the count limit; replay safety still gates fallback.
         log.warn(

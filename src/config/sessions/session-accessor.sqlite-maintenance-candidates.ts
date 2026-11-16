@@ -1,7 +1,7 @@
 import { toUSVString } from "node:util";
 import { sql } from "kysely";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
-import { jsonPickObject, jsonValid } from "../../infra/database-engine/json-values.js";
+import { jsonNativeFieldsValid, jsonPickObject } from "../../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -24,10 +24,7 @@ const maintenanceFields = [
   "spawnedBy",
   "parentSessionKey",
   "modelSelectionLocked",
-  "mainRestartRecovery",
-  "restartRecoveryRuns",
-  "restartRecoveryTerminalRunIds",
-  "restartRecoveryDeliveryRunId",
+  "resumeAfterRestart",
   "pendingFinalDelivery",
   "chatType",
   "delivery",
@@ -40,7 +37,7 @@ function maintenanceCandidates(database: Pick<OpenClawAgentDatabase, "db">) {
   // keep the full parser contract, including malformed and overdepth payloads.
   const projection = (
     isPostgresSqlConnection(database.db)
-      ? /* kysely-allow-raw: Certified JSON projection uses the selected engine's operators. */ sql<string>`CASE WHEN entry_valid = 1 AND ${jsonValid(database.db, entryJson)}
+      ? /* kysely-allow-raw: Certified JSON projection uses the selected engine's operators. */ sql<string>`CASE WHEN entry_valid = 1 AND ${jsonNativeFieldsValid(database.db, entryJson)}
     THEN ${jsonPickObject(database.db, entryJson, maintenanceFields)} ELSE entry_json END`
       : /* kysely-allow-raw: maintenance reads only phase facts from certified rows. */ sql<string>`CASE WHEN entry_valid = 1 AND json_valid(entry_json)
     THEN (SELECT json_group_object(key, CASE type

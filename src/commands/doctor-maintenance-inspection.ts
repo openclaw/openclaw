@@ -3,6 +3,7 @@ import type { PreManagedServiceStop } from "../cli/update-cli/update-command-ser
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasGatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
+import { isErrno } from "../infra/errno.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
@@ -18,6 +19,7 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -145,6 +147,36 @@ export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintena
   };
 }
 
+/** Default CLI output omits nested causes; report the target without replacing the failure. */
+export async function reportDoctorReadOnlyFilesystemError(
+  error: unknown,
+  runtime?: RuntimeEnv,
+): Promise<void> {
+  const failure = collectNestedErrorCandidates(error).find(
+    (cause): cause is NodeJS.ErrnoException => isErrno(cause) && cause.code === "EROFS",
+  );
+  if (!failure) {
+    return;
+  }
+  const quote = (value: string) =>
+    JSON.stringify(value).replace(
+      /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/gu,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+  const operation =
+    "operation" in failure && typeof failure.operation === "string"
+      ? failure.operation
+      : typeof failure.syscall === "string"
+        ? failure.syscall
+        : "write";
+  const target =
+    typeof failure.path === "string" ? quote(failure.path) : "an unreported target path";
+  const outputRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
+  outputRuntime.error(
+    `Doctor encountered a read-only filesystem (EROFS): ${quote(operation)} at ${target}.\nProvide a writable mount covering the affected path; changing ownership or file modes alone cannot fix a read-only mount. Docker writable-storage layout: https://docs.openclaw.ai/install/docker#read-only-container-root`,
+  );
+}
+
 /** The same persisted-state admission protects completion and exceptional restoration. */
 export async function assertDoctorMaintenanceReady(
   cfg: OpenClawConfig,
@@ -182,9 +214,6 @@ export async function assertDoctorMaintenanceReady(
   }
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
-  const { assertNoPendingLegacyExecApprovals } =
-    await import("../infra/exec-approvals-migration-gate.js");
-  assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
   if (!schemaPublicationDeferred && databaseTargets) {
     const { completeDoctorMigrationBackups } =
       await import("./doctor-migration-backup-artifacts.js");
@@ -228,7 +257,7 @@ export function assertDoctorMaintenanceInspection(
     `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`;
   const guidance =
     kind === "foreign"
-      ? `Run ${formatCliCommand("openclaw gateway status --deep", env)} to locate the Gateway's installation, then run ${formatCliCommand("openclaw doctor --fix", env)} from that installation. The service was left unchanged.`
+      ? `Run ${formatCliCommand("openclaw gateway status --deep", env)} to find the Gateway installation. If an operator-owned launcher override points there, update or remove that override; reinstalling alone will not fix it. Inspect systemd overrides with systemctl cat (--user for user services). The service was left unchanged.`
       : `Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`;
   throw new DoctorMaintenanceRefusalError(
     `Doctor could not enter maintenance. Error: ${detail} ${guidance}`,

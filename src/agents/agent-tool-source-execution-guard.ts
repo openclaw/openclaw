@@ -7,7 +7,10 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  captureGatewayToolReceiptAssertion,
+  getGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const executionBudgetContext = resolveGlobalSingleton(
   Symbol.for("openclaw.agentToolExecutionBudgetContext"),
@@ -72,16 +75,35 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): Sess
   // neither diagnostic identity tokens nor their collection grant authority.
   const authority = getGatewayToolCallerIdentity()?.receiptAuthority;
   const assertBudgetCurrent = executionBudgetContext.getStore()?.assertCurrent;
-  const assertReceipt = Object.assign(() => {
-    if (authority?.() === false) {
-      throw new Error("tool invocation authority is no longer active");
-    }
-  }, authority);
+  const assertReceipt = authority
+    ? captureGatewayToolReceiptAssertion(authority, "tool invocation authority is no longer active")
+    : undefined;
   return composeSessionSourceAssertion([assertReceipt], (assertSource) => {
     signal?.throwIfAborted();
     assertBudgetCurrent?.();
     assertSource();
   });
+}
+
+const pluginToolInvocationSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginToolInvocationSource"),
+  () => new AsyncLocalStorage<SessionSourceAssertion>(),
+);
+
+/**
+ * Plugin tools are built before their call; freeze the invoking caller's source authority at
+ * call entry, before the first await, so the plugin's invocation guard rechecks that caller.
+ */
+export function runWithPluginToolInvocationSource<T>(run: () => Promise<T>): Promise<T> {
+  const source = captureAgentToolSourceExecutionGuard();
+  return runWithAgentToolSourceExecutionScope(source, () =>
+    pluginToolInvocationSources.run(source, run),
+  );
+}
+
+/** The invocation guard's caller part; outside a plugin tool call there is none to check. */
+export function assertPluginToolInvocationSourceCurrent(): void {
+  pluginToolInvocationSources.getStore()?.();
 }
 
 /** Prepare storage authority for one effect; its final callback checks the retained receipt. */

@@ -10,6 +10,7 @@ import {
 import {
   awaitGateBeforeSettlement,
   createDeferred,
+  nextEventLoopTurn,
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -17,6 +18,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
@@ -169,6 +171,23 @@ it("preserves legacy synchronous plugin acquisition for the exact canonical plac
   expect(() => workspace.acquireManagedWorkspace({ ...request, workspaceDir: linked })).toThrow(
     "does not own the requested workspace",
   );
+});
+
+it("collects runtime-private HOME state only after its workspace lease retires", async () => {
+  const f = managedFixture("native-state-retention");
+  const lease = await f.workspace.acquireManagedWorkspaceAsync(f.request);
+  const nativeState = path.join(f.session, ".openclaw-worker", "codex", "session", "config.toml");
+  try {
+    expect(lease.homeDir).toBe(f.session);
+    fs.mkdirSync(path.dirname(nativeState), { recursive: true });
+    fs.writeFileSync(nativeState, "synthetic native state");
+    await f.collect(1);
+    expectPaths([f.workspaceDir, nativeState], true);
+  } finally {
+    lease.release();
+  }
+  await f.collect(2);
+  expectPaths([f.workspaceDir, nativeState, f.session], false);
 });
 
 it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
@@ -453,3 +472,124 @@ it("keeps other Gateway namespaces isolated", async () => {
 
   expect(fs.existsSync(other)).toBe(true);
 });
+
+for (const cancelled of [false, true]) {
+  it(`joins private publication cleanup during drain without blocking editing (cancelled: ${cancelled})`, async ({
+    signal,
+  }) => {
+    const f = fixture("publication-drain");
+    const workspaceDir = f.seed();
+    const entered = createDeferred();
+    const work = createDeferred();
+    const cleaning = createDeferred();
+    const cleanup = createDeferred();
+    const controller = new AbortController();
+    const events: string[] = [];
+    vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer").mockImplementation(
+      async (input) => {
+        entered.resolve();
+        try {
+          await work.promise;
+          input.signal?.throwIfAborted();
+          return "integrated";
+        } finally {
+          cleaning.resolve();
+          await cleanup.promise;
+          events.push("publication settled");
+        }
+      },
+    );
+    const identity = {
+      gatewayNamespace: f.input.gatewayNamespace,
+      environmentId: f.entry.environmentId,
+      sessionId: f.entry.sessionId,
+      generation: f.generation,
+    };
+    const publication = f.workspace.exec(
+      {
+        ...identity,
+        argv: ["openclaw-internal-workspace-transfer"],
+        transfer: {
+          direction: "publication",
+          token: "synthetic-upload",
+          inputToken: "synthetic-download",
+          inputManifestRef: "sha256:" + "a".repeat(64),
+          inputDigest: "sha256:" + "b".repeat(64),
+          sourceUrl: "https://github.com/example/repository.git",
+          targetUrl: "https://github.com/example/repository.git",
+          targetCommit: "c".repeat(40),
+          gitToken: "synthetic-read-only-fixture",
+        },
+      },
+      controller.signal,
+      { url: "http://127.0.0.1:1" },
+    );
+    const observedPublication = publication.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let drain: ReturnType<NodeWorkerWorkspaceRuntime["exec"]> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, publication, "publication did not start"),
+        signal,
+      );
+      await f.collect(1);
+      expect(fs.existsSync(workspaceDir)).toBe(true);
+      drain = f.workspace
+        .exec({ ...identity, argv: [NODE_WORKSPACE_DRAIN_COMMAND] })
+        .then((result) => {
+          events.push("drained");
+          return result;
+        });
+      await nextEventLoopTurn();
+      expect(events).toEqual([]);
+      const edited = await withinTest(
+        f.workspace.exec({
+          ...identity,
+          argv: [
+            "node",
+            "-e",
+            "require('node:fs').writeFileSync('edited.txt', 'editing continues')",
+          ],
+        }),
+        signal,
+      );
+      expect(edited.code).toBe(0);
+      expect(fs.readFileSync(path.join(workspaceDir, "edited.txt"), "utf8")).toBe(
+        "editing continues",
+      );
+      expect(
+        await withinTest(
+          f.workspace.exec({
+            ...identity,
+            sessionId: "unrelated-session",
+            argv: [NODE_WORKSPACE_DRAIN_COMMAND],
+          }),
+          signal,
+        ),
+      ).toMatchObject({ code: 0, stdout: "drained\n" });
+      expect(events).toEqual([]);
+      if (cancelled) {
+        controller.abort(new Error("publication cancelled"));
+      }
+      work.resolve();
+      await withinTest(cleaning.promise, signal);
+      await nextEventLoopTurn();
+      expect(events).toEqual([]);
+      cleanup.resolve();
+      expect(await withinTest(observedPublication, signal)).toBe(
+        cancelled ? controller.signal.reason : undefined,
+      );
+      expect(await withinTest(drain, signal)).toMatchObject({ code: 0, stdout: "drained\n" });
+      expect(events).toEqual(["publication settled", "drained"]);
+      await f.collect(2);
+      expect(fs.existsSync(workspaceDir)).toBe(false);
+    } finally {
+      work.resolve();
+      cleanup.resolve();
+      await Promise.allSettled([publication, drain]);
+      await f.workspace.processes.close();
+    }
+  });
+}

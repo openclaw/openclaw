@@ -55,7 +55,7 @@ export async function prepareChatHistorySessionRead({
     return undefined;
   }
   const queries = (cfg: OpenClawConfig) => {
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       return [];
     }
@@ -68,7 +68,7 @@ export async function prepareChatHistorySessionRead({
   };
   const selectSession = (read: SessionRowReadView) => {
     const cfg = read.state.cfg;
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       respond(false, undefined, requested.error);
       return undefined;
@@ -170,7 +170,7 @@ export async function prepareChatHistorySessionRead({
   };
   if (requestedSessionId && !(await readTranscriptOwner())) {
     if (retainedSessionId) {
-      unavailable("retained transcript is no longer available");
+      unavailable("retained chat history is no longer available");
     } else {
       respond(
         false,
@@ -287,7 +287,7 @@ export async function prepareChatHistorySessionRead({
         });
         try {
           if (!(await publication.verify())) {
-            unavailable("retained transcript changed while reading history");
+            unavailable("retained chat history changed while reading");
             return;
           }
           signal?.throwIfAborted();

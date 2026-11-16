@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
@@ -81,11 +81,20 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
             TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
           },
           async () => {
-            const server = createServer((socket) => socket.end("serving"));
+            const sockets = new Set<Socket>();
+            const server = createServer((socket) => {
+              sockets.add(socket);
+              socket.once("close", () => sockets.delete(socket));
+              socket.end("serving");
+            });
             const closeServer = async () => {
               if (server.listening) {
                 await new Promise<void>((resolve) => {
                   server.close(() => resolve());
+                  // Synthetic health probes own no request work after the fixture response.
+                  for (const socket of sockets) {
+                    socket.destroy();
+                  }
                 });
               }
             };

@@ -31,6 +31,8 @@ export type SessionMethodAccessRequest = {
   /** Opt into the explicit desired-state mutation allowlist. */
   allowDeferred?: boolean;
   session?: SessionAccessRow;
+  /** A read proved no session row exists yet; the Gateway binds the first turn to the caller. */
+  sessionAbsent?: boolean;
 };
 
 export function sessionAccessRowForBatch(rows: readonly SessionAccessRow[]) {
@@ -95,12 +97,21 @@ export function readSessionMethodScopeAccess(
     isRecord(patch) &&
     (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
     !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
+  // Parentless creation, and the first turn of a session proven absent, have no existing
+  // row whose ownership must be checked: the Gateway records the caller as its creator.
+  const createsWithoutParent =
+    (request.method === "sessions.create" &&
+      !(
+        isRecord(request.params) &&
+        typeof request.params.parentSessionKey === "string" &&
+        request.params.parentSessionKey.trim()
+      )) ||
+    (request.method === "chat.send" && request.sessionAbsent === true && !request.session);
   if (
     (patchNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&
         !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
-        // Creation assigns its owner on the Gateway before a canonical row exists.
-        request.method !== "sessions.create")) &&
+        !createsWithoutParent)) &&
     request.session?.sharingRole !== "owner" &&
     request.session?.sharingRole !== "admin"
   ) {

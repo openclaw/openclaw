@@ -8,8 +8,6 @@ export type DraftGatewaySnapshot = Readonly<{
   data: NewSessionRouteData | undefined;
   isConnected: boolean;
   isAdmin: boolean;
-  canStartAsDraft: boolean;
-  visibility: "normal" | "draft" | "incognito";
   cloudProfileId: string;
   pendingPlacement: Readonly<{
     sessionKey: string;
@@ -31,7 +29,6 @@ export type DraftGatewayCallbacks = DraftPreferenceOptions & {
   changed: () => void;
   updateComplete: () => Promise<unknown>;
   onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
-  onVisibilityRetired: () => void;
   onCloudProfileCleared: () => void;
   onCloudState: (error: string | null) => void;
   onPendingPlacementReset: () => void;

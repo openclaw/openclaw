@@ -12,10 +12,10 @@ import {
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { assertModelSupportsChat } from "../../agents/failover/error.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
@@ -340,6 +340,14 @@ export async function createModelSelectionState(params: {
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
     const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
+    if (!params.hasModelDirective && !params.hasResolvedTurnModelOverride) {
+      // Preserve the saved selection when discovery withdraws chat support.
+      assertModelSupportsChat(
+        findSelectedCatalogEntry({ catalog: visibilityPolicy.catalog, ...storedOverrideRef })
+          ?.inference?.chat,
+        storedOverrideRef,
+      );
+    }
     const overrideAllowed =
       (effectiveStoredModelOverride?.source === "session" &&
         hasSessionAutoModelSelection(sessionEntry)) ||

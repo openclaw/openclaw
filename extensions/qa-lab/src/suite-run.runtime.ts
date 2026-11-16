@@ -15,9 +15,8 @@ import {
   isRuntimeParityResultPass,
   runRuntimeParityScenario,
   runtimeParityCellStatus,
-  type RuntimeParityCell,
-  type RuntimeParityResult,
 } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.types.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
 import { invalidateQaSuiteArtifactGeneration } from "./suite-artifacts.js";

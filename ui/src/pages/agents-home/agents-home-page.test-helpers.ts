@@ -1,7 +1,10 @@
+import { createRouter } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
+import { retainGatewayResponsePayload } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -18,7 +21,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { ClawsPage } from "../claws/page.tsx";
+import { TemplatesPage } from "../templates/page.tsx";
 
 const roster: AgentsListResult = {
   defaultId: "harbor",
@@ -43,12 +46,11 @@ export const workflowOperator = {
 } as const;
 
 type PageOptions = {
-  clawsEnabled?: boolean;
+  templatesEnabled?: boolean;
   pathname?: string;
-  clawIconUrl?: string;
+  templateIconUrl?: string;
   workspaceFileNames?: string[];
   riskConsentRequired?: boolean;
-  reviewRequiredOnce?: "plugin" | "skill";
   clawHubTrustWarning?: string;
   applyWait?: Promise<void>;
 };
@@ -57,14 +59,16 @@ const disposers: Array<() => void> = [];
 
 export function createPage(options: PageOptions = {}) {
   const ensureConfigLoaded = vi.fn(async () => undefined);
-  let addCount = 0;
-  let rejectedForReview = false;
+  const addedAgents: Array<{ id: string; name: string }> = [];
+  const lifetime = new AbortController();
   const runtimeConfigListeners = new Set<() => void>();
   const runtimeConfig = {
     state: {
       configSnapshot: {
         sourceConfig: {
-          gateway: { controlUi: { experimental: { claws: options.clawsEnabled ?? false } } },
+          gateway: {
+            controlUi: { experimental: { templates: options.templatesEnabled ?? false } },
+          },
         },
       },
     },
@@ -74,23 +78,12 @@ export function createPage(options: PageOptions = {}) {
       return () => runtimeConfigListeners.delete(listener);
     },
   };
-  const capabilityGrants = {
-    hooks: {
-      allowPromptInjection: { effective: false },
-      allowConversationAccess: { effective: true },
-    },
-  };
   const request = createGatewayRequestMock(async (method, params) => {
     const args = params && typeof params === "object" ? params : {};
     if (method === "agents.list") {
       return {
         ...roster,
-        agents: [
-          ...roster.agents,
-          ...Array.from({ length: addCount }, (_, index) => ({
-            id: index === 0 ? "workflow-operator" : `workflow-operator-${index + 1}`,
-          })),
-        ],
+        agents: [...roster.agents, ...addedAgents],
       };
     }
     if (method === "agent.identity.get") {
@@ -105,7 +98,21 @@ export function createPage(options: PageOptions = {}) {
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
-    if (method === "claws.catalog.search") {
+    if (method === "templates.catalog.search") {
+      if ("overview" in args && args.overview) {
+        return {
+          entries: [],
+          overview: {
+            featured: [],
+            sections: [
+              {
+                category: "productivity",
+                entries: [{ ...workflowOperator, iconUrl: options.templateIconUrl }],
+              },
+            ],
+          },
+        };
+      }
       const query = "query" in args ? String(args.query).trim().toLowerCase() : "";
       const category = "category" in args ? String(args.category) : "";
       const featured = "featured" in args ? Boolean(args.featured) : false;
@@ -117,18 +124,19 @@ export function createPage(options: PageOptions = {}) {
             !workflowOperator.displayName.toLowerCase().includes(query) &&
             !workflowOperator.packageName.toLowerCase().includes(query))
             ? []
-            : [{ ...workflowOperator, iconUrl: options.clawIconUrl }],
+            : [{ ...workflowOperator, iconUrl: options.templateIconUrl }],
       };
     }
-    if (method === "claws.catalog.detail") {
+    if (method === "templates.catalog.detail") {
       const instructions = (options.workspaceFileNames ?? ["AGENTS.md", "SOUL.md", "USER.md"]).map(
         (name) => ({ name, source: `workspace/${name}` }),
       );
       return {
         detail: {
           ...workflowOperator,
-          iconUrl: options.clawIconUrl,
+          iconUrl: options.templateIconUrl,
           version: "1.2.0",
+          agentId: "workflow-operator",
           agentName: "Workflow Operator",
           workspaceFiles: instructions.length,
           skills: 1,
@@ -137,62 +145,42 @@ export function createPage(options: PageOptions = {}) {
           scheduledJobs: 0,
           contents: {
             instructions,
-            skills: [{ name: "@openclaw/research", version: "1.2.0" }],
-            integrations: [{ name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" }],
+            skills: [
+              {
+                name: "@openclaw/research",
+                source: "clawhub",
+                ref: "@openclaw/research",
+                version: "1.2.0",
+              },
+            ],
+            integrations: [
+              {
+                name: "@openclaw/workflow-tools",
+                kind: "plugin",
+                source: "clawhub",
+                ref: "@openclaw/workflow-tools",
+                version: "1.2.0",
+              },
+            ],
             automations: [],
           },
         },
       };
     }
-    if (method === "claws.catalog.preview") {
+    if (method === "templates.catalog.preview") {
       const name = "name" in args ? String(args.name) : "";
       return { preview: { kind: "instruction", name, content: `# ${name}` } };
     }
     if (method === "plugins.list") {
       return { plugins: [], diagnostics: [], mutationAllowed: true };
     }
-    if (method === "claws.add.plan") {
-      return {
-        operation: "add",
-        planIntegrity: "sha256:reviewed-plan",
-        pluginReviews:
-          options.reviewRequiredOnce === "plugin"
-            ? [
-                {
-                  actionId: "plugin:@openclaw/workflow-tools",
-                  pluginId: "workflow-tools",
-                  ref: "@openclaw/workflow-tools",
-                  version: "1.2.0",
-                  ownerAction: "install",
-                  integrity: `sha256-${"A".repeat(43)}=`,
-                  declaredCapabilities: { tools: ["workflow.start"] },
-                  capabilityGrants,
-                  capabilityGrantsByPluginId: { "workflow-tools": capabilityGrants },
-                  reviewToken: "review-workflow-tools",
-                  riskWarning: "This plugin can access conversations.",
-                },
-              ]
-            : [],
-        skillReviews:
-          options.reviewRequiredOnce === "skill"
-            ? [
-                {
-                  actionId: "skill:@openclaw/research",
-                  ref: "@openclaw/research",
-                  version: "1.2.0",
-                  integrity: "sha256:reviewed-skill",
-                  riskWarning: "This skill needs your trust.",
-                  reviewToken: "review-research",
-                },
-              ]
-            : [],
-      };
-    }
-    if (method === "claws.add.apply") {
+    if (method === "templates.add.apply") {
+      // The Gateway answers with the id it chose; here the requested one is always free.
+      const agentId = "agentId" in args ? String(args.agentId) : "";
       await options.applyWait;
       const acknowledged = "acknowledgeClawHubRisk" in args && args.acknowledgeClawHubRisk === true;
       if (options.riskConsentRequired && !acknowledged) {
-        throw new GatewayRequestError({
+        const refusal = new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "Explicit acknowledgement is required for this ClawHub release.",
           details: {
@@ -200,22 +188,14 @@ export function createPage(options: PageOptions = {}) {
             warning: options.clawHubTrustWarning ?? "Review this ClawHub release before adding it.",
           },
         });
+        // A correlated Gateway answer, not a lost request.
+        retainGatewayResponsePayload(refusal, undefined);
+        throw refusal;
       }
-      const reviewed =
-        options.reviewRequiredOnce === "plugin"
-          ? "acknowledgeCapabilities" in args
-          : "acknowledgeSkillWarnings" in args;
-      if (options.reviewRequiredOnce && !rejectedForReview && !reviewed) {
-        rejectedForReview = true;
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "Review the included dependencies before adding.",
-          details: { code: "CLAW_REVIEW_REQUIRED", kind: options.reviewRequiredOnce },
-        });
-      }
-      addCount += 1;
+      addedAgents.push({ id: agentId, name: "Workflow Operator" });
       return {
-        agentId: addCount === 1 ? "workflow-operator" : `workflow-operator-${addCount}`,
+        agentId,
+        sessionKey: `agent:${agentId}:team-room`,
         status: "complete",
         readiness: { ready: true },
       };
@@ -227,10 +207,22 @@ export function createPage(options: PageOptions = {}) {
     createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      hello: gatewayHelloForMethods(
-        ["openclaw.chat", "claws.catalog.search", "claws.catalog.detail", "claws.add.apply"],
-        ["operator.read", "operator.admin"],
-      ),
+      hello: {
+        ...gatewayHelloForMethods(
+          [
+            "openclaw.chat",
+            "templates.catalog.search",
+            "templates.catalog.detail",
+            "templates.add.apply",
+          ],
+          ["operator.read", "operator.admin"],
+        ),
+        auth: {
+          role: "operator",
+          scopes: ["operator.read", "operator.admin"],
+          recoveryScope: "test-recovery-scope",
+        },
+      },
       assistantAgentId: "harbor",
       sessionKey: "agent:harbor:team-room",
     }),
@@ -242,27 +234,58 @@ export function createPage(options: PageOptions = {}) {
   const agentSelection = createAgentSelectionCapability(source.gateway, agents);
   const agentIdentity = createAgentIdentityCapability(source.gateway);
   const sessionCapability = createSessionCapability(source.gateway, agentSelection);
-  const navigate = vi.fn<ApplicationContext["navigate"]>();
+  const router = createRouter<RouteId, ApplicationContext>({
+    routes: [
+      { id: "templates", path: "/templates", component: () => ({}) },
+      { id: "chat", path: "/chat", component: () => ({}) },
+    ],
+  });
+  const navigate = vi.fn<ApplicationContext["navigate"]>((route, routeOptions) => {
+    void router.navigate(route, context, {}, { ...router.getState().location, ...routeOptions });
+  });
+  const replace = vi.fn<ApplicationContext["replace"]>((route, routeOptions) => {
+    void router.navigate(
+      route,
+      context,
+      { history: "replace" },
+      {
+        ...router.getState().location,
+        ...routeOptions,
+      },
+    );
+  });
   const context = {
     ...createContext(source.gateway, sessionCapability, roster, [], agentIdentity),
     basePath: "",
+    router,
+    lifecycleAbortSignal: lifetime.signal,
+    replace,
     agents,
     agentSelection,
     runtimeConfig: runtimeConfig as unknown as ApplicationContext["runtimeConfig"],
     navigate,
   };
+  void router.navigate(
+    "templates",
+    context,
+    {},
+    { pathname: options.pathname ?? "/templates", search: "", hash: "" },
+  );
+  void agents.ensureList();
   const solidProvider = createSolidApplicationContextProvider(context);
   const view = mountSolid(
     () =>
-      createComponent(ClawsPage, {
+      createComponent(TemplatesPage, {
         routeData: {
           basePath: "",
-          location: { pathname: options.pathname ?? "/claws", search: "", hash: "" },
+          location: { pathname: options.pathname ?? "/templates", search: "", hash: "" },
         },
       }),
     { wrapper: solidProvider.wrapper },
   );
   disposers.push(() => {
+    lifetime.abort();
+    context.chatSubmissions.clear();
     view.unmount();
     agentSelection.dispose();
     agents.dispose();
@@ -270,15 +293,18 @@ export function createPage(options: PageOptions = {}) {
   });
   return {
     page: view.container,
+    unmountPage: view.unmount,
     wrapper: solidProvider.wrapper,
     context,
     request,
     navigate,
+    replace,
+    publishEvent: source.publishEvent,
     ensureConfigLoaded,
     setPhase: (phase: ApplicationGatewaySnapshot["phase"]) =>
       source.publish({ ...source.gateway.snapshot, phase }),
-    setClawsEnabled: (enabled: boolean) => {
-      runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.claws =
+    setTemplatesEnabled: (enabled: boolean) => {
+      runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.templates =
         enabled;
       for (const listener of runtimeConfigListeners) {
         listener();

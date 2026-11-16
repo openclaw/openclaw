@@ -290,6 +290,7 @@ describe("codex plugin", () => {
       expect(names).toEqual([
         "codex.cli.sessions.list",
         "codex.cli.session.resume",
+        "codex.app-server.stdio.v1",
         "codex.exec-server.stdio.v1",
       ]);
     }

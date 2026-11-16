@@ -9,6 +9,8 @@ import { testing as cliBackendsTesting } from "../agents/cli-backends.test-suppo
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { maintenanceConfig } from "../config/sessions/session-cold-storage.test-support.js";
 import { readSessionRowDatabaseFacts } from "../config/sessions/session-entry-read.worker.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -483,7 +485,7 @@ describe("session row transcript backfill", () => {
         openOpenClawAgentDatabase(options)
           .db.prepare("SELECT transcript_updated_at FROM session_windows WHERE session_id = ?")
           .get(params.sessionId),
-      ).toEqual({ transcript_updated_at: transcriptMtimeMs });
+      ).toEqual({ transcript_updated_at: transcriptMtimeMs + 1 });
       expect(readFacts()?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
         lastMessagePreview: "Imported next",
@@ -492,6 +494,50 @@ describe("session row transcript backfill", () => {
       // Legacy events without a message or record timestamp cannot rank an agent's reply.
       expect(readFacts()?.transcriptAssistantMessage).toBeNull();
     });
+  });
+
+  it("retains legacy row facts after transcript archival and database reopen", async () => {
+    await withSession(
+      async (params) => {
+        const options = sessionDatabaseOptions(params);
+        backfillInDatabase(params);
+        runOpenClawAgentWriteTransaction(({ db }) => {
+          db.prepare(
+            "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1, row_transcript_updated_at = 1, row_transcript_json = json_remove(row_transcript_json, '$.previewRevision') WHERE session_id = ?",
+          ).run(params.sessionId);
+        }, options);
+        await expect(
+          runSessionColdStorageMaintenance({ config: maintenanceConfig(params.storePath) }),
+        ).resolves.toMatchObject({ archivedTranscripts: 1 });
+        await withColdStore(params, async () => {
+          expect(
+            readSessionRowDatabaseFacts({
+              kind: "session-row-facts",
+              database: options,
+              env: process.env,
+              sessionKeys: [params.sessionKey],
+            }).rows[0],
+          ).toMatchObject({
+            transcriptPreview: "Preserved response",
+            transcriptAssistantMessage: { text: "Preserved response", timestamp: 100 },
+            transcriptTerminalModel: {
+              runId: "terminal-run",
+              modelProvider: "unit-test",
+              model: "fallback",
+            },
+          });
+          expect(
+            withOpenClawAgentDatabaseReadOnly(
+              ({ db }) =>
+                db.prepare("SELECT session_id FROM session_transcript_cold_archives").all(),
+              options,
+            ),
+          ).toEqual({ found: true, value: [{ session_id: params.sessionId }] });
+        });
+      },
+      [{ ...terminalAssistantMessage("Preserved response", "fallback"), timestamp: 100 }],
+      { lastRunId: "terminal-run" },
+    );
   });
 
   it("reads terminal facts beyond the preview budget without showing an older preview", async () => {

@@ -20,6 +20,10 @@ transforms that collapse the X or Y axis, such as `scale(0, 0)` and
 `scale3d(0, 0, 0)`. Nonzero scales and a zero Z axis alone remain visible.
 Basic HTML extraction keeps definition-list terms and values on separate lines.
 
+Document charset detection ignores declarations inside HTML or XML comments.
+Byte-order marks and HTTP charset headers retain precedence over active document
+declarations; commented-out metadata does not change the fetched bytes.
+
 ## Quick start
 
 Enabled by default, no configuration needed:
@@ -39,7 +43,11 @@ Output format after main-content extraction. For Markdown responses, text mode
 normalizes prose whitespace but preserves indentation, repeated spaces, tabs,
 and blank lines inside code blocks fenced with backticks or tildes.
 Text mode removes complete link destinations, including nested parentheses.
+An escaped `!` before a link stays literal rather than causing the link text to
+be omitted as an image.
 Readability text output keeps headings, paragraphs, and list items on separate lines.
+HTML text output preserves visible literal syntax, including link and image examples,
+backticks, and leading punctuation, rather than interpreting it as Markdown.
 </ParamField>
 
 <ParamField path="maxChars" type="number">
@@ -322,7 +330,7 @@ path. An unsuccessful save is not cached.
   32000-10000000) before parsing; oversized responses are truncated with a warning
 - Private/internal hostnames are blocked
 - `tools.web.fetch.ssrfPolicy.allowedHostnames` allows exact trusted hosts while leaving other private/internal targets blocked
-- `tools.web.fetch.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, including on redirects and with private-network access enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts without requiring a full allowlist. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials
+- `tools.web.fetch.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, including on redirects and with private-network access enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts without requiring a full allowlist. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials. The same deny list also applies when OpenClaw downloads remote media to send to a channel, including `message` tool attachments and sends and channel reply media; the other `ssrfPolicy` settings do not
 - `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork` broadly permits private-network targets; enable it only when model-selected URLs are trusted in this deployment
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins

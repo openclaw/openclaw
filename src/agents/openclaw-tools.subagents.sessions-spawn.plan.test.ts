@@ -62,6 +62,17 @@ it("rejects invalid thinking before preparing a model", async () => {
   expect(modelChoice).not.toHaveBeenCalled();
 });
 
+it("names the selected model's row levels for invalid thinking", async () => {
+  const plan = await planFor({
+    cfg: configFor({ subagents: { model: "moonshot/kimi-k3" } }),
+    thinkingOverrideRaw: "banana",
+  });
+  expect(plan).toMatchObject({
+    status: "error",
+    error: expect.stringMatching(/Use one of: max\b/),
+  });
+});
+
 it("uses the target default provider for a bare configured subagent model", async () => {
   expectModelPlan(
     await planFor({

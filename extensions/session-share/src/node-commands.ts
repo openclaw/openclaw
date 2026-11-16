@@ -183,7 +183,7 @@ export function createSessionShareNodeCommands(
           messages: parameterMessages,
         });
         const offset = sessionCatalogPaging.decodeCursor(params.cursor);
-        const search = params.searchTerm?.toLowerCase();
+        const search = params.searchTerm?.toLowerCase().normalize("NFC");
         const sessions = [];
         for (const {
           agentId,
@@ -202,8 +202,8 @@ export function createSessionShareNodeCommands(
             : undefined;
           if (
             search &&
-            !name?.toLowerCase().includes(search) &&
-            !sessionKey.toLowerCase().includes(search)
+            !name?.toLowerCase().normalize("NFC").includes(search) &&
+            !sessionKey.toLowerCase().normalize("NFC").includes(search)
           ) {
             continue;
           }

@@ -305,6 +305,13 @@ export function createAgentDedupeLifecycle(params: {
     reserve,
     bindSessionTarget,
     clearUnaccepted,
+    releaseUnacceptedReservation: () => {
+      if (accepted || committedResetCompletion || !ownsReservation()) {
+        return false;
+      }
+      clearUnaccepted();
+      return !reserved;
+    },
     cancelOwnedReservation,
     isReserved: () => reserved,
     markAccepted: (value: boolean) => {

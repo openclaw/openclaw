@@ -16,6 +16,10 @@ import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  captureSessionEntryPublicationSource,
+  sealSessionEntryPublicationSource,
+} from "./session-entry-publication-source.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionIdentityDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
@@ -190,8 +194,15 @@ export function prepareSessionIdentityPublication(
   previous: ReadonlyMap<string, SessionEntry>,
   current: ReadonlyMap<string, SessionEntry>,
 ): () => void {
-  const { identity } = readOpenClawAgentDatabaseIdentity(database);
-  const publish = () => publishCommittedSessionIdentity(agentId, identity, previous, current);
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  const prepared = {
+    source: captureSessionEntryPublicationSource(database.db, { ...identity }),
+    entries: current,
+  };
+  const publish = () => {
+    sealSessionEntryPublicationSource(prepared.source);
+    publishCommittedSessionIdentity(agentId, identity.identity, previous, current, prepared);
+  };
   // Savepoint success is not COMMIT; identity observers can cancel live work.
   return () => {
     if (!deferSqlitePostCommitPublication(sqlPublicationAnchor(database.db), publish)) {

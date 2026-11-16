@@ -18,6 +18,7 @@ openclaw-chat-question-panel {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--chat-composer-surface, var(--popover));
+  backdrop-filter: blur(18px) saturate(1.35);
   box-shadow: none;
   color: var(--text);
   outline: none;
@@ -40,12 +41,6 @@ openclaw-chat-question-panel {
   border-color: var(--chat-composer-hairline, var(--border));
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-
-@supports (backdrop-filter: blur(1px)) {
-  .chat-question-panel {
-    backdrop-filter: blur(18px) saturate(1.35);
-  }
 }
 
 .chat-question-panel--collapsed {
@@ -146,6 +141,24 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__collapse svg {
   transform: rotate(180deg);
+}
+
+.chat-question-panel__header {
+  display: grid;
+  gap: 2px;
+}
+
+.chat-question-panel__source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-question-panel__heading {
@@ -254,10 +267,6 @@ openclaw-chat-question-panel {
   font-weight: 700;
 }
 
-.chat-question-panel__option[role="radio"] .chat-question-panel__option-marker {
-  border-radius: var(--radius-full);
-}
-
 .chat-question-panel__option--selected .chat-question-panel__option-marker {
   border-color: var(--accent);
 }
@@ -312,8 +321,6 @@ openclaw-chat-question-panel {
 .chat-question-panel__store {
   display: grid;
   gap: 6px;
-  padding-left: 10px;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 42%, var(--border));
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
@@ -501,8 +508,7 @@ openclaw-chat-question-panel {
   width: min(620px, 100%);
   margin: 4px 0;
   padding: 7px 10px;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 42%, var(--border));
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--panel) 62%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);

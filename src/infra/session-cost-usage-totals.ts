@@ -18,7 +18,6 @@ export function createEmptyCostUsageTotals(): CostUsageTotals {
 
 export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
   return {
-    ...(totals.usageReport ? { usageReport: { ...totals.usageReport } } : {}),
     input: totals.input,
     output: totals.output,
     cacheRead: totals.cacheRead,
@@ -35,9 +34,6 @@ export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
 }
 
 export function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;

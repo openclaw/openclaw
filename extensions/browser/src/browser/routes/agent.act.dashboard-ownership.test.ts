@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-harness.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
@@ -271,16 +272,47 @@ describe("dashboard action ownership", () => {
       currentUrl = url;
       return null;
     });
+    const sessions: Array<EventEmitter & { detach: ReturnType<typeof vi.fn> }> = [];
+    let closed = false;
+    const closeListeners = new Set<() => void>();
     const page = {
       url: () => currentUrl,
       goto,
-      route: vi.fn(async () => {
-        preparations += 1;
-        if (preparations === (retry ? 2 : 1)) {
-          await ready.block();
+      isClosed: () => closed,
+      on: (event: string, listener: () => void) => {
+        if (event === "close") {
+          closeListeners.add(listener);
         }
+      },
+      off: (_event: string, listener: () => void) => {
+        closeListeners.delete(listener);
+      },
+      context: () => ({
+        newCDPSession: async () => {
+          const session = Object.assign(new EventEmitter(), {
+            send: vi.fn(async (method: string) => {
+              if (method === "Page.getFrameTree") {
+                return { frameTree: { frame: { id: "main" } } };
+              }
+              if (method === "Target.getTargetInfo") {
+                return { targetInfo: { targetId, title: tab.title } };
+              }
+              // Hold the actual document-fence preparation, including on a retried navigation.
+              // Interception stays on for the tab, so each attempt's claim starts tracking.
+              if (method === "Network.enable") {
+                preparations += 1;
+                if (preparations === (retry ? 2 : 1)) {
+                  await ready.block();
+                }
+              }
+              return {};
+            }),
+            detach: vi.fn(async () => {}),
+          });
+          sessions.push(session);
+          return session;
+        },
       }),
-      unroute: vi.fn(async () => {}),
     };
     setPwToolsCoreCurrentPage(page);
     const pwSession = await import("../pw-session.js");
@@ -304,7 +336,22 @@ describe("dashboard action ownership", () => {
         expectRevoked(response);
         expect(page.url()).toBe(dashboard.url);
       }
-      expect(page.unroute).toHaveBeenCalledTimes(retry ? 2 : 1);
+      expect(preparations).toBe(retry ? 2 : 1);
+      // The tab's document fence keeps one session for every attempt until the tab closes.
+      // Successful navigation also reads the selected target through a temporary CDP session.
+      const [fenceSession, ...temporary] = sessions;
+      expect(temporary).toHaveLength(revoke === "none" ? 1 : 0);
+      for (const session of temporary) {
+        expect(session.detach).toHaveBeenCalledOnce();
+        expect(session.eventNames()).toEqual([]);
+      }
+      expect(fenceSession?.detach).not.toHaveBeenCalled();
+      closed = true;
+      for (const listener of closeListeners) {
+        listener();
+      }
+      await vi.waitFor(() => expect(fenceSession?.detach).toHaveBeenCalledOnce());
+      expect(fenceSession?.eventNames()).toEqual([]);
     }).finally(() => gotoGuard.mockRestore());
   });
 });

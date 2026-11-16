@@ -13,15 +13,16 @@
 - `save_page` cannot set lifecycle, entity IDs, claim kinds, relationships or
   arbitrary frontmatter. Don't smuggle them into `fields`. Unsupported facts go
   in attributed prose.
-- Page body limit is 48,000 characters. Keep long originals attached; never
-  truncate them to fit.
+- One body input is at most 48,000 characters, and a page body has a smaller
+  size budget (see [page budgets](#page-budgets)). Keep long originals attached;
+  never truncate them to fit.
 - Search before creating. Match source ID, URL, original hash, title and date,
   not just a similar title.
 
 ## Create, then link
 
 You can't predict paths. Publish a new page with its evidence first, then use the
-returned path for self-citations and cross-links in a follow-up edit. Link to
+returned ID for self-citations and cross-links in a follow-up edit. Link to
 other pages only after they exist. Reread revision/hash before each follow-up
 edit.
 
@@ -31,10 +32,54 @@ edit.
   `knowledge_record` content read, the replacement, a reason and the
   vault/revision/hash/ontology fences. Equal offsets insert; empty replacement
   deletes.
-- Full replacement: read the entire body first (follow `content.nextOffset`;
-  compare hashes across pages). Never edit from a truncated read.
-- Request `metadataView: "full"` before changing domain fields. Preserve
-  unrelated prose and metadata.
+- Full replacement: read the entire body first (follow `nextOffset` with
+  `offset`; compare hashes across pages). Never edit from a truncated read.
+- The record read includes domain fields, aliases, tags and dependencies; send
+  the complete set you want when changing one. Preserve unrelated prose and
+  metadata. If the read's `omitted` lists `metadata.fields`, the fields were
+  too large to return: omit `fields` so they are preserved.
+
+## Page budgets
+
+A page body may hold 12,000 characters (one default `knowledge_record` read) if
+it is a hub, one of the most-linked pages in the store, and 24,000 otherwise.
+Claims have no budget.
+
+- A write that would grow a body past its budget saves nothing and returns a
+  receipt with `state: "rejected"` and `budget.pages`: current and attempted
+  size, the budget, the page's link degree and hub status, its largest sections
+  with `start` offsets, and connected pages each section links to or names.
+- Edits that keep a body the same size or smaller always succeed, even on a page
+  already over budget. Such a page can only shrink.
+- On rejection, don't cut text to fit or park it on an unrelated nearby page.
+  Work in this order, then reread and retry your edit:
+  1. Retire a written `## Timeline` section
+     ([retire a written Timeline](retire-dated.md#retire-a-written-timeline));
+     never extract it.
+  2. Retire sections that are dated or named for a source, and rewrite
+     superseded text into the State topics it bears on
+     ([retire a dated section](retire-dated.md#retire-a-dated-section)). This
+     usually brings the page under budget.
+  3. Move a whole section that has its own subject with
+     `knowledge_extract_section`, to a listed candidate it is about or to a new
+     page. Extraction moves text verbatim, so it relocates a poor section
+     without improving it.
+- A rejected page edit never blocks a fact: save it with `knowledge_remember` or
+  a claim.
+- Integrate into an existing topic before adding one. A page near its budget
+  usually means a subject needs its own page.
+
+`knowledge_extract_section` takes the source fences, the heading's
+`sectionStart`, a `destination` (fences of an existing page connected to the
+source, or `{title, type}` for a new page), a one-line `summary`, a reason, and
+the vault and ontology fences. In one publication the section moves verbatim with
+its links and the source evidence it quotes; claims it cites that name the source
+as a subject gain the destination as primary subject and keep the source; the
+source keeps the heading, your summary and a link. The destination's own budget
+applies. Afterwards decide for each moved claim whether the source page is still
+a subject, and remove it with `knowledge_annotate` `entities` when it is not.
+Reference-style links and a destination ending inside an open code block reject
+the move: write the section's links inline or as `[[id|label]]` first.
 
 ## Publish related records together
 

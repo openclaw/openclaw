@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   disableCronJobsBoundToSessions,
-  resolveCronJobBoundSessionKeys,
+  resolveCronJobSessionBindings,
 } from "./job-session-bindings.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
@@ -25,12 +25,12 @@ test.each([
 ] as const)(
   "resolves job session bindings: %s",
   (_name, sessionTarget, sessionKey, defaultAgentId, expected) => {
-    expect(
-      resolveCronJobBoundSessionKeys(
+    expect([
+      ...resolveCronJobSessionBindings(
         { id: "job1", sessionTarget, sessionKey },
         { cfg: {}, defaultAgentId },
-      ),
-    ).toEqual(new Set(expected));
+      ).keys(),
+    ]).toEqual(expected);
   },
 );
 
@@ -43,13 +43,13 @@ test("shares binding facts across interleaved session-routing contexts", () => {
   ];
   const expected = ["agent:ops:main", "agent:research:main", "global"];
   const first = contexts.map((opts, index) => {
-    const keys = resolveCronJobBoundSessionKeys(definition, opts);
-    expect([...keys]).toEqual([expected[index]]);
+    const keys = resolveCronJobSessionBindings(definition, opts);
+    expect([...keys]).toEqual([[expected[index], ["ops", "research", "ops"][index]]]);
     return keys;
   });
   for (let round = 0; round < 3; round++) {
     contexts.forEach((opts, index) => {
-      expect(resolveCronJobBoundSessionKeys(definition, opts)).toBe(first[index]);
+      expect(resolveCronJobSessionBindings(definition, opts)).toBe(first[index]);
     });
   }
 });
@@ -63,9 +63,9 @@ test("refreshes binding facts after job edits and agent/session routing changes"
   const cfg: OpenClawConfig = { session: { mainKey: "home" } };
   const opts = { cfg, defaultAgentId: "ops" as string | undefined };
   const check = (expected: string[]) => {
-    const keys = resolveCronJobBoundSessionKeys(definition, opts);
-    expect([...keys]).toEqual(expected);
-    expect(resolveCronJobBoundSessionKeys(definition, opts)).toBe(keys);
+    const keys = resolveCronJobSessionBindings(definition, opts);
+    expect([...keys.keys()]).toEqual(expected);
+    expect(resolveCronJobSessionBindings(definition, opts)).toBe(keys);
   };
   check(["agent:ops:cron:changing", "agent:ops:delivery", "agent:ops:source"]);
   definition.sessionTarget = "session:other";
@@ -171,4 +171,26 @@ test("a failing job does not abort the remaining bound jobs", async () => {
   const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
   await expect(disable(listed, update)).rejects.toThrow(AggregateError);
   expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
+});
+
+test.each([
+  ["global", "global"],
+  ["per-sender", "agent:ops:global"],
+] as const)("retains physical ownership and qualified targets in %s scope", (scope, key) => {
+  const bindings = resolveCronJobSessionBindings(
+    {
+      id: "selected",
+      agentId: "ops",
+      sessionTarget: "session:global",
+      sessionKey: "agent:research:global",
+      sourceConversation: { sessionKey: "global", sessionId: "creator" },
+    },
+    { cfg: { session: { scope } }, defaultAgentId: "main" },
+  );
+  expect(bindings).toEqual(
+    new Map([
+      [key, "ops"],
+      ["agent:research:global", "research"],
+    ]),
+  );
 });

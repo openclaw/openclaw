@@ -23,8 +23,6 @@ export function captureReplyToolAuthorityInput(
     operatorAuthority: run.operatorAuthority,
     toolsAllow,
     disableTools: run.disableTools === true,
-    forceRestartSafeTools: run.forceRestartSafeTools === true,
-    forceCodeModeTools: run.forceCodeModeTools === true,
     run: {
       // Attempts also carry prompts, replay state, and callbacks; retain only policy inputs.
       sessionId: run.run.sessionId,

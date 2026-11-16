@@ -23,6 +23,7 @@ function createAdmission(): Admission {
     generation: new SharedArrayBuffer(
       Int32Array.BYTES_PER_ELEMENT * Object.keys(SqliteDatabaseGenerationSlot).length,
     ),
+    writerDiagnostic: new Int32Array(new SharedArrayBuffer(125 * Int32Array.BYTES_PER_ELEMENT)),
     facts: new Map(),
     writeScopes: new Map(),
     writeScopeRevision: 0,
@@ -51,6 +52,7 @@ function createReceipts(
     readRevision: () => 0,
     writer: () => record,
     suspended: () => false,
+    hasPendingSchemaMutation: () => false,
     publish: publishScopeRevision,
     ...overrides,
   });
@@ -90,6 +92,33 @@ it("publishes cohort scope discovery once and preserves independent write receip
   expect(publications).toEqual([4]);
 });
 
+it("bounds worker clone handles while keeping packed scope receipts independent", () => {
+  using database = new DatabaseSync(":memory:");
+  const record = createAdmission();
+  const receipts = createReceipts(record);
+  const scopes = Array.from({ length: 128 }, (_, index) => `entry-${index}`);
+  const before = receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)!;
+  const revisions = [...record.writeScopes.values()];
+  expect(new Set(revisions.map((revision) => revision.state.buffer)).size).toBeLessThanOrEqual(8);
+  const inherited = structuredClone(revisions);
+
+  receipts.withSqliteDatabaseWriteScope(database, [scopes[17]!], () => {
+    receipts.begin(database, false);
+    receipts.finish(database, record);
+  });
+  const after = receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)!;
+  for (let index = 0; index < scopes.length; index++) {
+    expect(after[index] === before[index]).toBe(index !== 17);
+    expect(Atomics.load(inherited[index]!.state, 0)).toBe(Atomics.load(revisions[index]!.state, 0));
+  }
+
+  receipts.retireSqliteDatabaseWriteScopes(database, scopes);
+  receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes);
+  const replacements = [...record.writeScopes.values()];
+  expect(replacements.every((revision) => Atomics.load(revision.state, 1) === 0)).toBe(true);
+  expect(inherited.every((revision) => Atomics.load(revision.state, 1) === 1)).toBe(true);
+});
+
 it("publishes scope discovery and reference installs without revisiting unchanged scopes", () => {
   const record = createAdmission();
   const references = new SharedArrayBuffer(8);
@@ -121,7 +150,7 @@ it("publishes scope discovery and reference installs without revisiting unchange
     {
       ...record,
       facts: new Map(),
-      writeScopes: new Map(),
+      writeScopes: [],
       references: new Map([[123, references]]),
     },
   ]);
@@ -134,15 +163,17 @@ it("publishes scope discovery and reference installs without revisiting unchange
     ":memory:",
     "imported",
   );
-  registry.install([{ ...record, writeScopes: importer.writeScopes }]);
+  registry.install([{ ...record, writeScopes: [importer.writeScopes] }]);
   expect(visited).toBe(0);
-  expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","imported"]']);
+  expect(
+    registry.capture(cursor)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket.keys())),
+  ).toEqual(['["key","imported"]']);
 
   registry.install([
     {
       ...record,
       facts: new Map(),
-      writeScopes: new Map(),
+      writeScopes: [],
       references: new Map([[124, references]]),
     },
   ]);
@@ -154,18 +185,24 @@ it("publishes scope discovery and reference installs without revisiting unchange
   const added = receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new");
   expect(visited).toBe(0);
   const [delta] = registry.capture(cursor);
-  expect([...delta!.writeScopes.keys()]).toEqual(['["key","new"]']);
-  expect(before!.writeScopes.size).toBe(256);
+  expect(delta!.writeScopes.flatMap((bucket) => Array.from(bucket.keys()))).toEqual([
+    '["key","new"]',
+  ]);
+  expect(before!.writeScopes.reduce((size, bucket) => size + bucket.size, 0)).toBe(256);
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "existing-0")).toBe(
     initial![0],
   );
 
   using database = new DatabaseSync(":memory:");
   receipts.retireSqliteDatabaseWriteScopes(database, ["new"]);
-  expect(Atomics.load(delta!.writeScopes.get('["key","new"]')!.state, 1)).toBe(1);
-  expect(registry.capture()[0]!.writeScopes.size).toBe(257);
+  expect(Atomics.load(delta!.writeScopes[0]!.get('["key","new"]')!.state, 1)).toBe(1);
+  expect(registry.capture()[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0)).toBe(
+    257,
+  );
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new")).not.toBe(added);
-  expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
+  expect(
+    registry.capture(cursor)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket.keys())),
+  ).toEqual(['["key","new"]']);
 });
 
 it("sweeps remote retirements after keyed publication and imports new scope cells", () => {
@@ -189,21 +226,26 @@ it("sweeps remote retirements after keyed publication and imports new scope cell
     {
       ...record,
       facts: new Map(),
-      writeScopes: new Map(),
+      writeScopes: [],
       references: new Map([[123, references]]),
     },
   ]);
   expect([...record.writeScopes.keys()]).toEqual(['["key","local"]']);
-  expect([...registry.capture(undefined, { admissions: [record] })[0]!.writeScopes.keys()]).toEqual(
-    ['["key","local"]'],
-  );
+  expect(
+    registry
+      .capture(undefined, { admissions: [record] })[0]!
+      .writeScopes.flatMap((bucket) => Array.from(bucket.keys())),
+  ).toEqual(['["key","local"]']);
   const importer = { ...record, writeScopes: new Map() };
   createReceipts(importer, { publish: () => {} }).readSqliteDatabaseScopedWriteTokenForPath(
     ":memory:",
     "imported",
   );
-  registry.install([importer]);
+  registry.install([{ ...importer, writeScopes: [importer.writeScopes] }]);
   expect(
-    [...registry.capture(undefined, { admissions: [record] })[0]!.writeScopes.keys()].toSorted(),
+    registry
+      .capture(undefined, { admissions: [record] })[0]!
+      .writeScopes.flatMap((bucket) => Array.from(bucket.keys()))
+      .toSorted(),
   ).toEqual(['["key","imported"]', '["key","local"]']);
 });

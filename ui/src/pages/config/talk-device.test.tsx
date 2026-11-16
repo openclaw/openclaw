@@ -72,7 +72,7 @@ it.each(["event", "edit"])("renders the first accepted native snapshot from %s",
     await capability.set("voice.wakeEnabled", false);
   }
   await expect(capability.initialSnapshot).resolves.toEqual(snapshot);
-  await waitForSolid(() => expect(container.textContent).toContain("Voice Wake"));
+  await waitForSolid(() => expect(container.textContent).toContain("Voice wake"));
   expect(container.textContent).not.toContain("Loading");
 });
 
@@ -97,7 +97,7 @@ it("retires a pending snapshot without letting an old edit settle the replacemen
 
   const snapshot = createNativeDeviceSettingsSnapshot();
   publish(snapshot);
-  await waitForSolid(() => expect(container.textContent).toContain("Voice Wake"));
+  await waitForSolid(() => expect(container.textContent).toContain("Voice wake"));
   expect(settled).toHaveBeenCalledWith(snapshot);
 });
 

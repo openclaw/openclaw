@@ -14,6 +14,14 @@ import {
   type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
 import {
+  findUnanalyzableRisk,
+  hasBlockingRisk,
+  NON_REUSABLE_RISKS,
+  riskInsideStep,
+  shellWrapperPreludeReasons,
+  stepReasons,
+} from "./exec-authorization-risks.js";
+import {
   extractBindableShellWrapperInlineCommand,
   normalizeExecutableToken,
 } from "./exec-wrapper-resolution.js";
@@ -82,41 +90,10 @@ type PlanningContext = {
   platform?: NodeJS.Platform;
 };
 
-const PROMPT_ONLY_RISKS = new Set<CommandRisk["kind"]>([
-  "eval",
-  "source",
-  "alias",
-  "shell-wrapper-through-carrier",
-  "command-carrier",
-]);
-const NON_REUSABLE_RISKS = new Set<CommandRisk["kind"]>(["inline-eval"]);
-
-const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
-  "command-substitution",
-  "dynamic-executable",
-  "line-continuation",
-  "heredoc",
-  "here-string",
-  "process-substitution",
-  "redirect",
-  "syntax-error",
-  "function-definition",
-]);
-
 const POWERSHELL_NAMES = new Set(["powershell", "pwsh"]);
 const WINDOWS_CMD_NAMES = new Set(["cmd", "cmd.exe"]);
 const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
 const SHELL_WRAPPER_PRELUDE_REASON = "shell-env-assignment";
-const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES = new Set<CommandExplanation["shapes"][number]>([
-  "background",
-  "if",
-  "for",
-  "while",
-  "case",
-  "subshell",
-  "group",
-]);
-
 function normalizePlanningPlatform(platform?: string | null): NodeJS.Platform | undefined {
   switch (platform) {
     case "aix":
@@ -136,29 +113,30 @@ function normalizePlanningPlatform(platform?: string | null): NodeJS.Platform | 
   }
 }
 
-function commandSegmentFromStep(step: CommandStep, context: PlanningContext): ExecCommandSegment {
-  return {
-    raw: step.text,
-    argv: step.argv,
-    resolution: resolveCommandResolutionFromArgv(
-      step.argv,
-      context.cwd,
-      context.env,
-      context.platform,
-    ),
-  };
+async function commandSegmentFromStep(
+  step: CommandStep,
+  context: PlanningContext,
+): Promise<ExecCommandSegment> {
+  const segment = await commandSegmentFromArgv(step.argv, context);
+  segment.raw = step.text;
+  return segment;
 }
 
-function commandSegmentFromArgv(
+async function commandSegmentFromArgv(
   argv: string[],
   context: PlanningContext,
   sourceArgv?: string[],
-): ExecCommandSegment {
+): Promise<ExecCommandSegment> {
   return {
     raw: argv.join(" "),
     argv,
     sourceArgv,
-    resolution: resolveCommandResolutionFromArgv(argv, context.cwd, context.env, context.platform),
+    resolution: await resolveCommandResolutionFromArgv(
+      argv,
+      context.cwd,
+      context.env,
+      context.platform,
+    ),
   };
 }
 
@@ -173,80 +151,6 @@ const AUTHORIZATION_OPERATOR_BY_KIND: Record<CommandOperator["kind"], Authorizat
   "newline-sequence": ";",
   background: "&",
 };
-
-function riskInsideStep(risk: CommandRisk, step: CommandStep): boolean {
-  return risk.span.startIndex >= step.span.startIndex && risk.span.endIndex <= step.span.endIndex;
-}
-
-function riskBeforeStepExecutable(risk: CommandRisk, step: CommandStep): boolean {
-  return riskInsideStep(risk, step) && risk.span.endIndex <= step.executableSpan.startIndex;
-}
-
-function stepReasons(
-  step: CommandStep,
-  risks: readonly CommandRisk[],
-  kinds: ReadonlySet<CommandRisk["kind"]> = PROMPT_ONLY_RISKS,
-): string[] {
-  const reasons: string[] = [];
-  for (const risk of risks) {
-    if (kinds.has(risk.kind) && riskInsideStep(risk, step)) {
-      reasons.push(risk.kind);
-    }
-  }
-  return uniqueStrings(reasons);
-}
-
-function isShellExpansionDynamicArgument(risk: CommandRisk): boolean {
-  return (
-    risk.kind === "dynamic-argument" &&
-    /(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\(|[<>]\()/u.test(risk.text)
-  );
-}
-
-function riskInsidePromptOnlyStep(risk: CommandRisk, explanation: CommandExplanation): boolean {
-  return [...explanation.topLevelCommands, ...explanation.nestedCommands].some(
-    (step) => riskInsideStep(risk, step) && stepReasons(step, explanation.risks).length > 0,
-  );
-}
-
-function findUnanalyzableRisk(explanation: CommandExplanation): CommandRisk | null {
-  return explanation.risks.find((entry) => UNANALYZABLE_RISKS.has(entry.kind)) ?? null;
-}
-
-function hasBlockingRisk(
-  explanation: CommandExplanation,
-): CommandRisk["kind"] | CommandExplanation["shapes"][number] | null {
-  const risk = findUnanalyzableRisk(explanation);
-  if (risk) {
-    return risk.kind;
-  }
-  const unsupportedShape = explanation.shapes.find((shape) =>
-    UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES.has(shape),
-  );
-  if (unsupportedShape) {
-    return unsupportedShape;
-  }
-  const dynamicArgument = explanation.risks.find(
-    (entry) =>
-      isShellExpansionDynamicArgument(entry) && !riskInsidePromptOnlyStep(entry, explanation),
-  );
-  if (dynamicArgument) {
-    return dynamicArgument.kind;
-  }
-  return null;
-}
-
-function shellWrapperPreludeReasons(params: {
-  step: CommandStep;
-  risks: readonly CommandRisk[];
-}): string[] {
-  const reasons = params.risks
-    .filter(
-      (risk) => UNANALYZABLE_RISKS.has(risk.kind) && riskBeforeStepExecutable(risk, params.step),
-    )
-    .map((risk) => risk.kind);
-  return uniqueStrings(reasons);
-}
 
 export function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
@@ -298,13 +202,13 @@ function wrapperPrefixForStep(step: CommandStep): string {
 }
 
 function hasCommandPrelude(step: CommandStep): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/u.test(wrapperPrefixForStep(step).trimStart());
+  return /^[A-Za-z_][A-Za-z0-9_]*\+?=/u.test(wrapperPrefixForStep(step).trimStart());
 }
 
-function positionalCarrierSteps(params: {
+async function positionalCarrierSteps(params: {
   wrapper: CommandStepWithSegment;
   context: PlanningContext;
-}): CommandStepWithSegment[] | null {
+}): Promise<CommandStepWithSegment[] | null> {
   const inlineMatch = resolveInlineCommandMatch(
     params.wrapper.segment.argv,
     POSIX_INLINE_COMMAND_FLAGS,
@@ -352,7 +256,7 @@ function positionalCarrierSteps(params: {
   return [
     {
       step,
-      segment: commandSegmentFromArgv(
+      segment: await commandSegmentFromArgv(
         carriedArgv,
         params.context,
         params.wrapper.segment.sourceArgv,
@@ -476,14 +380,14 @@ function shellWrapperRiskForStep(
   return risk ?? null;
 }
 
-function wrapperPayloadPlan(params: {
+async function wrapperPayloadPlan(params: {
   context: PlanningContext;
   allowNestedPayload: boolean;
   topLevelSteps: CommandStepWithSegment[];
   nestedSteps: CommandStepWithSegment[];
   operators: readonly CommandOperator[];
   risks: readonly CommandRisk[];
-}): ExecAuthorizationGroup[] | null {
+}): Promise<ExecAuthorizationGroup[] | null> {
   const wrapper = params.topLevelSteps[0];
   if (!wrapper) {
     return null;
@@ -501,7 +405,7 @@ function wrapperPayloadPlan(params: {
   if (!params.allowNestedPayload) {
     return null;
   }
-  const carriedSteps = positionalCarrierSteps({ wrapper, context: params.context });
+  const carriedSteps = await positionalCarrierSteps({ wrapper, context: params.context });
   const nestedStepsForWrapper = wrapper.step.id
     ? params.nestedSteps.filter((entry) => entry.step.parentCommandId === wrapper.step.id)
     : params.nestedSteps;
@@ -556,21 +460,21 @@ function unanalyzablePlan(params: {
   };
 }
 
-function planFromExplanation(params: {
+async function planFromExplanation(params: {
   command: string;
   explanation: CommandExplanation;
   context: PlanningContext;
-}): ExecAuthorizationPlan {
-  const topLevelSteps = params.explanation.topLevelCommands.map((step) => ({
-    step,
-    segment: commandSegmentFromStep(step, params.context),
-  }));
-  const nestedSteps = params.explanation.nestedCommands
-    .filter((step) => step.context === "wrapper-payload")
-    .map((step) => ({
-      step,
-      segment: commandSegmentFromStep(step, params.context),
-    }));
+}): Promise<ExecAuthorizationPlan> {
+  const topLevelSteps: CommandStepWithSegment[] = [];
+  for (const step of params.explanation.topLevelCommands) {
+    topLevelSteps.push({ step, segment: await commandSegmentFromStep(step, params.context) });
+  }
+  const nestedSteps: CommandStepWithSegment[] = [];
+  for (const step of params.explanation.nestedCommands) {
+    if (step.context === "wrapper-payload") {
+      nestedSteps.push({ step, segment: await commandSegmentFromStep(step, params.context) });
+    }
+  }
   const blockingRisk = hasBlockingRisk(params.explanation);
   const unanalyzableRisk = findUnanalyzableRisk(params.explanation);
   const topLevelStep = topLevelSteps[0]?.step;
@@ -589,7 +493,7 @@ function planFromExplanation(params: {
     });
   }
 
-  const payloadPlan = wrapperPayloadPlan({
+  const payloadPlan = await wrapperPayloadPlan({
     context: params.context,
     allowNestedPayload: !blockingRisk,
     topLevelSteps,
@@ -638,7 +542,7 @@ export async function planShellAuthorization(params: {
   }
   try {
     const explanation = await explainShellCommand(params.command);
-    return planFromExplanation({
+    return await planFromExplanation({
       command: params.command,
       explanation,
       context: {
@@ -728,37 +632,40 @@ export async function planExecAuthorization(params: {
     }
   }
 
-  const steps = params.analysis.segments.map((segment, index) => ({
-    step: {
-      context: "top-level" as const,
-      executable: segment.argv[0] ?? "",
-      argv: segment.argv,
-      text: segment.raw,
-      span: {
-        startIndex: index,
-        endIndex: index + segment.raw.length,
-        startPosition: { row: 0, column: index },
-        endPosition: { row: 0, column: index + segment.raw.length },
+  const steps: CommandStepWithSegment[] = [];
+  for (const [index, segment] of params.analysis.segments.entries()) {
+    steps.push({
+      step: {
+        context: "top-level" as const,
+        executable: segment.argv[0] ?? "",
+        argv: segment.argv,
+        text: segment.raw,
+        span: {
+          startIndex: index,
+          endIndex: index + segment.raw.length,
+          startPosition: { row: 0, column: index },
+          endPosition: { row: 0, column: index + segment.raw.length },
+        },
+        executableSpan: {
+          startIndex: index,
+          endIndex: index + (segment.argv[0]?.length ?? 0),
+          startPosition: { row: 0, column: index },
+          endPosition: { row: 0, column: index + (segment.argv[0]?.length ?? 0) },
+        },
       },
-      executableSpan: {
-        startIndex: index,
-        endIndex: index + (segment.argv[0]?.length ?? 0),
-        startPosition: { row: 0, column: index },
-        endPosition: { row: 0, column: index + (segment.argv[0]?.length ?? 0) },
-      },
-    },
-    segment:
-      segment.resolution === null
-        ? commandSegmentFromArgv(
-            segment.argv,
-            {
-              cwd: params.cwd,
-              env: params.env,
-            },
-            segment.sourceArgv,
-          )
-        : segment,
-  }));
+      segment:
+        segment.resolution === null
+          ? await commandSegmentFromArgv(
+              segment.argv,
+              {
+                cwd: params.cwd,
+                env: params.env,
+              },
+              segment.sourceArgv,
+            )
+          : segment,
+    });
+  }
   const groups = groupsFromSteps({
     steps,
     transport: { kind: "direct" },
@@ -772,4 +679,3 @@ export async function planExecAuthorization(params: {
     operators: [],
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,6 +11,11 @@ export type BunGlobalInstallOwner = {
 };
 
 /** Resolves Bun's global project from its installed owner rather than unrelated caller settings. */
+export function resolveBunGlobalInstallOwner(): BunGlobalInstallOwner;
+export function resolveBunGlobalInstallOwner(
+  pkgRoot?: string | null,
+  env?: NodeJS.ProcessEnv,
+): BunGlobalInstallOwner | null;
 export function resolveBunGlobalInstallOwner(
   pkgRoot?: string | null,
   env: NodeJS.ProcessEnv = process.env,

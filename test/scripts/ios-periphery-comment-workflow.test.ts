@@ -18,8 +18,20 @@ type Workflow = {
   jobs?: Record<string, { steps?: WorkflowStep[] }>;
 };
 
-const artifactFixture = { expired: false, id: 77, name: ARTIFACT_NAME, size_in_bytes: 1 };
-type Artifact = typeof artifactFixture;
+type Artifact = {
+  expired: boolean;
+  id: number;
+  name: string;
+  size_in_bytes: number;
+  workflow_run?: { id: number; head_sha: string };
+};
+const artifactFixture: Artifact = {
+  expired: false,
+  id: 77,
+  name: ARTIFACT_NAME,
+  size_in_bytes: 1,
+  workflow_run: { id: 12345, head_sha: "head-sha" },
+};
 
 type ExistingComment = { body?: string; id: number; user?: { login?: string } };
 
@@ -50,6 +62,7 @@ const sourceEvents = {
 } satisfies Record<string, ProducerEvent>;
 
 const readWorkflow = (file: string) => parse(readFileSync(file, "utf8")) as Workflow;
+const producerWorkflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
 const makeArtifact = (overrides: Partial<Artifact> = {}): Artifact => ({
   ...artifactFixture,
   ...overrides,
@@ -108,6 +121,44 @@ const executeCommenter = compileFunction(`return (async () => {\n${commenterScri
   "github",
 ]) as (require: NodeJS.Require, context: unknown, core: unknown, github: unknown) => Promise<void>;
 
+function jobFixture(name: string, run_attempt = 2, conclusion = "success") {
+  const platform = name.includes("macOS") ? "macos" : "ios";
+  const producerSteps = producerWorkflow.jobs?.[`${platform}-index`]?.steps ?? [];
+  const stepNames =
+    name.startsWith("Build ") || name.startsWith("scan / Build ")
+      ? [
+          "Set up job",
+          ...producerSteps.map((step) => step.name!),
+          "Post Setup Node environment",
+          "Post Checkout",
+          "Complete job",
+        ]
+      : [name];
+  const started_at = `2026-10-29T0${run_attempt}:00:00Z`;
+  const completed_at = `2026-10-29T0${run_attempt}:30:00Z`;
+  return {
+    id: run_attempt * 100 + (platform === "ios" ? 1 : 2),
+    run_id: 12345,
+    head_sha: "head-sha",
+    name,
+    run_attempt,
+    conclusion,
+    status: "completed",
+    started_at,
+    completed_at,
+    steps: stepNames.map((stepName, index) => ({
+      number: platform === "macos" && index >= 13 ? index + 12 : index + 1,
+      name: stepName,
+      status: "completed",
+      conclusion:
+        conclusion === "failure" && stepName.startsWith("Scan shared kit") ? "failure" : "success",
+      started_at: started_at as string | null,
+      completed_at: completed_at as string | null,
+    })),
+  };
+}
+type PeripheryJob = ReturnType<typeof jobFixture>;
+
 async function runCommenter(
   artifact: Artifact,
   archiveData: Buffer,
@@ -131,6 +182,8 @@ async function runCommenter(
     producerAttempt?: number;
     producerConclusion?: string;
     previousAttempts?: number[];
+    jobPages?: PeripheryJob[][];
+    artifactPages?: Artifact[][];
     scopeJobConclusion?: string;
     workflowRuns?: Partial<WorkflowRun>[];
     otherReport?: { artifact: Artifact; archiveData: Buffer; producerAttempt?: number };
@@ -150,10 +203,9 @@ async function runCommenter(
   };
   const apiCalls: string[] = [];
   const job = (name: string, run_attempt: number, conclusion = "success") => ({
-    name,
-    run_attempt,
-    conclusion,
-    status: "completed",
+    ...jobFixture(name, run_attempt, conclusion),
+    run_id: run.id,
+    head_sha: run.head_sha,
   });
   const legacyIos = run.name === "iOS Periphery Dead Code";
   const scopeJobName = legacyIos ? "Detect iOS scan scope" : "Detect macOS scan scope";
@@ -175,6 +227,7 @@ async function runCommenter(
     },
   };
   let pullGetCount = 0;
+  const downloadedIds: number[] = [];
   const createdBodies: string[] = [];
   const updatedBodies: string[] = [];
   function writeComment(method: string, bodies: string[], body: string) {
@@ -197,7 +250,10 @@ async function runCommenter(
       actions: {
         listJobsForWorkflowRun(this: void, params: Record<string, unknown>) {
           apiCalls.push("listJobs");
-          expect(params).toMatchObject({ run_id: run.id, filter: "all" });
+          expect(params).toMatchObject({ run_id: run.id, filter: "all", per_page: 100 });
+          if (options.jobPages) {
+            return options.jobPages.flat();
+          }
           return [
             ...(options.previousAttempts ?? []).flatMap((run_attempt) =>
               [
@@ -226,7 +282,10 @@ async function runCommenter(
         },
         listWorkflowRunArtifacts(this: void, params: Record<string, unknown>) {
           apiCalls.push("listArtifacts");
-          expect(params.run_id).toBe(run.id);
+          expect(params).toMatchObject({ run_id: run.id, per_page: 100 });
+          if (options.artifactPages) {
+            return options.artifactPages.flat();
+          }
           return [
             {
               ...artifact,
@@ -248,6 +307,7 @@ async function runCommenter(
         },
         async downloadArtifact(params: { artifact_id: number }) {
           apiCalls.push("downloadArtifact");
+          downloadedIds.push(params.artifact_id);
           if (params.artifact_id === options.downloadErrorArtifactId) {
             throw new Error("artifact download failed");
           }
@@ -340,6 +400,7 @@ async function runCommenter(
     core,
     createdBodies,
     downloadCount: apiCalls.filter((call) => call === "downloadArtifact").length,
+    downloadedIds,
     jobListCount: apiCalls.filter((call) => call === "listJobs").length,
     pullGetCount,
     updatedBodies,
@@ -603,7 +664,17 @@ describe("Periphery publication admission", () => {
     ...metadata,
   });
   const publish = (options: Parameters<typeof runCommenter>[2] = {}) =>
-    runReport(findingArchive, { platform, ...options }, { name: "" });
+    runReport(
+      findingArchive,
+      { platform, ...options },
+      {
+        name: "",
+        workflow_run: {
+          id: options.run?.id ?? 12345,
+          head_sha: options.run?.head_sha ?? "head-sha",
+        },
+      },
+    );
 
   describe.each(["iOS", "macOS"] as const)("%s producer admission", (producerPlatform) => {
     it.each(["report", "draft", "passive", "manual"] as const)(
@@ -831,6 +902,193 @@ it("keeps a failed app report independent of the other producer's retained succe
   expect(result.createdBodies[0]).toContain("Periphery did not complete");
   expect(result.createdBodies[1]).toContain("unusedSyntheticFunction");
   expect(result.core.warnings).toEqual(["No macos-periphery-dead-code-12345-3 artifact found."]);
+});
+function reportJobs(platform: "iOS" | "macOS", producer: PeripheryJob) {
+  const other = platform === "iOS" ? "macOS" : "iOS";
+  const attempt = producer.run_attempt;
+  return [
+    jobFixture("Detect macOS scan scope", attempt),
+    jobFixture(`Scan ${platform} dead code`, attempt),
+    producer,
+    jobFixture(`Scan ${other} dead code`, attempt, "skipped"),
+    jobFixture(`Build ${other} Periphery reports`, attempt, "skipped"),
+  ];
+}
+
+it.each(["iOS", "macOS"] as const)(
+  "reads the original %s artifact after a full-step partial-rerun projection",
+  async (platform) => {
+    const original = jobFixture(`Build ${platform} Periphery reports`);
+    expect(jobFixture("Build macOS Periphery reports").steps.map((step) => step.number)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 25, 26, 27,
+    ]);
+    const projected = {
+      ...original,
+      id: 999,
+      name: `scan / ${original.name}`,
+      run_attempt: 3,
+      url: "https://api.github.com/projected-job",
+      html_url: "https://github.com/projected-job",
+    };
+    const result = await runReport(findingArchive, {
+      platform,
+      run: { run_attempt: 3 },
+      jobPages: [reportJobs(platform, projected), [original]],
+      artifactPages: [
+        [makeArtifact({ id: 88, name: `${platform.toLowerCase()}-periphery-dead-code-12345-3` })],
+        [makeArtifact({ name: `${platform.toLowerCase()}-periphery-dead-code-12345-2` })],
+      ],
+    });
+    expect(result.downloadedIds).toEqual([77]);
+    expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+    expect(result.core.warnings).toEqual([]);
+  },
+);
+
+it("normalizes timestamp spellings and skipped null steps without changing artifact ownership", async () => {
+  const original = jobFixture("Build iOS Periphery reports");
+  original.steps[5] = {
+    ...original.steps[5]!,
+    conclusion: "skipped",
+    started_at: null,
+    completed_at: null,
+  };
+  const projected = {
+    ...original,
+    id: 999,
+    run_attempt: 3,
+    started_at: original.started_at.replace("Z", ".000Z"),
+    completed_at: original.completed_at.replace("Z", "+00:00"),
+    steps: original.steps.map((step) => ({
+      ...step,
+      started_at: step.started_at?.replace("Z", ".000Z") ?? null,
+      completed_at: step.completed_at?.replace("Z", "+00:00") ?? null,
+    })),
+  };
+  const result = await runReport(findingArchive, {
+    run: { run_attempt: 3 },
+    jobPages: [[original], reportJobs("iOS", projected)],
+  });
+  expect(result.downloadedIds).toEqual([77]);
+  expect(result.core.warnings).toEqual([]);
+});
+
+it("does not substitute a projected attempt's artifact for a missing physical producer artifact", async () => {
+  const original = jobFixture("Build iOS Periphery reports");
+  const projected = { ...original, id: 999, run_attempt: 3 };
+  const result = await runReport(findingArchive, {
+    run: { run_attempt: 3 },
+    jobPages: [reportJobs("iOS", projected), [original]],
+    artifactPages: [[makeArtifact({ name: "ios-periphery-dead-code-12345-3" })]],
+  });
+  expect(result.downloadCount).toBe(0);
+  expect(result.core.warnings).toEqual(["No ios-periphery-dead-code-12345-2 artifact found."]);
+  expectUnavailableComment(result.createdBodies);
+});
+
+it.each(["started_at", "completed_at", "name", "conclusion", "number"] as const)(
+  "does not alias a producer whose intermediate step %s changed",
+  async (field) => {
+    const original = jobFixture("Build iOS Periphery reports");
+    const projected = {
+      ...original,
+      id: 999,
+      run_attempt: 3,
+      steps: original.steps.map((step, index) =>
+        index !== 5
+          ? step
+          : {
+              ...step,
+              [field]:
+                field === "name"
+                  ? "Different producer step"
+                  : field === "conclusion"
+                    ? "failure"
+                    : field === "number"
+                      ? 6.5
+                      : "2026-10-29T02:01:00Z",
+            },
+      ),
+    };
+    const result = await runReport(findingArchive, {
+      run: { run_attempt: 3 },
+      jobPages: [reportJobs("iOS", projected), [original]],
+    });
+    expect(result.downloadCount).toBe(0);
+    expectUnavailableComment(result.createdBodies);
+    expect(result.core.warnings).toEqual([
+      field === "number"
+        ? "No producer attempt found for Build iOS Periphery reports."
+        : "No ios-periphery-dead-code-12345-3 artifact found.",
+    ]);
+  },
+);
+
+it("rejects a duplicate platform producer in an older history page before grouping", async () => {
+  const original = jobFixture("Build iOS Periphery reports", 1);
+  const duplicate = { ...original, id: 999, name: `scan / ${original.name}` };
+  const result = await runReport(findingArchive, {
+    jobPages: [
+      reportJobs("iOS", jobFixture("Build iOS Periphery reports")),
+      [original],
+      [duplicate],
+    ],
+  });
+  expect(result.downloadCount).toBe(0);
+  expect(result.core.warnings).toEqual([
+    "No producer attempt found for Build iOS Periphery reports.",
+  ]);
+  expectUnavailableComment(result.createdBodies);
+});
+
+it.each([
+  ["wrong run", (job: PeripheryJob) => ({ ...job, run_id: 999 })],
+  ["wrong head", (job: PeripheryJob) => ({ ...job, head_sha: "old-head" })],
+  ["missing job timestamp", (job: PeripheryJob) => ({ ...job, started_at: "" })],
+  ["invalid timestamp", (job: PeripheryJob) => ({ ...job, completed_at: "not a date" })],
+  ["missing steps", (job: PeripheryJob) => ({ ...job, steps: [] })],
+  [
+    "non-skipped null timestamp",
+    (job: PeripheryJob) => ({
+      ...job,
+      steps: job.steps.map((step) => ({ ...step, started_at: null })),
+    }),
+  ],
+  ["unordered steps", (job: PeripheryJob) => ({ ...job, steps: job.steps.toReversed() })],
+] as const)("does not download from %s producer metadata", async (_label, change) => {
+  const result = await runReport(findingArchive, {
+    jobPages: [reportJobs("iOS", change(jobFixture("Build iOS Periphery reports")))],
+  });
+  expect(result.downloadCount).toBe(0);
+  expect(result.core.warnings).toEqual([
+    "No producer attempt found for Build iOS Periphery reports.",
+  ]);
+  expectUnavailableComment(result.createdBodies);
+});
+
+it.each([
+  ["duplicate name", () => [makeArtifact(), makeArtifact({ id: 88 })]],
+  ["duplicate ID", () => [makeArtifact(), makeArtifact({ name: "unrelated" })]],
+  ["invalid ID", () => [makeArtifact({ id: 0 })]],
+  ["missing run", () => [makeArtifact({ workflow_run: undefined })]],
+  ["wrong run", () => [makeArtifact({ workflow_run: { id: 999, head_sha: "head-sha" } })]],
+  ["wrong head", () => [makeArtifact({ workflow_run: { id: 12345, head_sha: "old-head" } })]],
+] as const)("rejects %s report artifact identity across pages", async (_label, reports) => {
+  const result = await runReport(findingArchive, {
+    artifactPages: reports().map((item) => [item]),
+  });
+  expect(result.downloadCount).toBe(0);
+  expect(result.core.warnings).toEqual([
+    `Invalid or ambiguous ${ARTIFACT_NAME} artifact identity.`,
+  ]);
+  expectUnavailableComment(result.createdBodies);
+});
+
+it("does not download an expired physical producer artifact", async () => {
+  const result = await runReport(findingArchive, {}, { expired: true });
+  expect(result.downloadCount).toBe(0);
+  expect(result.core.warnings).toEqual([`${ARTIFACT_NAME} artifact expired.`]);
+  expectUnavailableComment(result.createdBodies);
 });
 
 it("reads an in-flight iOS report from the previous automatic producer", async () => {

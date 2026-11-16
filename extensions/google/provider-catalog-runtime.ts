@@ -15,7 +15,11 @@ import {
   GOOGLE_GEMINI_COST,
   buildGoogleStaticCatalogProvider,
 } from "./provider-catalog.js";
-import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./provider-models.js";
+import {
+  isGoogleGeminiTextModelId,
+  isGoogleTextGenerationModelId,
+  resolveGoogleStaticModelId,
+} from "./provider-models.js";
 
 const GOOGLE_GEMINI_MODELS_CACHE_TTL_MS = 60_000;
 const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_MANIFEST_PROVIDER.baseUrl}/models?pageSize=1000`;
@@ -41,11 +45,13 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   const methods = record.supportedGenerationMethods;
   const contextWindow = asPositiveSafeInteger(record.inputTokenLimit);
   const maxTokens = asPositiveSafeInteger(record.outputTokenLimit);
+  // Gemini rows may advertise only the Interactions API; the effective endpoint
+  // picks the transport when the model resolves (resolveGoogleModelApi).
   if (
     !id ||
     !isGoogleTextGenerationModelId(id) ||
-    !Array.isArray(methods) ||
-    !methods.includes("generateContent") ||
+    (!isGoogleGeminiTextModelId(id) &&
+      (!Array.isArray(methods) || !methods.includes("generateContent"))) ||
     !contextWindow ||
     !maxTokens
   ) {
@@ -71,13 +77,26 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   };
 }
 
-export async function buildGoogleLiveCatalogProvider(params: {
+type GoogleLiveCatalogParams = {
   discoveryMode?: "strict";
   apiKey?: string;
   discoveryApiKey?: string;
-}): Promise<ModelProviderConfig> {
+};
+
+export async function buildGoogleLiveCatalogProvider(
+  params: GoogleLiveCatalogParams,
+): Promise<ModelProviderConfig> {
+  return (await loadGoogleLiveCatalog(params)).provider;
+}
+
+/** The provider config plus every model id the account listing returned, including hidden rows. */
+export async function loadGoogleLiveCatalog(params: GoogleLiveCatalogParams): Promise<{
+  provider: ModelProviderConfig;
+  listedModelIds?: string[];
+}> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
-  return await buildLiveModelProviderConfig({
+  let listedModelIds: string[] | undefined;
+  const provider = await buildLiveModelProviderConfig({
     providerId: "google",
     endpoint: GOOGLE_GEMINI_MODELS_ENDPOINT,
     providerConfig,
@@ -97,6 +116,10 @@ export async function buildGoogleLiveCatalogProvider(params: {
       ...((discoveryApiKey ?? apiKey) ? { "x-goog-api-key": discoveryApiKey ?? apiKey } : {}),
     }),
     projectRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
+      listedModelIds = rows.flatMap((row) => {
+        const name = normalizeOptionalString(asOptionalRecord(row)?.name);
+        return name?.startsWith("models/") ? [name.slice("models/".length)] : [];
+      });
       const liveModels = rows
         .map(buildGoogleLiveModel)
         .filter((model): model is ModelDefinitionConfig => Boolean(model));
@@ -105,4 +128,5 @@ export async function buildGoogleLiveCatalogProvider(params: {
       );
     },
   });
+  return { provider, ...(listedModelIds ? { listedModelIds } : {}) };
 }

@@ -477,4 +477,75 @@ describe("queued cancellation during adapter preparation", () => {
       }
     },
   );
+
+  it.each([
+    { replacement: false, partial: false },
+    { replacement: true, partial: false },
+    { replacement: false, partial: true },
+  ])(
+    "preserves late receipts after heartbeat failure (replacement: $replacement, partial: $partial)",
+    async ({ replacement, partial }) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const adapter = adapterFixture();
+      const terminals = audit(true);
+      const { outcome, queueId: queueIdPromise } = start({
+        payloads: partial
+          ? [{ text: "accepted part" }, { text: "must not send" }]
+          : [{ text: "question" }],
+        bestEffort: partial,
+      });
+      const queueId = await queueIdPromise;
+      await adapter.prepared;
+      adapter.releasePreparation();
+      await adapter.providerEntered;
+      const before = (await pendingDeliveries())[0]!;
+      const lease = await import("./delivery-queue-platform-lease.js");
+      const renew = vi
+        .spyOn(lease, "renewDeliveryPlatformSendLease")
+        .mockRejectedValueOnce(new Error("temporary renewal failure"));
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(renew).toHaveBeenCalledOnce();
+      if (replacement) {
+        setQueuedEntryState(stateDir, queueId, {
+          retryCount: before.retryCount,
+          platformSendStartedAt: before.platformSendStartedAt,
+          recoveryState: "send_attempt_started",
+          availableAt: Date.now() - 1,
+        });
+        const replacementClaim = await lease.claimDeliveryPlatformSendAttempt(
+          queueId,
+          stateDir,
+          before.platformSendStartedAt,
+          before.platformSendAttemptId,
+        );
+        expect(replacementClaim).toEqual(expect.any(String));
+        expect(replacementClaim).not.toBe(before.platformSendAttemptId);
+      } else {
+        expect(readQueuedEntry(stateDir, queueId).platformSendAttemptId).toBe(
+          before.platformSendAttemptId,
+        );
+      }
+      const retainedEntry = readQueuedEntry(stateDir, queueId);
+      adapter.releaseProvider();
+      const settled = await outcome;
+      expect(adapter.send).toHaveBeenCalledOnce();
+      if (replacement) {
+        expect(settled).toMatchObject({ queueCustody: "held" });
+        expect(readQueuedEntry(stateDir, queueId)).toEqual(retainedEntry);
+        expect(terminals).toEqual([]);
+      } else {
+        expect(settled).toMatchObject([{ messageId: "accepted-message" }]);
+        if (partial) {
+          expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("unknown_after_send");
+          expect(terminals).toEqual([]);
+        } else {
+          expect(await pendingDeliveries()).toEqual([]);
+          expect(terminals).toEqual(["sent"]);
+        }
+        vi.useRealTimers();
+        await recover();
+        expect(adapter.send).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });

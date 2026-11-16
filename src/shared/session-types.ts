@@ -42,6 +42,7 @@ export type GatewayAgentRow = Pick<
   | "thinkingOptions"
   | "thinkingDefault"
   | "defaultPermissionMode"
+  | "newSessionPermissionMode"
 >;
 
 export type SessionActivityPulse = {

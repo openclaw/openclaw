@@ -2,15 +2,16 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import * as gatewayLifecycle from "../../../gateway/server-lifecycle-runtime-context.js";
 import { registerPluginSubagentRunFromGateway } from "../../../gateway/server-methods/agent-subagent-registration.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import * as gatewayLifecycle from "../../../gateway/server-recovery-runtime-context.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import {
@@ -136,6 +137,8 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             runId,
             childSessionKey,
             childAgentId: "main",
+            agentDir: path.join(fixture.stateDir, "agents", "main", "agent"),
+            workspaceDir: path.join(fixture.stateDir, "workspace"),
             task: "unstarted operation",
             requester: {
               sessionKey: "agent:main:main",

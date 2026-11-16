@@ -1,18 +1,28 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects, serialize } from "node:v8";
+import { serialize } from "node:v8";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  createRegistryScope,
+  ExpiredPluginRegistryScopeError,
+  getPluginRegistryForContext,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
   assertStateDatabaseAccessAllowed,
 } from "./gateway-state-owner.js";
+import { createSqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import {
   deferSqlitePostCommitPublication,
   withSqlitePostCommitPublications,
@@ -21,7 +31,7 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
-import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
+import { bindSqliteWorkerDatabaseAdmissionCursor } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
@@ -92,13 +102,106 @@ function captureInline(facts: unknown) {
   return captured;
 }
 
+it("restores the owner between queued admission errors that reset the broker cursor", () => {
+  const context = new AsyncLocalStorage<object>();
+  const owner = {};
+  const observed: unknown[] = [];
+  const admission = context.run(owner, () => admissionFixture());
+  bindSqliteWorkerDatabaseAdmissionCursor(admission, createSqliteDatabaseAdmissionCursor(), () => {
+    observed.push(context.getStore());
+    context.enterWith({ unrelated: true });
+    return createSqliteDatabaseAdmissionCursor();
+  });
+  const decisions = Array.from({ length: 2 }, () => new Int32Array(new SharedArrayBuffer(4)));
+  for (const decision of decisions) {
+    const { port2 } = channelFixture();
+    admission.port.postMessage(
+      {
+        kind: "sqlite-database-admissions",
+        admissions: null,
+        port: port2,
+        decision: decision.buffer,
+      },
+      [port2],
+    );
+  }
+  admission.service();
+  expect(decisions.map((decision) => Atomics.load(decision, 0))).toEqual([2, 2]);
+  expect(observed).toEqual([owner, owner]);
+  expect(context.getStore()).toBeUndefined();
+  context.disable();
+});
+
+it.each(["rotated", "expired"] as const)(
+  "observes a %s registry between messages in one owner-context drain",
+  (change) => {
+    const context = new AsyncLocalStorage<object>();
+    const owner = {};
+    const registry = createEmptyPluginRegistry();
+    const replacement = createEmptyPluginRegistry();
+    const scope = createRegistryScope(registry, undefined);
+    let expired = false;
+    const nativePrototype: { deref: (this: WeakRef<object>) => object | undefined } =
+      WeakRef.prototype;
+    const deref = nativePrototype.deref;
+    // Collection cannot happen within one JS job; simulate loss of this weak target.
+    vi.spyOn(WeakRef.prototype, "deref").mockImplementation(function (this: WeakRef<object>) {
+      const value: unknown = deref.call(this);
+      return expired && value === registry ? undefined : value;
+    });
+    const effects: unknown[] = [];
+    const admission = context.run(owner, () =>
+      withPluginRuntimeGatewayRequestScope(scope, () =>
+        admissionFixture((_request, grant) => {
+          expect(context.getStore()).toBe(owner);
+          const current = getPluginRegistryForContext();
+          grant(() => {
+            effects.push(current);
+            if (change === "rotated") {
+              scope.pluginRegistry = replacement;
+            } else {
+              expired = true;
+            }
+            context.enterWith({ unrelated: true });
+          });
+        }),
+      ),
+    );
+    bindAuthority(admission, path.resolve("synthetic-generation.sqlite"), {
+      assertRequest() {
+        expect(context.getStore()).toBe(owner);
+        if (getPluginRegistryForContext() !== registry) {
+          throw new Error("Original generation changed");
+        }
+      },
+    });
+    const decisions = Array.from({ length: 2 }, () => new Int32Array(new SharedArrayBuffer(4)));
+    for (const decision of decisions) {
+      admission.port.postMessage({ stage: "transaction", decision: decision.buffer }, []);
+    }
+    admission.service();
+    expect(decisions.map((decision) => Atomics.load(decision, 0))).toEqual([1, 2]);
+    expect(effects).toEqual([registry]);
+    if (change === "expired") {
+      expect(admission.failure).toBeInstanceOf(ExpiredPluginRegistryScopeError);
+    } else {
+      expect(admission.failure).toMatchObject({ message: "Original generation changed" });
+    }
+    expect(context.getStore()).toBeUndefined();
+    context.disable();
+  },
+);
+
 it("finishes settled admissions without traversing empty pending decisions", () => {
   const admission = admissionFixture();
   admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
   const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
   try {
-    admission.finish();
-    admission.finish();
+    const firstFinish = admission.finish();
+    const repeatedFinish = admission.finish();
+    onTestFinished(async () => {
+      await Promise.all([firstFinish, repeatedFinish]);
+    });
     expect(iterate).not.toHaveBeenCalled();
   } finally {
     iterate.mockRestore();
@@ -120,7 +223,10 @@ it("releases publication captures from retained finished admissions", async () =
   const finished = Array.from({ length: 1_000 }, (_, index) => {
     const admission = admissionFixture();
     if (index === 0) {
-      observeCommits(admission, () => admission.finish());
+      observeCommits(admission, () => {
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
+      });
     }
     const snapshot = observeSnapshot(admission);
     admission.port.postMessage(
@@ -133,20 +239,21 @@ it("releases publication captures from retained finished admissions", async () =
       },
       [],
     );
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     return { admission, snapshot };
   });
   expect(publications).toBe(finished.length);
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(finished.filter(({ snapshot }) => snapshot.deref())).toHaveLength(0);
   // Lost reply recovery still consumes the committed evidence after transport cleanup.
   expect(finished[0]!.admission.committed).toEqual({ facts: { revision: 1 } });
 });
 
-it("preserves nested finish order and error precedence on repeated calls", () => {
+it("preserves nested finish order and error precedence after construction abort", () => {
   const admission = createAdmission((_request, grant) => grant());
   const finish = admission.finish.bind(admission);
   const events: string[] = [];
@@ -162,13 +269,55 @@ it("preserves nested finish order and error precedence on repeated calls", () =>
   });
 
   try {
-    expect(() => admission.finish()).toThrow(failure);
-    expect(() => admission.finish()).toThrow(failure);
+    expect(() => admission.abortConstruction()).toThrow(failure);
+    expect(() => admission.finish("not-entered")).toThrow(failure);
     expect(events).toEqual(["first", "second", "first", "second"]);
+    expect(admission.settlement).toEqual({ kind: "completed" });
     expect(() => admission.observeRequests(() => {})).toThrow("closed");
   } finally {
-    finish();
+    const finishing = finish();
+    onTestFinished(() => finishing);
   }
+});
+
+it.each(["unknown", "committed", "completed"] as const)(
+  "preserves queued %s evidence when finishing a refused dispatch",
+  (outcome) => {
+    const admission = admissionFixture();
+    const committed = { version: 1, sequence: 1, facts: { revision: 2 } };
+    admission.port.postMessage(
+      outcome === "committed"
+        ? { kind: "native-commit", committed }
+        : {
+            kind: "native-settlement",
+            settlement: {
+              kind: outcome,
+              ...(outcome === "completed" ? { committed } : {}),
+            },
+          },
+      [],
+    );
+    const finishing = admission.finish("not-entered");
+    onTestFinished(() => finishing);
+    expect(admission.settlement).toEqual(
+      outcome === "committed"
+        ? undefined
+        : {
+            kind: outcome,
+            ...(outcome === "completed" ? { committed: { facts: committed.facts } } : {}),
+          },
+    );
+    expect(admission.committed).toEqual(
+      outcome === "unknown" ? undefined : { facts: committed.facts },
+    );
+  },
+);
+
+it("keeps an unconfirmed finish unknown", () => {
+  const admission = admissionFixture();
+  const finishing = admission.finish();
+  onTestFinished(() => finishing);
+  expect(admission.settlement).toBeUndefined();
 });
 
 it.each([
@@ -197,7 +346,8 @@ it.each([
       databaseCurrent = false;
     }
     if (outcome === "late-close") {
-      admission.finish();
+      const finishing = admission.finish();
+      onTestFinished(() => finishing);
     }
     inGrant = true;
     grant(beforeRelease);
@@ -211,7 +361,8 @@ it.each([
     },
     assertAccess() {
       if (outcome === "access-close" && inGrant) {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       }
       if (!databaseCurrent) {
         throw revoked;
@@ -224,7 +375,8 @@ it.each([
     .mockImplementationOnce(() => "timed-out")
     .mockImplementationOnce(() => {
       if (outcome === "close") {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       } else {
         admission.service();
       }
@@ -278,7 +430,8 @@ it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
       expect(Atomics.load(decision, 0)).toBe(0);
       expect(effect).not.toHaveBeenCalled();
       if (ending === "closed") {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       } else if (ending === "revoked") {
         current = false;
       }
@@ -295,7 +448,7 @@ it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
       }
     } finally {
       prepared.resolve();
-      admission.finish();
+      await admission.finish();
     }
   },
 );
@@ -329,7 +482,8 @@ it("rechecks database ownership after a worker request crosses the message port"
     });
     expect(admission.failureSource).toBe("authority");
   } finally {
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     maintenance.release();
   }
 });
@@ -377,13 +531,14 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
   expect(acquireSchema).toHaveBeenCalledOnce();
   expect(admission.failure).toBe(revoked);
   expect(release).not.toHaveBeenCalled();
-  admission.finish();
+  const finishing = admission.finish();
+  onTestFinished(() => finishing);
   expect(release).toHaveBeenCalledOnce();
 });
 
 it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
   "keeps %s database creation under the current captured owner",
-  (scenario) => {
+  async (scenario) => {
     const root = tempDirs.make("sqlite-native-creation-");
     const databasePath = path.join(root, "admitted.sqlite");
     const requestedPath =
@@ -405,21 +560,52 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
         },
       });
     }
-    serviceOnWait(admission);
-    const exchange = () =>
-      exchangeSqliteDatabaseAdmissions(admission.port, [], requestedPath, true);
-    if (scenario === "revoked" || scenario === "different-path") {
-      expect(exchange).toThrow("SQLite admission facts exchange failed");
-    } else {
-      expect(exchange).not.toThrow();
+    const worker = new Worker(
+      `
+      const { parentPort, workerData } = require("node:worker_threads");
+      (async () => {
+        const { register } = await import(workerData.loader);
+        const unregister = register();
+        try {
+          const { exchangeSqliteDatabaseAdmissions } = await import(workerData.relay);
+          exchangeSqliteDatabaseAdmissions(workerData.port, [], workerData.requestedPath, true);
+        } finally {
+          workerData.port.close();
+          unregister();
+          parentPort.close();
+        }
+      })().catch((error) => { throw error; });
+      `,
+      {
+        eval: true,
+        execArgv: [],
+        workerData: {
+          port: admission.port,
+          requestedPath,
+          loader: import.meta.resolve("tsx/esm/api"),
+          relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
+        },
+        transferList: [admission.port],
+      },
+    );
+    const exchange = once(worker, "exit");
+    try {
+      if (scenario === "revoked" || scenario === "different-path") {
+        await expect(exchange).rejects.toThrow("SQLite admission facts exchange failed");
+      } else {
+        await expect(exchange).resolves.toEqual([0]);
+      }
+      expect(existsSync(requestedPath)).toBe(scenario === "admitted");
+    } finally {
+      await worker.terminate();
+      await admission.finish();
     }
-    expect(existsSync(requestedPath)).toBe(scenario === "admitted");
   },
 );
 
 it.each(["unadmitted", "retired"] as const)(
   "refuses %s database creation relays before creating files",
-  (scenario) => {
+  async (scenario) => {
     const location = path.join(tempDirs.make("sqlite-refused-creation-relay-"), "absent.sqlite");
     const admission =
       scenario === "retired"
@@ -429,7 +615,8 @@ it.each(["unadmitted", "retired"] as const)(
         : admissionFixture(() => {
             throw new Error("File creation must not request transaction authority");
           });
-    const { port2 } = channelFixture();
+    const { port1, port2 } = channelFixture();
+    const replied = once(port1, "close");
     const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     onTestFinished(() => admission.finish());
     admission.port.postMessage(
@@ -444,6 +631,7 @@ it.each(["unadmitted", "retired"] as const)(
       [port2],
     );
     admission.service();
+    await replied;
     expect(Atomics.load(decision, 0)).toBe(2);
     expect(admission.failure).toMatchObject({
       message:
@@ -498,14 +686,15 @@ it("reads a queued worker commit before settlement and message callbacks run", a
     }
     expect(Atomics.load(posted, 0)).toBe(2);
     expect(admission.settlement).toBeUndefined();
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     expect(admission.committed).toEqual({ facts: { count: 1 } });
     expect(admission.settlement).toEqual({ kind: "unknown", committed: { facts: { count: 1 } } });
     expect(await joined).toBe(0);
   } finally {
     Atomics.store(posted, 1, 1);
     Atomics.notify(posted, 1);
-    admission.finish();
+    await admission.finish();
     await worker.terminate();
   }
 });
@@ -515,8 +704,8 @@ function receiptFixture(captured = false) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE proof (value INTEGER)");
   const owner: SqliteWorkerOperationContext = { port: admission.port };
-  onTestFinished(() => {
-    admission.finish();
+  onTestFinished(async () => {
+    await admission.finish();
     db.close();
   });
   const transaction = (operation: () => void) =>
@@ -574,7 +763,8 @@ it.each(
       );
     }
     expect(rows()).toEqual(outcome === "rollback" ? [] : [{ value: 1 }]);
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     expect(admission.committed).toEqual(committed);
     const expectedFacts = outcome === "rollback" ? [] : [{ value: 1 }];
     expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
@@ -596,6 +786,7 @@ it.each(
     const { admission, owner, write, rows } = ownerContext.run("publication owner", () =>
       receiptFixture(captured),
     );
+    admission.requestClass = captured ? "session.actor.completeTurn" : undefined;
     const failure = new Error("Synthetic publication failed");
     const events: string[] = [];
     const publish = vi.fn((committed: { facts: unknown }) => {
@@ -656,14 +847,23 @@ it.each(
       [],
     );
     expect(events).toEqual([]);
-    settleSqliteWorkerJob(job, undefined, { written: true });
-    expect(getWorkerMessageMetrics()).toContainEqual({
-      kind: "authority",
-      direction: "from_worker",
-      messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
-      payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
-      unmeasuredMessages: before?.unmeasuredMessages ?? 0,
-    });
+    void settleSqliteWorkerJob(job, undefined, { written: true });
+    expect(getWorkerMessageMetrics()).toContainEqual(
+      expect.objectContaining({
+        kind: "authority",
+        direction: "from_worker",
+        messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
+        payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+        payloadBytesByRequestClass: {
+          ...before?.payloadBytesByRequestClass,
+          [captured ? "session.actor.completeTurn" : "other"]:
+            (before?.payloadBytesByRequestClass?.[
+              captured ? "session.actor.completeTurn" : "other"
+            ] ?? 0) + payloadBytes,
+        },
+        unmeasuredMessages: before?.unmeasuredMessages ?? 0,
+      }),
+    );
     expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();
@@ -733,7 +933,8 @@ it.each(["settlement", "settlement-only", "malformed", "finish"] as const)(
     } else {
       admission.port.postMessage({ kind: "native-commit", committed: null }, []);
     }
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     expect(admission.committed).toEqual({ facts: { value: 2 } });
     expect(published).toHaveBeenCalledTimes(2);
     expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual([

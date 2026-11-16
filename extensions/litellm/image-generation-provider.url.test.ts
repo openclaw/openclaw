@@ -53,7 +53,7 @@ beforeEach(() => {
       return Response.json({ data: images });
     }
     if (downloadElapsedMs) {
-      vi.setSystemTime(Date.now() + downloadElapsedMs);
+      vi.advanceTimersByTime(downloadElapsedMs);
     }
     return redirect
       ? new Response(null, { status: 302, headers: { Location: redirect } })
@@ -113,7 +113,7 @@ it("rejects downloads above the generated image download ceiling", async () => {
 });
 
 it("keeps all downloads within the default operation deadline", async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.useFakeTimers({ toFake: ["Date", "performance"] });
   vi.setSystemTime(0);
   images = [{ url: imageUrl }, { url: imageUrl }];
   downloadElapsedMs = 35_000;

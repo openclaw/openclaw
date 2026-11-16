@@ -15,37 +15,6 @@ openclaw-chat-details[mobile] {
   display: none;
 }
 
-/* Notices and suggestions share the gutter; Details lives in the pane header. */
-.chat-gutter-stack--details {
-  width: calc(100% - 28px);
-  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.chat-gutter-stack--details .chat-gutter-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  width: 100%;
-  pointer-events: none;
-}
-
-.chat-gutter-header .chat-topbar-notices {
-  position: static;
-  justify-self: center;
-  max-width: min(34rem, 100%);
-  transform: none;
-}
-
-.chat-gutter-stack--details .task-suggestions {
-  width: min(450px, 100%);
-  min-height: 0;
-}
-
-.chat-gutter-stack--details .task-suggestion {
-  max-height: 100%;
-}
-
 .chat-pane__header-trailing > openclaw-chat-details {
   flex: none;
   /* Pane activation reveals actions without moving this click target. */
@@ -66,7 +35,7 @@ openclaw-chat-details[mobile] {
   min-height: 28px;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--muted);
   background: var(--panel);
   font: inherit;
@@ -84,17 +53,16 @@ openclaw-chat-details[mobile] {
 .chat-details {
   position: fixed;
   inset: auto;
-  box-sizing: border-box;
   margin: 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--card);
   color: var(--text);
   box-shadow: var(--shadow-lg);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  --scrollbar-size: var(--scrollbar-size-compact);
   font-size: 12px;
 }
 .chat-details--docked {
@@ -104,7 +72,7 @@ openclaw-chat-details[mobile] {
   width: var(--chat-details-space);
   height: 100%;
   border: 1px solid var(--overlay-border, var(--border-strong));
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--panel-strong);
   box-shadow: var(--shadow-md);
   overflow-wrap: anywhere;
@@ -254,7 +222,7 @@ openclaw-chat-details[mobile] {
   gap: 9px;
   min-height: 36px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -298,7 +266,7 @@ openclaw-chat-details[mobile] {
   min-height: 28px;
   padding: 4px 7px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 .chat-details__participants[open] {
@@ -342,7 +310,7 @@ openclaw-chat-details[mobile] {
   width: 20px;
   height: 20px;
   flex: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .chat-details__muted {
   padding: 5px 6px;
@@ -354,10 +322,10 @@ openclaw-chat-details[mobile] {
   place-items: center;
   width: 22px;
   height: 22px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   flex: none;
-  color: hsl(var(--chat-details-avatar-hue) 32% 65%);
-  background: hsl(var(--chat-details-avatar-hue) 22% 30% / 0.35);
+  color: hsl(var(--chat-details-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
+  background: hsl(var(--chat-details-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
 }
 .chat-details__agent-avatar > svg {
   width: 15px;
@@ -534,7 +502,8 @@ button.chat-details__process:is(:hover, :focus-visible) {
   display: block;
   color: var(--muted);
 }
-.chat-details__more:is(:hover, :focus-visible) {
+.chat-details .chat-details__more:is(:hover, :focus-visible) {
+  background: none;
   color: var(--text);
 }
 @keyframes chat-details-pulse {
@@ -616,23 +585,12 @@ button.chat-details__process:is(:hover, :focus-visible) {
   margin-top: 6px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--card);
 }
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
-}
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
 }
 .chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
   display: flex;
@@ -742,7 +700,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   min-width: 0;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -794,7 +752,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-environment-mobile__group {
   padding-inline: 12px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
 }
 .chat-environment-mobile__row {
@@ -856,4 +814,11 @@ button.chat-details__process:is(:hover, :focus-visible) {
   width: 15px;
   height: 15px;
   color: var(--muted);
+}
+
+/* Loading hints stay subordinate to the conversation, in both Details hosts. */
+.chat-details .skeleton::after,
+.chat-mobile-host__details .skeleton::after {
+  opacity: 0.25;
+  animation-duration: calc(var(--skeleton-duration) * 1.8);
 }

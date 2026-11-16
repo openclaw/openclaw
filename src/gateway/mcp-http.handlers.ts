@@ -13,8 +13,8 @@ import {
   formatToolExecutionErrorMessage,
   protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
-  resolveToolResultFailureKind,
-} from "../agents/tool-result-error.js";
+} from "../agents/tool-execution-error.js";
+import { resolveToolResultFailureKind } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {

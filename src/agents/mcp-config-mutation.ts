@@ -55,7 +55,7 @@ async function withMcpLifecycleCoordination<
     assertCurrentAsync?: () => Promise<void>;
   },
 >(params: Params, run: (current: Params) => Promise<T>): Promise<T> {
-  // Claw Add already holds this non-reentrant lease.
+  // Template Add already holds this non-reentrant lease.
   const name = params.name.trim();
   if (!name || params.skipLifecycleLease) {
     return run(params);

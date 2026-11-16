@@ -452,7 +452,8 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       if (pending && current.pendingRequests.length === 0) {
         throw new ToolInputError("code mode promise is pending without host work");
       }
-      if (pending || current.pendingRequests.length > 0) {
+      // A rejected program cannot consume sibling replies; its owner cancels them.
+      if (pending || (current.outcome?.ok && current.pendingRequests.length > 0)) {
         const settlementMode = pending
           ? { kind: "awaiting" as const }
           : {

@@ -1,3 +1,4 @@
+import AVFoundation
 import OpenClawKit
 import SwiftUI
 import VisionKit
@@ -5,6 +6,22 @@ import VisionKit
 enum QRScannerResult: Equatable {
     case gatewayLink(GatewayConnectDeepLink)
     case setupCode(String)
+    case espDevice(ESPSetupDiscovery)
+}
+
+enum QRScannerPurpose {
+    case gateway, espDevice
+
+    func parse(_ payload: String) -> QRScannerResult? {
+        switch self {
+        case .gateway:
+            if let link = GatewayConnectDeepLink.fromSetupInput(payload) { return .gatewayLink(link) }
+            if AppleReviewDemoMode.isSetupCode(payload) { return .setupCode(payload) }
+        case .espDevice:
+            if let discovery = ESPSetupDiscovery.parse(payload) { return .espDevice(discovery) }
+        }
+        return nil
+    }
 }
 
 @MainActor
@@ -106,10 +123,81 @@ final class QRScannerResultHandoff {
     }
 }
 
-struct QRScannerView: UIViewControllerRepresentable {
+struct QRScannerView: View {
+    var purpose: QRScannerPurpose = .gateway
     let onResult: (QRScannerResult) -> Void
     let onError: (String) -> Void
     let onDismiss: () -> Void
+
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var cameraAuthorization = AVCaptureDevice.authorizationStatus(for: .video)
+
+    var body: some View {
+        ZStack {
+            switch self.cameraAuthorization {
+            case .authorized:
+                QRScannerCameraView(
+                    purpose: self.purpose,
+                    onResult: self.onResult,
+                    onError: self.onError)
+            case .notDetermined:
+                ProgressView {
+                    Text("Requesting camera access…")
+                        .font(OpenClawType.subhead)
+                }
+            case .denied, .restricted:
+                self.cameraAccessUnavailable
+            @unknown default:
+                self.cameraAccessUnavailable
+            }
+        }
+        .task {
+            // VisionKit can report unavailable before permission has ever been requested.
+            guard self.cameraAuthorization == .notDetermined else { return }
+            _ = await AVCaptureDevice.requestAccess(for: .video)
+            guard !Task.isCancelled else { return }
+            self.cameraAuthorization = AVCaptureDevice.authorizationStatus(for: .video)
+        }
+        .onChange(of: self.scenePhase) { _, phase in
+            guard phase == .active else { return }
+            self.cameraAuthorization = AVCaptureDevice.authorizationStatus(for: .video)
+        }
+        .onDisappear(perform: self.onDismiss)
+    }
+
+    private var cameraAccessUnavailable: some View {
+        ContentUnavailableView {
+            Label {
+                Text("Camera Access Needed")
+                    .font(OpenClawType.headline)
+            } icon: {
+                Image(systemName: "camera")
+            }
+        } description: {
+            Text(self.cameraAuthorization == .restricted
+                ? "Camera access is restricted. Check Screen Time or device-management restrictions."
+                : "Allow camera access for OpenClaw in Settings to scan QR codes.")
+                .font(OpenClawType.subhead)
+        } actions: {
+            if self.cameraAuthorization == .denied {
+                Button {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    self.openURL(url)
+                } label: {
+                    Text("Open Settings")
+                        .font(OpenClawType.body)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+}
+
+private struct QRScannerCameraView: UIViewControllerRepresentable {
+    var purpose: QRScannerPurpose = .gateway
+    let onResult: (QRScannerResult) -> Void
+    let onError: (String) -> Void
 
     func makeUIViewController(context: Context) -> UIViewController {
         guard DataScannerViewController.isSupported else {
@@ -125,11 +213,10 @@ struct QRScannerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_: UIViewController, context _: Context) {}
 
-    static func dismantleUIViewController(_ uiViewController: UIViewController, coordinator: Coordinator) {
+    static func dismantleUIViewController(_ uiViewController: UIViewController, coordinator _: Coordinator) {
         if let scanner = uiViewController as? QRScannerContainerViewController {
             scanner.stopScannerCapture()
         }
-        coordinator.parent.onDismiss()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -199,11 +286,11 @@ struct QRScannerView: UIViewControllerRepresentable {
     }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
-        let parent: QRScannerView
+        let parent: QRScannerCameraView
         private var handled = false
         private var reportedError = false
 
-        init(parent: QRScannerView) {
+        init(parent: QRScannerCameraView) {
             self.parent = parent
         }
 
@@ -226,12 +313,8 @@ struct QRScannerView: UIViewControllerRepresentable {
                       let payload = barcode.payloadStringValue
                 else { continue }
 
-                if let link = GatewayConnectDeepLink.fromSetupInput(payload) {
-                    self.deliver(.gatewayLink(link), scanner: scanner)
-                    return
-                }
-                if AppleReviewDemoMode.isSetupCode(payload) {
-                    self.deliver(.setupCode(payload), scanner: scanner)
+                if let result = self.parent.purpose.parse(payload) {
+                    self.deliver(result, scanner: scanner)
                     return
                 }
             }

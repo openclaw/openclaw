@@ -14,6 +14,7 @@ import {
   prepareGatewayRestartIntentConsumption,
   type GatewayRestartIntent,
 } from "../../infra/restart-intent.js";
+import * as snapshotWorker from "../../infra/sqlite-readonly-worker.js";
 import * as processOwners from "../../infra/state-lease-process-owner.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -89,6 +90,7 @@ function publishServingOwner(
     kind: "systemd",
     name: "openclaw-gateway.service",
   },
+  host = hostname(),
 ) {
   const { db } = openOpenClawStateDatabase();
   const now = Date.now();
@@ -103,7 +105,12 @@ function publishServingOwner(
     now + 60_000,
     now,
     JSON.stringify({
-      owner: { pid, host: hostname(), startedAt: 1 },
+      owner: {
+        pid,
+        host,
+        startedAt: 1,
+        processNamespace: { ...readGatewayLockProcessNamespace(), host },
+      },
       port: 18789,
       mode,
       supervisor,
@@ -117,7 +124,9 @@ beforeEach(() => {
   resetLifecycleRuntimeLogs();
   lifecycleTestRuntime.error.mockClear();
   resetLifecycleServiceMocks();
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-restart-intent-cli-"));
+  const environment = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-restart-intent-cli-") };
+  vi.stubEnv("OPENCLAW_STATE_DIR", environment.OPENCLAW_STATE_DIR);
+  service.readCommand.mockResolvedValue({ programArguments: [], environment });
   vi.stubEnv("OPENCLAW_PROFILE", "default");
   vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "");
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "");
@@ -170,7 +179,8 @@ it.each([
         environment: { OPENCLAW_STATE_DIR: stateDir },
       });
       let consumed: GatewayRestartIntent | null = null;
-      service.restart.mockImplementationOnce(async () => {
+      service.restart.mockImplementationOnce(async (args) => {
+        await args.prepareRestart?.();
         consumed = await prepareGatewayRestartIntentConsumption(env)();
         return { outcome: "completed" };
       });
@@ -220,6 +230,7 @@ it("targets the replacement at write admission despite stopped native status", a
 });
 
 it.each([
+  { state: "hostname-drift", mode: "supervised", name: "openclaw-gateway.service" },
   { state: "unknown", mode: "supervised", name: "openclaw-gateway.service" },
   { state: "live", mode: "foreground", name: "openclaw-gateway.service" },
   { state: "live", mode: "supervised", name: "another-gateway.service" },
@@ -228,7 +239,9 @@ it.each([
   "refuses restart for an unrelated or unverifiable serving owner ($state/$mode/$name)",
   async ({ state, mode, name }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue(state);
+    if (state !== "hostname-drift") {
+      vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue(state);
+    }
     openOpenClawStateDatabase();
     const coordinator = acquireServingStateOwner();
     try {
@@ -236,10 +249,18 @@ it.each([
         process.pid + 2,
         mode,
         mode === "supervised" ? { kind: "systemd", name } : null,
+        state === "hostname-drift" ? "previous-hostname" : hostname(),
       );
       service.readRuntime.mockResolvedValue({ status: "running", pid: process.pid });
 
-      await expectRestartRefused("live serving Gateway owner");
+      await expectRestartRefused("live serving Gateway owner", state !== "hostname-drift");
+      if (state === "hostname-drift") {
+        const output = lifecycleTestRuntime.error.mock.calls.flat().join("\n");
+        expect(output).toContain(
+          `Recorded serving host "previous-hostname" does not match this host ${JSON.stringify(hostname())}`,
+        );
+        expect(output).toContain("Gateway was not signaled");
+      }
     } finally {
       coordinator.release();
     }
@@ -295,6 +316,11 @@ it.each([false, true])(
       exclusion?.release();
       return { outcome: "completed" };
     });
+    const synchronousSnapshot = active
+      ? undefined
+      : vi.spyOn(snapshotWorker, "runSqliteReadOnlyWorkerSync").mockImplementation(() => {
+          throw new Error("Stopped-service intent admission must not synchronously copy state");
+        });
 
     try {
       if (active) {
@@ -307,10 +333,13 @@ it.each([false, true])(
         });
       } else {
         await expect(runServiceRestart(createGatewayServiceRunArgs())).resolves.toBe(true);
+        expect(synchronousSnapshot).not.toHaveBeenCalled();
+        synchronousSnapshot?.mockRestore();
         expect(service.restart).toHaveBeenCalledOnce();
         expect(readIntent()).toBeUndefined();
       }
     } finally {
+      synchronousSnapshot?.mockRestore();
       coordinator?.release();
     }
   },

@@ -30,6 +30,8 @@ import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 
 const npmArtifact = {
   artifactKind: "npm-pack",
@@ -55,10 +57,6 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 function runAssertion(command: string, env: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, command], {
     encoding: "utf8",
@@ -128,15 +126,6 @@ function writeFixtureServerShims(
   chmodSync(path.join(binDir, "node"), 0o755);
   chmodSync(path.join(binDir, "sleep"), 0o755);
   writeFileSync(pidPath, "");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
@@ -485,7 +474,7 @@ done
     const pid = Number(readFileSync(pidPath, "utf8"));
     expect(Number.isInteger(pid)).toBe(true);
     // The shell EXIT trap joins this exact fixture child before returning.
-    expect(isProcessAlive(pid)).toBe(false);
+    expect(isProcessPresent(pid)).toBe(false);
     if (!stubborn) {
       expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
     }

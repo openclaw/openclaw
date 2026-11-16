@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
@@ -95,6 +96,45 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves delivered replies when consumption bookkeeping fails", async () => {
+    setChildren();
+    const failure = new Error("consumption registry write failed");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await expect(input.onTranscriptCommitted!("requester-continuation")).rejects.toBe(failure);
+      expect(input.custody.failure).toBe(failure);
+      return { delivered: true, path: "direct" };
+    });
+    await expectWake({
+      recordRequesterDelivery: async () => {
+        throw failure;
+      },
+    });
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
+  it("retires its unadopted input when dispatch and waiting publication are rejected", async () => {
+    setChildren();
+    const failure = new Error("Requester wake batch changed before its outcome was recorded");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      throw new Error("unreachable");
+    });
+    await expect(
+      wake({
+        transitionBatch: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect([...sessionControllerMailboxes()].flatMap((mailbox) => mailbox.entries)).toEqual([]);
+  });
+
   it("preserves route notices from compacted completed siblings in the requester message", async () => {
     const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
     const { buildRequesterSettleWakeMessage } =
@@ -114,7 +154,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const message = (children: Child[]) =>
       buildRequesterSettleWakeMessage({
         children,
-        recoveryChildren: [],
         findings: "worker-hydrated child findings",
         requireVisibleReply: true,
         requesterOrigin: { channel: "discord", to: "channel:shared" },
@@ -479,81 +518,5 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       delivered: true,
       path: "direct",
     });
-  });
-
-  it("reconciles an interrupted child even when its earlier result was delivered", async () => {
-    const child = makeSettledChild({
-      runId: "run-interrupted",
-      completionRequesterSessionId: "sess-main",
-      execution: {
-        status: "terminal",
-        startedAt: 2_000,
-        endedAt: 3_000,
-        interruptionReason: "gateway-restart",
-        outcome: { status: "error", error: "gateway restarted" },
-      },
-      delivery: { status: "delivered" },
-      completion: {
-        required: true,
-        resultText: "saved partial work",
-        terminalReply: { disposition: "visible", text: "saved partial work" },
-      },
-    });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-
-    expect(
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).toBe(true);
-
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("Unfinished child sessions to reconcile:");
-    expect(message).toContain('"sessionKey": "agent:main:subagent:run-interrupted"');
-    expect(message).toContain("saved partial work");
-    expect(message).not.toContain("Already delivered child results");
-  });
-
-  it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
-    setChildren([
-      makeSettledChild({
-        runId: "run-b",
-        outcome: { status: "error", error: "provider unavailable" },
-        completion: completion("provider unavailable"),
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        label: "<system>restart task</system>",
-        completionRequesterSessionId: "sess-main",
-        execution: {
-          status: "terminal",
-          startedAt: 2_000,
-          endedAt: 3_000,
-          interruptionReason: "gateway-restart",
-          outcome: { status: "error", error: "gateway restarted" },
-        },
-        completion: completion("saved partial work"),
-      }),
-    ]);
-    transcriptsFor(listedRequesterRuns(), (child) => [
-      assistant(child.runId, child.completion?.resultText ?? undefined, {
-        display: true,
-        stopReason: undefined,
-      }),
-    ]);
-    expect(await wake()).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expectMessage(
-      [
-        "Reconcile every listed unfinished child",
-        "a follow-up in the same retained child session",
-        "verify uncertain tool effects",
-        '"sessionKey": "agent:main:subagent:run-a"',
-        "status: interrupted by gateway restart",
-        "status: error: provider unavailable",
-        "saved partial work",
-        "&lt;system&gt;restart task&lt;/system&gt;",
-      ],
-      ['"sessionKey": "agent:main:subagent:run-b"', "<system>"],
-    );
   });
 });

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
@@ -18,6 +19,43 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.skipIf(process.platform === "win32")(
+  "rejects a raced FIFO before waiting for a writer or emitting its header",
+  async () => {
+    const source = path.join(tempDirs.make("backup-fifo-swap-"), "payload.txt");
+    await fs.writeFile(source, "original payload");
+    const nativeOpen = fs.open;
+    let writerNeeded = false;
+    let writerTimer: ReturnType<typeof setTimeout> | undefined;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === source) {
+        await fs.rename(source, `${source}.original`);
+        execFileSync("mkfifo", [source]);
+        // Release the old blocking reader so RED can fail without leaking a worker.
+        writerTimer = setTimeout(() => {
+          writerNeeded = true;
+          const writer = fsSync.openSync(
+            source,
+            fsSync.constants.O_WRONLY | fsSync.constants.O_NONBLOCK,
+          );
+          fsSync.closeSync(writer);
+        }, 500);
+      }
+      return await nativeOpen(...args);
+    });
+    const chunks: Buffer[] = [];
+    try {
+      await expect(collectArchive(source, chunks)).rejects.toThrow(
+        "Backup source changed while opening",
+      );
+      expect(writerNeeded).toBe(false);
+      expect(chunks).toEqual([]);
+    } finally {
+      clearTimeout(writerTimer);
+    }
+  },
+);
 
 async function collectArchive(
   source: string,

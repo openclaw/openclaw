@@ -11,16 +11,21 @@ import {
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { entryFixture } from "../../../config/sessions/session-entry-fixture.test-support.js";
+import * as historyWorker from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
+import * as sessionReader from "../../../sessions/session-controller.session-reader.js";
 import {
   registerMainSessionGroupWatch,
   handleSessionStateSessionReset,
 } from "../../../sessions/session-state-events.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { expectText } from "../../../test-utils/text-assertions.js";
+import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -42,7 +47,6 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import { applyEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
-import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -226,6 +230,64 @@ async function preparePermissionPrompt({
 
 describe("buildAttemptSystemPrompt", () => {
   registerParityHostLifecycle();
+
+  it("prepares current public links without materializing saved prompt snapshots", async () => {
+    await withOpenClawTestState({ label: "prompt-link-projection" }, async ({ env }) => {
+      const config = { gateway: { publicOrigin: "https://gateway.example" } };
+      setRuntimeConfigSnapshot(config);
+      const store = entryFixture(env, "dashboard:public-link");
+      const entry = {
+        sessionId: "public-link",
+        lifecycleRevision: "first",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "public-link", createdAt: 1 },
+        skillsSnapshot: { prompt: "Saved skill instructions.\n".repeat(8_192), skills: [] },
+      };
+      store.replace(entry);
+      const { databaseClaim } = await loadSessionEntryForAdmission(store.scope);
+      try {
+        if (!("reader" in databaseClaim) || !databaseClaim.reader) {
+          throw new Error("Prompt fixture did not admit a durable session reader");
+        }
+        const reader = databaseClaim.reader;
+        vi.spyOn(sessionReader, "getReplyOperationSessionReader").mockReturnValue(reader);
+        // A metadata publication must not send the prompt back to the worker for saved snapshots.
+        store.database.db
+          .prepare("UPDATE session_nodes SET entry_json = entry_json WHERE session_key = ?")
+          .run(store.sessionKey);
+        await reader.readEntry(() => {}, "list");
+        const workerReads = vi.spyOn(historyWorker, "withSessionHistoryWorkerDatabase");
+        const readEntry = reader.readEntry.bind(reader);
+        let snapshotMaterializations = 0;
+        vi.spyOn(reader, "readEntry").mockImplementation(async (...args) => {
+          const result = await readEntry(...args);
+          snapshotMaterializations += Number(result.entry.skillsSnapshot !== undefined);
+          return result;
+        });
+        const prepare = () =>
+          preparePermissionPrompt({
+            attemptOverrides: { config, sessionKey: store.sessionKey, sessionId: entry.sessionId },
+          });
+        const published = await prepare();
+        const sessionUrl = "https://gateway.example/chat/main/dashboard/public-link";
+        expect(published.prepared.runtimeInfo).toHaveProperty("sessionUrl", sessionUrl);
+        expect(published.prepared.systemPromptText).toContain(sessionUrl);
+        const initialWorkerReads = workerReads.mock.calls.length;
+        store.replace({ ...entry, publicShare: undefined });
+        const revoked = await prepare();
+        expect(revoked.prepared.runtimeInfo).toHaveProperty("sessionUrl", undefined);
+        expect(revoked.prepared.systemPromptText).not.toContain(
+          "https://gateway.example/chat/main/dashboard/public-link",
+        );
+        store.replace({ ...entry, sessionId: "replacement", lifecycleRevision: "second" });
+        await expect(prepare()).rejects.toThrow(/changed|replaced|revoked/i);
+        expect(initialWorkerReads).toBe(0);
+        expect(snapshotMaterializations).toBe(0);
+      } finally {
+        await databaseClaim.release();
+      }
+    });
+  });
 
   it.each(["conversation", "ephemeral", "persistent", "leaf"] as const)(
     "preserves the provider prefix and standing policy across %s follow-ups",
@@ -560,6 +622,25 @@ describe("buildAttemptSystemPrompt", () => {
     }
   });
 
+  it("keeps the session prompt when a completion wake inherits its producer's tool ceiling", async () => {
+    const ceiling = { skills: { prompt: "", toolsAllow: ["read", "write", "exec"] } };
+    const userTurn = await preparePermissionPrompt({ attemptOverrides: { trigger: "user" } });
+    const wake = await preparePermissionPrompt({
+      ...ceiling,
+      attemptOverrides: {
+        trigger: "event",
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+      },
+    });
+    expect(wake.prepared.systemPromptText).toBe(userTurn.prepared.systemPromptText);
+    // A narrowly scoped run that is not a host wake keeps the minimal prompt.
+    const scoped = await preparePermissionPrompt({
+      ...ceiling,
+      attemptOverrides: { trigger: "user" },
+    });
+    expect(scoped.prepared.systemPromptText).not.toBe(userTurn.prepared.systemPromptText);
+  });
+
   it("keeps model instructions identical when only reasoning effort changes", async () => {
     const prompts = [];
     for (const effort of ["low", "high", "medium"] as const) {
@@ -774,13 +855,7 @@ describe("embedded session prompt delivery", () => {
       });
       expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
       expect(
-        buildTurnDeliveryContextFragments({
-          sessionKey: synthetic.attempt.sessionKey,
-          sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
-          requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
-        })
-          .map((fragment) => fragment.text)
-          .join("\n"),
+        synthetic.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
       ).toMatch(
         turn.requireExplicitMessageTarget
           ? /final text is private[\s\S]*target required this turn/u
@@ -788,4 +863,33 @@ describe("embedded session prompt delivery", () => {
       );
     },
   );
+
+  it("overrides a saved group's message-tool policy for an automatic CLI reply", async () => {
+    const shared = {
+      config: { messages: { groupChat: { visibleReplies: "message_tool" as const } } },
+      sessionPromptDelivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "-100123" },
+        origin: { provider: "telegram", surface: "telegram", chatType: "group" },
+      }),
+    };
+    const user = await preparePermissionPrompt({
+      requireExplicitMessageTarget: false,
+      attemptOverrides: {
+        ...shared,
+        messageChannel: "telegram",
+        chatType: "group",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+    const cli = await preparePermissionPrompt({
+      requireExplicitMessageTarget: false,
+      attemptOverrides: { ...shared, sourceReplyDeliveryMode: undefined },
+    });
+    expect(cli.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+    expect(cli.prepared.systemPromptText).toContain("MUST use `message(action=send)`");
+    expect(
+      cli.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
+    ).toContain("This turn's final text goes to the current source automatically.");
+    expect(user.prepared.runtimeContextFragments).toEqual([]);
+  });
 });

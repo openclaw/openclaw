@@ -43,6 +43,7 @@ import {
 } from "./code-mode-matrix-provider.ts";
 import {
   readMatrixSessionLedger,
+  readMatrixModelAccounting,
   captureMatrixLedgerBoundary,
   selectMatrixLedgerRows,
   collectMatrixUsage,
@@ -192,6 +193,7 @@ export type GatewayMatrixWorkload = ReturnType<typeof createGatewayMatrixWorkloa
 
 export type GatewayMatrixEvidence = GatewayMatrixWorkload & {
   behavior: Record<string, boolean>;
+  modelAccounting: Awaited<ReturnType<typeof readMatrixModelAccounting>>;
   taskElapsedMs?: number;
   taskResponseAt?: number;
   startupMs: number;
@@ -218,6 +220,7 @@ export type GatewayMatrixEvidence = GatewayMatrixWorkload & {
     taskReceipts: string;
     interviewReceipts: string;
     log: string;
+    modelTimeline: string;
     deliveredFiles?: string;
   };
 };
@@ -1512,6 +1515,7 @@ export async function runGatewayMatrixCell(
   };
   let failure: unknown;
   let cleanupCertain: boolean;
+  let gatewayExitedCleanly = false;
   let task: ResponseResult = { final: "" };
   let interview: ResponseResult = { final: "" };
   let taskEvents: unknown[] = [];
@@ -1573,7 +1577,11 @@ export async function runGatewayMatrixCell(
         "--allow-unconfigured",
       ],
       cwd: workspace,
-      env,
+      env: {
+        ...env,
+        OPENCLAW_DIAGNOSTICS: "timeline",
+        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path.join(artifactDir, "model-timeline.jsonl"),
+      },
       exactEnv: true,
       stdinMode: "pipe-closed",
       timeoutMs: (params.timeoutSeconds * (performance ? 1 : 2) + 120) * 1_000,
@@ -1652,7 +1660,14 @@ export async function runGatewayMatrixCell(
     }
     child?.cancel("manual-cancel");
     cleanupCertain = true;
-    for (const settle of [() => child?.wait(), cleanup, () => supervisor.shutdown()]) {
+    for (const settle of [
+      async () => {
+        const result = await child?.wait();
+        gatewayExitedCleanly = result?.exitCode === 0 && result.exitSignal === null;
+      },
+      cleanup,
+      () => supervisor.shutdown(),
+    ]) {
       try {
         await settle();
       } catch (error) {
@@ -1709,6 +1724,17 @@ export async function runGatewayMatrixCell(
     await fs.writeFile(path.join(artifactDir, "gateway.log"), redact(log), { mode: 0o600 });
   }
   const trace = collectGatewayMatrixTrace(taskEvents);
+  const modelAccounting = await readMatrixModelAccounting({
+    file: path.join(artifactDir, "model-timeline.jsonl"),
+    joined: cleanupCertain && gatewayExitedCleanly,
+    foregroundRunIds: [
+      task.id,
+      interview.id,
+      ...(ledger?.runs
+        .filter((run) => run.requesterSessionKey === rootSessionKey)
+        .map((run) => run.runId) ?? []),
+    ].filter((id): id is string => Boolean(id)),
+  });
   const interviewTrace = collectGatewayMatrixTrace(interviewEvents);
   const accounting = ledger
     ? collectMatrixUsage({
@@ -1860,6 +1886,7 @@ export async function runGatewayMatrixCell(
     failure instanceof Error &&
     (failure.name === "TimeoutError" || /timed out|deadline|timeout/iu.test(failure.message));
   const gateway: GatewayMatrixEvidence = {
+    modelAccounting,
     ...createGatewayMatrixWorkload(
       params.cell.task,
       params.cell.repetition,
@@ -1900,6 +1927,7 @@ export async function runGatewayMatrixCell(
       taskReceipts: artifactPath("task-receipts.json"),
       interviewReceipts: artifactPath("interview-receipts.json"),
       log: artifactPath("gateway.log"),
+      modelTimeline: artifactPath("model-timeline.jsonl"),
       ...(deliveredFiles ? { deliveredFiles: artifactPath("delivered-files.json") } : {}),
     },
   };

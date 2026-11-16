@@ -109,7 +109,7 @@ it.each([undefined, 4096])("defaults output tokens without inventing context (%s
   expect(model).toMatchObject({
     reasoning: false,
     input: ["text"],
-    maxTokens: maxTokens ?? 8192,
+    maxTokens: maxTokens ?? 32_768,
   });
   expect([model?.contextWindow, model?.contextTokens]).toEqual([undefined, undefined]);
   expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });

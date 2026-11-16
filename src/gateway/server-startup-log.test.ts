@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { makeProviderModelsConfigFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { VERSION } from "../version.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 
 const modelMocks = vi.hoisted(() => ({
@@ -27,7 +31,8 @@ function createManifestRecord(
 
 // Provider thinking owns a dedicated suite. Startup logging only needs its
 // fixture-level default while proving precedence and banner composition.
-vi.mock("../agents/model-thinking-default.js", () => ({
+vi.mock("../agents/model-thinking-default.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-thinking-default.js")>()),
   resolveThinkingDefault: modelMocks.resolveThinkingDefault,
 }));
 
@@ -36,7 +41,7 @@ async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0
   const warn = vi.fn();
   await logGatewayStartup({
     cfg: {},
-    env: {},
+    env: { PATH: "" },
     manifestRecords: [],
     loadedPluginIds: [],
     log: { info, warn },
@@ -81,20 +86,16 @@ describe("gateway startup log", () => {
           },
           models: {
             providers: Object.fromEntries(
-              ["local-utility", "ordinary"].map((provider) => [
-                provider,
-                {
-                  baseUrl: "http://127.0.0.1:9/v1",
-                  models: [
-                    makeProviderModelFixture({
-                      id: provider === "local-utility" ? "small" : "large",
-                      provider,
-                      api: "openai-completions",
-                      baseUrl: "http://127.0.0.1:9/v1",
-                    }),
-                  ],
-                },
-              ]),
+              ["local-utility", "ordinary"].flatMap((provider) =>
+                Object.entries(
+                  makeProviderModelsConfigFixture<"openai-completions">({
+                    id: provider === "local-utility" ? "small" : "large",
+                    provider,
+                    api: "openai-completions",
+                    baseUrl: "http://127.0.0.1:9/v1",
+                  }).providers,
+                ),
+              ),
             ),
           },
         },
@@ -112,14 +113,40 @@ describe("gateway startup log", () => {
     vi.useRealTimers();
   });
 
-  it("logs version alignment guidance as information on ordinary startup", async () => {
-    const { info, warn } = await startup({});
-
-    expect(info).toHaveBeenCalledWith(
-      "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each([undefined, null, VERSION, "2020.1.1", "2099.1.1"])(
+    "reports PATH CLI skew best effort (CLI version: %s)",
+    async (version) => {
+      await withTestDir({ prefix: "startup-cli-skew-" }, async (root) => {
+        if (version !== undefined) {
+          await fs.writeFile(
+            path.join(root, process.platform === "win32" ? "openclaw.cmd" : "openclaw"),
+            "",
+            { mode: 0o755 },
+          );
+        }
+        if (version) {
+          await fs.writeFile(
+            path.join(root, "package.json"),
+            JSON.stringify({ name: "openclaw", version }),
+          );
+        }
+        const { info, warn } = await startup({ env: { PATH: root } });
+        expect(info).toHaveBeenCalledWith(
+          "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+        );
+        if (version) {
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(
+              `PATH CLI ${version} at ${root} differs from this Gateway ${VERSION} at `,
+            ),
+          );
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw update"));
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("warns when dangerous config flags are enabled", async () => {
     const { warn } = await startup({

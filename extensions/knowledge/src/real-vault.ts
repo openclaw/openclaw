@@ -14,6 +14,8 @@ export type StoreConfig = {
   vaultId: string;
   publicationId: string;
   writesEnabled: boolean;
+  /** Degree percentile at which a page counts as a hub for its body budget. */
+  hubPercentile?: number;
 };
 export type IdentityStore = {
   lookup(key: string): Promise<Manifest | undefined>;

@@ -15,6 +15,7 @@ import {
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
 import { prepareSandboxSessionTools } from "../../agents/tools/sessions-operator-authority.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { readReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
 import { withVisibleWorkSessionReporter } from "../../auto-reply/reply/visible-work-sessions.js";
 import {
   bindChildSessionPublication,
@@ -160,8 +161,7 @@ async function createHostedChildFixture({
   const signal = new AbortController();
   const beforeInputCommit = vi.fn(() => {});
   const registry = getTestPluginRegistry();
-  // A real approval hook keeps input queued until execution promotes it; neither
-  // the pending-input owner nor its transcript writer is replaced by a test double.
+  // Keep the real input commit hook so origin closure must fence the write itself.
   registry.typedHooks.push({
     pluginId: "child-custody-fixture",
     hookName: "before_message_write",
@@ -189,7 +189,10 @@ async function createHostedChildFixture({
         }),
       );
     }
-    // The real reply admission owner rejects a missing persistence result before inference.
+    // Committed input survives origin closure, but later effects still need live authority.
+    const input = expectDefined(readReplySourceInput(replyOptions), "accepted child source");
+    input.abortSignal.throwIfAborted();
+    expectDefined(input.sourceAdapter?.authority, "accepted child authority").assertCurrent();
     const persisted = await recorder.persistApproved();
     persistenceResult(persisted);
     if (!persisted) {
@@ -413,7 +416,7 @@ function userMessages(scope: ReturnType<ChildFixture["scope"]>) {
   );
 }
 
-async function expectQueued(
+async function expectCommitted(
   fixture: ChildFixture,
   accepted: { runStarted: boolean; sessionId: string },
 ) {
@@ -422,9 +425,13 @@ async function expectQueued(
   expect(accepted.sessionId).toBe(scope.sessionId);
   await fixture.dispatchEntered;
   const pending = await listSessionPendingInputs(scope);
-  expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
-  expect(userMessages(scope)).toEqual([]);
-  return { scope, pending };
+  expect(pending).toEqual({ total: 0, items: [] });
+  const transcript = userMessages(scope);
+  expect(transcript).toHaveLength(1);
+  expect(transcript[0]).toMatchObject({
+    message: { content: "Continue independently.", provenance: { kind: "inter_session" } },
+  });
+  return { scope, transcript };
 }
 
 describe("hosted creation transfers accepted child input", () => {
@@ -601,7 +608,7 @@ describe("hosted creation transfers accepted child input", () => {
     async (options) => {
       await using fixture = await createHostedChildFixture(options);
       const accepted = await fixture.send();
-      await expectQueued(fixture, accepted);
+      await expectCommitted(fixture, accepted);
       if (options.toolInvocation) {
         fixture.closeInvocation();
       }
@@ -661,7 +668,7 @@ describe("hosted creation transfers accepted child input", () => {
     async (change) => {
       await using fixture = await createHostedChildFixture();
       const accepted = await fixture.send();
-      const { scope, pending } = await expectQueued(fixture, accepted);
+      const { scope, transcript } = await expectCommitted(fixture, accepted);
       fixture.closeParent();
       if (change === "replacement") {
         replaceSessionEntrySync(scope, { sessionId: "successor-child", updatedAt: Date.now() });
@@ -670,13 +677,10 @@ describe("hosted creation transfers accepted child input", () => {
       }
       await fixture.finish();
       expect(fixture.provider).not.toHaveBeenCalled();
-      expect(userMessages(scope)).toEqual([]);
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ id: pending.items[0]?.id, state: "interrupted" }],
-      });
+      expect(userMessages(scope)).toEqual(transcript);
+      expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
+      expect(fixture.persistenceResult).not.toHaveBeenCalled();
       if (change === "replacement") {
-        expect(fixture.persistenceResult).toHaveBeenCalledExactlyOnceWith(undefined);
         expect(loadSessionEntry(scope)?.sessionId).toBe("successor-child");
         expect(userMessages({ ...scope, sessionId: "successor-child" })).toEqual([]);
       }

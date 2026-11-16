@@ -3,10 +3,10 @@ import { For, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 const { retryStale } = vi.hoisted(() => ({
@@ -126,7 +126,9 @@ it("keeps card chrome through import recovery and retains the current resolved r
   expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Exec");
   expect(placeholder.querySelector(".chat-tool-disclosure__content")).not.toBeNull();
   expect(placeholder.querySelector(".chat-tool-row__chevron")).not.toBeNull();
-  expect(root.container.querySelector(".chat-permission-card")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(root.container.querySelector(".chat-permission-card")).not.toBeNull(),
+  );
   expect(root.container.querySelector(".chat-progress-card-receipt")).not.toBeNull();
   for (const [name, verb, removed] of [
     ["edit", "Editing", "-1"],

@@ -5,11 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  beginRestartRecoveryTerminalDelivery,
-  cancelRestartRecoveryTerminalDelivery,
-  completeRestartRecoveryTerminalDelivery,
-} from "./restart-recovery-receipt.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
@@ -80,10 +75,6 @@ it("keeps unbound absent collaboration reads empty without allocating an owner",
   await expect(
     addSessionSuggestionInWorker(scope, { authorId: "reader", text: "Missing session" }),
   ).rejects.toThrow();
-  const delivery = { ...scope, sessionId: "absent", sourceTurnId: "source", toolCallId: "send" };
-  expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
-  expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
-  expect(await cancelRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
   expect(memorySessionActorOwners.read(location)).toBeUndefined();
 });
 
@@ -114,20 +105,9 @@ it("shares current unbound memory facts across sharing, delivery and steering", 
     delivery.assertCurrent();
     const steering = prepareSteeringDelivery({
       ...scope,
-      sessionId: entry.sessionId,
       assertCurrent() {},
     });
     await steering.prepareCurrent();
-    await mutate(scope, {
-      type: "session.entry.patch",
-      input: {
-        operation: {
-          kind: "fields",
-          patch: { restartRecoveryDeliveryReceiptState: "delivered-terminal" },
-        },
-      },
-    });
-    await expect(steering.prepareCurrent()).rejects.toThrow("delivered-terminal");
 
     owner.closeSession(scope.sessionKey);
     expect(() => facts.readCurrent(cfg)).toThrow("Session access facts are unavailable");

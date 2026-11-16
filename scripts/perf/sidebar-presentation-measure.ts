@@ -7,7 +7,9 @@
  *   --state-dir .local/sidebar/run-1 --output .local/sidebar/run-1.json
  * Add --owner-file <baseline/session-row-presentation.ts> to substitute only that
  * owner at load time. Repeat --source-file <saved/session-utils-display.ts> (original
- * basename required) to substitute additional Gateway owners; sourceHashes records each.
+ * basename required) to substitute additional Gateway/agent owners; sourceHashes records each.
+ * --background-processes 50 seeds live registry records across the selected page,
+ * split between canonical-key and sessionId scope matching, including agentless records.
  * Alternate baseline/candidate runs (at least five pairs),
  * with matched A/A controls before timing claims. Each run needs a fresh state dir.
  * Use separate --allocations runs for sampled bytes including collected objects;
@@ -24,6 +26,8 @@
  * measures full-page packing under writes. Call latency excludes the write;
  * CPU/allocation include it. Use identical churn on both revisions.
  * --repeats N reuses fixture setup, writing <output>.<1-based repeat>.json.
+ * --row-mode compact|full measures recipient diagnostics; --sandbox-required
+ * selects a role that cannot read the fixture's unsandboxed host workspace.
  * With --barrier-dir <fresh directory> --side base|fix, publish <side>.ready
  * after warmup and wait for <repeat>.<side>.go before each measured repeat.
  * A controller can alternate the two prepared processes without overlapping measured reads.
@@ -36,21 +40,18 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
 import { transformSync } from "esbuild";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -65,8 +66,11 @@ const { values } = parseArgs({
     repeats: { type: "string", default: "1" },
     sessions: { type: "string", default: "10000" },
     "page-size": { type: "string", default: "100" },
+    "row-mode": { type: "string", default: "sidebar" },
+    "sandbox-required": { type: "boolean", default: false },
     churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
+    "background-processes": { type: "string", default: "0" },
     operations: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
     "max-presentation-bytes-per-call": { type: "string" },
@@ -74,11 +78,18 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(global.gc, "run with --expose-gc");
+assert(
+  values["row-mode"] === "sidebar" ||
+    values["row-mode"] === "compact" ||
+    values["row-mode"] === "full",
+);
+const rowMode = values["row-mode"] === "full" ? undefined : values["row-mode"];
 const integer = (
-  name: "sessions" | "clients" | "operations" | "repeats" | "page-size",
+  name: "sessions" | "clients" | "operations" | "repeats" | "page-size" | "background-processes",
   min: number,
 ) => parseStrictIntegerOption({ raw: values[name], label: name, min, fallback: min });
 const sessions = integer("sessions", 2);
+const backgroundProcesses = integer("background-processes", 0);
 const clients = integer("clients", 2);
 const operations = integer("operations", 1);
 const repeats = integer("repeats", 1);
@@ -124,7 +135,7 @@ if (sources.size) {
     load(url, context, next) {
       const loaded = next(url, context);
       for (const [name, source] of sources) {
-        if (url.endsWith(`/src/gateway/${name}`)) {
+        if (url.endsWith(`/src/gateway/${name}`) || url.endsWith(`/src/agents/${name}`)) {
           replaced.add(name);
           return {
             ...loaded,
@@ -144,6 +155,7 @@ const cfg: OpenClawConfig = {
       default: "view",
       definitions: {
         view: {
+          ...(values["sandbox-required"] ? { sandbox: "required" } : {}),
           sessions: { others: "view" },
           agents: "*",
           scopes: ["operator.read", "operator.write"],
@@ -162,10 +174,7 @@ process.env = {
 const traced = process.execArgv.includes("--trace-gc-nvp");
 const marker = (phase: string, profilePath?: string) => {
   if (traced) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, profilePath);
   }
 };
 marker("identify-start");
@@ -185,6 +194,7 @@ const [
   { serializeGatewayFrame },
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
+  { addSession, createProcessSession, deleteSession },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
@@ -199,6 +209,7 @@ const [
   import("../../src/gateway/serialized-json.js"),
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
+  import("../../src/agents/bash-process-registry.js"),
 ]);
 assert.equal(replaced.size, sources.size, "source substitution did not run");
 setActivePluginRegistry(createEmptyPluginRegistry());
@@ -240,17 +251,9 @@ let connected = false;
 const collections: { kind: number; ms: number }[] = [];
 let start = Infinity;
 let end = Infinity;
-const record = (entries: PerformanceEntry[]) => {
-  for (const entry of entries) {
-    if (entry.startTime >= start && entry.startTime < end) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-};
-const observer = new PerformanceObserver((events) => record(events.getEntries()));
+const observer = new PerformanceObserver((events) =>
+  recordGcCollections(events.getEntries(), collections, start, end),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -264,6 +267,28 @@ function distribution(samples: number[]) {
   };
 }
 try {
+  for (let index = 0; index < backgroundProcesses; index++) {
+    const rowIndex = sessions - 1 - (index % pageSize);
+    addSession(
+      createProcessSession({
+        id: `sidebar-process-${index}`,
+        scopeKey: index % 2 ? keyFor(rowIndex) : `sidebar-${rowIndex}`,
+        agentId: index % 3 ? "main" : undefined,
+        command: "synthetic background work",
+        cleanupMs: 60_000,
+        startedAt: 1_800_000_000_000,
+        maxOutputChars: 10_000,
+        totalOutputChars: 0,
+        pendingStdoutChars: 0,
+        pendingStderrChars: 0,
+        pendingOutputDropped: false,
+        exited: false,
+        truncated: false,
+        backgrounded: true,
+        cursorKeyMode: "normal",
+      }),
+    );
+  }
   runOpenClawAgentWriteTransaction(
     (database) => {
       for (let index = 0; index < sessions; index++) {
@@ -282,12 +307,19 @@ try {
     },
     { agentId: "main" },
   );
+  const coldStart = performance.now();
+  const coldCpu = process.cpuUsage();
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.prepareSelection();
   await projection.ensureMaterialized();
+  const coldUsedCpu = process.cpuUsage(coldCpu);
+  const coldProjection = {
+    elapsedMs: performance.now() - coldStart,
+    cpuMs: (coldUsedCpu.user + coldUsedCpu.system) / 1000,
+  };
   const revisions: (string | undefined)[] = Array.from({ length: clients });
-  const opts = {
-    rowMode: "sidebar" as const,
+  const opts: SessionsListParams = {
+    rowMode,
     source: "sidebar" as const,
     limit: pageSize,
     archived: "all" as const,
@@ -297,12 +329,14 @@ try {
     const result = await listProjectedSessions({
       projection: projection!,
       client: recipients[slot],
-      opts: { ...opts, ifRowsRevision: conditional ? revisions[slot] : undefined },
+      opts: { ...opts, ifRowsRevision: conditional ? (revisions[slot] ?? "") : undefined },
       acceptsSerializedJson: true,
     });
     assert.equal(result.count, pageSize);
     assert.equal(result.totalCount, sessions);
-    revisions[slot] = result.rowsRevision;
+    if (result.rowsRevision !== undefined) {
+      revisions[slot] = result.rowsRevision;
+    }
     // Exercise the real response encoder without a socket or a retained response backlog.
     serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result });
     return result;
@@ -351,6 +385,10 @@ try {
     const result = await list(index, false);
     const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
     assert.equal(rows.length, pageSize);
+    assert.equal(
+      rows.reduce((count, row) => count + (row.backgroundProcessCount ?? 0), 0),
+      backgroundProcesses,
+    );
     assert.equal(rows[0]?.key, keyFor(sessions - 1));
     assert.equal(
       rows[0]?.sharingRole,
@@ -444,7 +482,7 @@ try {
     const usedThread = process.threadCpuUsage(threadCpu);
     loop.disable();
     await nextTurn();
-    record(observer.takeRecords());
+    recordGcCollections(observer.takeRecords(), collections, start, end);
     observer.disconnect();
     let allocation:
       | {
@@ -550,10 +588,23 @@ try {
           "session-list-view-cache.ts",
           "session-row-prepared-read.ts",
           "session-utils-display.ts",
+          "session-utils-core.ts",
+          "session-utils-row.ts",
+          "session-row-projection-record.ts",
+          "bash-process-observation.ts",
         ].map((name) => [
           name,
           createHash("sha256")
-            .update(sources.get(name) ?? readFileSync(path.resolve("src/gateway", name), "utf8"))
+            .update(
+              sources.get(name) ??
+                readFileSync(
+                  path.resolve(
+                    name === "bash-process-observation.ts" ? "src/agents" : "src/gateway",
+                    name,
+                  ),
+                  "utf8",
+                ),
+            )
             .digest("hex"),
         ]),
       ),
@@ -561,9 +612,13 @@ try {
       clients,
       identities: profiles.length,
       pageSize,
+      backgroundProcesses,
+      rowMode: values["row-mode"],
+      sandboxRequired: values["sandbox-required"],
       operations,
       warmCalls,
       preparedBackfillRows: pageSize,
+      coldProjection,
       repeat,
       repeats,
       churn: values.churn,
@@ -619,6 +674,9 @@ try {
     inspector.disconnect();
   }
   projection?.dispose();
+  for (let index = 0; index < backgroundProcesses; index++) {
+    deleteSession(`sidebar-process-${index}`);
+  }
   catalog.release();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();

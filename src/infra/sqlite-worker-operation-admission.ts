@@ -1,42 +1,44 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
+import { MessageChannel, type MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   prepareSqliteDatabaseAdmission,
+  prepareSqliteDatabaseAdmissionAsync,
+  retainPreparedSqliteDatabaseAdmissionLocation,
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
-  type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import {
-  readSqliteWorkerMonotonicNs,
+  readSqliteWorkerAdmissionDecision,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
+  type SqliteWorkerAdmissionHandler as AdmissionHandler,
+  type SqliteWorkerDatabaseAuthority as DatabaseAuthority,
   type SqliteWorkerExecutionAuthority,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import {
   SQLITE_COLD_ADMISSION_PENDING,
+  createSqliteDatabaseAdmissionReplies,
   exchangeDatabaseAdmissions,
   getSqliteDatabaseAdmissionUpstream,
   withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
 import {
-  currentSqliteWorkerOperationAdmission as currentAdmission,
-  isNativeCommitReceipt,
-  type NativeCommitReceipt,
+  createSqliteWorkerNativeReceiptOwner,
   type RetainedWorkerTransactionAdmission,
-  type SqliteWorkerNativeSettlement,
   type SqliteWorkerNativeSettlementOwner,
 } from "./sqlite-worker-operation-settlement.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
-import { recordWorkerMessage } from "./worker-message-metrics.js";
+import { recordWorkerAuthorityMessage } from "./worker-message-metrics.js";
 
 export {
   deferSqliteWorkerCommitReceipt,
@@ -48,35 +50,25 @@ export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission
 export {
   withSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmissionAsync,
+  requestSqliteWorkerSchemaMaintenance,
+  takeSqliteWorkerOperationAdmissionAttachment,
 } from "./sqlite-worker-operation-scope.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
-const TIMED_OUT = 3;
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
-type DatabaseAuthority = {
-  /** Canonical identity captured when the database owner was admitted. */
-  databasePath: string;
-  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
-  /** Only the broker can identify an initial open of its captured primary database. */
-  coldOpenPath?: string;
-  assertRequest?(): void;
-  assertAccess(): void;
-  assertCreate?(databasePath: string): void;
-  acquireSchema(): { assertCurrent(): void; release(): void };
-};
-
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
+  requestClass?: string; // Broker-owned telemetry, never authority.
   readonly attachment?: { value: unknown };
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
   observeRequests(observer: (request: SqliteWorkerAdmissionRequest) => void): void;
   service(): void;
-  finish(): void;
+  finish(outcome?: "not-entered"): void | Promise<void>;
   bindDatabaseAuthority(authority: DatabaseAuthority): void;
 };
 
@@ -97,18 +89,6 @@ const executionAuthorities = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerExecutionAuthorities"),
   () => new WeakMap<SqliteWorkerOperationAdmission, SqliteWorkerExecutionAuthority>(),
 );
-const databaseAdmissionCursors = new WeakMap<
-  SqliteWorkerOperationAdmission,
-  { cursor: SqliteDatabaseAdmissionCursor; reset(): SqliteDatabaseAdmissionCursor }
->();
-
-export function bindSqliteWorkerDatabaseAdmissionCursor(
-  admission: SqliteWorkerOperationAdmission,
-  cursor: SqliteDatabaseAdmissionCursor,
-  reset: () => SqliteDatabaseAdmissionCursor,
-): void {
-  databaseAdmissionCursors.set(admission, { cursor, reset });
-}
 
 export function bindSqliteWorkerExecutionAuthority(
   admission: SqliteWorkerOperationAdmission,
@@ -138,23 +118,15 @@ export function observeSqliteWorkerCommittedFacts(
   bind(observer);
 }
 
-type AdmissionHandler = (
-  request: SqliteWorkerAdmissionRequest,
-  grant: (beforeRelease?: () => void) => boolean,
-) => void;
-
 /** The optional continuation runs under live host authority before releasing the native writer. */
 export const createSqliteWorkerOperationAdmission = (
   admit: AdmissionHandler,
   attachment?: unknown,
   prepare?: (request: SqliteWorkerAdmissionRequest) => Promise<void>,
-): SqliteWorkerOperationAdmission =>
-  createOperationAdmission(admit, attachment, undefined, prepare);
+) => createOperationAdmission(admit, attachment, undefined, prepare);
 
 /** Task lifetime channels relay a broker's creation grant without acquiring database authority. */
-export function createSqliteDatabaseAdmissionRelay(
-  assertCurrent: () => void,
-): SqliteWorkerOperationAdmission {
+export function createSqliteDatabaseAdmissionRelay(assertCurrent: () => void) {
   return createOperationAdmission(
     () => {
       throw new Error("Worker format facts do not grant database authority");
@@ -169,21 +141,32 @@ function createOperationAdmission(
   attachment?: unknown,
   assertRelayCurrent?: () => void,
   prepare?: (request: SqliteWorkerAdmissionRequest) => Promise<void>,
-): SqliteWorkerOperationAdmission {
-  const { port1, port2 } = new MessageChannel();
-  const inOwnerContext = AsyncLocalStorage.snapshot();
-  const decisions = new Set<Int32Array>();
-  let databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+) {
+  // Closed Node ports retain their creation context; only the carrier is context-free.
+  const { port1, port2 } = runInDetachedAsyncContext(() => new MessageChannel());
+  let callbacks:
+    | {
+        admit: typeof admit;
+        prepare: typeof prepare;
+        assertRelayCurrent: typeof assertRelayCurrent;
+        inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
+      }
+    | undefined = {
+    admit,
+    prepare,
+    assertRelayCurrent,
+    inOwnerContext: AsyncLocalStorage.snapshot(),
+  };
+  // Only accepted broker creation attaches filesystem completion to its decision.
+  const decisions = new Map<Int32Array, Promise<void> | undefined>();
+  let finishing: Promise<void> | undefined;
+  const databaseReplies = createSqliteDatabaseAdmissionReplies();
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;
+  let samplePayload: boolean | undefined;
   let observeRequest: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
-  const commitObservers: CommitObserver[] = [];
-  let observingCommit = false;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
-  let committed: SqliteWorkerNativeSettlementOwner["committed"];
-  let nativeReceiptSequence = 0;
-  let settlement: SqliteWorkerNativeSettlement | undefined;
   let databaseAuthority:
     | (DatabaseAuthority & { lease?: ReturnType<DatabaseAuthority["acquireSchema"]> })
     | undefined;
@@ -202,83 +185,45 @@ function createOperationAdmission(
       cleanupFailures.push(error);
     }
   };
-  const invalidProtocol = (
-    kind: "commit receipt" | "native settlement" | "admission request",
-    code: "outcome-unknown" | "unavailable" = "outcome-unknown",
-  ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
-  const installCommitted = (receipt: NativeCommitReceipt): void => {
-    // Each private port delivers receipts in order; repeated receipts remain idempotent.
-    if (receipt.sequence <= nativeReceiptSequence) {
-      return;
-    }
-    nativeReceiptSequence = receipt.sequence;
-    const publication = { facts: receipt.facts };
-    committed = publication;
-    observingCommit = true;
-    try {
-      inOwnerContext(() => {
-        for (const observer of commitObservers) {
-          observer(publication);
-        }
-      });
-    } catch (error) {
-      recordFailure(
-        Object.assign(
-          new SqliteWorkerError("SQLite committed facts publication failed", "outcome-unknown"),
-          { cause: error },
-        ),
-        "protocol",
-      );
-    } finally {
-      observingCommit = false;
-    }
-  };
-  const receive = (message: unknown) => {
-    recordWorkerMessage(
-      isRecord(message) && message.kind === "sqlite-database-admissions"
-        ? "admission"
-        : "authority",
-      "from_worker",
-      isRecord(message) && typeof message.payloadBytes === "number"
-        ? message.payloadBytes
-        : undefined,
-    );
+  const receipts = createSqliteWorkerNativeReceiptOwner(
+    (operation) => callbacks?.inOwnerContext(operation),
+    (error) => recordFailure(error, "protocol"),
+  );
+  const receive = (wire: unknown) => {
+    // Reentrant finish releases the owner record, not an already-running callback frame.
+    const currentCallbacks = callbacks;
+    const metric = isRecord(wire) ? wire : undefined;
+    samplePayload = recordWorkerAuthorityMessage(metric, admission.requestClass, samplePayload);
     started = true;
-    if (isRecord(message) && message.kind === "sqlite-database-admissions") {
-      if (
-        !(message.port instanceof MessagePort) ||
-        !(message.decision instanceof SharedArrayBuffer) ||
-        message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
-        (message.location !== undefined && typeof message.location !== "string") ||
-        (message.deadlineAtMs !== undefined &&
-          (typeof message.deadlineAtMs !== "number" || !Number.isFinite(message.deadlineAtMs))) ||
-        (message.create !== undefined &&
-          typeof message.create !== "boolean" &&
-          message.create !== "admitted")
-      ) {
-        recordFailure(
-          new SqliteWorkerError("SQLite admission facts request is invalid", "unavailable"),
-          "protocol",
-        );
+    if (metric?.kind === "sqlite-database-admissions") {
+      const received = databaseReplies.receive(
+        metric,
+        admission,
+        currentCallbacks?.inOwnerContext,
+        (error) => recordFailure(error, "protocol"),
+      );
+      if (!received) {
         return;
       }
-      const decision = new Int32Array(message.decision);
-      const deadlineAtMs = message.deadlineAtMs;
-      const assertWaiting = () => {
-        if (
-          Atomics.load(decision, 0) !== REQUESTED ||
-          (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs)
-        ) {
-          throw new SqliteWorkerError("SQLite admission requester stopped waiting", "unavailable");
-        }
-      };
+      const {
+        message,
+        decision,
+        deadlineAtMs,
+        observedLocation,
+        assertWaiting,
+        publishFacts,
+        failFacts,
+        finishFacts,
+      } = received;
       let coldOpenPath: string | undefined;
+      let preparing = false;
       try {
         assertWaiting();
-        if (closed) {
+        if (closed || !currentCallbacks) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
         }
-        const assertRelayCreation = message.create === "admitted" ? assertRelayCurrent : undefined;
+        const assertRelayCreation =
+          message.create === "admitted" ? currentCallbacks.assertRelayCurrent : undefined;
         if (message.create === "admitted" && !assertRelayCreation) {
           throw new SqliteWorkerError("SQLite creation relay is not admitted", "closed");
         }
@@ -288,6 +233,112 @@ function createOperationAdmission(
         }
         // The paired registry owns these records; sharing them grants no database authority.
         installSqliteDatabaseAdmissions(admissions);
+        const authority = databaseAuthority;
+        const expected = authority?.databaseIdentity;
+        const expectedIdentity =
+          expected &&
+          (message.location === expected.databasePath ||
+            message.location === authority.databasePath)
+            ? expected
+            : undefined;
+        const upstream = getSqliteDatabaseAdmissionUpstream();
+        const prepared =
+          !message.create &&
+          (!message.location ||
+            retainPreparedSqliteDatabaseAdmissionLocation(
+              message.location,
+              expectedIdentity,
+              observedLocation,
+            ));
+        if (!upstream && prepared) {
+          publishFacts(admissions);
+          return;
+        }
+        if (
+          !upstream &&
+          message.location &&
+          (!message.create || authority || assertRelayCreation)
+        ) {
+          const location = message.location;
+          const createRequest = message.create;
+          const assertCurrent = () => {
+            assertWaiting();
+            if (closed || callbacks !== currentCallbacks || databaseAuthority !== authority) {
+              throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
+            }
+            currentCallbacks.inOwnerContext(() => {
+              authority?.assertRequest?.();
+              assertRelayCreation?.();
+            });
+          };
+          decisions.set(decision, undefined);
+          preparing = true;
+          void currentCallbacks.inOwnerContext(async () => {
+            try {
+              await prepareSqliteDatabaseAdmissionAsync({
+                location,
+                expectedIdentity,
+                observedLocation,
+                assertCurrent,
+                ...(createRequest
+                  ? {
+                      create: {
+                        async authorize(creationLocation: string) {
+                          assertCurrent();
+                          if (createRequest === "admitted") {
+                            return;
+                          }
+                          const assertCreate = authority?.assertCreate?.bind(authority);
+                          const prepareCreate = authority?.prepareCreate?.bind(authority);
+                          if (!authority || !assertCreate) {
+                            throw new SqliteWorkerError(
+                              "SQLite worker file creation requires host authority",
+                              "closed",
+                            );
+                          }
+                          if (
+                            authority.coldOpenPath &&
+                            (await resolveIdentityPathViaExistingAncestor(
+                              authority.coldOpenPath,
+                            )) === creationLocation
+                          ) {
+                            coldOpenPath = authority.coldOpenPath;
+                          }
+                          assertCurrent();
+                          currentCallbacks.inOwnerContext(() => authority.assertAccess());
+                          if (prepareCreate) {
+                            await currentCallbacks.inOwnerContext(prepareCreate, creationLocation);
+                          } else {
+                            currentCallbacks.inOwnerContext(assertCreate, creationLocation);
+                          }
+                          assertCurrent();
+                          currentCallbacks.inOwnerContext(() => authority.assertAccess());
+                          coldOpenPath = undefined;
+                        },
+                        retain(completion: Promise<void>) {
+                          // The same waiting decision now also owns the submitted host effect.
+                          decisions.set(decision, completion);
+                          void completion.catch((error: unknown) => {
+                            if (!cleanupFailures.includes(error)) {
+                              cleanupFailures.push(error);
+                            }
+                          });
+                        },
+                      },
+                    }
+                  : {}),
+              });
+              assertCurrent();
+              publishFacts(admissions);
+            } catch (error) {
+              failFacts(error, coldOpenPath);
+            } finally {
+              decisions.delete(decision);
+              finishFacts();
+            }
+          });
+          return;
+        }
         let location = message.location;
         let create = false;
         if (
@@ -297,34 +348,33 @@ function createOperationAdmission(
         ) {
           location = resolveIdentityPathViaExistingAncestorSync(message.location);
           const creationLocation = location;
-          const authority = databaseAuthority;
-          const assertCreate = authority?.assertCreate?.bind(authority);
+          const creationAuthority = databaseAuthority;
+          const assertCreate = creationAuthority?.assertCreate?.bind(creationAuthority);
           if (message.create === "admitted") {
             create = true;
-          } else if (authority && assertCreate) {
+          } else if (creationAuthority && assertCreate) {
             if (
-              authority.coldOpenPath &&
-              resolveIdentityPathViaExistingAncestorSync(authority.coldOpenPath) ===
+              creationAuthority.coldOpenPath &&
+              resolveIdentityPathViaExistingAncestorSync(creationAuthority.coldOpenPath) ===
                 creationLocation
             ) {
-              coldOpenPath = authority.coldOpenPath;
+              coldOpenPath = creationAuthority.coldOpenPath;
             }
-            inOwnerContext(() => {
-              authority.assertRequest?.();
-              authority.assertAccess();
+            currentCallbacks.inOwnerContext(() => {
+              creationAuthority.assertRequest?.();
+              creationAuthority.assertAccess();
               assertCreate(creationLocation);
             });
             coldOpenPath = undefined;
             create = true;
           }
         }
-        if (create) {
-          assertRelayCreation?.();
+        if (create && assertRelayCreation) {
+          currentCallbacks.inOwnerContext(assertRelayCreation);
         }
         if (closed) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
         }
-        const upstream = getSqliteDatabaseAdmissionUpstream();
         if (upstream) {
           if (upstream.closed) {
             throw new SqliteWorkerError("SQLite admission upstream is closed", "closed");
@@ -342,6 +392,7 @@ function createOperationAdmission(
                   admissions,
                   location,
                   create ? "admitted" : undefined,
+                  observedLocation,
                 ),
             ),
           );
@@ -358,6 +409,7 @@ function createOperationAdmission(
                 (location === identity.databasePath || location === databaseAuthority?.databasePath)
                 ? identity
                 : undefined,
+              observedLocation,
             );
           } catch (error) {
             if (!isRecord(error) || error.code !== "ENOENT") {
@@ -365,123 +417,43 @@ function createOperationAdmission(
             }
           }
         }
-        const scope =
-          message.location === undefined && admissions.length === 0
-            ? undefined
-            : { location: message.location, admissions };
-        const cursor = databaseAdmissionCursors.get(admission);
-        const reply = captureSqliteDatabaseAdmissions(
-          cursor?.cursor ?? databaseAdmissionCursor,
-          scope,
-        );
-        message.port.postMessage(reply, []);
-        recordWorkerMessage("admission", "to_worker");
-        Atomics.compareExchange(decision, 0, REQUESTED, GRANTED);
+        publishFacts(admissions);
       } catch (error) {
-        const cursor = databaseAdmissionCursors.get(admission);
-        if (cursor) {
-          cursor.cursor = cursor.reset();
-        } else {
-          databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
-        }
-        if (
-          error instanceof StateDatabaseAdmissionPendingError &&
-          error.databasePath === coldOpenPath
-        ) {
-          // Nothing was created: preserve the worker cold-open owner's existing
-          // bounded wait rather than poisoning this operation as a protocol failure.
-          Atomics.store(decision, 0, SQLITE_COLD_ADMISSION_PENDING);
-        } else {
-          recordFailure(error, "protocol");
-          Atomics.store(decision, 0, REFUSED);
-        }
+        failFacts(error, coldOpenPath);
       } finally {
-        message.port.close();
-        Atomics.notify(decision, 0);
-      }
-      return;
-    }
-    if (isRecord(message) && message.kind === "native-commit") {
-      const receipt = message.committed;
-      if (!isNativeCommitReceipt(receipt)) {
-        invalidProtocol("commit receipt");
-        return;
-      }
-      installCommitted(receipt);
-      return;
-    }
-    if (isRecord(message) && message.kind === "native-settlement") {
-      const value = message.settlement;
-      if (
-        !isRecord(value) ||
-        (value.kind !== "completed" && value.kind !== "unknown") ||
-        (value.committed !== undefined && !isNativeCommitReceipt(value.committed))
-      ) {
-        invalidProtocol("native settlement");
-        return;
-      }
-      if (value.committed !== undefined) {
-        installCommitted(value.committed);
-      }
-      settlement = {
-        kind: value.kind,
-        ...(committed ? { committed } : {}),
-      };
-      return;
-    }
-    if (
-      !isRecord(message) ||
-      !(message.decision instanceof SharedArrayBuffer) ||
-      message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
-      (message.stage !== "open" &&
-        message.stage !== "prepare" &&
-        message.stage !== "transaction" &&
-        message.stage !== "commit")
-    ) {
-      invalidProtocol("admission request", "unavailable");
-      return;
-    }
-    const decision = new Int32Array(message.decision);
-    // Bun starts process.hrtime at zero in each thread, so the worker's deadline
-    // instant cannot cross threads. The host bounds its own late work from receipt;
-    // the worker still enforces its budget through the shared decision word.
-    const deadlineNs =
-      typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
-        ? readSqliteWorkerMonotonicNs() +
-          BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
-        : undefined;
-    const expired = () => {
-      if (deadlineNs !== undefined && readSqliteWorkerMonotonicNs() >= deadlineNs) {
-        if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
-          Atomics.notify(decision, 0);
+        if (!preparing) {
+          finishFacts();
         }
       }
-      if (Atomics.load(decision, 0) !== TIMED_OUT) {
-        return false;
-      }
-      if (Array.isArray(message.ports)) {
-        for (const port of message.ports) {
-          if (port instanceof MessagePort) {
-            port.close();
-          }
-        }
-      }
-      return true;
-    };
+      return;
+    }
+    if (receipts.receive(wire)) {
+      return;
+    }
+    const receivedDecision = readSqliteWorkerAdmissionDecision(wire);
+    if (!receivedDecision) {
+      recordFailure(
+        new SqliteWorkerError("SQLite worker admission request is invalid", "unavailable"),
+        "protocol",
+      );
+      return;
+    }
+    const { decision, expired, request } = receivedDecision;
     if (expired()) {
       // The worker has abandoned this request; even policy preparation must not run late.
       return;
     }
-    decisions.add(decision);
-    const request: SqliteWorkerAdmissionRequest = { stage: message.stage, facts: message.facts };
+    decisions.set(decision, undefined);
     try {
       // A queued fact may describe an earlier COMMIT; observing it never grants more work.
-      inOwnerContext(() => observeRequest?.(request));
+      if (observeRequest) {
+        currentCallbacks?.inOwnerContext(observeRequest, request);
+      }
     } catch (error) {
       refuse(decision, error, "domain");
       return;
     }
-    if (closed) {
+    if (closed || !currentCallbacks) {
       refuse(
         decision,
         new SqliteWorkerError("SQLite worker admission is closed", "closed"),
@@ -495,7 +467,7 @@ function createOperationAdmission(
       }
       // Domain admission can reenter owner lifecycle before handing the native writer its grant.
       try {
-        inOwnerContext(() => databaseAuthority?.assertAccess());
+        currentCallbacks.inOwnerContext(() => databaseAuthority?.assertAccess());
       } catch (error) {
         refuse(decision, error, "authority");
         return false;
@@ -526,7 +498,7 @@ function createOperationAdmission(
     };
     let source: AdmissionFailureSource = "authority";
     try {
-      inOwnerContext(() => {
+      currentCallbacks.inOwnerContext(() => {
         databaseAuthority?.assertRequest?.();
       });
       if (
@@ -546,7 +518,7 @@ function createOperationAdmission(
             "closed",
           );
         }
-        inOwnerContext(() => {
+        currentCallbacks.inOwnerContext(() => {
           authority.lease ??= authority.acquireSchema();
           authority.assertAccess();
           authority.lease.assertCurrent();
@@ -554,13 +526,14 @@ function createOperationAdmission(
         });
       } else {
         source = "domain";
-        if (prepare) {
+        const prepareRequest = currentCallbacks.prepare;
+        if (prepareRequest) {
           preparing = true;
           void (async () => {
             try {
-              await inOwnerContext(prepare, request);
+              await currentCallbacks.inOwnerContext(prepareRequest, request);
               if (!closed && !expired() && Atomics.load(decision, 0) === REQUESTED) {
-                inOwnerContext(admit, request, grant);
+                currentCallbacks.inOwnerContext(currentCallbacks.admit, request, grant);
               }
             } catch (error) {
               refuse(decision, error, "domain");
@@ -570,7 +543,7 @@ function createOperationAdmission(
           })();
           return;
         }
-        inOwnerContext(admit, request, grant);
+        currentCallbacks.inOwnerContext(currentCallbacks.admit, request, grant);
       }
     } catch (error) {
       if (
@@ -602,17 +575,29 @@ function createOperationAdmission(
       }
     }
   };
-  port1.on("message", receive).unref();
-  const service = () => {
-    // Observers may inspect retained facts without recursively publishing the next receipt.
-    if (observingCommit) {
-      return;
-    }
-    for (let queued = receiveMessageOnPort(port1); queued; queued = receiveMessageOnPort(port1)) {
+  const receiveInOwnerContext = (message: unknown) =>
+    callbacks ? callbacks.inOwnerContext(receive, message) : receive(message);
+  port1.on("message", receiveInOwnerContext).unref();
+  const drain = (first: ReturnType<typeof receiveMessageOnPort>) => {
+    for (let queued = first; queued; queued = receiveMessageOnPort(port1)) {
       receive(queued.message);
     }
   };
-  const admission: SqliteWorkerOperationAdmission = {
+  const service = () => {
+    // Observers may inspect retained facts without recursively publishing the next receipt.
+    if (receipts.observingCommit) {
+      return;
+    }
+    const queued = receiveMessageOnPort(port1);
+    if (queued) {
+      // Callbacks restore this frame; each message still rechecks live authority.
+      return callbacks ? callbacks.inOwnerContext(drain, queued) : drain(queued);
+    }
+  };
+  const admission: SqliteWorkerOperationAdmission & {
+    /** Only untouched construction can finish synchronously; started work keeps its normal join. */
+    abortConstruction(): void;
+  } = {
     port: port2,
     attachment: attachment === undefined ? undefined : { value: attachment },
     observeRequests(observer) {
@@ -645,10 +630,10 @@ function createOperationAdmission(
     get committed() {
       // Event callbacks can precede delivery of already queued commit facts.
       service();
-      return committed;
+      return receipts.committed;
     },
     get settlement() {
-      return settlement;
+      return receipts.settlement;
     },
     waitForSettlement(deadlineMs) {
       while (true) {
@@ -656,11 +641,11 @@ function createOperationAdmission(
         if (failure !== undefined) {
           throw toErrorObject(failure.error, "SQLite worker admission failed");
         }
-        if (settlement?.kind === "completed") {
-          return settlement;
+        if (receipts.settlement?.kind === "completed") {
+          return receipts.settlement;
         }
         const remaining = deadlineMs - performance.now();
-        if (settlement?.kind === "unknown" || closed || remaining <= 0) {
+        if (receipts.settlement?.kind === "unknown" || closed || remaining <= 0) {
           throw new SqliteWorkerError(
             "SQLite worker native settlement is unknown",
             "outcome-unknown",
@@ -670,74 +655,79 @@ function createOperationAdmission(
       }
     },
     service,
-    finish() {
+    abortConstruction() {
+      if (started) {
+        throw new SqliteWorkerError(
+          "SQLite admission construction has already received work",
+          "closed",
+        );
+      }
+      // Finish closes before draining, so queued requests cannot submit a new CREATE.
+      // Use the actual method so installed finish observers retain their existing order.
+      const completion = admission.finish();
+      if (completion !== undefined) {
+        throw new SqliteWorkerError(
+          "SQLite unstarted admission cleanup did not finish synchronously",
+          "closed",
+        );
+      }
+    },
+    finish(outcome) {
+      if (finishing) {
+        return finishing;
+      }
       closed = true;
       // Receipts remain observable; late requests can no longer obtain authority.
       service();
-      if (decisions.size > 0) {
-        for (const decision of decisions) {
-          if (Atomics.load(decision, 0) === REQUESTED) {
-            refuse(
-              decision,
-              new SqliteWorkerError("SQLite worker admission is closed", "closed"),
-              "authority",
-            );
-          }
+      const acceptedCreations = [...decisions.values()].filter(
+        (pending): pending is Promise<void> => pending !== undefined,
+      );
+      for (const decision of decisions.keys()) {
+        if (Atomics.load(decision, 0) === REQUESTED) {
+          refuse(
+            decision,
+            new SqliteWorkerError("SQLite worker admission is closed", "closed"),
+            "authority",
+          );
         }
       }
       port1.close();
       port2.close();
-      // Preserve an active observer iteration when publication itself ends custody.
-      if (observingCommit) {
-        queueMicrotask(() => {
-          commitObservers.length = 0;
-        });
-      } else {
-        commitObservers.length = 0;
-      }
-      observeRequest = undefined;
-      if (databaseAuthority?.lease) {
-        try {
-          databaseAuthority.lease.release();
-          databaseAuthority.lease = undefined;
-        } catch (error) {
-          cleanupFailures.push(error);
+      const release = () => {
+        receipts.finish(outcome);
+        observeRequest = undefined;
+        if (databaseAuthority?.lease) {
+          try {
+            databaseAuthority.lease.release();
+            databaseAuthority.lease = undefined;
+          } catch (error) {
+            cleanupFailures.push(error);
+          }
         }
+        if (!databaseAuthority?.lease) {
+          databaseAuthority = undefined;
+        }
+        // Recovery retains receipts, not the finished request's callbacks or async context.
+        callbacks = undefined;
+        databaseReplies.release(admission);
+      };
+      if (acceptedCreations.length === 0) {
+        release();
+        return undefined;
       }
-      if (!databaseAuthority?.lease) {
-        databaseAuthority = undefined;
-      }
+      finishing = Promise.allSettled(acceptedCreations)
+        .then(release)
+        .finally(() => {
+          finishing = undefined;
+        });
+      return finishing;
     },
   };
   commitObserverBindings.set(admission, (observer) => {
     if (closed || started) {
       throw new SqliteWorkerError("SQLite commit observation is closed or started", "closed");
     }
-    commitObservers.push(observer);
+    receipts.observe(observer);
   });
   return admission;
-}
-
-/** Schema work borrows live host authority through the same retained job port. */
-export function requestSqliteWorkerSchemaMaintenance(databasePath: string): boolean {
-  if (!currentAdmission.getStore()) {
-    return false;
-  }
-  requestSqliteWorkerOperationAdmission({
-    stage: "prepare",
-    facts: { kind: "schema-maintenance", databasePath },
-  });
-  return true;
-}
-
-/** Require owner-prepared data carried by this operation's command envelope. */
-export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
-  const scope = currentAdmission.getStore();
-  if (!scope?.active) {
-    throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
-  }
-  if (!scope.owner.attachment) {
-    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
-  }
-  return scope.owner.attachment.value;
 }

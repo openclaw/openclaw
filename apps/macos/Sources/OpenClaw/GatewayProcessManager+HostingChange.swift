@@ -318,9 +318,7 @@ extension GatewayProcessManager {
         change.generation = self.gatewayStartGeneration
         self.status = .starting
         let cli = restoring ? change.previousCLI : nil
-        let selectedRuntime = cli?.prefix.first.map {
-            BundledRuntime(root: URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent())
-        } ?? runtime
+        let selectedRuntime = cli?.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:)) ?? runtime
         let result = try await self.enableLaunchAgentIfNeeded(
             port: change.port,
             generation: change.generation,
@@ -350,12 +348,10 @@ extension GatewayProcessManager {
     }
 
     private func requireDurableAppHostingEnvironment(_ cli: GatewayLaunchAgentManager.InstalledServiceCLI?) throws {
-        guard let cli, let executable = cli.prefix.first else { return }
+        guard let cli, let runtime = cli.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:)) else { return }
         let profile = AppProfile.current
         let retained = try GatewayLaunchAgentManager.retainedServiceEnvironment(
             stateDirectory: profile.stateDirectoryURL(), profile: profile)
-        let runtime = BundledRuntime(root: URL(fileURLWithPath: executable)
-            .deletingLastPathComponent().deletingLastPathComponent())
         func projected(_ environment: [String: String]) -> [String: String] {
             GatewayChildSupervisor.environmentWithoutSupervisorMarkers(Self.appHostedEnvironment(
                 runtime: runtime,

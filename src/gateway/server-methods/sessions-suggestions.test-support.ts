@@ -10,6 +10,7 @@ import {
   profileSessionEntry,
 } from "./sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
+import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionKey = "agent:main:main";
@@ -52,6 +53,7 @@ export const context = (
 ): GatewayRequestContext =>
   ({
     getRuntimeConfig: () => runtimeConfig,
+    getPresenceSnapshot: () => getSessionSuggestionTestMocks().presence,
     broadcast,
     broadcastToConnIds: vi.fn(),
     logGateway: { warn: vi.fn() },

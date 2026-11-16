@@ -35,7 +35,8 @@ const readInstalledPackageVersionMock = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../infra/package-update-utils.js", () => ({
+vi.mock("../infra/package-update-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/package-update-utils.js")>()),
   readInstalledPackageVersion: readInstalledPackageVersionMock,
 }));
 

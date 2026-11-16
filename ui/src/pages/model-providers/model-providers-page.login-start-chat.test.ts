@@ -12,9 +12,11 @@ it.each([
   { recommended: true, delayed: true },
   { recommended: false, delayed: false, verified: true },
   { recommended: true, delayed: false, cancel: true },
+  // The Gateway's own routing is not a choice: Start Chat must not pin it on the session.
+  { recommended: true, delayed: false, runtimeSource: "implicit" as const },
 ])(
-  "Start Chat offers the first available recommendation (recommended: $recommended, delayed: $delayed)",
-  async ({ recommended, delayed, verified, cancel }) => {
+  "Start Chat offers the first available recommendation (recommended: $recommended, delayed: $delayed, runtime: $runtimeSource)",
+  async ({ recommended, delayed, verified, cancel, runtimeSource = "model" as const }) => {
     const { context, request, answer, publishEvent } = loginHarness();
     const originalRequest = request.getMockImplementation()!;
     let available = !delayed;
@@ -32,7 +34,7 @@ it.each([
             models: [
               model("best", { provider: "other", recommended: true, available: true }),
               model("old", { recommended: true, available: false }),
-              model("best", { agentRuntime: { id: "openclaw", source: "model" } }),
+              model("best", { agentRuntime: { id: "openclaw", source: runtimeSource } }),
               model("second"),
             ],
           } satisfies ModelCatalogResult)
@@ -61,7 +63,7 @@ it.each([
     });
     await waitForSolid(() =>
       expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-        "Example API key is connected",
+        "Example API key is ready",
       ),
     );
     if (recommended || verified) {
@@ -82,7 +84,11 @@ it.each([
       startChat()!.click();
       await waitForSolid(() =>
         expect(create).toHaveBeenCalledWith(
-          { agentId: "writer", model: "example/best", agentRuntime: "openclaw" },
+          {
+            agentId: "writer",
+            model: "example/best",
+            ...(runtimeSource === "model" ? { agentRuntime: "openclaw" } : {}),
+          },
           { signal: expect.any(AbortSignal) },
         ),
       );
@@ -94,7 +100,9 @@ it.each([
         creation.resolve(null);
         await waitForSolid(() => expect(button.disabled).toBe(false));
         expect(startChat()).toBe(button);
-        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain("Request failed");
+        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
+          "Couldn’t complete the request. Try again.",
+        );
       }
     } else {
       await waitForSolid(() =>

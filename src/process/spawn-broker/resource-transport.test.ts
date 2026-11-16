@@ -23,13 +23,19 @@ function resourceFixture() {
     clientFailures,
     responses,
     async attach(
-      source: string,
+      source: string | URL,
       ownerPort = false,
       observe: (response: BrokerResourceResponse) => void = () => {},
     ) {
       await host.ready();
       lease = host.captureNativeResource(
-        { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort },
+        {
+          moduleUrl:
+            source instanceof URL
+              ? source.href
+              : `data:text/javascript,${encodeURIComponent(source)}`,
+          ownerPort,
+        },
         { message() {}, failed: (error) => ownerFailures.push(error) },
       );
       client = attachBrokerNativeResource(
@@ -63,6 +69,40 @@ function resourceFixture() {
     },
   };
 }
+
+it.skipIf(process.platform === "win32")(
+  "loads a source SQLite resource in the compiled broker and joins its cleanup",
+  async () => {
+    await using fixture = resourceFixture();
+    const created = createDeferred();
+    const { client, lease } = await fixture.attach(
+      new URL("../../infra/sqlite-readonly-native-resource.ts", import.meta.url),
+      true,
+      (response) => {
+        if (response.type === "resource-created") {
+          created.resolve();
+        }
+      },
+    );
+    expect(fixture.host.entryPath).not.toMatch(/\.[cm]?ts$/u);
+    await Promise.race([
+      created.promise,
+      fixture.failure.then((error) => {
+        throw error;
+      }),
+    ]);
+    await client.close();
+    await lease.close();
+    lease.release();
+    expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
+    expect(fixture.responses).toContainEqual({
+      type: "resource-closed",
+      id: lease.attachment.id,
+      requestId: 1,
+    });
+  },
+  20_000,
+);
 
 it.skipIf(process.platform === "win32").each([
   ["import", 'throw new Error("synthetic resource import failure");'],

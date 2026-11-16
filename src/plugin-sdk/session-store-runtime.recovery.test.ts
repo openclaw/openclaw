@@ -4,7 +4,10 @@ import {
   loadSessionEntry as loadInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
+import type {
+  InternalSessionEntry,
+  SessionEntry as ConfigSessionEntry,
+} from "../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   getSessionEntry,
@@ -35,7 +38,7 @@ describe("session-store-runtime recovery boundary", () => {
     };
   });
 
-  it("allows public recovery fields to change without an active core transaction", async () => {
+  it("allows ordinary public run status to change without an active core transaction", async () => {
     await upsertSessionEntry({
       ...scope,
       agentId: "main",
@@ -46,13 +49,11 @@ describe("session-store-runtime recovery boundary", () => {
       ...scope,
       update: () => ({
         abortedLastRun: true,
-        restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
       }),
     });
 
     expect(read()).toMatchObject({
       abortedLastRun: true,
-      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
       sessionId: "healthy-session",
     });
   });
@@ -90,15 +91,15 @@ describe("session-store-runtime recovery boundary", () => {
     expect(read()).not.toHaveProperty("pendingProjectGitUrl");
   });
 
-  it("rejects core recovery state from runtime-escaped creation inputs", async () => {
+  it("rejects private shutdown state from runtime-escaped creation inputs", async () => {
     const injected = {
-      mainRestartRecovery: { chargedAttempts: 1, cycleId: "cycle-injected", revision: 1 },
+      resumeAfterRestart: { queuedInputIds: [] },
       pendingProjectGitUrl: "https://github.com/openclaw/injected.git",
       sessionId: "created",
       updatedAt: 10,
-    } as unknown as SessionEntry;
+    } satisfies InternalSessionEntry;
     const expectPrivateFieldsRemoved = () => {
-      expect(read()).not.toHaveProperty("mainRestartRecovery");
+      expect(read()).not.toHaveProperty("resumeAfterRestart");
       expect(read()).not.toHaveProperty("pendingProjectGitUrl");
     };
     await patchSessionEntry({

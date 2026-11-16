@@ -353,7 +353,7 @@ it("keeps authorized resume execution available while native discovery is disabl
 });
 
 it.each([
-  { scenario: "hydrated cwd", text: "latest ask", ts: 1778678322 },
+  { scenario: "hydrated cwd", text: "Cafe\u0301 latest ask", ts: 1778678322 },
   { scenario: "empty rollout", text: "history prompt", ts: 1778678322 },
   { scenario: "Date-invalid timestamp", text: "bad timestamp", ts: 8_700_000_000_000 },
 ])("keeps history usable with $scenario", async ({ scenario, text, ts }) => {
@@ -375,7 +375,7 @@ it.each([
     await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
   }
   const parsed = await listLocalSessions({
-    filter: scenario === "empty rollout" ? sessionId : hydrated ? "latest" : text,
+    filter: scenario === "empty rollout" ? sessionId : hydrated ? "CAFÉ latest" : text,
     limit: 5,
   });
   expect(parsed.sessions).toEqual([

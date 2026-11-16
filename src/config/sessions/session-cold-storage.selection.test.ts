@@ -5,6 +5,7 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -16,13 +17,18 @@ import {
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
+import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   currentId,
   historicalId,
   maintenanceConfig,
+  setTranscriptActivity,
 } from "./session-cold-storage.test-support.js";
 
 let state: OpenClawTestState;
@@ -55,6 +61,31 @@ afterEach(async () => {
 });
 afterAll(async () => {
   await state.cleanup();
+});
+
+it("archives by default after 30 days, respects opt-out, and restores history", async () => {
+  const defaultFixture = await createSessionColdStorageFixture(state.statePath("default.sqlite"));
+  const config = {
+    agents: { entries: { main: {} } },
+    session: { store: defaultFixture.scope.storePath },
+  };
+  const run = () => runSessionColdStorageMaintenance({ config });
+  setTranscriptActivity(defaultFixture.options, historicalId, Date.now() - 15 * 86_400_000);
+  const recent = defaultFixture.snapshot();
+  await expect(run()).resolves.toMatchObject({ archivedTranscripts: 0 });
+  expect(defaultFixture.snapshot()).toEqual(recent);
+  setTranscriptActivity(defaultFixture.options, historicalId, Date.now() - 31 * 86_400_000);
+  const old = defaultFixture.snapshot();
+  await expect(
+    maintain(maintenanceConfig(defaultFixture.scope.storePath, false)),
+  ).resolves.toMatchObject({
+    archivedTranscripts: 0,
+  });
+  expect(defaultFixture.snapshot()).toEqual(old);
+  await expect(run()).resolves.toMatchObject({ archivedTranscripts: 1 });
+  expect(readSessionColdTranscript(defaultFixture.database(), historicalId)).toBeDefined();
+  await restoreSessionColdTranscript(defaultFixture.scope);
+  expect(defaultFixture.snapshot()).toEqual(old);
 });
 
 function delayPreparation() {
@@ -166,16 +197,9 @@ it.each([
   }
 });
 
-it.each([
-  "registry",
-  "recovery-cycle",
-  "recovery-run",
-  "recovery-tombstone",
-  "terminal-run",
-] as const)(
-  "keeps pending %s custody hot before recovery dispatch, then permits retired claims",
+it.each(["registry", "resume-marker"] as const)(
+  "keeps %s custody hot during cold selection",
   async (custody) => {
-    const protectedHistory = custody !== "recovery-tombstone" && custody !== "terminal-run";
     if (custody === "registry") {
       registerAgentRunContext("cold-live-run", {
         agentId: "main",
@@ -186,35 +210,17 @@ it.each([
       replaceSessionEntrySync(fixture.scope, {
         sessionId: currentId,
         updatedAt: 1,
-        ...(custody === "recovery-cycle" || custody === "recovery-tombstone"
-          ? {
-              mainRestartRecovery: {
-                cycleId: "waiting",
-                revision: 1,
-                chargedAttempts: 0,
-                ...(custody === "recovery-tombstone" ? { tombstone: { reason: "exhausted" } } : {}),
-              },
-            }
-          : {
-              restartRecoveryRuns: [
-                { runId: "awaiting-recovery", lifecycleGeneration: "previous-gateway" },
-              ],
-              ...(custody === "terminal-run"
-                ? { restartRecoveryTerminalRunIds: ["awaiting-recovery"] }
-                : {}),
-            }),
+        resumeAfterRestart: { queuedInputIds: [] },
       });
     }
     const before = fixture.snapshot();
     try {
       await expect(maintain()).resolves.toEqual({
-        archivedTranscripts: protectedHistory ? 0 : 1,
+        archivedTranscripts: 0,
         externalizedTranscripts: 0,
       });
-      if (protectedHistory) {
-        expect(fixture.snapshot()).toEqual(before);
-        expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
-      }
+      expect(fixture.snapshot()).toEqual(before);
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
     } finally {
       clearAgentRunContext("cold-live-run");
     }
@@ -235,6 +241,80 @@ it("propagates selection failure without a mutation or synchronous fallback", as
     observer.restore();
   }
   expectHistoryUnchanged();
+});
+
+it("scans hot-window protection only when embedded archives leave a batch slot", async () => {
+  await expect(maintain()).resolves.toEqual({
+    archivedTranscripts: 1,
+    externalizedTranscripts: 0,
+  });
+  const archive = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const bytes = await fs.readFile(
+    resolveSessionColdArchivePath(fixture.scope.storePath, archive.archive_name),
+  );
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
+    )
+    .run(bytes, historicalId);
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+    )
+    .run(currentId);
+  const referenceScope = {
+    ...fixture.scope,
+    sessionKey: "agent:main:cold-reference",
+    sessionId: "cold-reference-current",
+  };
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+    previousSessionId: currentId,
+  });
+  const input = {
+    databaseOptions: fixture.options,
+    admissionIdentities: [],
+    liveSessionKeys: [],
+    cooledSessionIds: [],
+    beforeMs: 100,
+    maxTranscripts: 1,
+    maxBytes: 64 * 1024 * 1024,
+  };
+  for (const maxTranscripts of [1, 2]) {
+    const observer = observeHostDataSql();
+    try {
+      const selected = selectSessionColdBatch({ ...input, maxTranscripts });
+      expect(selected.found).toBe(true);
+      if (!selected.found) {
+        throw new Error("Cold selection database was not found");
+      }
+      expect(selected.value.externalizations.map((item) => item.session_id)).toEqual([
+        historicalId,
+      ]);
+      expect(selected.value.plans).toEqual([]);
+      expect(
+        observer.queries.some(
+          (sql) =>
+            sql.includes('from "session_nodes"') &&
+            sql.includes('"last_activity_at"') &&
+            sql.includes('"last_interaction_at"'),
+        ),
+      ).toBe(maxTranscripts > 1);
+    } finally {
+      observer.restore();
+    }
+  }
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+  });
+  const unprotected = selectSessionColdBatch({ ...input, maxTranscripts: 2 });
+  expect(unprotected.found && unprotected.value.plans.map((plan) => plan.sessionId)).toEqual([
+    currentId,
+  ]);
 });
 
 it("retains an embedded archive when its window gains an admitted owner after preparation", async () => {

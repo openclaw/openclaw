@@ -49,6 +49,28 @@ describe("OpenClawSchema cloudWorkers config", () => {
     }
   });
 
+  it("keeps mirroring implicit and requires a finite retained-disk work window", () => {
+    expect(
+      OpenClawSchema.parse(cloudProfile({})).cloudWorkers?.profiles?.development,
+    ).not.toHaveProperty("workspaceDurability");
+    for (const workspaceDurability of [
+      { mode: "mirrored" },
+      { mode: "retained-disk", computeWindowSeconds: 600 },
+    ]) {
+      expect(
+        OpenClawSchema.parse(cloudProfile({ workspaceDurability })).cloudWorkers?.profiles
+          ?.development?.workspaceDurability,
+      ).toEqual(workspaceDurability);
+    }
+    for (const computeWindowSeconds of [undefined, 0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER]) {
+      expect(
+        OpenClawSchema.safeParse(
+          cloudProfile({ workspaceDurability: { mode: "retained-disk", computeWindowSeconds } }),
+        ).success,
+      ).toBe(false);
+    }
+  });
+
   it("rejects a malformed idle suspend duration", () => {
     expect(OpenClawSchema.safeParse(cloudProfile({ suspendAfter: "-1m" })).success).toBe(false);
   });

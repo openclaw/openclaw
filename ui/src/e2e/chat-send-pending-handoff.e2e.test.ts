@@ -284,7 +284,7 @@ suite.define(() => {
         await gateway.setMethodResponse("chat.history", {
           cases: [
             {
-              match: { offset: 80 },
+              match: { cursor: "older-handoff" },
               response: {
                 ...historyPage,
                 messages: [ready, canonicalUser],
@@ -298,12 +298,13 @@ suite.define(() => {
                 messages: [tail],
                 hasMore: true,
                 nextOffset: 80,
+                olderCursor: "older-handoff",
                 inputReceipts: [],
               },
             },
           ],
         });
-        await gateway.deferNext("chat.history", { offset: 80 });
+        await gateway.deferNext("chat.history", { cursor: "older-handoff" });
         await gateway.emitGatewayEvent("chat", {
           sessionKey: "main",
           runId,
@@ -353,7 +354,7 @@ suite.define(() => {
         const thread = pane.locator(".chat-thread");
         await thread.hover();
         await page.mouse.wheel(0, -1_000_000);
-        await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
+        await gateway.waitForRequest("chat.history", { match: { cursor: "older-handoff" } });
         await gateway.resolveDeferred("chat.history");
         await waitForChatScrollIdle(page);
         if (
@@ -403,7 +404,7 @@ suite.define(() => {
           historyMessages: BASE_HISTORY,
           sessions: [{ key: "main", sessionId, label: "Synthetic PR landing" }],
           // Reconnect refreshes can retire and reissue viewport-fill reads.
-          heldRequests: [{ method: "chat.history", match: { offset: 80 } }],
+          heldRequests: [{ method: "chat.history", match: { cursor: "older-handoff" } }],
         });
         const { runId } = await openChatAndSubmitProbe(page, gateway, {
           deferSend: true,
@@ -479,11 +480,20 @@ suite.define(() => {
           thinkingLevel: null,
           totalMessages: 605,
         };
-        const latestPage = { ...response, messages: recent, hasMore: true, nextOffset: 80 };
+        const latestPage = {
+          ...response,
+          messages: recent,
+          hasMore: true,
+          nextOffset: 80,
+          olderCursor: "older-handoff",
+        };
         await gateway.setMethodResponse("chat.startup", latestPage);
         await gateway.setMethodResponse("chat.history", {
           cases: [
-            { match: { offset: 80 }, response: { ...response, messages: older, hasMore: false } },
+            {
+              match: { cursor: "older-handoff" },
+              response: { ...response, messages: older, hasMore: false },
+            },
             { match: {}, response: latestPage },
           ],
         });
@@ -504,8 +514,10 @@ suite.define(() => {
         await capture("consumed-prompt-latest-page.png");
         const userBubbles = page.locator(".chat-bubble").getByText(prompt, { exact: true });
         const latestPromptCount = await userBubbles.count();
-        await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
-        await gateway.resolveDeferred("chat.history", undefined, { match: { offset: 80 } });
+        await gateway.waitForRequest("chat.history", { match: { cursor: "older-handoff" } });
+        await gateway.resolveDeferred("chat.history", undefined, {
+          match: { cursor: "older-handoff" },
+        });
         await waitForChatScrollIdle(page);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.hover();

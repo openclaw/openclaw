@@ -12,6 +12,17 @@ it("matches card ID prefixes case-insensitively", () => {
   expect(matchesCardQuery(card, query)).toBe(true);
 });
 
+it("matches canonically equivalent Unicode in card titles", () => {
+  // "é" (NFC) stored as NFD "e\u0301" in a user/agent-writable card title.
+  const nfd = "caf\u00e9".normalize("NFD");
+  expect(nfd).not.toBe("caf\u00e9");
+  const card = createWorkboardCard({ title: nfd });
+
+  // NFC query must still match the NFD-stored title (and vice versa).
+  expect(matchesCardQuery(card, "caf\u00e9")).toBe(true);
+  expect(matchesCardQuery(card, "caf\u00e9".normalize("NFD"))).toBe(true);
+});
+
 it("reuses card formatters and replaces them when the host locale changes", () => {
   const timestamp = 1_800_000_000_000;
   const expected = (locale: string) => ({

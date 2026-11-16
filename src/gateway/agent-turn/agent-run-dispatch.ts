@@ -14,8 +14,6 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type {
   FollowupCompletionOwner,
   FollowupReply,
@@ -92,8 +90,6 @@ export function dispatchAgentRunFromGateway(params: {
   cleanupAbortController: () => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
-  canonicalSkillWorkspaceDir?: string;
-  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   /** Privacy classification carried from the resolved session entry. */
   isIncognito?: boolean;
@@ -336,16 +332,13 @@ export function dispatchAgentRunFromGateway(params: {
       readAgentRunDispatchExecutionIdentity(params),
     );
     const invoke = () =>
-      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-        agentCommandFromGatewayIngress(
-          cronCreatorAuthorityCapability
-            ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
-            : ingressOptsWithSpawnFacts,
-          diagnostics.runtime,
-          params.context.deps,
-          { restoreAdmittedRecovery: params.restoreAdmittedRecovery },
-          params.commandRuntimeContext,
-        ),
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
+          : ingressOptsWithSpawnFacts,
+        diagnostics.runtime,
+        params.context.deps,
+        params.commandRuntimeContext,
       );
     if (followupCompletion) {
       if (
@@ -382,6 +375,7 @@ export function dispatchAgentRunFromGateway(params: {
           agentId: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).agentId,
           ownerConnId: registeredRunEntry?.adapter.requester?.connectionId,
           ownerDeviceId: registeredRunEntry?.adapter.requester?.deviceId,
+          initiatingPersonalOperator: registeredRunEntry?.adapter.initiatingPersonalOperator,
           controlUiVisible: registeredRunEntry?.adapter.controlUiVisible,
           turnKind: registeredRunEntry?.adapter.turnKind,
         },

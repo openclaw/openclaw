@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errno.js";
 import { extractErrorCode, formatErrorMessageWithCode } from "../infra/errors.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -80,8 +80,8 @@ export async function resolveSetupWorkspaceSelection(params: {
   }
   await params.prompter.note(
     t("wizard.setup.workspaceConflictNotice", {
-      current: shortenHomePath(conflict.currentWorkspaceDir),
-      requested: shortenHomePath(conflict.requestedWorkspaceDir),
+      current: displayPath(conflict.currentWorkspaceDir),
+      requested: displayPath(conflict.requestedWorkspaceDir),
     }),
     t("wizard.setup.workspaceConflictTitle"),
   );

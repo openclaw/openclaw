@@ -1,5 +1,6 @@
 import { spinner } from "@clack/prompts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { clearActiveProgressLine } from "../../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
@@ -22,6 +23,8 @@ import {
 import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
+import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -32,10 +35,34 @@ const activeUpdateProgress = new Map<
   {
     finish: (record: UpdateRunRecord | undefined) => void;
     pause: () => void;
+    suspendForDoctor: () => Promise<() => void>;
   }
 >();
+
+/**
+ * Update Doctor children take exclusive SQLite custody of shared state. Any open
+ * parent reader blocks that lock, so observation stops, and its in-flight read
+ * settles, before the caller closes parent handles and spawns the child.
+ */
+export async function suspendUpdateProgressForDoctor(runId: string): Promise<() => void> {
+  return (await activeUpdateProgress.get(runId)?.suspendForDoctor()) ?? (() => {});
+}
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
+
+/** Child phase facts stay visible while schema changes defer ledger observation. */
+export function createUpdateDoctorProgress(): ((line: string) => void) | undefined {
+  const settings = getConsoleSettings();
+  if (!isLogLevelEnabled("info", settings.level)) {
+    return undefined;
+  }
+  return (message) => {
+    const line =
+      settings.style === "json" ? formatJsonConsoleLine({ level: "info", message }) : message;
+    clearActiveProgressLine();
+    process.stderr.write(`${line}\n`);
+  };
+}
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
@@ -70,6 +97,7 @@ export function createUpdateProgress(
   let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentRecord: UpdateRunRecord | undefined;
   let pendingRead: AbortController | undefined;
+  let pendingPoll: Promise<void> | undefined;
   let polling = true;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
@@ -156,18 +184,45 @@ export function createUpdateProgress(
     } finally {
       pendingRead = undefined;
       if (polling && observation === "active") {
-        timer = setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
+        timer = setTimeout(startPoll, UPDATE_PROGRESS_POLL_MS);
         timer.unref?.();
       }
     }
   };
+  const startPoll = () => {
+    pendingPoll = poll();
+  };
+  const suspend = () => {
+    if (observation === "active") {
+      observation = "suspended";
+      currentRecord = undefined;
+      pausePolling();
+      stop();
+    }
+  };
+  const resume = () => {
+    if (observation === "suspended") {
+      observation = "active";
+      polling = true;
+      startPoll();
+    }
+  };
   if (run) {
-    void poll();
+    startPoll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
         pausePolling();
         stop();
+      },
+      suspendForDoctor: async () => {
+        // Another owner's suspension stays theirs to resume.
+        if (observation !== "active") {
+          return () => {};
+        }
+        suspend();
+        await pendingPoll;
+        return resume;
       },
     });
   }
@@ -198,21 +253,8 @@ export function createUpdateProgress(
   return {
     progress,
     stop,
-    suspend: () => {
-      if (observation === "active") {
-        observation = "suspended";
-        currentRecord = undefined;
-        pausePolling();
-        stop();
-      }
-    },
-    resume: () => {
-      if (observation === "suspended") {
-        observation = "active";
-        polling = true;
-        void poll();
-      }
-    },
+    suspend,
+    resume,
     dispose: () => finalize(currentRecord, true),
   };
 }
@@ -274,6 +316,7 @@ export async function prepareResult(
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
+    writeArtifacts?: boolean;
   } = {},
   assertCurrent?: () => void,
 ): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
@@ -307,19 +350,22 @@ export async function prepareResult(
     });
     return report;
   };
-  const reportPath = await writeUpdateRunReportArtifact({
-    result,
-    report: renderReport,
-    record: reportHints.record,
-    readRun,
-    env: opts.run?.env,
-    detached: reportHints.readHistory === false,
-    assertCurrent,
-  }).catch((error: unknown) => {
-    assertCurrent?.();
-    defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
-    return undefined;
-  });
+  const reportPath =
+    reportHints.writeArtifacts === false
+      ? undefined
+      : await writeUpdateRunReportArtifact({
+          result,
+          report: renderReport,
+          record: reportHints.record,
+          readRun,
+          env: opts.run?.env,
+          detached: reportHints.readHistory === false,
+          assertCurrent,
+        }).catch((error: unknown) => {
+          assertCurrent?.();
+          defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
+          return undefined;
+        });
   assertCurrent?.();
   report ??= renderReport(readRun?.());
   const preparedReport = report;

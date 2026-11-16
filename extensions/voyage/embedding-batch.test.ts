@@ -174,7 +174,7 @@ it("clamps polling and avoids status fetch after expiry", async ({ signal }) => 
   vi.useFakeTimers();
   vi.setSystemTime(0);
   const fetchMock = stubBatchFetch();
-  const nowSpy = vi.spyOn(Date, "now");
+  const nowSpy = vi.spyOn(performance, "now");
   const polling = createDeferred<void>();
   const result = runBatch({
     pollIntervalMs: 2_000,

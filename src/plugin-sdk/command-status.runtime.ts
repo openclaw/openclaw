@@ -72,15 +72,21 @@ export async function resolveDirectStatusReplyForSessionCore(
     statusModel.provider;
   const selectedModel =
     statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model;
+  // Selection may normalize stale model/auth pins. Give it a coherent private
+  // snapshot without a persistence path so inspecting status cannot change them.
+  const selectionEntry = statusEntry ? structuredClone(statusEntry) : undefined;
+  const selectionStore = { ...statusLoaded.store };
+  if (selectionEntry) {
+    selectionStore[statusSessionKey] = selectionEntry;
+  }
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,
     agentCfg,
-    sessionEntry: statusEntry,
-    sessionStore: statusLoaded.store,
+    sessionEntry: selectionEntry,
+    sessionStore: selectionStore,
     sessionKey: statusSessionKey,
     parentSessionKey: statusEntry?.parentSessionKey,
-    storePath: statusLoaded.storePath,
     defaultProvider,
     defaultModel,
     provider: selectedProvider,

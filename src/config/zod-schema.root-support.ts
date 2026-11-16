@@ -40,7 +40,6 @@ export const GatewayRemoteConfigSchema = z
 
 export const SecuritySchema = z
   .strictObject({
-    preset: z.enum(["personal", "corporate"]).optional(),
     audit: z
       .strictObject({
         suppressions: z
@@ -139,8 +138,8 @@ export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
   hooks: z
     .strictObject({
-      /** Controls prompt mutation via before_prompt_build. */
-      allowPromptInjection: z.boolean().optional(),
+      /** Controls plugin prompt modification, including hooks, guidance, and steering. */
+      allowPromptModification: z.boolean().optional(),
       /**
        * Controls access to raw conversation content from conversation hooks including
        * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,

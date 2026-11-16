@@ -509,9 +509,7 @@ describe("memory index schema", () => {
   it("keeps a large stale-source delete batch aligned with path FTS", () => {
     using db = new DatabaseSync(":memory:");
     const result = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
-    if (!result.ftsAvailable) {
-      return;
-    }
+    expect(result.ftsAvailable).toBe(true);
     const insert = db.prepare(
       "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', ?, 0, 0)",
     );

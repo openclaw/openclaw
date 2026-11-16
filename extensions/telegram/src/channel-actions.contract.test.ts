@@ -8,14 +8,21 @@ const telegramConfig = (
 type PreparedSend = Parameters<
   NonNullable<NonNullable<typeof telegramPlugin.actions>["prepareSendPayload"]>
 >[0];
-function prepareSend(params: PreparedSend["ctx"]["params"], payload: PreparedSend["payload"]) {
+function prepareSend(
+  params: PreparedSend["ctx"]["params"],
+  payload: PreparedSend["payload"],
+  to = "123456",
+) {
   return telegramPlugin.actions?.prepareSendPayload?.({
     ctx: { channel: "telegram", action: "send", cfg: {}, params },
-    to: "123456",
+    to,
     payload,
   });
 }
 const presentation = { blocks: [{ type: "text" as const, text: "Quoted chart" }] };
+const effectId = "5104841245755180586";
+const presented = { text: "Chart", presentation };
+const nonPrivateTargets = ["-1001", "-1001:topic:42", "@somechannel"];
 const { actions: pluginActions, agentPrompt } = telegramPlugin;
 function describeActions(cfg: OpenClawConfig, accountId?: string) {
   return pluginActions?.describeMessageTool?.({ cfg, accountId });
@@ -66,12 +73,8 @@ describe("telegram actions contract", () => {
       },
     });
     expectActions(cfg, "default", ["send", "poll"], ["react", "emoji-list", "sticker"]);
-    expectActions(
-      cfg,
-      "work",
-      ["react", "emoji-list", "sticker", "sticker-search"],
-      ["send", "poll"],
-    );
+    const workActions = ["react", "emoji-list", "sticker", "sticker-search"];
+    expectActions(cfg, "work", workActions, ["send", "poll"]);
     const schema = describeActions(cfg, "default")?.schema;
     const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
     expect(contributions.some((entry) => Object.hasOwn(entry.properties, "emoji"))).toBe(false);
@@ -103,19 +106,18 @@ describe("telegram actions contract", () => {
   it.each(["disabled", "tokenless", "unknown"] as const)(
     "hides actions and capabilities for a %s scoped account",
     (accountId) => {
-      expect(
-        describeActions(
-          telegramConfig({
-            ...(accountId !== "tokenless" ? { botToken: "tok-root" } : {}),
-            accounts: {
-              healthy: { botToken: "tok-healthy" },
-              disabled: { enabled: false, botToken: "tok-disabled" },
-              tokenless: {},
-            },
-          }),
-          accountId,
-        ),
-      ).toEqual({ actions: [], capabilities: [], schema: null });
+      const accounts = {
+        healthy: { botToken: "tok-healthy" },
+        disabled: { enabled: false, botToken: "tok-disabled" },
+        tokenless: {},
+      };
+      const rootToken = accountId === "tokenless" ? {} : { botToken: "tok-root" };
+      const cfg = telegramConfig({ ...rootToken, accounts });
+      expect(describeActions(cfg, accountId)).toEqual({
+        actions: [],
+        capabilities: [],
+        schema: null,
+      });
     },
   );
 
@@ -131,13 +133,14 @@ describe("telegram actions contract", () => {
 
     expect(rich?.text_markup).toBe("markdown_telegram_rich");
     expect(rich?.rules.join("\n")).toContain("<details>");
+    expect(rich?.rules.join("\n")).toContain("Lists, checklists, and inline formatting: Markdown");
+    expect(rich?.rules.join("\n")).not.toContain("<ul>");
     expect(plain?.text_markup).toBe("markdown");
     expect(plain?.rules[0]).toMatch(/^Telegram rich OFF\./);
     // `<details>` guidance lives only in the contract, not in a second capability route.
     for (const accountId of ["rich", "plain"]) {
-      expect(agentPrompt?.messageToolCapabilities?.({ cfg, accountId })).not.toContain(
-        "markdownDetails",
-      );
+      const capabilities = agentPrompt?.messageToolCapabilities?.({ cfg, accountId });
+      expect(capabilities).not.toContain("markdownDetails");
     }
   });
 
@@ -159,28 +162,32 @@ describe("telegram actions contract", () => {
     { key: "quote_text", quote: " \nsnake case quote  ", telegram: {} },
   ])("preserves $key on durable presentation delivery", async ({ key, quote, telegram }) => {
     const payload = {
-      text: "Chart",
-      presentation,
+      ...presented,
       ...(key === "quoteText" ? { channelData: { telegram } } : {}),
     };
-    expect(await prepareSend({ [key]: quote }, payload)).toEqual({
+    expect(await prepareSend({ [key]: quote, effectId }, payload)).toEqual({
       ...payload,
-      channelData: { telegram: { ...telegram, quoteText: quote } },
+      channelData: { telegram: { ...telegram, quoteText: quote, messageEffectId: effectId } },
     });
   });
 
+  it.each(nonPrivateTargets)("omits prepared effects without blocking %s", async (to) => {
+    const sending = prepareSend({ effectId }, presented, to);
+    await expect(sending).resolves.toEqual(presented);
+  });
+
+  it("omits non-numeric effect names without blocking delivery", async () => {
+    await expect(prepareSend({ effect: "confetti" }, presented)).resolves.toEqual(presented);
+  });
+
   it("leaves legacy delivery to the legacy owner", async () => {
-    expect(
-      await prepareSend({ quoteText: "original message" }, { text: "legacy send" }),
-    ).toBeNull();
+    const legacy = prepareSend({ quoteText: "original", effectId }, { text: "legacy send" });
+    await expect(legacy).resolves.toBeNull();
   });
 
   it("rejects retired native buttons before prepared presentation delivery", async () => {
-    await expect(
-      prepareSend(
-        { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
-        { text: "Choose", presentation },
-      ),
-    ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
+    const native = { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' };
+    const error = /native "buttons" is unsupported.*Use presentation/;
+    await expect(prepareSend(native, presented)).rejects.toThrow(error);
   });
 });

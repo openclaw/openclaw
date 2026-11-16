@@ -16,6 +16,7 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
     sessions: role.sessions,
     agents: role.agents,
     scopes: role.scopes,
+    ...(role.workerProfiles !== undefined ? { workerProfiles: role.workerProfiles } : {}),
     ...(role.accessPrograms
       ? { accessPrograms: { cyber: [...new Set(role.accessPrograms.cyber)].toSorted() } }
       : {}),

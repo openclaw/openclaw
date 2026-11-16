@@ -92,31 +92,6 @@ if (values.prepare) {
             health: "done",
             planProgress: { completed: 3, total: 3 },
           };
-          entry.restartRecoveryOperatorSource = {
-            version: 1,
-            sessionKey,
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            sourceRunId: runId,
-            agentId: "main",
-            snapshot: {
-              profileId: "synthetic-operator",
-              scopes: ["operator.read", "operator.write"],
-              assignedRole: null,
-              githubLogin: null,
-              grant: null,
-              aliasBindingIds: [],
-              authPolicy: {
-                generation: "",
-                grantGeneration: "synthetic",
-                role: "operator",
-                authMethod: "token",
-              },
-              controlUiAdmin: false,
-              localOperator: true,
-              sourceIngress: "internal",
-            },
-          };
           writeSessionEntry(database, sessionKey, entry);
         }
       },

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { markFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -119,7 +119,7 @@ describe("tool-policy-pipeline", () => {
     const apply = (frozen: boolean) => {
       const policy = { allow: ["read"] };
       if (frozen) {
-        markFrozenClawToolAllowPolicy(policy);
+        markFrozenTemplateToolAllowPolicy(policy);
       }
       return filterNames(
         ["read", "future_tool"],
@@ -161,15 +161,36 @@ describe("tool-policy-pipeline", () => {
     },
   );
 
-  test("still warns for profile steps when explicit alsoAllow entries are present", () => {
-    const warnings = runAllowlistWarningStep({
-      allow: ["apply_patch", "browser"],
-      label: "tools.profile (coding)",
-      suppressUnavailableCoreToolWarningAllowlist: ["apply_patch"],
-    });
-    expect(warnings).toEqual([
-      "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+  const profileSuppression = ["apply_patch"];
+  test.each([
+    [
+      ["apply_patch", "browser"],
+      "tools.profile (coding)",
+      { suppressUnavailableCoreToolWarningAllowlist: profileSuppression },
+    ],
+    [["skill_library", "browser"], "tools.allow", {}],
+  ] as const)("warns for unavailable core tools in %s", (allow, label, options) => {
+    expect(runAllowlistWarningStep({ allow: [...allow], label, ...options })).toEqual([
+      `tools: ${label} allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.`,
     ]);
+  });
+
+  test.each([
+    ["group:web", false],
+    ["group:fs group:web group:warning_case_unknown", true],
+  ] as const)("classifies group allowlist entries (%s)", (names, suppress) => {
+    const label = suppress ? "agents.main.tools.allow" : "tools.allow";
+    const unknown = suppress ? "group:warning_case_unknown" : "group:web";
+    const message = suppress
+      ? "These entries won't match any tool unless the plugin is enabled."
+      : "These entries are shipped core tools but unavailable in the current runtime/provider/model/config.";
+    expect(
+      runAllowlistWarningStep({
+        allow: names.split(" "),
+        label,
+        suppressUnavailableCoreToolWarning: suppress,
+      }),
+    ).toEqual([`tools: ${label} allowlist contains unknown entries (${unknown}). ${message}`]);
   });
 
   test("includes the active reason for unavailable core tool warnings", () => {

@@ -30,6 +30,8 @@ import type {
 } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { createSessionRowChildActivity } from "./session-row-child-activity.js";
+import { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import { createSessionRowModelFactsReader } from "./session-row-projection-materialize.js";
 import {
   create as createSessionRow,
@@ -165,6 +167,12 @@ export function createSessionRowProjectionFixture(params: {
   const storePath = params.storePath ?? "";
   const rowContext = params.rowContext ?? buildSessionListRowMetadataContext({ now: Date.now() });
   const rows = new Map<string, Row>();
+  const childActivity = createSessionRowChildActivity((link) =>
+    matching({ key: link.key, agentId: link.agentId, storePath: link.storePath }).flatMap(
+      (row) => row.materialized?.source.childLinks ?? [],
+    ),
+  );
+  const childVisibility = createSessionRowChildVisibility();
   const revisions = createSessionRowProjectionRevisions(rows, new Map());
   const store = { ...params.store };
   let revision = 0;
@@ -192,6 +200,8 @@ export function createSessionRowProjectionFixture(params: {
     );
   };
   function setEntry(key: string, entry: SessionEntry | undefined) {
+    childActivity.clear();
+    childVisibility.clear();
     const target = params.targetsBySessionKey?.get(key);
     const agentId =
       target?.agentId ??
@@ -281,6 +291,9 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    readChildVisibility: (...args) => childVisibility.read(...args),
+    readChildActivity: (record, now, excluded, token) =>
+      childActivity.read(record, rowContext, now, excluded, token),
     findUrlCandidates(selection, agentId) {
       return matching({ agentId })
         .filter((row) => {
@@ -353,7 +366,16 @@ export function createSessionRowProjectionFixture(params: {
         now,
         subagentRuns: options?.subagentRuns ?? rowContext.subagentRuns.atTime(now),
         activeModel: record.fallbackModel,
+        preparedRunState: options?.preparedRunState,
         excludedChildKeys: options?.excludedChildKeys,
+        childActivity:
+          options?.childActivity ??
+          projection.readChildActivity(
+            record,
+            now,
+            options?.excludedChildKeys,
+            options?.excludedChildKeys ? {} : undefined,
+          ),
       });
       Object.assign(row, record.facts?.present());
       if (!options?.includeDerivedTitles) {
@@ -481,6 +503,8 @@ export function createSessionRowProjectionFixture(params: {
       revision++;
       revisionToken = {};
       rows.clear();
+      childActivity.clear();
+      childVisibility.clear();
       revisions.dispose();
     },
   };

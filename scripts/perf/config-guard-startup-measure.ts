@@ -10,10 +10,9 @@
  */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
-import path from "node:path";
 import {
   constants,
   PerformanceObserver,
@@ -21,8 +20,9 @@ import {
   type PerformanceNodeEntry,
 } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -42,7 +42,6 @@ const iterations = parseStrictIntegerOption({
   label: "iterations",
 });
 const ownerUrl = new URL("../../src/cli/program/config-guard.ts", import.meta.url).href;
-const replacement = values.owner ? pathToFileURL(path.resolve(values.owner)).href : undefined;
 const fixtureUrl = `data:text/javascript,${encodeURIComponent(`
   const config = {
     gateway: { mode: "local" },
@@ -62,7 +61,7 @@ const fixtureUrl = `data:text/javascript,${encodeURIComponent(`
     publications++;
   }
 `)}`;
-let replaced = false;
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL === ownerUrl && specifier === "../../config/config.js") {
@@ -70,20 +69,12 @@ registerHooks({
     }
     return nextResolve(specifier, context);
   },
-  load(url, context, nextLoad) {
-    if (url !== ownerUrl || !replacement) {
-      return nextLoad(url, context);
-    }
-    replaced = true;
-    const result = nextLoad(replacement, context);
-    return { format: result.format, source: result.source, shortCircuit: true };
-  },
 });
 const { ensureConfigReady } = await import("../../src/cli/program/config-guard.js");
 const fixture: { reads: number; publications: number; reset: () => void } = await import(
   fixtureUrl
 );
-assert(!replacement || replaced, "Requested baseline source was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Requested baseline source was not loaded");
 const unexpected = (...args: unknown[]) => {
   throw new Error(`Unexpected guard diagnostic/exit: ${args.join(" ")}`);
 };
@@ -100,9 +91,6 @@ async function run(count: number) {
   assert.equal(fixture.reads, count);
   assert.equal(fixture.publications, count);
   return `${fixture.reads}:${fixture.publications}:same-runtime-and-source`;
-}
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 }
 await run(1000);
 globalThis.gc();
@@ -131,7 +119,7 @@ try {
   const memoryAfter = process.memoryUsage();
   const allocatedBytes =
     values.mode === "allocation"
-      ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
   await setImmediate();
   collections.push(...observer.takeRecords());

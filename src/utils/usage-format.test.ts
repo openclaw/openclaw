@@ -1,27 +1,35 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
   toNormalizedUsage,
 } from "../agents/embedded-agent-runner/usage-accumulator.js";
-import { MODELS_JSON_STATE } from "../agents/models-config-state.js";
+import {
+  captureModelsJsonSource,
+  MODELS_JSON_STATE,
+  publishModelsJsonCostSource,
+} from "../agents/models-config-state.js";
 import { normalizeUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   formatCostUsageCachePrefix,
   formatUsd,
+  captureModelCostPricing,
   estimateAggregateUsageCost,
   estimateUsageCost,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "./usage-format.js";
 
-type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
+type ModelCostConfig = NonNullable<Awaited<ReturnType<typeof resolveModelCostConfig>>>;
 function accumulate(...usages: Parameters<typeof mergeUsageIntoAccumulator>[1][]) {
   const result = createUsageAccumulator();
   for (const usage of usages) {
@@ -90,7 +98,7 @@ describe("usage-format", () => {
       agents: { entries: { ops: { agentDir: opsAgentDir } } },
     } satisfies OpenClawConfig;
 
-    expect(resolveCost("demo-roster", "demo-model", config)?.input).toBe(42);
+    expect((await resolveCost("demo-roster", "demo-model", config))?.input).toBe(42);
   });
 
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
@@ -101,18 +109,24 @@ describe("usage-format", () => {
     await fs.mkdir(emptyAgentDir, { recursive: true });
 
     const config = sourceConfig("demo-scoped", [pricedModel(30)]);
-    const resolveInputPrice = (scopedAgentDir?: string) =>
-      resolveCost("demo-scoped", "demo-model", config, scopedAgentDir)?.input;
+    using reads = vi.spyOn(fs, "readFile");
+    const resolveInputPrice = async (scopedAgentDir?: string) =>
+      (await resolveCost("demo-scoped", "demo-model", config, scopedAgentDir))?.input;
 
-    expect([agentDir, secondAgentDir, emptyAgentDir, undefined].map(resolveInputPrice)).toEqual([
-      10, 20, 30, 10,
-    ]);
+    expect(
+      await Promise.all(
+        [agentDir, secondAgentDir, emptyAgentDir, undefined].map(resolveInputPrice),
+      ),
+    ).toEqual([10, 20, 30, 10]);
+    expect(
+      reads.mock.calls.filter(([file]) => file === path.join(agentDir, "models.json")),
+    ).toHaveLength(1);
   });
 
   const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
   const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
 
-  it("refreshes duplicate model prices and fingerprints with replacement config snapshots", () => {
+  it("refreshes duplicate model prices and fingerprints with replacement config snapshots", async () => {
     const partial = { output: 0 };
     let previousFingerprint: string | undefined;
     const snapshots: [Array<SourceModel["cost"]>, ModelCostConfig | undefined][] = [
@@ -128,11 +142,11 @@ describe("usage-format", () => {
         costs.map((cost) => ({ id: "priced-fixture", cost })),
       );
       const resolve = () => resolveCost("venice", "priced-fixture", snapshot, agentDir);
-      expect.soft(resolve()).toEqual(expected);
-      const fingerprint = resolveModelCostConfigFingerprint(snapshot, agentDir);
+      expect.soft(await resolve()).toEqual(expected);
+      const fingerprint = await resolveModelCostConfigFingerprint(snapshot, agentDir);
       expect.soft(fingerprint).not.toBe(previousFingerprint);
       previousFingerprint = fingerprint;
-      expect.soft(resolve()).toEqual(expected);
+      expect.soft(await resolve()).toEqual(expected);
     }
   });
 
@@ -144,17 +158,106 @@ describe("usage-format", () => {
     ]);
     const resolve = (model: string, snapshot = config) =>
       resolveCost("demo-metadata-row", model, snapshot);
-    expect(resolve("metadata-only")).toBeUndefined();
-    expect(resolve("priced-model")?.input).toBe(1);
+    expect(await resolve("metadata-only")).toBeUndefined();
+    expect((await resolve("priced-model"))?.input).toBe(1);
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
-    expect(resolve("metadata-only", structuredClone(config))?.input).toBe(9);
+    expect((await resolve("metadata-only", structuredClone(config)))?.input).toBe(9);
 
     await writePricing(agentDir, "demo-metadata-json", [
       { id: "metadata-only" },
       { id: "priced-model", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
     ]);
+    publishModelsJsonCostSource(
+      agentDir,
+      await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+    );
 
-    expect(resolveCost("demo-metadata-json", "priced-model")?.input).toBe(5);
+    expect((await resolveCost("demo-metadata-json", "priced-model"))?.input).toBe(5);
+  });
+
+  it("prepares absent and replaced pricing without synchronous filesystem calls", async () => {
+    const params = {
+      provider: "priced",
+      model: "demo-model",
+      agentDir,
+      allowPluginNormalization: false,
+    };
+    using access = vi.spyOn(fsSync, "accessSync");
+    using exists = vi.spyOn(fsSync, "existsSync");
+    using lstat = vi.spyOn(fsSync, "lstatSync");
+    using stat = vi.spyOn(fsSync, "statSync");
+    using realpath = vi.spyOn(fsSync, "realpathSync");
+    using open = vi.spyOn(fsSync, "openSync");
+    using fstat = vi.spyOn(fsSync, "fstatSync");
+    using read = vi.spyOn(fsSync, "readFileSync");
+    for (let index = 0; index < 66; index++) {
+      expect(await resolveModelCostConfig(params)).toBeUndefined();
+    }
+    publishModelsJsonCostSource(agentDir, "{malformed");
+    expect(await resolveModelCostConfig(params)).toBeUndefined();
+    await writePricing(agentDir, "priced", [pricedModel(7)]);
+    publishModelsJsonCostSource(
+      agentDir,
+      await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+    );
+    expect((await resolveModelCostConfig(params))?.input).toBe(7);
+    for (const call of [access, exists, lstat, stat, realpath, open, fstat, read]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retains operation prices across cache eviction and another agent's publication", async () => {
+    await writePricing(agentDir, "priced", [pricedModel(7)]);
+    const captured = await captureModelCostPricing({}, agentDir);
+    expect(captured.resolve("priced", "demo-model")?.input).toBe(7);
+    const fingerprint = captured.fingerprint();
+    for (let index = 0; index < 129; index++) {
+      publishModelsJsonCostSource(path.join(stateDir, `agent-${index}`), null);
+    }
+    expect(MODELS_JSON_STATE.costCache.has(agentDir)).toBe(false);
+    await writePricing(agentDir, "priced", [pricedModel(9)]);
+    expect(
+      (await captureModelCostPricing({}, agentDir)).resolve("priced", "demo-model")?.input,
+    ).toBe(9);
+    using lstat = vi.spyOn(fsSync, "lstatSync");
+    expect(captured.resolve("priced", "demo-model")?.input).toBe(7);
+    expect(captured.fingerprint()).toBe(fingerprint);
+    expect(lstat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the owning write newer than an overlapping source read", async () => {
+    await writePricing(agentDir, "priced", [pricedModel(1)]);
+    const target = path.join(agentDir, "models.json");
+    const readFile = fs.readFile;
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    using heldRead = vi.spyOn(fs, "readFile").mockImplementationOnce(async () => {
+      const contents = await readFile(target, "utf8");
+      entered.resolve();
+      await release.promise;
+      return contents;
+    });
+    const captured = captureModelsJsonSource(agentDir);
+    await entered.promise;
+    let writeStarted = false;
+    const writing = MODELS_JSON_STATE.writeQueue.enqueue(target, async () => {
+      writeStarted = true;
+      await writePricing(agentDir, "priced", [pricedModel(9)]);
+      publishModelsJsonCostSource(agentDir, await readFile(target, "utf8"));
+    });
+    try {
+      await nextTurn();
+      // Reproduce a late read after a committed write if the read bypasses its owner queue.
+      if (writeStarted) {
+        await writing;
+      }
+    } finally {
+      release.resolve();
+      await Promise.all([captured, writing]);
+    }
+    expect((await captured).pricing.providers?.priced?.models[0]?.cost?.input).toBe(1);
+    expect((await resolveCost("priced", "demo-model", undefined, agentDir))?.input).toBe(9);
+    expect(heldRead).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -180,7 +283,7 @@ describe("usage cost estimation", () => {
     [{ input: 1_000, cost: { total: 0 } }, true, 0],
     [{ input: 1_000 }, true, undefined],
     [{ total: 1_000 }, false, undefined],
-  ] as const)("preserves aggregate call-tier pricing: %j", (usage, tiered, expected) => {
+  ] as const)("preserves aggregate call-tier pricing: %j", async (usage, tiered, expected) => {
     const rates = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
     const cost: ModelCostConfig = {
       ...rates,
@@ -191,11 +294,13 @@ describe("usage cost estimation", () => {
     expect(
       estimateAggregateUsageCost({
         usage,
-        provider: "fixture",
-        model: "priced",
-        agentDir: "/missing-aggregate-cost-test-agent",
-        allowPluginNormalization: false,
-        config,
+        cost: await resolveModelCostConfig({
+          provider: "fixture",
+          model: "priced",
+          agentDir: "/missing-aggregate-cost-test-agent",
+          allowPluginNormalization: false,
+          config,
+        }),
       }),
     ).toBe(expected);
   });

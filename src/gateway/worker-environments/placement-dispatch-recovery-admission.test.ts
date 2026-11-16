@@ -135,57 +135,78 @@ describe("placement recovery session admission with persisted placements", () =>
     releaseOwnedWork = undefined;
   });
 
-  it.each(["busy", "idle"] as const)(
-    "startup pre-pass leaves %s Stop with its current final-save owner",
-    async (state) => {
-      const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
-      const reads = vi.spyOn(placements, "readProjection");
-      const stopBarrier = barrier();
-      const environmentBarrier = barrier();
-      const harness = await harnessFor({
-        workspacePath: support.testState.root,
-        runReclaimPreparation: async ({ run, authorize }) => {
-          await stopBarrier.wait();
-          return run(authorize);
-        },
-      });
-      const active = await seedActive(harness);
-      await placements.startDrain(placementTransition(active));
-      const coordinated = coordinate(harness);
-      vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
-        environmentBarrier.wait,
-      );
-      const stop = state === "busy" ? coordinated.reclaim(REQUEST) : undefined;
-      void stop?.catch(stopBarrier.reject);
-      let sweep: Promise<void> | undefined;
-      try {
-        if (stop) {
-          await stopBarrier.entered;
+  it("startup pre-pass leaves live Stop with its current final-save owner", async () => {
+    const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
+    const reads = vi.spyOn(placements, "readProjection");
+    const stopBarrier = barrier();
+    const environmentBarrier = barrier();
+    const harness = await harnessFor({
+      workspacePath: support.testState.root,
+      runReclaimPreparation: async ({ run, authorize }) => {
+        await stopBarrier.wait();
+        return run(authorize);
+      },
+    });
+    const active = await seedActive(harness);
+    await placements.startDrain(placementTransition(active));
+    const coordinated = coordinate(harness);
+    vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
+      environmentBarrier.wait,
+    );
+    const stop = coordinated.reclaim(REQUEST);
+    void stop.catch(stopBarrier.reject);
+    let sweep: Promise<void> | undefined;
+    try {
+      await stopBarrier.entered;
+      reads.mockClear();
+      sweep = coordinated.reconcile("startup");
+      void sweep.catch(environmentBarrier.reject);
+      await environmentBarrier.entered;
+      expect(claimStop).not.toHaveBeenCalled();
+      expect(reads).not.toHaveBeenCalled();
+      expect(await pendingResults()).toEqual([]);
+      environmentBarrier.release();
+      await sweep;
+    } finally {
+      environmentBarrier.release();
+      stopBarrier.release();
+      await Promise.allSettled([sweep, stop]);
+    }
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("targeted recovery waits for an earlier healthy placement recovery", async () => {
+    const harness = await harnessFor();
+    await seedActive(harness);
+    harness.markEnvironmentNodeDeviceId("healthy-worker-node");
+    const hold = barrier();
+    const reconcile = harness.service.reconcile;
+    vi.spyOn(harness.service, "reconcile").mockImplementation((mode, admit) =>
+      reconcile(mode, (ids, run) => {
+        if (!admit) {
+          throw new Error("Recovery requires coordinator admission");
         }
-        reads.mockClear();
-        sweep = coordinated.reconcile("startup");
-        void sweep.catch(environmentBarrier.reject);
-        await environmentBarrier.entered;
-        expect(claimStop).toHaveBeenCalledTimes(state === "busy" ? 0 : 1);
-        if (state === "busy") {
-          expect(reads).not.toHaveBeenCalled();
-          expect(await pendingResults()).toEqual([]);
-        } else {
-          expect(await pendingResults()).toMatchObject([
-            { sessionId: REQUEST.sessionId, recoveryRequestedAtMs: 1_000 },
-          ]);
-        }
-        environmentBarrier.release();
-        await sweep;
-      } finally {
-        environmentBarrier.release();
-        stopBarrier.release();
-        await Promise.allSettled([sweep, stop]);
-      }
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    },
-  );
+        return admit(ids, async (recoveryMode) => {
+          await run(recoveryMode);
+          await hold.wait();
+        });
+      }),
+    );
+    const coordinated = coordinate(harness);
+    const previous = coordinated.reconcile();
+    await hold.entered;
+    const admitted = observeTargetedAdmission(harness).then(() => "admitted");
+    const targeted = coordinated.reconcileActive(harness.ready.environmentId);
+    try {
+      expect(await Promise.race([admitted, targeted.then(() => "finished")])).toBe("admitted");
+    } finally {
+      hold.release();
+      await Promise.all([previous, targeted]);
+    }
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
 
   it.each(["startup", "full", "targeted"] as const)(
     "%s recovery preserves a live dispatch through activation",

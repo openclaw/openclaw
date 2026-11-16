@@ -1,6 +1,8 @@
 /**
  * Session-summary owner microbenchmark: 10,000 synthetic resident entries, followed
  * by mutations and reads of every physical store. No Gateway/SQLite costs.
+ * --delete-burst 1 exercises exact tombstones; --stores 2 --colliding-keys
+ * keeps equal logical keys in different physical stores to verify deletion scope.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-store-summary-measure.ts \
  *   --iterations 3000 --stores 1 --create-burst 8
  * Save baseline session-stores.ts before editing and pass --owner /absolute/base.ts.
@@ -17,13 +19,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -35,6 +38,8 @@ const { values } = parseArgs({
     warm: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
     "create-burst": { type: "string", default: "0" },
+    "delete-burst": { type: "string", default: "0" },
+    "colliding-keys": { type: "boolean", default: false },
   },
 });
 assert(global.gc, "Run with --expose-gc");
@@ -48,8 +53,18 @@ const createBurst = parseStrictIntegerOption({
   min: 0,
   fallback: 0,
 });
-assert(!values.warm || createBurst === 0, "--warm cannot create rows");
-assert(!values.cold || (!values.warm && createBurst === 0), "--cold measures preparation only");
+const deleteBurst = parseStrictIntegerOption({
+  raw: values["delete-burst"],
+  label: "--delete-burst",
+  min: 0,
+  fallback: 0,
+});
+assert(!createBurst || !deleteBurst, "Choose creation or deletion");
+assert(!values.warm || (createBurst === 0 && deleteBurst === 0), "--warm cannot mutate rows");
+assert(
+  !values.cold || (!values.warm && createBurst === 0 && deleteBurst === 0),
+  "--cold measures preparation only",
+);
 const sessionCount = 10000;
 assert(storeCount <= sessionCount);
 const ownerUrl = new URL("../../src/status/session-stores.ts", import.meta.url).href;
@@ -82,7 +97,14 @@ type Summary = {
   recent: Recent[];
   byAgent: Map<string, { count: number; recent: Recent[] }>;
 };
-type Change = { kind: "row"; id: string; key: string; agentId: string; row: Row };
+type Change = {
+  kind: "row";
+  id: string;
+  key: string;
+  agentId: string;
+  storePath: string;
+  row: Row | undefined;
+};
 const listeners = new Set<(change: Change) => void>();
 const stores: Array<{ path: string; rows: Row[] }> = Array.from(
   { length: storeCount },
@@ -93,9 +115,10 @@ const stores: Array<{ path: string; rows: Row[] }> = Array.from(
 );
 for (let index = 0; index < sessionCount; index++) {
   const store = stores[index % storeCount]!;
-  const agentId = `agent-${index % storeCount}`;
+  const agentId = `agent-${values["colliding-keys"] ? 0 : index % storeCount}`;
+  const keyIndex = values["colliding-keys"] ? Math.floor(index / storeCount) : index;
   store.rows.push({
-    key: `agent:${agentId}:session-${String(index).padStart(5, "0")}`,
+    key: `agent:${agentId}:session-${String(keyIndex).padStart(5, "0")}`,
     agentId,
     storeTarget: { storePath: store.path },
     entry: { sessionId: `session-${index}`, updatedAt: (index * 7919) % sessionCount },
@@ -124,14 +147,15 @@ const {
 assert(instrumented, "Owner instrumentation was not loaded");
 let sequence = 0;
 let nextSession = sessionCount;
-function publish(row: Row) {
+function publish(row: Row, removed = false) {
   projection.state.revision = {};
   const change: Change = {
     kind: "row",
     id: `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`,
     key: row.key,
     agentId: row.agentId,
-    row,
+    storePath: row.storeTarget.storePath,
+    row: removed ? undefined : row,
   };
   for (const listener of listeners) {
     listener(change);
@@ -142,7 +166,13 @@ function run(count: number, mutate = !values.warm && !values.cold) {
   for (let index = 0; index < count; index++, sequence++) {
     if (mutate) {
       const store = stores[sequence % storeCount]!;
-      if (createBurst > 0) {
+      if (deleteBurst > 0) {
+        for (let removed = 0; removed < deleteBurst; removed++) {
+          const row = store.rows.pop();
+          assert(row && store.rows.length > 0, "Keep at least one row per store");
+          publish(row, true);
+        }
+      } else if (createBurst > 0) {
         const agentId = store.rows[0]!.agentId;
         for (let added = 0; added < createBurst; added++, nextSession++) {
           const row: Row = {
@@ -175,15 +205,12 @@ function run(count: number, mutate = !values.warm && !values.cold) {
   }
   return checksum;
 }
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 const encodeSummary = (summary: Summary) =>
   JSON.stringify({ ...summary, byAgent: [...summary.byAgent] });
 const inspector = new Session();
 try {
   const warmup = values.cold ? 0 : 100;
-  run(warmup, !values.warm && createBurst === 0);
+  run(warmup, !values.warm && createBurst === 0 && deleteBurst === 0);
   const snapshots = values.cold
     ? []
     : stores.map((store) => {
@@ -212,7 +239,7 @@ try {
   const memoryAfter = process.memoryUsage();
   const counts = { selectionCalls, selectedRows };
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   global.gc();
   const retainedMemoryAfter = process.memoryUsage();
@@ -245,14 +272,19 @@ try {
         ? "cold-first-fleet-read"
         : values.warm
           ? "idle"
-          : createBurst > 0
-            ? "creation-burst-per-fleet-read"
-            : "one-row-replacement-per-fleet-read",
+          : deleteBurst > 0
+            ? "deletion-burst-per-fleet-read"
+            : createBurst > 0
+              ? "creation-burst-per-fleet-read"
+              : "one-row-replacement-per-fleet-read",
       owner: sourceUrl,
       ownerSha256: createHash("sha256").update(source).digest("hex"),
       node: process.version,
       sessionCount,
-      finalSessionCount: nextSession,
+      finalSessionCount: stores.reduce((count, store) => count + store.rows.length, 0),
+      deletedRows: deleteBurst * iterations,
+      deleteBurst,
+      collidingKeys: values["colliding-keys"],
       createdRows: nextSession - sessionCount,
       createBurst,
       storeCount,

@@ -202,6 +202,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
 | `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
+| `openclaw_sqlite_reader_operations_total`                 | counter   | `reader_operation`                                                                        |
+| `openclaw_sqlite_reader_read_bytes_total`                 | counter   | `reader_operation`                                                                        |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_heap_used_high_water_bytes`              | gauge     | `worker_class`, `script`                                                                  |
@@ -221,8 +223,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_row_selection_resets_total`             | counter   | none                                                                                      |
 | `openclaw_session_row_partition_cache_total`              | counter   | `task`, `outcome`                                                                         |
 | `openclaw_session_row_partition_revisions_total`          | counter   | `reason`                                                                                  |
-| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite only)                                        |
+| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite and authority)                               |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_authority_component_sampled_bytes_total` | counter   | `request_class`, `component`                                                              |
+| `openclaw_worker_authority_component_samples_total`       | counter   | `request_class`, `component`, `result`                                                    |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                          | counter   | `level`, `reason`                                                                         |
@@ -241,17 +245,53 @@ when a later read fails, rather than reported as zero or retained from an older
 sample. Other platforms do not expose these gauges. OpenClaw does not currently
 expose a total SQLite or jemalloc allocation counter.
 
-SQLite `sqlite_request` and `sqlite_reply` payload byte series add `request_class`
-from the active writer job, using the same closed vocabulary as
+On Linux, `openclaw_sqlite_reader_read_bytes_total` sums physical storage reads
+from `/proc/thread-self/io` across outer reader operations, including reads below
+the 64 MiB heavy-reader log threshold. `openclaw_sqlite_reader_operations_total`
+counts completed operations with valid before/after measurements, including
+failures and zero-byte reads. Nested readers count once under their outer
+operation. Usage operations distinguish `sessions.usage.refresh`, `summary`,
+`overview`, `sessions`, and `inventory` suffixes.
+
+Transcript hydration uses `sessions.transcript-hydration.<caller>` with fixed
+caller names, including `model-open`, `cron-model`, `subagent-model`,
+`model-reload`, `compaction`, `preview`, and `export`. Sum this prefix to compare
+with the former `sessions.transcript-hydration` total. Reused actor snapshots
+and followers sharing an in-flight hydration do not add reader operations;
+the dispatched read is attributed to its initiating caller. Chat history and
+message subscriptions use separate history operations.
+
+These process-lifetime totals include retired direct reader workers and travel
+with the existing diagnostic memory samples. The label uses internal operation
+names, capped at 256 plus `other`; paths and session identities are excluded.
+The diagnostic sample retains these totals; Prometheus applies its existing
+per-family and total series budgets and reports omitted series through
+`openclaw_prometheus_family_series_dropped_total`. Unavailable measurements are
+omitted. These counters cover physical reads on
+the reader thread during the operation, not logical SQLite pager reads, main
+thread reads, libuv filesystem workers, or all process I/O.
+
+SQLite `sqlite_request`, `sqlite_reply`, and `authority` payload byte series add
+`request_class` from the owning writer job, using the same closed vocabulary as
 `openclaw_worker_request_seconds{kind="sqlite_writer"}`. Unknown or unattributed
-classes use `other`; continuation frames keep their job's class. Other message
-kinds and the message-count/unmeasured-count metrics retain their existing labels.
+classes use `other`; continuation frames and private admission-port commit and
+settlement receipts keep their job's class. Other message kinds and the
+message-count/unmeasured-count metrics retain their existing labels.
 No payload decoding or extra serialization is performed for attribution.
+Local workspace requests use the fixed `localWorkspace.*` operation names, such as
+`localWorkspace.prepare` and `localWorkspace.mutate`, so pack preparation and
+checkpoint publication can be measured separately. Unknown suffixes remain grouped
+under `localWorkspace`; workspace IDs and paths never become labels.
 
 ```promql
 # Known SQLite request payload MB/min by bounded request class
 sum by (request_class) (
   rate(openclaw_worker_message_payload_bytes_total{kind="sqlite_request",direction="to_worker"}[5m])
+) * 60 / 1e6
+
+# Known authority receipt payload MB/min by bounded request class
+sum by (request_class) (
+  rate(openclaw_worker_message_payload_bytes_total{kind="authority",direction="from_worker"}[5m])
 ) * 60 / 1e6
 ```
 
@@ -277,6 +317,47 @@ Object graphs without a known size increase `openclaw_worker_message_unmeasured_
 instead of appearing as measured zero-byte messages. Compare byte rankings with
 this coverage counter before drawing conclusions; nested worker-to-worker traffic
 does not cross the main-thread boundary.
+
+Actor authority component counters independently sample each complete operation
+with probability 1/128, grouped by fixed `session.actor.*` request class. They include native admission facts
+that have no `payloadBytes` and therefore remain absent from the older payload byte
+counter. The older counter is unchanged: do not add it to the sampled series.
+Only numbers and fixed labels are retained; sampling does not change worker frames.
+
+Components partition V8-serialized facts using marginal removal sizes:
+`admission_entry` removes the snapshot's full entry; `admission_other` includes
+references and all remaining admission facts. `receipt_entry` removes the postimage
+entry and the complete entry-metadata receipts (including their small envelopes).
+`receipt_events` then removes appended events and transcript authority receipts.
+`receipt_value` then removes the phase result and transcript append result, including
+reloads, initial entries and model prompt projections; `receipt_other` includes
+everything left. Shared objects belong to the last component still referencing
+them. Native cloning can change V8 array encoding sizes, so each receipt remainder
+is capped at the previous remainder. Attribution is approximate, but receipt
+components sum exactly to the worker-recorded `payloadBytes` (zero total-byte
+error). Port, decision-cell and transport framing bytes are excluded. This is byte
+attribution, not structured-clone allocation. If serialization fails, the known
+receipt total goes to `receipt_other` and its component samples increment
+`result="unmeasured"`. Unsupported admission facts without a known size still
+contribute no bytes.
+
+For ordinary appends with one committed receipt, divide each component's sampled
+bytes by receipt samples to estimate bytes per append (including all admission
+frames in each sampled operation):
+
+```promql
+sum by (component) (
+  rate(openclaw_worker_authority_component_sampled_bytes_total{request_class="session.actor.appendTranscriptEvent"}[15m])
+)
+/
+scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other"}[15m])))
+```
+
+Check sample counts and unmeasured samples before interpreting a short window.
+Rejected admissions can contribute bytes without a receipt; oversized transferred
+outcomes appear under admission-other rather than decoded receipt components.
+Independent sampling avoids aliasing alternating user/assistant appends; use longer
+windows when sample counts are low.
 
 Foreign Worker instances with accessor or read-only methods, or nonextensible
 instances, retain CPU and lifecycle tracking but exclude per-message traffic.
@@ -415,7 +496,7 @@ reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
 `trigger` parameter filters job types and does not identify why a client fetched.
 
 The budget is at most **8 additional samples and scrape series per method**,
-created only for observed kinds and subject to the shared 16,384-sample cap.
+created only for observed kinds and subject to the shared 16,576-sample cap.
 Existing method-only counters and timing histograms keep their labels and bucket
 counts. To attribute polling, use:
 
@@ -512,7 +593,7 @@ uses one sample in the existing shared cap.
 
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
-samples in the shared 16,384-sample cap. An RPC duration histogram occupies one sample
+samples in the shared 16,576-sample cap. An RPC duration histogram occupies one sample
 but expands into 44 scrape series (41 finite buckets, `+Inf`, sum, and count).
 The four timing histograms therefore use 176 scrape series per method, compared
 with 76 previously. Including request and exclusive-sample counters and both
@@ -719,7 +800,7 @@ queue and exporter endpoint whenever diagnostics and an interested trusted
 consumer are active. They have no slow-log threshold and add no request, session,
 provider or host labels. The six elapsed and two CPU populations consume at most
 eight aggregate samples, or 152 exposed histogram series, under the existing
-16,384-sample cap. Startup-phase emission and its whole-process CPU semantics are
+16,576-sample cap. Startup-phase emission and its whole-process CPU semantics are
 unchanged.
 
 An OpenTelemetry exporter with traces disabled does not request phase events.
@@ -837,12 +918,14 @@ attribute elapsed execution to a work scope; they do not provide CPU profiles.
 worker owners of that kind. It includes SQLite writer capacity waiters and scoped
 read-only requests, and excludes requests that already hold an execution slot.
 `openclaw_worker_queue_wait_seconds{kind,request_class}` measures enqueue to
-dispatch; `openclaw_worker_request_seconds{kind,request_class}` measures dispatch
-to reply or failure. Both use the existing duration histogram buckets. Cancellation
+dispatch and retains the duration histogram buckets for queue-wait quantiles.
+`openclaw_worker_request_seconds{kind,request_class}` measures dispatch
+to reply or failure using cumulative `_sum`, `_count`, and the `+Inf` bucket. Cancellation
 before dispatch removes the queued request without adding a duration sample.
 
 `openclaw_worker_request_phase_seconds{kind,request_class,phase}` breaks completed
-SQLite writer requests into observed intervals, using the same histogram buckets:
+SQLite writer requests into observed intervals, retaining `_sum`, `_count`, and
+the `+Inf` bucket for each phase:
 
 | Phase      | Interval                                                                 |
 | ---------- | ------------------------------------------------------------------------ |
@@ -853,6 +936,15 @@ SQLite writer requests into observed intervals, using the same histogram buckets
 | `execute`  | Backend execution, including owner code, admission exchanges, and SQL.   |
 | `result`   | Execution end through cleanup, serialization, and result framing.        |
 | `reply`    | Final reply preparation and posting through broker receipt.              |
+
+The request and phase families no longer export finite buckets. Removed series
+are `openclaw_worker_request_seconds_bucket` and
+`openclaw_worker_request_phase_seconds_bucket` with `le` equal to `0.005`, `0.01`,
+`0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10`, `30`, `60`, `120`,
+`300`, or `600`, for every label set. No families or labels are renamed. Existing
+wall-time totals, request rates, and mean-duration queries remain unchanged;
+request and phase quantiles are no longer available. Queue-wait quantiles, RPC
+histograms, GC attribution, and payload request-class counters are unchanged.
 
 The Prometheus subscription enables these timestamps without a restart or a
 diagnostic flag. Large result transfers remain in `result`; input and result
@@ -880,6 +972,17 @@ command suffixes, or caller-provided names. The exporter's shared series cap sti
 applies.
 
 The `transcripts` request family includes stored event appends and retention.
+
+Known session writer commands outside the transcript and history families retain
+their exact owner names, including `session.entries.replace`,
+`session.lifecycle.deletePlan`, `session.lifecycle.delete`,
+`session.archivePruning.pruneRetention`, `session.archivePruning.reclaimPages`, and
+`session.metadata.append`. Unknown `session.*` commands still use `sessions`, so
+queries that compare with older builds should aggregate `sessions` with the
+`session.*` labels. Cron, plugin-state, transcript and history commands keep their
+family labels. The closed vocabulary lives in `src/infra/sqlite-worker-request-class.ts`
+and also applies to worker payload-byte metrics. The `execute` phase includes I/O and
+commit waits, not just SQL or CPU.
 
 Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
 bounded operation-family classifier as SQLite writers. Examples include
@@ -1119,7 +1222,14 @@ Labels contain a bounded `worker_class` (`reader`, `file-reader`, `compute`,
 above. GC counters also carry the same `kind` values as
 `openclaw_gc_duration_seconds`. No worker, pool, session, or task ID is exported.
 
-`openclaw_worker_tasks_completed_total` counts observed terminal task replies,
+SQLite broker workers share these totals under
+`worker_class="writer",script="sqlite-store.worker.js"`, across all databases and
+worker retirements. They omit `openclaw_worker_tasks_completed_total` because
+broker operations do not use the pool task-reply protocol. This adds at most four
+series to each existing GC counter family (one per kind) and one heap high-water
+series, independent of database or worker count.
+
+`openclaw_worker_tasks_completed_total` counts observed terminal pool task replies,
 including handled failures. `openclaw_worker_gc_duration_seconds_total` and
 `openclaw_worker_gc_collections_total` record elapsed GC seconds and collection
 counts. `openclaw_worker_gc_reclaimed_bytes_total` sums positive differences
@@ -1133,10 +1243,13 @@ byte counter or a sum of simultaneous worker heaps. It can miss peaks between
 samples, and remains visible after the last worker exits.
 
 Workers report through the existing periodic memory channel. The native sampler
-drains worker GC batches every 100 ms (the main thread remains at one second).
-Task replies carry
+drains GC samples once per second; broker samples travel with the next memory
+sample. The 30-second diagnostics heartbeat publishes the cumulative totals, so a
+15-second scrape window cannot precisely locate a collection. Inspector-triggered
+collections contribute to `mark_sweep_compact`; the native profiler does not
+expose a forced flag. Task replies carry
 only a completion marker, without a heap read or another per-task round trip.
-Healthy retirement flushes the last GC batch and heap sample over the same channel
+Healthy pool retirement flushes the last GC batch and heap sample over the same channel
 before stopping the worker, with a 100 ms best-effort limit. Collection requires
 enabled diagnostics and an interested consumer. Tasks before activation are not
 backfilled. Forced termination, crashes, cancellation, or a retirement flush timeout
@@ -1231,6 +1344,29 @@ reuse the memory telemetry port; port closure stops its observer. Workers withou
 that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.
 
+`openclaw_heap_used_after_major_gc_bytes{thread="main"}` records the full main
+isolate's used heap at the native `MarkSweepCompact` epilogue. Its companion
+`openclaw_heap_used_after_major_gc_timestamp_seconds` records the Unix time when
+the existing observer drains that sample, normally within one second of collection
+but later if the event loop is blocked. V8's profiler does not expose a
+per-collection timestamp. Scavenges and incremental collections update neither
+gauge. No extra collection, polling, heap read, or observer is added.
+
+Both gauges are absent until an observed major collection and retain their last
+sample until another major collection or exporter restart. Use the timestamp to
+check freshness; a large old-space limit can make major collections rare.
+**A minimum of `heap_used` over a time window is not a leak signal under a large
+old-space limit:** it can mostly measure garbage awaiting the next major GC.
+Compare fresh post-major-GC samples under comparable workloads instead.
+
+Workers reuse the existing GC batches on their memory telemetry channel, with
+`thread` set to the same bounded worker-script label as the GC histogram. A
+worker-kind gauge is the most recently received isolate sample, not a sum or
+maximum across workers of that kind; delayed batches can arrive out of order.
+It remains after worker exit, so check its timestamp. Workers without that
+channel (including native-only memory fallbacks), unregistered nested workers,
+and Bun isolates are omitted. No worker slot or thread ID label is added.
+
 The histogram's `_count` and `_sum` are the collection count and total elapsed
 seconds for each label set. Existing queries that need a single total should
 aggregate the new labels; select `thread="main"` to retain main-isolate scope:
@@ -1279,9 +1415,9 @@ attributes.
 
   </Accordion>
   <Accordion title="Series cap and overflow accounting">
-    The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
+    The exporter retains at most **16,576 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
-    A fixed catalog of 139 metric families reserves **16,000 entries**, leaving **384 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 141 metric families reserves **16,128 entries**, leaving **256 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 
@@ -1293,8 +1429,8 @@ attributes.
     | 512 | `gateway_rpc_client_requests_total`, `worker_message_payload_bytes_total`, `worker_queue_depth`, `worker_queue_wait_seconds`, `worker_request_seconds` |
     | 384 | `gc_duration_seconds` |
     | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
-    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total`, `worker_authority_component_samples_total` |
+    | 64 | `heap_used_after_major_gc_bytes`, `heap_used_after_major_gc_timestamp_seconds`, `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total`, `worker_authority_component_sampled_bytes_total` |
     | 32 | `chat_send_phase_seconds`, `session_row_partition_cache_total`, `worktree_preparation_seconds` |
     | 8 | `session_row_partition_revisions_total` |
     | 4 | Every other cataloged family |
@@ -1402,7 +1538,8 @@ increase(openclaw_gc_duration_seconds_count[5m])
 Run, harness-run, model-call (including synthetic model turns), and message-dispatch
 duration histograms preserve the existing bounds through 600 seconds and add
 900, 1800, and 3600 seconds. Each label set expands into 22 scrape series.
-Other duration histograms keep their existing bounds.
+Other duration histograms keep their existing bounds, except the totals-only
+worker request and phase families described above.
 
 Percentiles remain bucket-based estimates; observations above one hour still
 fall only in `+Inf`. Upgrading cannot recover the distribution of historical

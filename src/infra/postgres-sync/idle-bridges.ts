@@ -3,10 +3,12 @@ import type { PostgresBridge } from "./protocol.js";
 // Each isolate owns its idle transports; taking one removes it before another caller can open.
 const idleBridges = new Map<
   string,
-  { bridge: PostgresBridge; timeout: ReturnType<typeof setTimeout> }
+  { bridge: PostgresBridge; releasedAt: number; timeout: ReturnType<typeof setTimeout> }
 >();
-const maxIdleBridges = 4;
+const maxIdleBridges = 2;
 const idleBridgeTimeoutMs = 3 * 60_000;
+// A backend terminated within this burst window can still fail the next statement.
+const idleValidationMs = 1000;
 
 function closeBridge(bridge: PostgresBridge): void {
   // Closing this logical endpoint releases only its independently owned socket.
@@ -35,35 +37,36 @@ export function hasIdlePostgresBridge(key: string): boolean {
   return bridge !== undefined && !Atomics.load(bridge.service, 1);
 }
 
-function removeIdleBridge(key: string): PostgresBridge | undefined {
+function removeIdleBridge(key: string) {
   const idle = idleBridges.get(key);
   idleBridges.delete(key);
   if (idle) {
     clearTimeout(idle.timeout);
   }
   unwatch();
-  return idle?.bridge;
+  return idle;
 }
 
-export function takeIdlePostgresBridge(key: string): PostgresBridge | undefined {
-  const bridge = removeIdleBridge(key);
-  if (bridge) {
-    if (Atomics.load(bridge.service, 1)) {
-      closeBridge(bridge);
-      return undefined;
-    }
+export function takeIdlePostgresBridge(key: string) {
+  const idle = removeIdleBridge(key);
+  if (!idle) {
+    return undefined;
   }
-  return bridge;
+  if (Atomics.load(idle.bridge.service, 1)) {
+    closeBridge(idle.bridge);
+    return undefined;
+  }
+  return { bridge: idle.bridge, validate: performance.now() - idle.releasedAt >= idleValidationMs };
 }
 
 export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): void {
   const previous = removeIdleBridge(key);
   if (previous) {
-    closeBridge(previous);
+    closeBridge(previous.bridge);
   }
   if (idleBridges.size === maxIdleBridges) {
     const oldest = idleBridges.keys().next().value!;
-    closeBridge(removeIdleBridge(oldest)!);
+    closeBridge(removeIdleBridge(oldest)!.bridge);
   }
   if (!idleBridges.size) {
     process.once("beforeExit", closeIdleBridges);
@@ -72,9 +75,9 @@ export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): v
   const timeout = setTimeout(() => {
     const expired = removeIdleBridge(key);
     if (expired) {
-      closeBridge(expired);
+      closeBridge(expired.bridge);
     }
   }, idleBridgeTimeoutMs);
   timeout.unref();
-  idleBridges.set(key, { bridge, timeout });
+  idleBridges.set(key, { bridge, timeout, releasedAt: performance.now() });
 }

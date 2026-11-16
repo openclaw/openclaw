@@ -147,6 +147,9 @@ export function isNodeLaunchAgentLabel(label: string): boolean {
   return label === NODE_LAUNCH_AGENT_LABEL || label.startsWith(`${NODE_LAUNCH_AGENT_LABEL}.`);
 }
 
+/** Durable exec jobs are registry-owned and transient; service repair never inspects them. */
+export const DURABLE_PROCESS_LAUNCHD_LABEL_PREFIX = "ai.openclaw.durable-proc.";
+
 export function resolveNodeSystemdServiceName(profile?: string): string {
   return `${NODE_SYSTEMD_SERVICE_NAME}${resolveGatewayProfileSuffix(profile)}`;
 }
@@ -167,7 +170,8 @@ export function resolveNodeServiceIdentityEnvironment(
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(profile),
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
-    OPENCLAW_LOG_PREFIX: "node",
+    // launchd writes every node's supervisor logs to one ~/Library/Logs/openclaw.
+    OPENCLAW_LOG_PREFIX: `node${resolveGatewayProfileSuffix(profile)}`,
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
   };

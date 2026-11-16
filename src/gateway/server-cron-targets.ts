@@ -27,11 +27,14 @@ import {
 } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { assertAgentDatabaseAdmitted } from "../state/agent-database-admission.js";
+import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 /** Resolve and admit scheduler events against the current roster and canonical session owner. */
 export function createGatewayCronTargetResolver(
   env: NodeJS.ProcessEnv,
   log: Pick<ReturnType<typeof import("../logging/logger.js").getChildLogger>, "warn">,
+  resolveGatewayContext?: () => GatewayRequestContext | undefined,
 ) {
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = getRuntimeConfig();
@@ -59,11 +62,15 @@ export function createGatewayCronTargetResolver(
     requestedSessionKey?: string | null;
   }) => {
     const requested = paramsValue.requestedSessionKey?.trim();
-    const candidate = toAgentStoreSessionKey({
-      agentId: paramsValue.agentId,
-      requestKey: requested,
-      mainKey: paramsValue.runtimeConfig.session?.mainKey,
-    });
+    // Global scope stores this conversation under the literal key, not its queue identity.
+    const candidate =
+      paramsValue.runtimeConfig.session?.scope === "global" && requested === "global"
+        ? requested
+        : toAgentStoreSessionKey({
+            agentId: paramsValue.agentId,
+            requestKey: requested,
+            mainKey: paramsValue.runtimeConfig.session?.mainKey,
+          });
     const canonical = canonicalizeMainSessionAlias({
       cfg: paramsValue.runtimeConfig,
       agentId: paramsValue.agentId,
@@ -215,18 +222,37 @@ export function createGatewayCronTargetResolver(
     if (!agentId || !sessionKey) {
       throw new Error("Session event has no configured owner");
     }
-    const receipt = enqueueSessionEventForHost(text, {
-      ...opts,
-      agentId,
-      sessionKey,
-      source: "cron",
-    });
-    void receipt.settled.then((result) => {
-      if (result.status !== "completed") {
-        log.warn({ result }, "Session event did not complete");
-      }
-    });
-    return receipt.accepted;
+    const { jobId, ...eventOpts } = opts ?? {};
+    const enqueue = (expectedTarget = eventOpts.expectedTarget) => {
+      const receipt = enqueueSessionEventForHost(text, {
+        ...eventOpts,
+        ...(expectedTarget ? { expectedTarget } : {}),
+        agentId,
+        sessionKey,
+        source: "cron",
+      });
+      void receipt.settled.then((result) => {
+        if (result.status !== "completed") {
+          log.warn({ result }, "Session event did not complete");
+        }
+      });
+      return receipt.accepted;
+    };
+    const context = jobId ? resolveGatewayContext?.() : undefined;
+    const job = jobId ? context?.cron.getJob(jobId) : undefined;
+    if (!context || !job) {
+      return enqueue();
+    }
+    // A notice about a job acts for the job's requester, like the job's own runs.
+    return captureCronJobTurnTarget({ job, agentId, sessionKey, context }).then(
+      async ({ target, release }) => {
+        try {
+          return await enqueue(target);
+        } finally {
+          release();
+        }
+      },
+    );
   };
   return { resolveCronAgent, resolveCronTarget, deferSessionEvent, enqueueSessionEvent };
 }

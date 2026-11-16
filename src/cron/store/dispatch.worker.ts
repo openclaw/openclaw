@@ -44,7 +44,12 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     });
   }
   if (
-    ["cron.requestRuns", "cron.drainQueue", "cron.cancelRequests"].includes(String(type)) &&
+    [
+      "cron.requestRuns",
+      "cron.drainQueue",
+      "cron.cancelRequests",
+      "cron.settleConditionCheck",
+    ].includes(String(type)) &&
     !queue
   ) {
     return loadQueue().then((loaded) => {
@@ -94,7 +99,6 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
   if (
     (type === "cron.scheduleUnowned" ||
       type === "cron.recordFailureAlertOutcome" ||
-      type === "cron.recordFailureRepairSettlement" ||
       type === "cron.maintainHistory") &&
     !maintenance
   ) {
@@ -122,6 +126,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
+    case "cron.settleConditionCheck":
     case "cron.provisionDefaultProactive":
     case "cron.recordSkippedRuns":
     case "cron.mutateExternalState":
@@ -138,7 +143,6 @@ export function isCronStateWorkerCommand(command: {
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
-    case "cron.recordFailureRepairSettlement":
     case "cron.save":
     case "cron.saveChanges":
     case "cron.registerQuarantine":
@@ -167,6 +171,7 @@ export function executeCronStateCommand(
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
+    case "cron.settleConditionCheck":
       if (!queue) {
         throw new Error("Cron queue worker is not prepared");
       }
@@ -177,6 +182,8 @@ export function executeCronStateCommand(
           return queue.drainCronQueueInWorker(database, command.input);
         case "cron.cancelRequests":
           return queue.cancelCronRequestsInWorker(database, command.input);
+        case "cron.settleConditionCheck":
+          return queue.settleCronConditionCheckInWorker(database, command.input);
       }
     case "cron.provisionDefaultProactive":
       if (!proactive) {
@@ -239,6 +246,7 @@ export function executeCronStateCommand(
         database,
         command.input.storeKey,
         command.input.defaultStorePath,
+        command.input.includeConfigRevisions,
       );
     case "cron.recoverRuns":
       if (!recovery) {
@@ -248,15 +256,11 @@ export function executeCronStateCommand(
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
-    case "cron.recordFailureRepairSettlement":
       if (!maintenance) {
         throw new Error("Cron maintenance worker is not prepared");
       }
       if (command.type === "cron.maintainHistory") {
         return maintenance.maintainCronRunHistoryInWorker(database, command.input);
-      }
-      if (command.type === "cron.recordFailureRepairSettlement") {
-        return maintenance.recordCronFailureRepairSettlementInWorker(database, command.input);
       }
       return command.type === "cron.scheduleUnowned"
         ? maintenance.scheduleUnownedCronJobsInWorker(database, command.input)

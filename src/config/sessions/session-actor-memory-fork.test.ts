@@ -91,56 +91,68 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
 }
 
 describe("memory actor fork and cut", () => {
-  it("forks the latest in-process bindings and detaches copied transcript results", async () => {
-    const { parent, child, forkInput } = await fixture({
-      cliSessionBindings: {
-        claude: { sessionId: "cli-parent", resumeCheckpointId: "old-checkpoint", forceReuse: true },
-      },
-    });
-    const patch = mutateMemory(storage(parent), "session.entry.patch", {
-      operation: {
-        kind: "fields",
-        patch: {
-          cliSessionBindings: {
-            claude: {
-              sessionId: "cli-parent",
-              resumeCheckpointId: "new-checkpoint",
-              forceReuse: true,
+  it.each([false, true])(
+    "forks current bindings and child audience (preserve visibility=%s)",
+    async (preserveVisibility) => {
+      const { parent, child, acquire, forkInput } = await fixture({
+        cliSessionBindings: {
+          claude: {
+            sessionId: "cli-parent",
+            resumeCheckpointId: "old-checkpoint",
+            forceReuse: true,
+          },
+        },
+      });
+      await commitMemory(storage(child), "session.entry.create", {
+        entry: { ...forkInput.params.fallbackEntry, visibility: "draft" },
+      });
+      const patch = mutateMemory(storage(parent), "session.entry.patch", {
+        operation: {
+          kind: "fields",
+          patch: {
+            cliSessionBindings: {
+              claude: {
+                sessionId: "cli-parent",
+                resumeCheckpointId: "new-checkpoint",
+                forceReuse: true,
+              },
             },
           },
         },
-      },
-    });
-    const fork = mutateMemory(
-      storage(child),
-      "session.parentFork.commit",
-      forkInput,
-      forkAuthority,
-    );
-    committed(await patch);
-    const result = committed(await fork);
-    expect(result.status).toBe("forked");
-    assert(result.status === "forked", "Fork failed");
-    expect(result.sessionEntry).toMatchObject({
-      incognito: true,
-      forkSource: { sessionKey: parentKey, sessionId: "parent-session" },
-      cliSessionBindings: {
-        claude: {
-          sessionId: "cli-parent",
-          resumeCheckpointId: "new-checkpoint",
-          forkNextResume: true,
+      });
+      const fork = mutateMemory(
+        storage(child),
+        "session.parentFork.commit",
+        { ...forkInput, ...(preserveVisibility ? { patch: { preserveVisibility: true } } : {}) },
+        forkAuthority,
+      );
+      committed(await patch);
+      const result = committed(await fork);
+      expect(result.status).toBe("forked");
+      assert(result.status === "forked", "Fork failed");
+      expect(result.sessionEntry).toMatchObject({
+        incognito: true,
+        forkSource: { sessionKey: parentKey, sessionId: "parent-session" },
+        cliSessionBindings: {
+          claude: {
+            sessionId: "cli-parent",
+            resumeCheckpointId: "new-checkpoint",
+            forkNextResume: true,
+          },
         },
-      },
-    });
-    expect(result.sessionEntry.cliSessionBindings?.claude?.forceReuse).toBeUndefined();
-    const copied = await readMemory(storage(child), "session.parentFork.source", {});
-    expect(copied?.branchEntries).toHaveLength(4);
-    copied?.branchEntries.splice(0);
-    const source = await readMemory(storage(parent), "session.parentFork.source", {});
-    const reread = await readMemory(storage(child), "session.parentFork.source", {});
-    expect(source?.branchEntries).toHaveLength(4);
-    expect(reread?.branchEntries).toHaveLength(4);
-  });
+      });
+      expect(result.sessionEntry.cliSessionBindings?.claude?.forceReuse).toBeUndefined();
+      expect(result.sessionEntry.visibility).toBe(preserveVisibility ? "draft" : undefined);
+      const activeChild = await acquire(childKey);
+      const copied = await readMemory(storage(activeChild), "session.parentFork.source", {});
+      expect(copied?.branchEntries).toHaveLength(4);
+      copied?.branchEntries.splice(0);
+      const source = await readMemory(storage(parent), "session.parentFork.source", {});
+      const reread = await readMemory(storage(activeChild), "session.parentFork.source", {});
+      expect(source?.branchEntries).toHaveLength(4);
+      expect(reread?.branchEntries).toHaveLength(4);
+    },
+  );
 
   it("does not inherit CLI bindings without host fork support", async () => {
     const { child, forkInput } = await fixture({
@@ -165,6 +177,8 @@ describe("memory actor fork and cut", () => {
       expectedState,
       mode: "rewind" as const,
     };
+    const drained = await readMemory(storage(parent), "session.history.raw-delta", { limits: {} });
+    assert(drained.kind === "page", "Raw delta page failed");
     const rewind = await commitMemory(storage(parent), "session.messageCut", { intent });
     expect(rewind).toMatchObject({
       status: "created",
@@ -172,16 +186,37 @@ describe("memory actor fork and cut", () => {
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    await expect(async () => readMemory(storage(parent), "session.entry.read", {})).rejects.toThrow(
-      /closed/,
-    );
+    // The cut keeps the transcript identity; the writer claim is what is retired.
+    expect(rewind.entry.sessionId).toBe("parent-session");
+    expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
+    // The control rotates the generation, as SQLite does: a pre-cut cursor is refused.
+    expect(
+      await readMemory(storage(parent), "session.history.raw-delta", {
+        limits: { cursor: drained.cursor },
+      }),
+    ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+    const stale = await mutateMemory(storage(parent), "session.event.append", {
+      scope: {
+        agentId: "main",
+        sessionKey: parentKey,
+        storePath,
+        sessionId: expectedState.sessionId,
+        expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
+      },
+      eventJson: JSON.stringify({ type: "custom", id: "stale", customType: "x", parentId: "a2" }),
+    });
+    assert(stale.kind === "rolled-back", "Stale writer was admitted after the cut");
     const active = await acquire();
     const old = await readMemory(storage(active), "session.history.hydrate", {
       sessionId: "parent-session",
     });
     expect(old.kind).toBe("full");
     if (old.kind === "full") {
-      expect(old.snapshot.events).toEqual(transcript);
+      // The original window is retained: every seeded event plus the one control.
+      expect(old.snapshot.events).toMatchObject([
+        ...transcript,
+        { type: "leaf", parentId: "a2", targetId: "a1" },
+      ]);
     }
     const branch = await readMemory(storage(active), "session.parentFork.source", {});
     expect(branch?.branchEntries).toHaveLength(2);

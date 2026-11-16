@@ -13,6 +13,7 @@ export function createSessionDataHost(
     activeRouteId: "sessions",
     sessionCatalogRowsVisible: true,
     navigationVisible: true,
+    navigationCollapsed: false,
     navigationView: "sessions",
     sidebarAgentsMode: "chip",
     shouldPublishSessionData: () => true,

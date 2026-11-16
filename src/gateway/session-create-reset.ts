@@ -32,6 +32,7 @@ export function tryResetGatewaySessionForCreation(
   if (
     canonicalParentSessionKey &&
     params.fork !== true &&
+    params.succeedsParent !== false &&
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
@@ -81,6 +82,7 @@ async function resetGatewaySessionForCreation(
       ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
       : {}),
     ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+    creationOperation: params.creationOperation,
     reason: "new",
     commandSource: params.commandSource,
     ...(params.creation ? { creation: params.creation } : {}),

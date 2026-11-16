@@ -13,6 +13,7 @@ import { startSqliteCheckpointWriter } from "./sqlite-checkpoint-writer.test-sup
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import * as copies from "./sqlite-file-copy.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   prepareSqliteReadOnlyCopyInProcess,
   prepareSqliteReadOnlyLocationInProcess,
@@ -132,10 +133,58 @@ it.each(["cache", "update-tmpdir"])(
   },
 );
 
+it.each([
+  ["synchronous copy", prepareSqliteReadOnlyLocationSyncInProcess],
+  ["asynchronous copy", prepareSqliteReadOnlyCopyInProcess],
+  ["online backup", prepareSqliteReadOnlyLocationInProcess],
+] as const)("reads and cleans up a %s snapshot despite EXDEV renames", async (_mode, prepare) => {
+  const databasePath = createTempDatabasePath(
+    "CREATE TABLE probe(value); INSERT INTO probe VALUES(7);",
+  );
+  const stagingRoot = tempDirs.make("sqlite-efs-publication-");
+  const before = fs.readFileSync(databasePath);
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+  });
+  const prepared = await prepare(databasePath, stagingRoot);
+  try {
+    withDatabase(
+      prepared.location,
+      (db) => {
+        expect(db.prepare("SELECT value FROM probe").all()).toEqual([{ value: 7 }]);
+      },
+      true,
+    );
+    if (process.platform !== "win32") {
+      expect(fs.statSync(prepared.location).mode & 0o777).toBe(0o600);
+    }
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+  } finally {
+    expect(await prepared.cleanupAsync()).toBe(true);
+  }
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
+});
+
+it("preserves other rename errors and removes the failed snapshot", async () => {
+  const databasePath = createTempDatabasePath("CREATE TABLE probe(value);");
+  const stagingRoot = tempDirs.make("sqlite-rename-refusal-");
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+  });
+  await expect(prepareSqliteReadOnlyLocationInProcess(databasePath, stagingRoot)).rejects.toThrow(
+    "operation not permitted",
+  );
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
+});
+
 it.each([13, 778])(
   "retains SQLite destination write failure %i and identifies the snapshot cache",
   async (errcode) => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-full-");
+    const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+      ...process.env,
+      XDG_CACHE_HOME: cacheRoot,
+    });
     const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
     const quotaError = Object.assign(new Error("disk I/O error"), {
       code: "ERR_SQLITE_ERROR",
@@ -166,13 +215,17 @@ it.each([13, 778])(
         expect((failure as Error).message).toContain("source has no live WAL sidecars");
       }
     });
-    expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    expect(fs.readdirSync(stagingRoot)).toEqual([]);
   },
 );
 
 it("reports live WAL capacity without retrying or retaining an incomplete backup", async () => {
   const databasePath = createTempDatabasePath("CREATE TABLE writes(id INTEGER PRIMARY KEY)");
   const cacheRoot = tempDirs.make("openclaw-live-snapshot-full-");
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+    ...process.env,
+    XDG_CACHE_HOME: cacheRoot,
+  });
   const writer = startSqliteConcurrentWriter(databasePath, "WAL");
   writers.push(writer);
   await writer.waitFor("ready");
@@ -186,7 +239,7 @@ it("reports live WAL capacity without retrying or retaining an incomplete backup
     );
   });
   expect(backup).toHaveBeenCalledOnce();
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
 
 it.each([
@@ -203,7 +256,10 @@ it.each([
     if (empty) {
       fs.writeFileSync(databasePath, "");
     }
-    const stagingRoot = path.join(cacheRoot, "openclaw");
+    const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+      ...process.env,
+      XDG_CACHE_HOME: cacheRoot,
+    });
     const allocationError = Object.assign(new Error("snapshot directory allocation failed"), {
       code,
       path: path.join(stagingRoot, "openclaw-sqlite-readonly-stage"),
@@ -235,8 +291,10 @@ it.each([
 
 it("preserves source failures inside the snapshot cache without staging guidance", async () => {
   const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cached-source-");
-  const stagingRoot = path.join(cacheRoot, "openclaw");
-  fs.mkdirSync(stagingRoot, { mode: 0o700 });
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+    ...process.env,
+    XDG_CACHE_HOME: cacheRoot,
+  });
   const databasePath = path.join(stagingRoot, "source.sqlite");
   withDatabase(databasePath, (database) => database.exec("CREATE TABLE probe (value TEXT);"));
   const sourceError = Object.assign(new Error("source permission denied"), {
@@ -257,6 +315,10 @@ it("preserves source failures inside the snapshot cache without staging guidance
 
 it("identifies filesystem failures whose path belongs to the staging destination", async () => {
   const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-destination-path-");
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+    ...process.env,
+    XDG_CACHE_HOME: cacheRoot,
+  });
   const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
   vi.spyOn(sqlite, "backup").mockImplementationOnce(async (_source, destination) => {
     throw Object.assign(new Error("destination permission denied"), {
@@ -271,7 +333,7 @@ it("identifies filesystem failures whose path belongs to the staging destination
       message: expect.stringContaining(cacheRoot),
     });
   });
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
 
 it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
@@ -320,13 +382,17 @@ it("preserves source corruption without reporting a snapshot staging quota failu
 
 it("keeps synchronous destination EDQUOT actionable without changing the source", async () => {
   const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-sync-full-");
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+    ...process.env,
+    XDG_CACHE_HOME: cacheRoot,
+  });
   const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
   const before = readFamily(databasePath);
   const quotaError = Object.assign(new Error("Disk quota exceeded"), { code: "EDQUOT" });
   const statfs = fs.statfsSync.bind(fs);
   let measuredBeforeCleanup = false;
   vi.spyOn(fs, "statfsSync").mockImplementation((...args) => {
-    measuredBeforeCleanup = fs.readdirSync(path.join(cacheRoot, "openclaw")).length > 0;
+    measuredBeforeCleanup = fs.readdirSync(stagingRoot).length > 0;
     return statfs(...args);
   });
   const sync = vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
@@ -344,7 +410,7 @@ it("keeps synchronous destination EDQUOT actionable without changing the source"
   expect(sync).toHaveBeenCalledOnce();
   expect(measuredBeforeCleanup).toBe(true);
   expect(readFamily(databasePath)).toEqual(before);
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
 
 it("keeps worker stderr valid at the Node buffer end", async () => {
@@ -390,15 +456,13 @@ it("names retry count and guidance for artifact-preserving synchronous inspectio
   }
   assert(error instanceof Error);
   expect.soft(error.message).toContain("after 10 read-only inspection attempts");
-  expect.soft(error.message).toContain("the database may be under concurrent write activity");
+  expect.soft(error.message).toContain("reason=source-disappeared, attempts=10");
   expect
     .soft(error.message)
     .toContain("Wait a moment for write activity to settle, then retry the inspection");
-  expect.soft(error.message).toContain(canonicalPath);
+  expect.soft(error.message).not.toContain(canonicalPath);
   expect.soft(error.cause).toBeInstanceOf(SqliteSourceChangedError);
-  expect.soft(error.cause).toMatchObject({
-    message: `SQLite source disappeared: ${canonicalPath}`,
-  });
+  expect.soft(error.cause).toMatchObject({ reason: "source-disappeared" });
   expect.soft(error.message).not.toContain("SQLite source disappeared");
 });
 
@@ -712,7 +776,7 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       return result;
     });
     await expect(prepareSqliteReadOnlyCopyInProcess(source, staging)).rejects.toThrow(
-      `did not stabilize after ${MAX_SNAPSHOT_ATTEMPTS}`,
+      "reason=wal-copy-unstable, attempts=10",
     );
     expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
     raw.mockRestore();

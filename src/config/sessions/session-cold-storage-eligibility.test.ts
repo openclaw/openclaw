@@ -61,7 +61,7 @@ function checkpoint(sessionId: string, before = sessionId, after = sessionId) {
   return { sessionId, preCompaction: { sessionId: before }, postCompaction: { sessionId: after } };
 }
 
-it("selects live, recovering, and recent windows without preserving idle history", () => {
+it("selects live, marked, and recent windows without preserving idle history", () => {
   const idle = addNode("idle", { archivedAt: 2, pinnedAt: 3 });
   for (let i = 0; i < 1_000; i++) {
     addWindow(idle.key, `history-${i}`, cutoff - 1, i % 2 === 0 ? null : cutoff - 1);
@@ -70,7 +70,7 @@ it("selects live, recovering, and recent windows without preserving idle history
   addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
   const live = addNode("live-history");
   addWindow(live.key, "running-history", cutoff - 1, null);
-  const protectedNode = addNode("busy", { restartRecoveryBeforeAgentReplyState: "pending" });
+  const protectedNode = addNode("busy", { resumeAfterRestart: { queuedInputIds: [] } });
   addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
   for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
     addNode(column, { updatedAt: column === "updated_at" ? cutoff : 1 });
@@ -100,7 +100,23 @@ it("retains explicit cross-generation references without treating archive or pin
     usageFamilySessionIds: ["idle", "usage"],
     compactionCheckpoints: [checkpoint("checkpoint", "before", "after")],
   });
-  expectProtection(["previous", "usage", "checkpoint", "before", "after"]);
+  expectProtection(["previous", "checkpoint", "before", "after"]);
+});
+
+it("lets idle runs of an active rotating session cool despite usage-family lineage", () => {
+  const runs = Array.from({ length: 50 }, (_, i) => `run-${i}`);
+  const { key } = addNode("cron", {
+    previousSessionId: "run-49",
+    usageFamilySessionIds: [...runs, "cron"],
+  });
+  for (const id of runs) {
+    addWindow(key, id);
+  }
+  database.prepare("UPDATE session_nodes SET last_activity_at = ?").run(cutoff);
+  expectProtection(["cron", "run-49"]);
+  expect(
+    readSessionColdStorageProtection({ db: database }, cutoff, new Set(), ["run-0", "run-49"]),
+  ).toEqual(new Set(["cron", "run-49"]));
 });
 
 it("does not let legacy checkpoint self-references protect an idle current window", () => {
@@ -112,19 +128,6 @@ it("does not let legacy checkpoint self-references protect an idle current windo
     .prepare("UPDATE session_nodes SET last_activity_at = ? WHERE current_session_id = ?")
     .run(cutoff, "idle");
   expectProtection(["idle", "older-generation"]);
-});
-
-it.each([
-  { restartRecoveryBeforeAgentReplyState: "admitted" },
-  { restartRecoveryBeforeAgentReplyState: "continue" },
-  { restartRecoveryDeliveryReceiptState: "terminal-pending" },
-  { mainRestartRecovery: { reservation: { id: "claim" } } },
-  { mainRestartRecovery: { foregroundClaims: [] } },
-])("protects every generation of recovery-owned nodes (%j)", (metadata) => {
-  const { key } = addNode("recovery", metadata);
-  addWindow(key, "old-recovery-window");
-  addNode("unrelated-idle");
-  expectProtection(["recovery", "old-recovery-window"]);
 });
 
 it.each([
@@ -153,23 +156,28 @@ it("preserves the zero fallback for a null transcript timestamp", () => {
 });
 
 it.each([false, true])(
-  "preserves pending-input protection with consumption column=%s",
+  "protects owned queued inputs and ignores inert rows with consumption column=%s",
   (consumption) => {
+    for (const id of ["queued", "interrupted", "unowned", "consumed"]) {
+      addNode(id);
+    }
     database.exec(`CREATE TABLE session_pending_inputs (
-      session_id TEXT, state TEXT${consumption ? ", consumed_event_id TEXT" : ""}
+      session_key TEXT, session_id TEXT, state TEXT${consumption ? ", consumed_event_id TEXT" : ""}
     )`);
     database.exec(
-      "INSERT INTO session_pending_inputs (session_id,state) VALUES ('queued','queued'),('interrupted','interrupted'),('done','done')",
+      "INSERT INTO session_pending_inputs (session_key,session_id,state) VALUES ('agent:main:queued','queued','queued'),('agent:main:interrupted','interrupted','interrupted'),('agent:main:unowned','unowned','queued')",
     );
     if (consumption) {
-      database.exec("INSERT INTO session_pending_inputs VALUES ('consumed','queued','event')");
+      database.exec(
+        "INSERT INTO session_pending_inputs VALUES ('agent:main:consumed','consumed','queued','event')",
+      );
     }
-    expectProtection(["queued", "interrupted"]);
+    expectProtection(["queued"], cutoff, ["agent:main:queued"]);
   },
 );
 
 it("checks selected windows against their owners and all cross-generation references", () => {
-  const busy = addNode("recovering", { restartRecoveryBeforeAgentReplyState: "pending" });
+  const busy = addNode("marked", { resumeAfterRestart: { queuedInputIds: [] } });
   addWindow(busy.key, "busy-history");
   const invalid = addNode("invalid", {}, "not-json");
   addWindow(invalid.key, "invalid-history");

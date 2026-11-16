@@ -27,11 +27,12 @@ export function request(
   overrides: Record<string, string | number | boolean> = {},
   selectedSha = candidateSha,
   selectedTransportRef = "release-ci/" + selectedSha.slice(0, 12) + "-123",
+  qualificationSha = selectedSha,
 ) {
   return buildQualificationAdmissionRequest({
     repository,
     candidateSha: selectedSha,
-    qualificationSha: selectedSha,
+    qualificationSha,
     requestId,
     transportRef: selectedTransportRef,
     reviewed: true,
@@ -43,6 +44,11 @@ export function request(
       mode: "both",
       codex_plugin_spec: "",
       trusted_workflow_json: JSON.stringify({
+        trustedWorkflow: {
+          ref: selectedTransportRef,
+          fullRef: "refs/heads/" + selectedTransportRef,
+          sha: qualificationSha,
+        },
         laneInputs: { qualification_baselines_json: qualificationBaselinesJson },
       }),
       ...overrides,
@@ -57,6 +63,7 @@ export function fixture(
     policy?: unknown;
     workflowSource?: string;
     candidateSha?: string;
+    qualificationSha?: string;
     transportRef?: string;
     candidateVersion?: string;
     oldestSupportedBaseline?: string | null;
@@ -64,8 +71,14 @@ export function fixture(
   } = {},
 ) {
   const admissionSha = options.publisherSha ?? publisherSha;
-  const selected = request(options.inputs, options.candidateSha, options.transportRef);
+  const selected = request(
+    options.inputs,
+    options.candidateSha,
+    options.transportRef,
+    options.qualificationSha,
+  );
   const sourceSha = selected.candidateSha;
+  const qualificationSha = selected.qualificationSha;
   const ref = protectedTag ? "release-publish/bbbbbbbbbbbb-10" : "main";
   const producer = {
     repository,
@@ -93,7 +106,12 @@ export function fixture(
     actor,
     triggering_actor: { ...actor },
   };
-  const authority = { permission: "write", ancestry: "ahead", tagSha: admissionSha };
+  const authority = {
+    permission: "write",
+    ancestry: "ahead",
+    qualificationAncestry: "ahead",
+    tagSha: admissionSha,
+  };
   const policy = options.policy ?? {
     schema: "openclaw.release-qualification-policy/v1",
     profiles: { beta: ["ci"], stable: ["ci"], full: ["ci"] },
@@ -114,14 +132,15 @@ export function fixture(
     Object.entries({
       [admissionSha + ":" + QUALIFICATION_ADMISSION_WORKFLOW]:
         'env:\n  RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\njobs:\n  admit_qualification:\n',
-      [sourceSha + ":" + QUALIFICATION_WORKFLOW]:
+      [qualificationSha + ":" + QUALIFICATION_WORKFLOW]:
         options.workflowSource ??
         "on:\n  workflow_dispatch:\n    inputs:\n" +
           Object.keys(selected.inputs)
             .map((key) => "      " + key + ":\n        type: string\n")
             .join("") +
           "jobs:\n  untrusted:\n    run: NEVER_EXECUTE_Q\n",
-      [sourceSha + ":scripts/lib/release-qualification-coverage.json"]: JSON.stringify(policy),
+      [qualificationSha + ":scripts/lib/release-qualification-coverage.json"]:
+        JSON.stringify(policy),
       [sourceSha + ":package.json"]: JSON.stringify({
         version: options.candidateVersion ?? "2026.8.1",
       }),
@@ -152,6 +171,8 @@ export function fixture(
         head_sha: admissionSha,
         status: "completed",
         conclusion: "success",
+        started_at: "2026-09-28T00:00:00Z",
+        completed_at: "2026-09-28T00:00:04Z",
         steps: [
           {
             name: QUALIFICATION_ADMISSION_UPLOAD,
@@ -174,6 +195,7 @@ export function fixture(
     calls.push(endpoint);
     const path = endpoint.slice(prefix.length);
     const routes: Record<string, unknown> = {
+      ["compare/" + qualificationSha + "...main"]: { status: authority.qualificationAncestry },
       ["compare/" + admissionSha + "...main"]: { status: authority.ancestry },
       ["git/ref/tags/" + ref]: {
         ref: producer.workflowFullRef,
@@ -232,7 +254,7 @@ export function fixture(
       descriptor,
       repository,
       candidateSha: sourceSha,
-      qualificationSha: sourceSha,
+      qualificationSha,
       workflowRef: selected.transportRef,
       inputs,
       runGh,

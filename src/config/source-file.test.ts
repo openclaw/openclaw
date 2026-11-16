@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as snapshots from "../infra/fs-observation-snapshot.js";
+import * as owned from "../infra/owned-directory-observation.js";
 import * as configPaths from "./paths.js";
 import { admitConfigObservationRoots, configObservationEntries } from "./source-file-roots.js";
 import { createConfigFileAdapter } from "./source-file.js";
@@ -15,10 +16,22 @@ vi.mock("@openclaw/fs-safe/watch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/watch")>()),
 }));
 
+vi.mock("../infra/owned-directory-observation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/owned-directory-observation.js")>()),
+  observeOwnedDirectory: vi.fn(() => ({ close: vi.fn(), isWatching: vi.fn(() => true) })),
+}));
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 type Source = { subscription: WatchSubscription; options: WatchOptions };
 
 function failSource({ options }: Source, operation: "scan" | "watch" = "scan") {
+  const events = vi.mocked(owned.observeOwnedDirectory);
+  const last = events.mock.results.at(-1);
+  if (operation === "watch" && last?.type === "return") {
+    vi.spyOn(last.value, "isWatching").mockReturnValueOnce(false);
+    events.mock.calls.at(-1)![1]();
+    return;
+  }
   options.onHealth?.({
     state: "unavailable",
     mode: operation === "scan" || options.mode !== "poll" ? "events" : "poll",
@@ -35,6 +48,7 @@ afterEach(async () => {
   await Promise.all([...adapters].map((adapter) => adapter.stop()));
   adapters.clear();
   vi.restoreAllMocks();
+  vi.mocked(owned.observeOwnedDirectory).mockClear();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -148,6 +162,28 @@ async function fixture({
 }
 
 describe("config file observation", () => {
+  it("uses nonrecursive events beside config files without a recursive authority-root watch", async () => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", undefined);
+    const h = await fixture({ realMode: true });
+    expect(h.sources[0]!.options).toMatchObject({ mode: "poll", pollIntervalMs: 300_000 });
+    const events = vi.mocked(owned.observeOwnedDirectory);
+    expect(events).toHaveBeenCalledWith(path.dirname(h.p("openclaw.json")), expect.any(Function), {
+      recursive: false,
+      reconcileIntervalMs: 300_000,
+    });
+    expect(events).toHaveBeenCalledTimes(1);
+    const reconcile = vi.spyOn(h.sources[0]!.subscription, "reconcile");
+    await h.write("replacement.json");
+    await fs.rename(h.p("replacement.json"), h.p("openclaw.json"));
+    events.mock.calls[0]![1]("openclaw.json", "rename");
+    await reconcile.mock.results.at(-1)!.value;
+    await h.settle();
+    expect(h.onChange).toHaveBeenCalledOnce();
+    const close = events.mock.results[0]!.value.close;
+    await h.adapter.stop();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("ignores inaccessible unused roots, then admits them when selected", async () => {
     const allowed = await fs.realpath(dirs.make("config-unused-include-root-"));
     const lstatSync = fsSync.lstatSync;
@@ -286,39 +322,50 @@ describe("config file observation", () => {
   });
 
   it.each([undefined, "false", "1"])(
-    "bounds watch-limit recovery and preserves polling override %s",
+    "bounds guarded-worker recovery and preserves polling override %s",
     async (setting) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", setting);
       vi.stubEnv("CHOKIDAR_INTERVAL", "250");
       const h = await fixture();
-      const initialMode = setting === "1" ? "poll" : "auto";
       expect(h.sources[0]!.options).toMatchObject({
-        mode: initialMode,
+        mode: "poll",
         intervalMs: 300_000,
-        pollIntervalMs: 250,
+        pollIntervalMs: setting === "1" ? 250 : 300_000,
       });
-      const fail = () => failSource(h.sources.at(-1)!, "watch");
+      const fail = () => failSource(h.sources.at(-1)!);
       for (const ms of [500, 2000, 5000]) {
-        const current = await h.recover(ms, "watch");
-        expect(current.options.mode).toBe(initialMode);
+        const current = await h.recover(ms, "scan");
+        expect(current.options.mode).toBe("poll");
       }
-      const fallback = setting === undefined ? h.nextSource() : undefined;
-      vi.stubEnv("CHOKIDAR_USEPOLLING", setting === undefined ? "false" : undefined);
       h.onChange.mockClear();
       fail();
       await h.sources.at(-1)!.subscription.close();
       await vi.advanceTimersByTimeAsync(500);
-      if (setting === undefined) {
-        const current = await fallback!;
+      expect(h.adapter.status()).toBe("disabled");
+      expect(h.onChange).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([undefined, "false"])(
+    "preserves native notification fallback with override %s",
+    async (setting) => {
+      vi.stubEnv("CHOKIDAR_USEPOLLING", setting);
+      vi.stubEnv("CHOKIDAR_INTERVAL", "250");
+      const h = await fixture();
+      for (const ms of [500, 2000, 5000]) {
+        await h.recover(ms, "watch");
+      }
+      const fallback = setting === undefined ? h.nextSource() : undefined;
+      failSource(h.sources.at(-1)!, "watch");
+      await h.sources.at(-1)!.subscription.close();
+      await vi.advanceTimersByTimeAsync(500);
+      if (fallback) {
+        const current = await fallback;
         await current.subscription.ready;
-        expect(current.options.mode).toBe("poll");
+        expect(current.options).toMatchObject({ mode: "poll", pollIntervalMs: 250 });
         expect(h.log.warn).toHaveBeenCalledWith(expect.stringContaining("degrading to polling"));
       } else {
         expect(h.adapter.status()).toBe("disabled");
-        expect(h.onChange).toHaveBeenCalledOnce();
-        expect(h.log.warn).not.toHaveBeenCalledWith(
-          expect.stringContaining("degrading to polling"),
-        );
       }
     },
   );

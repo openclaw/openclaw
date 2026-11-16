@@ -15,19 +15,33 @@ const enSessionProgress = {
       label: "Refresh task progress",
       retry: "Retry progress refresh",
       pending: "Refreshing task progress…",
-      failed: "Could not refresh. Previous update kept.",
-      timeout: "No new update yet. The request may still be running.",
+      failed: "Couldn’t refresh progress. Try again. Your last update is saved.",
+      timeout: "No new update yet. The agent may still be working.",
       updated: "Task progress updated",
     },
     widgetLabel: "Session progress",
     widgetLoading: "Loading session progress…",
-    widgetEmpty: "No progress card yet",
-    detailsEmptyTitle: "No saved progress",
+    widgetEmpty: "No progress yet.",
+    detailsEmptyTitle: "No saved progress yet.",
     detailsEmptyDescription: "Progress saved by this session appears here.",
     showInChat: "Show in chat",
-    widgetUnavailable: "Session progress is unavailable.",
+    widgetUnavailable: "Couldn’t load progress. Try again.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
+    runtime: {
+      children: "Delegated work: {activity}",
+      running: "{count} running",
+      queued: "{count} queued",
+      waiting: "{count} waiting",
+      failed: "{count} failed",
+      stopped: "{count} stopped",
+      delegated: "Waiting for delegated work",
+      queuedSelf: "Queued",
+      working: "Working",
+      idle: "No active work",
+      unknown: "Activity unavailable",
+      offline: "Disconnected · Activity may be outdated",
+    },
     activity: {
       updated: "Updated {time}",
       completed: "Completed {time}",
@@ -54,9 +68,11 @@ const enSessionProgress = {
 
 export const registerSessionProgressEnglish = Object.assign(
   () => {
-    const { refresh, activity, outcome, status, ...labels } = enSessionProgress.sessionProgressCard;
+    const { refresh, runtime, activity, outcome, status, ...labels } =
+      enSessionProgress.sessionProgressCard;
     Object.assign(en.sessionProgressCard, labels);
     Object.assign(en.sessionProgressCard.refresh, refresh);
+    Object.assign(en.sessionProgressCard.runtime, runtime);
     Object.assign(en.sessionProgressCard.activity, activity);
     Object.assign(en.sessionProgressCard.outcome, outcome);
     Object.assign(en.sessionProgressCard.status, status);

@@ -157,7 +157,7 @@ function makeRefusalMessageChunk(refusal: string): OpenAICompatibleChatCompletio
 }
 
 function makeToolCallChunk(
-  id: string,
+  id: string | undefined,
   name: string,
   args: string,
   finishReason?: string,
@@ -168,7 +168,14 @@ function makeToolCallChunk(
       {
         index: 0,
         delta: {
-          tool_calls: [{ index: 0, id, function: { name, arguments: args }, type: "function" }],
+          tool_calls: [
+            {
+              index: 0,
+              ...(id === undefined ? {} : { id }),
+              function: { name, arguments: args },
+              type: "function",
+            },
+          ],
         },
         finish_reason: finishReason as ChatCompletionChunk.Choice["finish_reason"],
       },
@@ -467,7 +474,7 @@ describe("OpenAI-compatible completions params", () => {
     const serialized = JSON.stringify(messages);
     expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
     expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
-    // The breakpoint still lands on the stable prefix, and nothing is relocated.
+    // Opening turns checkpoint both the stable prefix and shared guidance without relocating facts.
     expect(messages[0]).toEqual({
       role: "system",
       content: [
@@ -478,7 +485,12 @@ describe("OpenAI-compatible completions params", () => {
         },
         {
           type: "text",
-          text: "Reactions guidance\n## Runtime\nRuntime: session=alpha",
+          text: "\nReactions guidance",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "\n## Runtime\nRuntime: session=alpha",
         },
       ],
     });
@@ -747,20 +759,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     // id (next test) keeps the first name.
     mockChunksRef.chunks = [
       makeToolCallChunk("call_A", "first", '{"city":'),
-      {
-        id: "chatcmpl-test",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              tool_calls: [
-                { index: 0, function: { name: "second", arguments: '"Paris"}' }, type: "function" },
-              ],
-            },
-            finish_reason: "tool_calls",
-          },
-        ],
-      },
+      makeToolCallChunk(undefined, "second", '"Paris"}', "tool_calls"),
     ];
 
     const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
@@ -802,20 +801,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     // "empty-name continuation" assertion requirement.
     mockChunksRef.chunks = [
       makeToolCallChunk("call_name", "get_weather", '{"city":'),
-      {
-        id: "chatcmpl-test",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              tool_calls: [
-                { index: 0, function: { name: "", arguments: '"Paris"}' }, type: "function" },
-              ],
-            },
-            finish_reason: "tool_calls",
-          },
-        ],
-      },
+      makeToolCallChunk(undefined, "", '"Paris"}', "tool_calls"),
     ];
 
     const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });

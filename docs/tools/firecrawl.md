@@ -78,6 +78,10 @@ Notes:
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
 - `baseUrl` defaults to hosted Firecrawl at `https://api.firecrawl.dev`. Self-hosted overrides are allowed only for private/internal endpoints; HTTP is accepted only for those private targets.
 - `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
+- Search and scrape select their own `webSearch` or `webFetch` connection settings.
+  If that scope has neither an API key nor a base URL, the sibling connection is
+  reused. Once either field is configured, missing fields use the shared environment
+  or hosted defaults; credentials and endpoints are never mixed across scopes.
 - Firecrawl search requests default to a 30-second timeout; `firecrawl_search`'s `timeoutSeconds` parameter overrides it per call.
 
 Both Firecrawl `web_search` providers and `firecrawl_search` use
@@ -125,6 +129,8 @@ Notes:
 - Legacy `tools.web.fetch.firecrawl.*` and `tools.web.search.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 - Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.
 - `firecrawl_scrape` rejects obvious private, loopback, metadata, and non-HTTP(S) target URLs before forwarding them to Firecrawl, matching the `web_fetch` target-safety contract for explicit Firecrawl scrape calls.
+- Fetch results keep the requested `url`; `finalUrl` prefers Firecrawl's resolved
+  `metadata.url`, falling back to `metadata.sourceURL` when it is missing or invalid.
 
 `firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars, including its required API key.
 

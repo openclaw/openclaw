@@ -136,11 +136,23 @@ def stage_ios_testflight_release!(api_key:, short_version:, build_number:, notes
     expire_previous_builds: false,
     uses_non_exempt_encryption: false
   )
-  saved_build = Spaceship::ConnectAPI::Build.get(build_id: build.id, includes: "preReleaseVersion,buildBetaDetail")
-  saved_notes = saved_build.get_beta_build_localizations.select { |localization| localization.locale == "en-US" }
-  unless group.fetch_builds.any? { |candidate| candidate.id == build.id } && saved_build.build_beta_detail&.auto_notify_enabled == true &&
-      saved_notes.length == 1 && saved_notes.first.whats_new == expected_notes
-    FastlaneCore::UI.user_error!("TestFlight distribution readback did not match the group, automatic notification, and saved notes; retry staging without uploading again.")
+  # Apple's distribution writes can succeed before all read endpoints agree.
+  # Repeat only reads; never resubmit or notify testers again while waiting.
+  saved_build = nil
+  mismatches = []
+  12.times do |attempt|
+    saved_build = Spaceship::ConnectAPI::Build.get(build_id: build.id, includes: "preReleaseVersion,buildBetaDetail")
+    saved_notes = saved_build.get_beta_build_localizations.select { |localization| localization.locale == "en-US" }
+    mismatches = []
+    mismatches << "group membership" unless group.fetch_builds.any? { |candidate| candidate.id == build.id }
+    mismatches << "automatic notification" unless saved_build.build_beta_detail&.auto_notify_enabled == true
+    mismatches << "saved notes" unless saved_notes.length == 1 && saved_notes.first.whats_new == expected_notes
+    break if mismatches.empty?
+    FastlaneCore::UI.message("TestFlight distribution readback #{attempt + 1}/12 is waiting for: #{mismatches.join(', ')}.")
+    sleep(10) if attempt < 11
+  end
+  unless mismatches.empty?
+    FastlaneCore::UI.user_error!("TestFlight distribution readback did not match #{mismatches.join(', ')} after 12 checks; retry staging without uploading again.")
   end
   state = saved_build.build_beta_detail.external_build_state
   outcome = if TESTFLIGHT_REVIEW_STATES.include?(state)

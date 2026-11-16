@@ -6,7 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
-import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-maintenance.js";
+import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-stop-policy.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
@@ -202,8 +202,8 @@ export async function withGatewayMaintenanceDrain<T>(
       localPortOverride: port,
       ignoreEnvUrlOverride: true,
       tlsFingerprint: target.tlsFingerprint,
-      // The deadline bounds deferral, not the final RPC needed to observe custody.
-      timeoutMs: 10_000,
+      // Handoff may wait for final writes within the original 30-second drain budget.
+      timeoutMs: method === "gateway.suspend.handoff" ? 30_000 : 10_000,
       onHelloOk: (hello) => {
         observedBootId = hello.server.bootId;
       },

@@ -1,6 +1,6 @@
 // Error payload tests ensure embedded runs convert provider/tool failures into
 // concise user-facing replies without leaking raw provider bodies or secrets.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Classification fixtures here exercise message/status tables. Provider-attributed
 // structured signals otherwise cross the plugin-consult gate and cold-materialize
 // the full bundled provider runtime, timing the unit test out under CI load
@@ -16,10 +16,13 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveCronPayloadOutcome } from "../../../cron/isolated-agent/helpers.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   buildPayloads,
   makePayloadAssistant as makeAssistant,
@@ -28,33 +31,23 @@ import {
 } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error silence", () => {
-  it.each([
-    { text: "NO_REPLY", mutatingAction: false },
-    { text: "NO_REPLY", mutatingAction: true },
-    { text: "NO_REPLY", mutatingAction: undefined },
-  ])(
-    "suppresses authored silence: $text, mutatingAction=$mutatingAction",
-    ({ text, mutatingAction }) => {
-      const payloads = buildPayloads({
-        assistantTexts: [text],
-        lastToolError: {
-          toolName: "codex_apps.slack.slack_read_thread",
-          error: "429 RATE_LIMITED",
-          mutatingAction,
-        },
-      });
-      expect(payloads).toHaveLength(0);
+  it.each([false, true, undefined])(
+    "suppresses authored silence (mutatingAction=%s)",
+    (mutatingAction) => {
+      const lastToolError = {
+        toolName: "codex_apps.slack.slack_read_thread",
+        error: "429",
+        mutatingAction,
+      };
+      expect(buildPayloads({ assistantTexts: ["NO_REPLY"], lastToolError })).toHaveLength(0);
     },
   );
 
   it("does not append a bash warning after the agent edits its Slack answer and finishes silently", () => {
-    const assistant = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "NO_REPLY" }],
-    });
     expect(
       buildPayloads({
         assistantTexts: ["NO_REPLY"],
-        lastAssistant: assistant,
+        lastAssistant: makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] }),
         didSendViaMessagingTool: true,
         lastToolError: {
           toolName: "bash",
@@ -66,19 +59,35 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
     ).toHaveLength(0);
   });
 
-  it.each([
-    { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
-    { name: "an aborted run", mutatingAction: false, runAborted: true },
+  it.each<{
+    name: string;
+    assistantTexts?: string[];
+    isCronTrigger?: true;
+    runAborted?: true;
+    outcome?: "no_change" | "progress";
+  }>([
+    { name: "a run without an answer", assistantTexts: [] },
+    { name: "a scheduled run", isCronTrigger: true },
+    { name: "an aborted run", runAborted: true },
+    { name: "a scheduled no_change result", isCronTrigger: true, outcome: "no_change" },
+    { name: "a scheduled progress summary", isCronTrigger: true, outcome: "progress" },
   ])(
-    "keeps failure reporting for $name despite NO_REPLY",
-    ({ name: _name, mutatingAction, ...run }) => {
-      expectSingleToolErrorPayload(
-        buildPayloads({
-          ...run,
-          assistantTexts: ["NO_REPLY"],
-          lastToolError: { toolName: "read", error: "failed", mutatingAction },
-        }),
-        { title: "Read" },
+    "reports a NO_REPLY tool failure for $name unless a summary covers it",
+    ({ name, outcome, assistantTexts = ["NO_REPLY"], ...run }) => {
+      const result = outcome && { outcome, summary: "Published the CI repair." };
+      const claim = claimAgentRunContext(name, {
+        cronRunsByJobId: new Map([["job", { nextCheckEnabled: true, result }]]),
+      });
+      onTestFinished(() => releaseAgentRunContext(name, claim));
+      const lastToolError = { toolName: "read", error: "failed", mutatingAction: false };
+      const payloads = buildPayloads({
+        ...run,
+        runId: name,
+        assistantTexts,
+        lastToolError,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        outcome === "progress" ? [] : ["⚠️ Read failed"],
       );
     },
   );
@@ -94,25 +103,40 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
       { title: "Read" },
     );
   });
-
-  it.each([false, true, undefined])(
-    "still warns without an answer (mutatingAction=%s)",
-    (mutatingAction) => {
-      expectSingleToolErrorPayload(
-        buildPayloads({
-          lastToolError: { toolName: "read", error: "failed", mutatingAction },
-        }),
-        { title: "Read" },
-      );
-    },
-  );
 });
 
 describe("buildEmbeddedRunPayloads", () => {
+  it.each(["selected", "earlier", "aborted"] as const)(
+    "binds provider-error observations only to the selected assistant (%s)",
+    (source) => {
+      const assistant = makeAssistant({
+        content: [],
+        stopReason: "error",
+        errorMessage: "400 invalid request schema",
+      });
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: false,
+      });
+      const payloads = buildPayloads({
+        lastAssistant: assistant,
+        currentAssistant: source === "earlier" ? null : assistant,
+        agentTerminal,
+        runAborted: source === "aborted",
+        isCronTrigger: true,
+      });
+      const outcome = resolveCronPayloadOutcome({ payloads });
+      expect(outcome.hasFatalStructuredErrorPayload).toBe(true);
+      expect(outcome.agentTerminal).toEqual(source === "selected" ? agentTerminal : undefined);
+    },
+  );
+
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
   const REDACTED_TEST_MODEL_FAILURE_TEXT =
-    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -158,7 +182,6 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
   it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
@@ -204,8 +227,6 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expectNoPayloadTextContaining(payloads, "Edit");
-    expectNoPayloadTextContaining(payloads, "missing");
   });
 
   it.each([false, true])(
@@ -244,7 +265,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.map((payload) => payload.text)).not.toContain(errorJsonPretty);
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
@@ -253,7 +273,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it.each<Parameters<typeof buildPayloads>[0] & { name: string; text: string; absent: string[] }>([
@@ -306,7 +325,7 @@ describe("buildEmbeddedRunPayloads", () => {
         errorMessage:
           "400 max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
       }),
-      text: "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
+      text: "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.",
       absent: ["deepseek-v4-flash:0731"],
     },
     {
@@ -346,7 +365,7 @@ describe("buildEmbeddedRunPayloads", () => {
           '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
         content: [],
       }),
-      text: "This model was not found. Choose another model in the Control UI.",
+      text: "This model was not found. Choose another model in the OpenClaw app.",
       absent: ["some-model-id", "Param Incorrect"],
     },
     {

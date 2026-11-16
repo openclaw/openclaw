@@ -44,13 +44,13 @@ import {
   readSessionActorTransactionState,
   replaceSessionActorStoredEntry,
 } from "./session-actor-transaction.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
-  markCanonicalSessionValidationPending,
-} from "./session-canonical-key.js";
-import { validateCanonicalSessionRow } from "./session-canonical-row.js";
+  validateCanonicalSessionRow,
+} from "./session-canonical-row.js";
 import { normalizeSessionEntryTimestamp } from "./session-entry-json.js";
 import {
   splitSessionEntrySnapshots,
@@ -92,6 +92,8 @@ type SessionEntryWriteOptions = {
   canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
   postimages?: SessionEntryWritePostimages;
   consumePendingReset?: boolean;
+  /** Initial child fork keeps this logical node's current audience across transcript installation. */
+  preserveVisibility?: boolean;
   /** A rehome can bind historical windows to an otherwise unchanged target. */
   publishConversationBinding?: boolean;
   preserveNodeSuggestions?: boolean;

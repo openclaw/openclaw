@@ -70,7 +70,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.threadBindings.spawnSessions":
     "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
-    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester chat or "isolated" for a clean child. Default: "fork".',
   "session.sharing":
     "Controls which collaboration modes session owners and administrators may select. Omitted booleans default to enabled; set a mode false to remove it from the picker and reject new selections.",
   "session.sharing.readOnly":
@@ -80,32 +80,34 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.sharing.drafts":
     "Allows draft visibility, which hides sessions from non-owner, non-admin operators. Default: true.",
   "session.maintenance":
-    "Automatic session-store maintenance controls for dashboard archiving, pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
+    "Automatic session-store maintenance controls for app-session archiving, pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
-    'Determines whether pruning and disk-budget policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds. Cold storage has its own explicit enabled setting.',
+    'Determines whether pruning and disk-budget policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds. Cold storage is enabled by default and has its own opt-out setting.',
   "session.maintenance.coldStorage":
-    "Moves inactive transcripts into compressed JSONL archives while retaining session metadata. Archive files become required history and must be included in backups. Changes apply without restarting the Gateway.",
+    "Moves inactive chats into compressed JSONL archives while retaining session metadata. Archive files become required history and must be included in backups. Changes apply without restarting the Gateway.",
   "session.maintenance.coldStorage.enabled":
-    "Enables background transcript archival (default false). A worker checks for eligible transcripts every minute. This explicit archive policy is separate from deletion and disk-budget cleanup.",
+    "Enables background chat archival (default true). Set false to disable future extraction. A worker checks for eligible chats every minute. This archive policy is separate from deletion and disk-budget cleanup.",
   "session.maintenance.coldStorage.afterDays":
-    "Archive transcripts after this many inactive days (positive integer, default 30). Active work is protected; changing the cutoff takes effect on the next worker pass without a Gateway restart.",
+    "Archive chats after this many inactive days (positive integer, default 30). Active work is protected; changing the cutoff takes effect on the next worker pass without a Gateway restart.",
   "session.maintenance.pruneAfter":
     "Archives eligible durable conversations and removes disposable automation entries older than this duration (default `30d`; for example `12h`). Archived conversations retain their history and can be restored; protected or routable conversations remain active.",
   "session.maintenance.archiveDashboardAfter":
-    "Archives inactive dashboard sessions after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable automatic dashboard archiving.",
+    "Archives inactive sessions started in the OpenClaw app after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable this automatic archiving.",
   "session.maintenance.maxEntries":
     "Caps unarchived session entries (default 5000). Eligible durable overflow conversations are archived with their history; disposable automation entries are removed. Existing archives do not consume the cap. Protected active entries still count and can keep the store above the limit.",
   "session.maintenance.preserveRecent":
     "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
-    "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
+    "Age-based retention for archived chats (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
-    'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, dashboard, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
+    'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, app-session, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.defaultTools":
+    'Tools added when the automations tool creates or explicitly revises a nonempty toolsAllow list, before creator-policy checks and approval. Unset adds nothing. Use toolsAllowMode: "exact" on that request to opt out; [] remains tool-less. Existing jobs and unrelated edits are unchanged.',
   "cron.skipMissedJobs":
     "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":
@@ -122,6 +124,28 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
     "Allows automation webhooks to IPv6 Unique Local Addresses (fc00::/7). Use only with trusted fake-IP proxy environments.",
+  "cron.delivery":
+    "Gateway-wide default announce destination for automations that name no route of their own (no channel other than `last`, `to`, `threadId`, `accountId`, or owner targeting). It replaces the remembered session route at run time and never applies to `none` or `webhook` delivery. A `cron.creators.<profileId>.delivery` or `cron.agents.<agentId>.delivery` default wins over this one.",
+  "cron.delivery.channel":
+    "Channel for the default destination, such as `telegram`. Omit to use `last` resolution against the default recipient.",
+  "cron.delivery.to":
+    "Recipient for the default destination, in the channel's target syntax (for example a Telegram chat id such as `-100123456789`).",
+  "cron.delivery.threadId":
+    "Optional thread or forum topic for the default destination, such as a Telegram topic id.",
+  "cron.delivery.accountId":
+    "Optional channel account for the default destination when the channel has several accounts.",
+  "cron.agents":
+    "Per-agent automation defaults keyed by agent id. Each automation uses the entry for its effective agent (its agentId, else the agent in its session key, else the default agent).",
+  "cron.agents.*.delivery":
+    "Default announce destination for this agent's automations that name no route. Replaces `cron.delivery` whole for this agent; fields are not merged. A creator default for the job's human creator wins over it.",
+  "cron.agents.*.failureAlert":
+    "Default failure-alert route (`mode`, `channel`, `to`, `threadId`, `accountId`) for this agent's automations. Replaces the `cron.failureAlert` route fields whole; `enabled`, `after`, `cooldownMs`, and `includeSkipped` stay Gateway-wide.",
+  "cron.creators":
+    "Per-creator automation defaults keyed by the Gateway profile id of the human who created the automation. Applies only when the automation records a human profile creator (directly, or as the profile that delegated creation to an agent); legacy automations and channel-only, unknown, agent, or system creators use no creator entry. Keys match exactly.",
+  "cron.creators.*.delivery":
+    "Default announce destination for this person's automations that name no route. Wins over `cron.agents.<agentId>.delivery` and `cron.delivery`; replaces them whole.",
+  "cron.creators.*.failureAlert":
+    "Default failure-alert route (`mode`, `channel`, `to`, `threadId`, `accountId`) for this person's automations. Wins over the owner agent's route and replaces the `cron.failureAlert` route fields whole; `enabled`, `after`, `cooldownMs`, and `includeSkipped` stay Gateway-wide.",
   "cron.sessionRetention":
     "Controls how long completed automation run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; a zero duration such as `0h` also disables; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   transcripts:
@@ -289,9 +313,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.allowCollaborativeSteering":
-    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (personal preset default: true; corporate: false). When false, collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject, the corporate default). Same-requester compatibility checks, queue modes, and cross-session steering authorization still apply.",
+    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: true). Shared-credential WebUI and channel input can also continue the exact same active session. When false, that exception requires current WebUI admin and channel-owner authority; verified personal continuity also remains available. Otherwise collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject). Current access, live execution authority, execution-setting checks, queue modes, and cross-session steering authorization still apply.",
   "messages.queue.collaborativeSteeringFallback":
-    'What happens when another person cannot steer because collaborative steering is disabled: "queue" (personal default) runs their input as a separate turn without a status notice; "reject" (corporate default) preserves strict refusal and requires a fresh /followup request. Does not enable collaborative steering or bypass access checks.',
+    'What happens when another person cannot steer because collaborative steering is disabled: "queue" (default) runs their input as a separate turn without a status notice; "reject" preserves strict refusal and requires a fresh /followup request. Does not enable collaborative steering or bypass access checks.',
   "messages.queue.byChannel":
     "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":

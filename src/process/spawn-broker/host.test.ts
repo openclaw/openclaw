@@ -1,13 +1,16 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { once, type EventEmitter } from "node:events";
+import { writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnAndWait } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
@@ -158,6 +161,46 @@ it.skipIf(process.platform === "win32").each(bootstrapModes)(
   20_000,
 );
 
+it.skipIf(skipBrokerTests)(
+  "starts, spawns, and closes without Gateway runtime recovery or logging",
+  async () => {
+    const preload = path.join(tempDirs.make("openclaw-broker-cold-"), "preload.mjs");
+    writeFileSync(
+      preload,
+      `import {registerHooks} from 'node:module';
+     if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
+       registerHooks({resolve(specifier, context, nextResolve) {
+         const resolved = nextResolve(specifier, context);
+         if (/\\/(?:child-runtime-viability\\.[^/]+|logging\\/)/.test(resolved.url)) {
+           throw new Error('broker loaded Gateway recovery or logging: ' + resolved.url);
+         }
+         return resolved;
+       }});
+     }`,
+    );
+    const host = await withEnvAsync(
+      { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}` },
+      async () => {
+        const broker = createSpawnBrokerHost({
+          workerUrl: pathToFileURL(path.resolve("src/process/spawn-broker/worker.ts")),
+        });
+        onTestFinished(() => broker.close());
+        await broker.ready();
+        return broker;
+      },
+    );
+    const child = host.spawn(process.execPath, ["-e", 'process.stdout.write("broker-output")'], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    await child.ready();
+    const output = capture(child.stdout);
+    await child.waitForClose();
+    expect(child.exitCode).toBe(0);
+    expect(output()).toBe("broker-output");
+    await host.close();
+  },
+);
+
 describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   let host: SpawnBrokerHost;
   beforeEach(async () => {
@@ -264,35 +307,34 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await settlement;
   });
 
-  it.each(["coalesced", "later"])("orders native lifecycle events for %s exits", async (timing) => {
-    const argv =
-      timing === "coalesced"
-        ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
-        : [process.execPath, "-e", "setTimeout(()=>process.exit(0),50)"];
-    const starting = runWithSpawnBroker(host, () =>
-      spawnAndWait({ argv, options: { stdio: "ignore" } }),
-    );
-    await Promise.resolve();
-    if (timing === "coalesced") {
-      const resumeAt = performance.now() + 20;
-      while (performance.now() < resumeAt) {
-        /* Batch the broker's native lifecycle messages. */
+  it.for(["immediate", "stdin EOF"])(
+    "orders native lifecycle events for %s exits",
+    async (timing, { signal }) => {
+      const child = await runWithSpawnBroker(host, () =>
+        spawnAndWait({
+          argv:
+            timing === "immediate"
+              ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
+              : [process.execPath, "-e", "process.stdin.resume()"],
+          options: { stdio: timing === "immediate" ? "ignore" : ["pipe", "ignore", "ignore"] },
+        }),
+      );
+      try {
+        const events: string[] = [];
+        for (const event of ["exit", "close"]) {
+          child.on(event, () => events.push(event));
+        }
+        expect(child.exitCode).toBe(null);
+        const closed = once(child, "close", { signal });
+        child.stdin?.end();
+        expect(await closed).toEqual([0, null]);
+        expect(child.exitCode).toBe(0);
+        expect(events).toEqual(["exit", "close"]);
+      } finally {
+        child.stdin?.end();
       }
-    }
-    const child = await starting;
-    await Promise.resolve();
-    await Promise.resolve();
-    const events: string[] = [];
-    for (const event of ["exit", "close"]) {
-      child.on(event, () => events.push(event));
-    }
-    expect(child.exitCode).toBe(null);
-    const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
-    await delay(0);
-    expect(code).toBe(0);
-    expect(child.exitCode).toBe(0);
-    expect(events).toEqual(["exit", "close"]);
-  });
+    },
+  );
 
   it("preserves real inherited stdin across the host and broker", async () => {
     const input = "inherited-input:".repeat(32_000);

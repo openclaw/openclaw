@@ -11,6 +11,8 @@ export function createSessionTranscriptHeader(
     cwd?: string;
     /** Source transcript lineage recorded on forked transcript headers. */
     parentSession?: string;
+    /** Copied events whose paths are already counted by the source transcript or its sources. */
+    inheritedThrough?: readonly string[];
     /** Stable timestamp shared with sibling records written in the same operation. */
     timestamp?: string;
   } = {},
@@ -22,7 +24,16 @@ export function createSessionTranscriptHeader(
     timestamp: params.timestamp ?? new Date().toISOString(),
     cwd: params.cwd ?? process.cwd(),
     ...(params.parentSession ? { parentSession: params.parentSession } : {}),
+    ...(params.inheritedThrough?.length ? { inheritedThrough: [...params.inheritedThrough] } : {}),
   };
+}
+
+/** Event ids whose paths a copied transcript inherited; see `inheritedThrough`. */
+export function readInheritedThrough(header: unknown): string[] {
+  const value = asOptionalRecord(header)?.inheritedThrough;
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
 }
 
 /** Retained header fallback for the session's creation boundary. */

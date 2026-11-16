@@ -3,9 +3,11 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts
 
 export const NODE_DIAGNOSTIC_REPORT_GRACE_MS = 2_000;
 
-/** Selects the POSIX Node signal-report path shared by child test harnesses. */
-export function shouldEnableNodeDiagnosticReports(): boolean {
-  return process.platform !== "win32" && !process.versions.bun;
+/** Selects the POSIX Node signal-report path for the child runtime, inherited by default. */
+export function shouldEnableNodeDiagnosticReports(
+  runtime: "node" | "bun" = process.versions.bun ? "bun" : "node",
+): boolean {
+  return process.platform !== "win32" && runtime === "node";
 }
 
 type NodeDiagnosticReport = {

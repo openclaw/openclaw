@@ -120,12 +120,12 @@ test("runtime switching reports lock contention and preserves a busy Gateway", l
   });
 });
 
-test("explicit bounded interruption arms native handoff before switching", linuxRoot, t => {
+test("explicit bounded interruption commits native handoff before switching", linuxRoot, t => {
   const f = fixture(t, "always-draining");
   f.env.OPENCLAW_TEAM_DRAIN_BUDGET = "1";
   accepted(f, run(f, [...f.target, "--interrupt-after-drain"]));
   const log = events(f);
-  assert.ok(log.indexOf("handoff.armed") >= 0 && log.indexOf("handoff.armed") < log.indexOf("service.system.restart"), log);
+  assert.ok(log.indexOf("handoff.committed") >= 0 && log.indexOf("handoff.committed") < log.indexOf("service.system.restart"), log);
   assert.equal(readFileSync(join(f.state, "shutdown-kind"), "utf8"), "external-restart");
 });
 

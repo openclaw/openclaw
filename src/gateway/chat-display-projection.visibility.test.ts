@@ -16,8 +16,8 @@ const userTextMessage = (text: string, seq = 1) => ({
   content: [{ type: "text", text }],
   __openclaw: { seq },
 });
-const internalMessage = (text: string, sourceTool: string) => ({
-  ...userTextMessage(text),
+const internalMessage = (text: string, sourceTool: string, seq = 1) => ({
+  ...userTextMessage(text, seq),
   provenance: { kind: "internal_system", sourceTool },
 });
 const mediaMessage = (text: string, seq: number, url: string) => ({
@@ -157,9 +157,77 @@ it.each([
       ]
     : [];
   const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
-  expectProjection([completion, ...controls, answer], [...controls, answer]);
+  const continued =
+    sourceTool === "subagent_settle"
+      ? { ...answer, __openclaw: { ...answer["__openclaw"], continuation: { source: "subagent" } } }
+      : answer;
+  expectProjection([completion, ...controls, answer], [...controls, continued]);
   expect(completion).toEqual(original);
 });
+
+it.each([
+  ["heartbeat", { role: "user", content: [{ type: "text", text: HEARTBEAT_PROMPT }] }],
+  ["exec completion", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 2)],
+])("keeps a %s boundary on a tool-shaped user row", (name, hidden) => {
+  const toolResult = {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
+    __openclaw: { seq: 3 },
+  };
+  const toolEnvelope = { ...userTextMessage("done", 5), toolCallId: "tool-1" };
+  const answer = assistantTextMessage("Disk usage crossed 95 percent.", 4);
+  for (const toolRow of [toolResult, toolEnvelope]) {
+    expectProjection(
+      [hidden, toolRow, answer],
+      [
+        {
+          ...toolRow,
+          __openclaw: {
+            ...toolRow["__openclaw"],
+            turnBoundary: true,
+            ...(name === "heartbeat" ? {} : { continuation: { source: "exec" } }),
+          },
+        },
+        answer,
+      ],
+    );
+  }
+});
+
+it.each([
+  ["exec", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 3), true],
+  ["restart", internalMessage("Gateway restarted; continue.", "restart", 3), true],
+  [
+    "subagent",
+    {
+      ...userTextMessage("child finished", 3),
+      provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+    },
+    false,
+  ],
+  ["heartbeat", userTextMessage(HEARTBEAT_PROMPT, 3), true],
+] as const)(
+  "marks the row after a hidden %s wake as continuing or starting a turn",
+  (source, wake, turnBoundary) => {
+    const earlier = assistantTextMessage("long final answer", 2);
+    const followUp = assistantTextMessage("should I fix points 1-4?", 4);
+    // The earlier answer stays its own row; only the wake's own work continues the turn.
+    expectProjection(
+      [earlier, { ...wake, timestamp: 100 }, followUp],
+      [
+        earlier,
+        {
+          ...followUp,
+          __openclaw: {
+            seq: 4,
+            ...(turnBoundary ? { turnBoundary: true } : {}),
+            ...(source === "heartbeat" ? {} : { continuation: { source } }),
+          },
+        },
+      ],
+    );
+  },
+);
 
 it.each(["no_r", "NO_R", "No_Repl"])("keeps ordinary %s replies visible", (text) => {
   const messages = [
@@ -201,6 +269,29 @@ it("hides heartbeat prompt and ok acknowledgements from visible history", () => 
       answer,
     ],
     [{ ...answer, __openclaw: { seq: 4, turnBoundary: true } }],
+  );
+});
+
+it.each([false, true])("preserves separate reasoning items after a heartbeat: %s", (heartbeat) => {
+  const reasoning = ["first-item", "second-item"].map((itemId, index) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "Checking the next step." }],
+    stopReason: "stop",
+    __openclaw: { id: itemId, seq: index + 2, runId: "run-1" },
+  }));
+  const answer = assistantTextMessage("Finished.", 4);
+  expectProjection(
+    [...(heartbeat ? [userTextMessage(HEARTBEAT_PROMPT)] : []), ...reasoning, answer],
+    [
+      heartbeat
+        ? {
+            ...reasoning[0],
+            __openclaw: { id: "first-item", seq: 2, runId: "run-1", turnBoundary: true },
+          }
+        : reasoning[0],
+      reasoning[1],
+      answer,
+    ],
   );
 });
 

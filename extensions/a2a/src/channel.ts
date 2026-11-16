@@ -14,10 +14,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sendJsonNoStore as writeJsonResponse } from "openclaw/plugin-sdk/http-response-runtime";
-import {
-  isHostNoticePayload,
-  isReplyPayloadTerminalContent,
-} from "openclaw/plugin-sdk/reply-payload";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   createComputedAccountStatusAdapter,
@@ -48,6 +44,7 @@ import {
   extractA2aMessageText,
   resolveA2aRpcMethod,
 } from "./protocol.js";
+import { filterA2aReplyPayload } from "./reply-payload.js";
 import { getA2aChannelRuntime } from "./runtime.js";
 import { A2aTaskStore, openTerminalStore } from "./task-store.js";
 import type { A2aChannelConfig, ResolvedA2aChannelAccount } from "./types.js";
@@ -159,8 +156,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
   base: {
     ...a2aChannelSetupPlugin,
     messaging: {
-      transformReplyPayload: ({ payload }) =>
-        isHostNoticePayload(payload) || !isReplyPayloadTerminalContent(payload) ? null : payload,
+      transformReplyPayload: ({ payload }) => filterA2aReplyPayload(payload),
       normalizeTarget: normalizeA2aChannelTarget,
       inferTargetChatType: () => "direct",
       targetResolver: {

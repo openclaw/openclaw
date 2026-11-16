@@ -1,8 +1,14 @@
 import { deserialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
+import { assertSandboxStateOwnerPathCurrent } from "../../agents/sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { assertWorktreeRegistryPredicates } from "../../agents/worktrees/registry-run-end.worker.js";
-import type { WorktreeRegistryPredicate } from "../../agents/worktrees/types.js";
+import type {
+  WorktreeRegistryPredicate,
+  WorktreeWorkerAuthority,
+} from "../../agents/worktrees/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
@@ -11,7 +17,9 @@ import type { LocalWorkspacePreparation } from "./local-workspace-cas.js";
 import {
   beginLocalWorkspaceSweepInDatabase,
   deleteLocalWorkspaceSweepBatchInDatabase,
+  finishLocalWorkspaceSweepInDatabase,
   prepareLocalWorkspaceContentInDatabase,
+  requestLocalWorkspaceSweepInDatabase,
   pruneLocalWorkspaceLegacyBatchInDatabase,
   type LocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
@@ -27,7 +35,9 @@ export const localWorkspaceOperations = {
     const preparation = deserialize(inflateRawSync(input.preparation)) as LocalWorkspacePreparation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        prepareLocalWorkspaceContentInDatabase(db, preparation);
+        const epoch = prepareLocalWorkspaceContentInDatabase(db, preparation);
+        requestLocalWorkspaceSweepInDatabase(db, epoch);
+        return epoch;
       },
       { database: open() },
     );
@@ -41,6 +51,13 @@ export const localWorkspaceOperations = {
     runOpenClawStateWriteTransaction(({ db }) => beginLocalWorkspaceSweepInDatabase(db), {
       database: open(),
     }),
+  "localWorkspace.finishSweep": (input: { epoch: number }, { open }: WorkerOperationContext) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => finishLocalWorkspaceSweepInDatabase(db, input.epoch),
+      {
+        database: open(),
+      },
+    ),
   "localWorkspace.sweepBatch": (
     input: { epoch: number; batch: LocalWorkspaceSweepCandidates },
     { open }: WorkerOperationContext,
@@ -50,9 +67,10 @@ export const localWorkspaceOperations = {
       { database: open() },
     ),
   "localWorkspace.mutate": (
-    input: {
+    input: Pick<WorktreeWorkerAuthority, "workspaceEvidence" | "stateOwnerPath"> & {
       id: string;
       mutation: LocalWorkspaceMutation | Uint8Array;
+      preparationEpoch: number | undefined;
       leases: readonly OpenClawStateLeaseIdentity[];
       predicates?: readonly WorktreeRegistryPredicate[];
     },
@@ -69,13 +87,31 @@ export const localWorkspaceOperations = {
     // current leases and registry predicates still gate the actual commit below.
     const mutation: LocalWorkspaceMutation =
       input.mutation instanceof Uint8Array
-        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
+        ? (deserialize(resolveZstdCodec().decompress(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const committed = mutateLocalWorkspaceProjection(db, input.id, mutation) ?? null;
+        const committed =
+          mutateLocalWorkspaceProjection(db, input.id, mutation, input.preparationEpoch) ?? null;
+        for (const evidence of input.workspaceEvidence ?? []) {
+          assertWorkspaceFilesystemEvidence(evidence);
+        }
+        if (input.stateOwnerPath) {
+          assertSandboxStateOwnerPathCurrent(input.stateOwnerPath);
+        }
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, "commit");
         assertWorktreeRegistryPredicates(db, input.predicates);
+        if (
+          mutation.kind === "delete" ||
+          (mutation.kind === "update" &&
+            (mutation.manifest ||
+              mutation.rejectedResult ||
+              "tree_root_digest" in mutation.patch ||
+              "source_paths_digest" in mutation.patch ||
+              "checkpoint_json" in mutation.patch))
+        ) {
+          requestLocalWorkspaceSweepInDatabase(db);
+        }
         deferSqliteWorkerCommitReceipt(db, committed);
         return committed;
       },

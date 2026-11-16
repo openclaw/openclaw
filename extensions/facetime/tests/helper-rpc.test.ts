@@ -34,12 +34,12 @@ const clients = new Set<net.Socket>();
 type ServerOptions = ConstructorParameters<typeof FaceTimeHelperSocketServer>[0];
 const onMessage = vi.fn<ServerOptions["onMessage"]>();
 const onStale = vi.fn<NonNullable<ServerOptions["onStale"]>>();
-const onDisconnect = vi.fn<NonNullable<ServerOptions["onDisconnect"]>>();
+let onDisconnect: ReturnType<typeof vi.fn<NonNullable<ServerOptions["onDisconnect"]>>>;
 
 beforeEach(async () => {
   onMessage.mockReset();
   onStale.mockReset();
-  onDisconnect.mockReset();
+  onDisconnect = vi.fn<NonNullable<ServerOptions["onDisconnect"]>>();
   // Observe the real listener so its ephemeral port stays bound until helper.stop().
   const createServer = vi.spyOn(net, "createServer");
   let listener: net.Server;

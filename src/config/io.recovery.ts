@@ -1,6 +1,6 @@
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -8,8 +8,13 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
-import { createConfigFileWriteGuard } from "./io.write-safety.js";
-import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
+import {
+  captureConfigRootWriteTarget,
+  createConfigFileWriteGuard,
+  resolveConfigWriteDirectory,
+} from "./io.write-safety.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
@@ -103,11 +108,24 @@ async function recoverConfigJsonRootSuffixUnderLock(
   if (!validated.ok) {
     return false;
   }
-  const writeGuard = createConfigFileWriteGuard(
+  if (snapshot.path !== context.configPath) {
+    throw new ConfigMutationConflictError("config path changed since last load", {
+      retryable: false,
+    });
+  }
+  const { path: publicationPath, pathProof } = captureConfigRootWriteTarget(
     context.configPath,
     context.deps.fs,
+  );
+  const writeGuard = createConfigFileWriteGuard(
+    publicationPath,
+    context.deps.fs,
     captureConfigWriteLockGuard(context.configPath),
-    { snapshot, includeGraph: { hashes: {}, targets: {} } },
+    {
+      snapshot: { ...snapshot, path: publicationPath },
+      includeGraph: { hashes: {}, targets: {} },
+      targetPathProof: pathProof,
+    },
   );
   writeGuard.assertBeforeMutation();
   const clobberedPath = await persistBoundedClobberedConfigSnapshot({
@@ -124,13 +142,12 @@ async function recoverConfigJsonRootSuffixUnderLock(
   }
   // Recovery must publish by rename; a copy fallback can truncate the live config.
   await replaceFileAtomic({
-    filePath: context.configPath,
+    filePath: publicationPath,
     content: suffixRecovery.raw,
     dirMode:
-      readExistingStateRootMode(
-        path.dirname(context.configPath),
-        resolveStateDir(context.deps.env, context.deps.homedir),
-        context.deps.fs,
+      stateRootDirectoryMode(
+        path.dirname(publicationPath),
+        resolveConfigWriteDirectory(context.configPath, publicationPath, context.deps).path,
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(context.configPath),

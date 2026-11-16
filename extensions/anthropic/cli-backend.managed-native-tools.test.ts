@@ -18,10 +18,15 @@ function resolve(managedNativeTools: unknown, agentId = "main") {
 }
 
 describe("Claude CLI managed native tools", () => {
-  it("keeps nothing unless the operator selects tools", () => {
-    expect(buildAnthropicCliBackend().resolveManagedNativeTools?.({ agentId: "main" })).toEqual([]);
-    expect(resolve(undefined)).toEqual([]);
-    expect(resolve({})).toEqual([]);
+  it("keeps native WebSearch unless an explicit list replaces it", () => {
+    expect(buildAnthropicCliBackend().resolveManagedNativeTools?.({ agentId: "main" })).toEqual([
+      "WebSearch",
+    ]);
+    expect(resolve(undefined)).toEqual(["WebSearch"]);
+    expect(resolve({ agents: { ops: [] } })).toEqual(["WebSearch"]);
+    expect(resolve({ agents: { ops: [] } }, "ops")).toEqual([]);
+    expect(resolve({ default: [] })).toEqual([]);
+    expect(resolve({ default: ["Agent"] })).toEqual(["Agent"]);
   });
 
   it("applies the default, replaced by an agent's own list", () => {
@@ -32,16 +37,21 @@ describe("Claude CLI managed native tools", () => {
     expect(resolve(selection, "ops")).toEqual([]);
   });
 
-  it("never returns tools outside the orchestration set or with their own capability", () => {
+  it("keeps only orchestration tools and policy-gated native web search", () => {
     const backend = buildAnthropicCliBackend();
-    const selected = resolve({ default: ["Agent", "Bash", "Read", "Monitor", "CronCreate"] });
-    expect(selected).toEqual(["Agent"]);
+    const selected = resolve({
+      default: ["WebSearch", "Agent", "Bash", "Read", "WebFetch", "Monitor", "CronCreate"],
+    });
+    expect(selected).toEqual(["Agent", "WebSearch"]);
     expect(backend.projectNativeToolAuthority?.(["Agent", "Workflow"])).toEqual([]);
+    // Core keeps WebSearch only while the turn's OpenClaw policy offers this capability.
+    expect(backend.projectNativeToolAuthority?.(["WebSearch"])).toEqual(["web_search"]);
   });
 
   it.each<[unknown, boolean]>([
     [{ default: ["Agent", "Workflow"], agents: { ops: [] } }, true],
     [{ default: ["Skill"] }, false],
+    [{ default: ["WebFetch"] }, false],
     [{ agents: { ops: ["Bash"] } }, false],
     [{ default: ["Agent", "Agent"] }, false],
     [{ allow: ["Agent"] }, false],

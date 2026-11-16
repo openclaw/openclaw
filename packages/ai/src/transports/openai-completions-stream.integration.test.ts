@@ -21,7 +21,7 @@ import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-t
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 function nativeTool(id: string, name: string, args: string) {
-  return { tool_calls: [{ index: 0, id, function: { name, arguments: args } }] };
+  return { tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: args } }] };
 }
 
 function localModel(baseUrl: string, overrides: Parameters<typeof makeCompletionsModel>[0] = {}) {
@@ -43,14 +43,11 @@ function collectLocal(baseUrl: string) {
 }
 
 describe("openai completions stream", () => {
-  afterAll(() => {
-    resetDiagnosticRunActivityForTest();
-  });
-
+  afterAll(resetDiagnosticRunActivityForTest);
   describe.each([
     { name: "direct", createStream: streamOpenAICompletions },
     { name: "managed", createStream: createOpenAICompletionsTransportStreamFn() },
-  ])("$name cache-creation usage", ({ name, createStream }) => {
+  ])("$name HTTP streams", ({ name, createStream }) => {
     const usageCases = [
       ["top-level fallback", {}, 300, 0.001075, undefined],
       ["nested write zero", { cache_write_tokens: 0 }, 0, 0.001, undefined],
@@ -78,13 +75,9 @@ describe("openai completions stream", () => {
               cache_creation_input_tokens: 300,
               ...(billedCost === undefined ? {} : { cost: billedCost }),
             };
-            for (const chunk of [
-              makeCompletionsChunk({ role: "assistant", content: "Usage preserved." }),
-              makeCompletionsChunk({}, "stop"),
-              makeCompletionsChunk({}, null, { choices: [], usage }),
-            ]) {
-              writeSse(res, chunk);
-            }
+            writeSse(res, makeCompletionsChunk({ role: "assistant", content: "Usage preserved." }));
+            writeSse(res, makeCompletionsChunk({}, "stop"));
+            writeSse(res, makeCompletionsChunk({}, null, { choices: [], usage }));
             res.end("data: [DONE]\n\n");
           },
           async (baseUrl) => {
@@ -120,60 +113,82 @@ describe("openai completions stream", () => {
         );
       },
     );
+    it.each([
+      ["thinking", { reasoning_content: "Need a Qwen answer.", content: "qwen-ok" }],
+      ["text", { content: "qwen-ok" }],
+      ["hidden reasoning", { reasoning_content: "Private reasoning" }],
+      ["tool call", nativeTool("call_1", "read", "{}")],
+      ["finish", {}],
+      ["usage", {}],
+      ["error", {}],
+    ] as const)("attributes %s after transport keepalives", async (kind, delta) => {
+      const failed = kind === "error";
+      let capturedPayload: Record<string, unknown> | undefined;
+      await withServer(
+        (_req, res, body) => {
+          capturedPayload = JSON.parse(body) as Record<string, unknown>;
+          startSse(res);
+          const heartbeat = { id: "heartbeat", model: "keepalive", choices: [] };
+          [
+            heartbeat,
+            { ...heartbeat, choices: [{ delta: { role: "assistant", content: "" } }] },
+            { ...heartbeat, choices: [], usage: {} },
+            failed
+              ? { error: { message: "Synthetic upstream failure", type: "server_error" } }
+              : makeCompletionsChunk(delta, kind === "finish" ? "stop" : null, {
+                  id: "real-response",
+                  model: kind === "thinking" ? "qwen3.5-32b" : "served-model",
+                  ...(kind === "usage"
+                    ? {
+                        choices: [],
+                        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+                      }
+                    : {}),
+                }),
+            ...(failed ? [] : [heartbeat, makeCompletionsChunk({}, "stop", { id: "", model: "" })]),
+          ].forEach((chunk) => writeSse(res, chunk));
+          res.end("data: [DONE]\n\n");
+        },
+        async (baseUrl) => {
+          const model = localModel(baseUrl, {
+            id: "qwen3.5-32b",
+            provider: "qwen",
+            reasoning: true,
+            compat: { thinkingFormat: "qwen", supportsReasoningEffort: false },
+          });
+          const stream = await createStream(model, replyContext("Reply qwen-ok"), {
+            apiKey: "test-key",
+            reasoning: kind === "thinking" ? "medium" : "off",
+            reasoningEffort: kind === "thinking" ? "medium" : "off",
+          });
+          const { result, thinking, text } = await captureStream(stream);
+          expect(result.responseId).toBe(failed ? undefined : "real-response");
+          expect(result.responseModel).toBe(
+            failed || kind === "thinking" ? undefined : "served-model",
+          );
+          expect(result.stopReason === "error").toBe(failed);
+          expect(result.errorMessage).toEqual(
+            failed ? expect.stringContaining("Synthetic upstream failure") : undefined,
+          );
+          if (kind === "thinking") {
+            expect(capturedPayload?.enable_thinking).toBe(true);
+            expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+          }
+          expect(thinking).toBe(kind === "thinking" ? "Need a Qwen answer." : "");
+          expect(text).toBe(kind === "thinking" || kind === "text" ? "qwen-ok" : "");
+        },
+      );
+    });
   });
-
-  it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    await withServer(
-      (_req, res, body) => {
-        capturedPayload = JSON.parse(body) as Record<string, unknown>;
-        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-        res.end(
-          JSON.stringify({
-            id: "chatcmpl-qwen-thinking",
-            object: "chat.completion",
-            model: "qwen3.5-32b",
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  reasoning_content: "Need a Qwen answer.",
-                  content: "qwen-ok",
-                },
-                finish_reason: "stop",
-              },
-            ],
-          }),
-        );
-      },
-      async (baseUrl) => {
-        const model = localModel(baseUrl, {
-          id: "qwen3.5-32b",
-          provider: "qwen",
-          reasoning: true,
-          compat: { thinkingFormat: "qwen", supportsReasoningEffort: false },
-        });
-        const stream = createOpenAICompletionsTransportStreamFn()(
-          model,
-          replyContext("Reply qwen-ok"),
-          { apiKey: "test-key", reasoning: "medium" } as never,
-        );
-        const { thinking, text } = await captureStream(stream);
-        expect(capturedPayload?.enable_thinking).toBe(true);
-        expect(capturedPayload).not.toHaveProperty("reasoning_effort");
-        expect(thinking).toBe("Need a Qwen answer.");
-        expect(text).toBe("qwen-ok");
-      },
-    );
-  });
-
   it.each([
     { finishReason: "tool_call", emitsTool: true, stopReason: "toolUse" },
     { finishReason: "tool_call", emitsTool: false, stopReason: "stop" },
     { finishReason: "tool_calls", emitsTool: true, stopReason: "toolUse" },
     { finishReason: "function_call", emitsTool: true, stopReason: "toolUse" },
     { finishReason: "unknown", emitsTool: true, stopReason: "error" },
+    { finishReason: "STOP", emitsTool: false, stopReason: "stop" },
+    { finishReason: "MAX_TOKENS", emitsTool: false, stopReason: "length" },
+    { finishReason: "SAFETY", emitsTool: false, stopReason: "error" },
   ])(
     "handles $finishReason with emitsTool=$emitsTool through the public LLM runtime",
     async ({ finishReason, emitsTool, stopReason }) => {
@@ -181,21 +196,10 @@ describe("openai completions stream", () => {
         (_req, res) => {
           startSse(res);
           const delta = emitsTool
-            ? {
-                tool_calls: [
-                  {
-                    ...nativeTool("call_lookup", "lookup", '{"query":"local"}').tool_calls[0],
-                    type: "function",
-                  },
-                ],
-              }
+            ? nativeTool("call_lookup", "lookup", '{"query":"local"}')
             : { role: "assistant", content: "No tool required." };
-          for (const chunk of [
-            makeCompletionsChunk(delta),
-            makeCompletionsChunk({}, finishReason),
-          ]) {
-            writeSse(res, chunk);
-          }
+          writeSse(res, makeCompletionsChunk(delta));
+          writeSse(res, makeCompletionsChunk({}, finishReason));
           res.end("data: [DONE]\n\n");
         },
         async (baseUrl) => {
@@ -210,19 +214,13 @@ describe("openai completions stream", () => {
           const result = await stream.result();
           expect(result.stopReason).toBe(stopReason);
           const toolCalls = result.content.filter((block) => block.type === "toolCall");
-          if (stopReason === "toolUse") {
-            expect(toolCalls).toEqual([
-              expect.objectContaining({
-                id: "call_lookup",
-                name: "lookup",
-                arguments: { query: "local" },
-              }),
-            ]);
-          } else {
-            expect(toolCalls).toEqual([]);
-          }
-          if (finishReason === "unknown") {
-            expect(result.errorMessage).toBe("Provider finish_reason: unknown");
+          expect(toolCalls).toMatchObject(
+            stopReason === "toolUse"
+              ? [{ id: "call_lookup", name: "lookup", arguments: { query: "local" } }]
+              : [],
+          );
+          if (stopReason === "error") {
+            expect(result.errorMessage).toBe(`Provider finish_reason: ${finishReason}`);
           }
         },
       );
@@ -274,8 +272,7 @@ describe("openai completions stream", () => {
 
             writeSse(res, makeCompletionsChunk({ role: "assistant", content: "OK" }));
             writeSse(res, makeCompletionsChunk({}, "stop"));
-            res.write("data: [DONE]\n\n");
-            res.end();
+            res.end("data: [DONE]\n\n");
           };
 
           writeNextChunk();

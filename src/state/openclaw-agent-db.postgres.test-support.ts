@@ -41,7 +41,6 @@ export async function loadOwners() {
     cleanup,
     search,
     engine,
-    maintenance,
     transcriptStore,
     transcriptFts,
   ] = await Promise.all([
@@ -55,7 +54,6 @@ export async function loadOwners() {
     import("../test-utils/session-state-cleanup.js"),
     import("../config/sessions/session-transcript-search.js"),
     import("./openclaw-agent-db-engine.js"),
-    import("./openclaw-agent-db-maintenance-lease.js"),
     import("../config/sessions/session-accessor.sqlite-transcript-store.js"),
     import("../config/sessions/session-transcript-fts.js"),
   ]);
@@ -76,7 +74,6 @@ export async function loadOwners() {
     searchSessionTranscriptsReadOnlySync: search.searchSessionTranscriptsReadOnlySync,
     admitAgentEngineSearchExtensions: engine.admitAgentEngineSearchExtensions,
     openAgentEngineStore: engine.openAgentEngineStore,
-    withAgentDatabaseMaintenanceLease: maintenance.withAgentDatabaseMaintenanceLease,
     appendTranscriptEventsInTransaction: transcriptStore.appendTranscriptEventsInTransaction,
     createSessionTranscriptFtsInserter: transcriptFts.createSessionTranscriptFtsInserter,
     selectSessionTranscriptFtsRows: transcriptFts.selectSessionTranscriptFtsRows,

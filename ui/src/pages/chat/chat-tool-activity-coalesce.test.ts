@@ -43,7 +43,6 @@ it("coalesces a new projected boundary's invocation without borrowing from the p
   expect(rows[0]).toBe(previous);
   expect(extractToolCardsCached(rows[1])[0]).toMatchObject({ callId: "call", completed: true });
 });
-
 it("invalidates replaced blocks and messages without rebuilding unrelated bundles", () => {
   const first = invocation("first");
   const second = invocation("second");
@@ -60,7 +59,6 @@ it("invalidates replaced blocks and messages without rebuilding unrelated bundle
   expect(extractToolCardsCached(initial[0])[0]?.exitCode).toBe(0);
   expect(extractToolCardsCached(replacedBlock[0])[0]?.exitCode).toBe(1);
 });
-
 const activity = (status?: AgentActivityItem["status"]): AgentActivityItem => ({
   itemId: "tool:active",
   toolCallId: "active",
@@ -92,7 +90,6 @@ it.each([false, true])("replaces history placeholders (live first: %s)", (liveFi
   expect(outcomes(liveFirst ? [live, history] : [history, live])).toEqual([activity("running")]);
   expect(outcomes([history])).toEqual([{ ...activity(), unpairedCall: true }]);
 });
-
 it.each([true, false])("retains durable outcomes over stale live (raw=%s)", (hasRawResult) => {
   const terminal = execution(
     hasRawResult ? [{ type: "text", text: "Command ended" }] : [activeCall],
@@ -112,4 +109,13 @@ it.each([true, false])("retains durable outcomes over stale live (raw=%s)", (has
   for (const rows of orders) {
     expect(outcomes(rows)).toEqual([activity()]);
   }
+});
+
+it.each(["text", "thinking"])("keeps %s apart from its calls and prepared activity", (type) => {
+  const prose = (value: string) => ({ type, text: value, thinking: value });
+  const content = [prose("Now."), activeCall, prose("Then."), toolCall("b")];
+  const rows = messages([execution(content)]);
+  const cards = rows.map(extractToolCardsCached);
+  expect(cards.map((list) => list.map((card) => card.callId))).toEqual([[], ["active"], [], ["b"]]);
+  expect(rows.flatMap(readPreparedActivity)).toEqual([activity()]);
 });

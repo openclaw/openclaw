@@ -6,7 +6,8 @@ import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({ toolPolicyAuditInfo: vi.fn() }));
 
-vi.mock("../../logging/subsystem.js", () => ({
+vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({
     debug: vi.fn(),
     error: vi.fn(),
@@ -20,11 +21,15 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     toolPolicyAuditInfo.mockClear();
   });
 
-  const repeatedToolError =
-    "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.";
+  const repeatLimitFallback =
+    "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
+  const namedRepeatLimit =
+    "OpenClaw stopped this turn: the model called probe with the same arguments 20 times in a row. Send a new message to continue.";
   it.each([
-    ["private tool diagnostics", "openclaw_repeated_tool_error", repeatedToolError],
-    ["HTTP 503 temporary failure", "openclaw_repeated_tool_error", repeatedToolError],
+    [namedRepeatLimit, "tool_repeat_limit", namedRepeatLimit],
+    [namedRepeatLimit + "\n", "tool_repeat_limit", repeatLimitFallback],
+    ["private tool diagnostics", "tool_repeat_limit", repeatLimitFallback],
+    ["HTTP 503 temporary failure", "tool_repeat_limit", repeatLimitFallback],
     [
       "HTTP 503 temporary failure",
       "openclaw_repetitive_output",

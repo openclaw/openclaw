@@ -30,19 +30,25 @@ function seedSkippedRoom() {
   return { roomId, createdAt };
 }
 
-function publishBotRole(roomId: string, role: "bot" | "member", createdAt: number) {
-  fixture.broadcast(
-    fixture.signRelay({
-      kind: 39002,
-      created_at: createdAt,
-      content: "",
-      tags: [
-        ["d", roomId],
-        ["p", fixture.botPublicKey, "", role],
-        ["p", fixture.senderPublicKey, "", "member"],
-      ],
-    }),
-  );
+function roomRoster(
+  roomId: string,
+  role: "bot" | "member",
+  createdAt: number,
+  includeSender = true,
+) {
+  return fixture.signRelay({
+    kind: 39002,
+    created_at: createdAt,
+    content: "",
+    tags: [
+      ["d", roomId],
+      ["p", fixture.botPublicKey, "", role],
+      ...(includeSender ? [["p", fixture.senderPublicKey, "", "member"]] : []),
+    ],
+  });
+}
+function publishBotRole(...params: Parameters<typeof roomRoster>) {
+  fixture.broadcast(roomRoster(...params));
 }
 
 function notifyBotMembership(roomId: string, kind: 44100 | 44101, createdAt: number) {
@@ -70,6 +76,12 @@ function roomSubscriptionIds(roomId: string) {
         filters.some((filter) => filter.kinds?.includes(39002)),
     )
     .map(({ id }) => id);
+}
+
+function hasSender(bus: Awaited<ReturnType<typeof startBus>>) {
+  return bus.directory
+    .listGroupMembers({ groupId: skipped.roomId })
+    .some((member) => member.id === fixture.senderPublicKey);
 }
 
 it("restores a skipped room without replacing healthy subscriptions", async () => {
@@ -132,15 +144,12 @@ it("restores a skipped room without replacing healthy subscriptions", async () =
       tags: expect.arrayContaining([["h", skipped.roomId]]),
     }),
   );
-  expect(messages).toHaveLength(4);
-  expect(messages).toEqual(
-    expect.arrayContaining([
-      "healthy before restoration",
-      "healthy while restoration waits",
-      "restored short history",
-      "restored room message",
-    ]),
-  );
+  expect(messages.toSorted()).toEqual([
+    "healthy before restoration",
+    "healthy while restoration waits",
+    "restored room message",
+    "restored short history",
+  ]);
   expect(roomSubscriptionIds(skipped.roomId)).toHaveLength(1);
   expect(roomSubscriptionIds(fixture.roomId)).toEqual(healthySubscriptions);
   expect(fixture.authenticatedSessions()).toBe(1);
@@ -183,24 +192,10 @@ it("discards a grant query superseded by removal and accepts a later signed gran
 it("retains a newer non-Bot roster when a later grant query returns an older Bot roster", async () => {
   const bus = await startBus();
   const healthySubscriptions = roomSubscriptionIds(fixture.roomId);
-  const newerDenial = fixture.signRelay({
-    kind: 39002,
-    created_at: skipped.createdAt + 3,
-    content: "",
-    tags: [
-      ["d", skipped.roomId],
-      ["p", fixture.botPublicKey, "", "member"],
-    ],
-  });
+  const newerDenial = roomRoster(skipped.roomId, "member", skipped.createdAt + 3, false);
   fixture.broadcast(newerDenial);
   notifyBotMembership(skipped.roomId, 44101, skipped.createdAt + 3);
-  await vi.waitFor(() =>
-    expect(
-      bus.directory
-        .listGroupMembers({ groupId: skipped.roomId })
-        .some((entry) => entry.id === fixture.senderPublicKey),
-    ).toBe(false),
-  );
+  await vi.waitFor(() => expect(hasSender(bus)).toBe(false));
   expect(roomSubscriptionIds(skipped.roomId)).toEqual([]);
 
   // Model a stale relay snapshot after the client has accepted the newer denial.
@@ -214,11 +209,7 @@ it("retains a newer non-Bot roster when a later grant query returns an older Bot
   fixture.sendMessage("healthy after stale Bot roster");
   await vi.waitFor(() => expect(messages).toEqual(["healthy after stale Bot roster"]));
   expect(roomSubscriptionIds(skipped.roomId)).toEqual([]);
-  expect(
-    bus.directory
-      .listGroupMembers({ groupId: skipped.roomId })
-      .some((entry) => entry.id === fixture.senderPublicKey),
-  ).toBe(false);
+  expect(hasSender(bus)).toBe(false);
   expect(fatal).toEqual([]);
 
   publishBotRole(skipped.roomId, "bot", skipped.createdAt + 5);
@@ -250,38 +241,14 @@ it.each(["live downgrade", "shutdown during reconciliation"] as const)(
 
     let reconciliation: ReturnType<BuzzRelayFixture["pauseNextMembershipQuery"]> | undefined;
     if (interruption === "shutdown during reconciliation") {
-      fixture.broadcast(
-        fixture.signRelay({
-          kind: 39002,
-          created_at: skipped.createdAt + 2,
-          content: "",
-          tags: [
-            ["d", skipped.roomId],
-            ["p", fixture.botPublicKey, "", "bot"],
-          ],
-        }),
-      );
+      fixture.broadcast(roomRoster(skipped.roomId, "bot", skipped.createdAt + 2, false));
       reconciliation = fixture.pauseNextMembershipQuery();
       history.release();
       await reconciliation.started;
-      expect(
-        bus.directory
-          .listGroupMembers({ groupId: skipped.roomId })
-          .some((member) => member.id === fixture.senderPublicKey),
-      ).toBe(true);
+      expect(hasSender(bus)).toBe(true);
     } else {
       // A registered room subscription can receive a live roster before its EOSE.
-      fixture.sendUnchecked(
-        fixture.signRelay({
-          kind: 39002,
-          created_at: skipped.createdAt + 2,
-          content: "",
-          tags: [
-            ["d", skipped.roomId],
-            ["p", fixture.botPublicKey, "", "member"],
-          ],
-        }),
-      );
+      fixture.sendUnchecked(roomRoster(skipped.roomId, "member", skipped.createdAt + 2, false));
       await vi.waitFor(() => expect(fatal).toHaveLength(1));
       expect(turnSignal?.aborted).toBe(true);
       await expect(

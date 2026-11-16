@@ -37,7 +37,12 @@ import {
   resolvePluginRuntimeExecutionArtifact,
   resolvePreferredBundledRootArtifact,
 } from "./plugin-runtime-artifact-selection.js";
-import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import {
+  getPluginSetupModuleLoader,
+  preparePluginSetupModuleLoader,
+  PluginSetupPreparationRequiredError,
+  withPluginSetupPreparation,
+} from "./plugin-setup-module.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -182,11 +187,13 @@ function resolveSetupApiPath(
   return modulePath;
 }
 
-function resolveRelevantSetupMigrationPluginIds(params: {
+type PluginSetupConfigParams = {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string[] {
+};
+
+function resolveRelevantSetupMigrationPluginIds(params: PluginSetupConfigParams): string[] {
   const entries = params.config.plugins?.entries;
   const ids = new Set<string>(
     entries && typeof entries === "object" ? normalizeStringEntries(Object.keys(entries)) : [],
@@ -365,6 +372,9 @@ function registerSetupRecord(record: PluginManifestRecord): SetupRecordRegistrat
     moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
     mod = moduleLoader(setupSource) as OpenClawPluginModule;
   } catch (error) {
+    if (error instanceof PluginSetupPreparationRequiredError) {
+      throw error;
+    }
     // A broken setup entry silently removes the plugin's providers/CLI
     // backends/migrations from onboarding; record why instead of vanishing.
     registration.diagnostics.push({
@@ -512,13 +522,14 @@ function registerSetupRecord(record: PluginManifestRecord): SetupRecordRegistrat
   return registration;
 }
 
-export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
+type PluginSetupRegistryParams = Partial<PluginSetupConfigParams> & {
   pluginIds?: readonly string[];
   manifestRegistry?: PluginManifestRegistry;
-}): PluginSetupRegistry {
+};
+
+export const resolvePluginSetupRegistry = withPluginSetupCache(function (
+  params?: PluginSetupRegistryParams,
+): PluginSetupRegistry {
   const env = params?.env ?? process.env;
   const scopedPluginIds = params?.pluginIds
     ? new Set(normalizeStringEntries(params.pluginIds))
@@ -659,15 +670,45 @@ export const resolvePluginSetupCliBackend = withPluginSetupCache(function (param
   );
 });
 
-export const runPluginSetupConfigMigrations = withPluginSetupCache(function (params: {
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): {
+/** Keep selection and source preparation in the same setup inventory. */
+export const resolvePluginSetupRegistryAsync = withPluginSetupCache(async function (
+  params: PluginSetupRegistryParams & { assertCurrent?: () => void; signal?: AbortSignal } = {},
+): Promise<PluginSetupRegistry> {
+  return await withPluginSetupPreparation(params, async ({ assertCurrent }) => {
+    const selectedIds = params.pluginIds ? new Set(normalizeStringEntries(params.pluginIds)) : null;
+    const records =
+      selectedIds?.size === 0
+        ? []
+        : (params.manifestRegistry?.plugins ?? loadSetupManifestRecords(params)).filter(
+            (record) => !selectedIds || selectedIds.has(record.id),
+          );
+    for (const record of records) {
+      if (record.setup?.requiresRuntime === false) {
+        continue;
+      }
+      const artifact = resolveLoadableSetupRuntimeSource(record);
+      if (artifact) {
+        await preparePluginSetupModuleLoader(record, artifact.source, artifact.rootDir, {
+          assertCurrent,
+          signal: params.signal,
+        });
+      }
+    }
+    assertCurrent();
+    return resolvePluginSetupRegistry({
+      ...params,
+      manifestRegistry: { ...params.manifestRegistry, plugins: records, diagnostics: [] },
+    });
+  });
+});
+
+export const runPluginSetupConfigMigrations = withPluginSetupCache(async function (
+  params: PluginSetupConfigParams,
+): Promise<{
   config: OpenClawConfig;
   changes: string[];
   warnings?: string[];
-} {
+}> {
   const loadPaths = params.config.plugins?.load?.paths ?? [];
   const warning = findUninspectedPluginDiagnostic(
     discoverConfiguredPluginLoadPaths({ loadPaths, env: params.env }).diagnostics,
@@ -677,22 +718,20 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
     return { config: params.config, changes: [] };
   }
   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
+  const registry = await resolvePluginSetupRegistryAsync({ ...params, pluginIds });
   return applyPluginDoctorCompatibilitySequence(
     params.config,
-    resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations.map((entry) => ({
+    registry.configMigrations.map((entry) => ({
       pluginId: entry.pluginId,
       normalizeCompatibilityConfig: ({ cfg }) => entry.migrate(cfg) ?? { config: cfg, changes: [] },
     })),
   );
 });
 
-export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function (params: {
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-  manifestRegistry?: PluginManifestRegistry;
-}): SetupAutoEnableReason[] {
+export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function (
+  params: PluginSetupConfigParams &
+    Pick<PluginSetupRegistryParams, "pluginIds" | "manifestRegistry">,
+): SetupAutoEnableReason[] {
   const env = params.env ?? process.env;
   const reasons: SetupAutoEnableReason[] = [];
   const seen = new Set<string>();

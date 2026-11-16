@@ -11,6 +11,7 @@ const spawnProductionBoundaryFiles = [
 // These suites mock shared runtime, network, or plugin modules and cannot
 // share the non-isolated core worker without leaking module state.
 const coreIsolatedFiles = [
+  "src/agents/bash-tools.exec.pty.test.ts",
   "src/agents/cli-runner/bundle-mcp.user-config.test.ts",
   "src/agents/failover/classify.legacy-provider-predicates.test.ts",
   "src/agents/failover/failover-classification.corpus.test.ts",
@@ -26,7 +27,6 @@ const coreIsolatedFiles = [
   "src/agents/subagents/announce/subagent-announce.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
-  "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
 const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];

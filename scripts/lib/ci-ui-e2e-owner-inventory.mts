@@ -12,7 +12,6 @@ const pageStyles = {
   ],
   activity: [
     "ui/src/pages/activity/run-inspector.css",
-    "ui/src/pages/activity/session-activity-media.css",
     "ui/src/styles/activity.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
@@ -213,7 +212,6 @@ function pageWatch(
 }
 
 const ownerWatches: readonly UiE2eOwnerWatch[] = [
-  pageWatch("ui/src/e2e/activity-answer-candidates.e2e.test.ts", ["activity", "chat"]),
   pageWatch("ui/src/e2e/activity-current-work.e2e.test.ts", ["activity", "chat"]),
   pageWatch(
     "ui/src/e2e/activity-polish.e2e.test.ts",
@@ -243,11 +241,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/activity-session-subagents.e2e.test.ts",
     ["activity"],
-    ["ui/src/pages/activity/activity-page.tsx"],
-  ),
-  pageWatch(
-    "ui/src/e2e/activity-summaries.e2e.test.ts",
-    ["activity", "config"],
     ["ui/src/pages/activity/activity-page.tsx"],
   ),
   pageWatch("ui/src/e2e/agent-channel-runtime-status.e2e.test.ts", [
@@ -357,8 +350,9 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/browser-tab-preview-urls.e2e.test.ts",
     ["chat"],
-    ["ui/src/pages/chat/components/browser-tab-card.ts"],
+    ["ui/src/lib/chat/tool-cards.ts"],
   ),
+  pageWatch("ui/src/e2e/chat-browser-tool-previews.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-ordering.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-start-stop.e2e.test.ts", ["chat", "config"]),
@@ -437,11 +431,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "skills",
   ]),
   pageWatch(
-    "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts",
-    ["chat", "config", "skills"],
-    ["ui/src/components/modal-dialog.tsx"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-composer-catalog.e2e.test.ts",
     ["chat", "config", "model-providers"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -500,7 +489,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/components/chat-detail-panel.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-flow.active-run-follow-ups.e2e.test.ts", ["chat", "config"]),
   pageWatch("ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts", ["chat", "config"]),
   pageWatch(
     "ui/src/e2e/chat-flow.dynamic-catalog.e2e.test.ts",
@@ -898,7 +886,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-worked-for-visualization.e2e.test.ts",
     ["chat"],
-    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/components/browser-tab-card.ts"],
+    ["ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
     "ui/src/e2e/chat-workspace-directory-race.e2e.test.ts",
@@ -1095,16 +1083,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/desktop/desktop-panel-solid.tsx",
     ],
   ),
-  pageWatch(
-    "ui/src/e2e/desktop-panel.e2e.test.ts",
-    ["activity", "chat", "terminal"],
-    [
-      "ui/src/components/command-palette.tsx",
-      "ui/src/components/desktop/desktop-client.ts",
-      "ui/src/components/desktop/desktop-panel-solid.tsx",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
   {
     testFile: "ui/src/e2e/desktop-picture-in-picture.e2e.test.ts",
     ownerRoots: [
@@ -1191,6 +1169,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/logs/logs-page.tsx"],
   ),
   pageWatch("ui/src/e2e/logs-layout.e2e.test.ts", ["config", "logs"]),
+  pageWatch("ui/src/e2e/logs-scroll.e2e.test.ts", ["logs"]),
   pageWatch(
     "ui/src/e2e/managed-media-base-path.e2e.test.ts",
     ["chat"],
@@ -1892,7 +1871,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     sessionMenuOwnerRoots,
   ),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
-  pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-session-stability.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
@@ -2098,6 +2076,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
+  {
+    testFile: "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
+    ownerRoots: ["ui/src/lib/openclaw-id/onepassword-save.ts"],
+    watchGlobs: [],
+  },
 ];
 
 export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = ownerWatches.map((watch) => ({

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
-import "../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import "../templates/tool-policy-runtime.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -55,7 +55,7 @@ function createInspector(env: NodeJS.ProcessEnv) {
   const request = {
     kind: "catalog" as const,
     syntheticAuth: [],
-    clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+    templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
   };
   return {
     run: (

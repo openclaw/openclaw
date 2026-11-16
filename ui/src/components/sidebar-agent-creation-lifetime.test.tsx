@@ -5,6 +5,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createGateway,
   createSessions,
+  createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
@@ -25,6 +26,36 @@ beforeEach(() => {
   upload.mockReset();
 });
 afterEach(() => restoreDialog());
+
+it("preserves the creation draft through unrelated session refreshes", async () => {
+  const sessions = createSessionsHarness("main", ["agent:main:main"]);
+  const { sidebar } = await mountSidebar(
+    createGateway(createTestGatewayClient(async () => ({}))),
+    sessions.sessions,
+    "panel",
+    TWO_AGENTS,
+  );
+  const menus = getAppSidebarOwner(sidebar.hostElement)!.sidebarMenus;
+  menus.openAgentCreateDialog();
+  await vi.dynamicImportSettled();
+  const input = () =>
+    document.querySelector<HTMLInputElement>('.agent-create-dialog input[name="name"]')!;
+  await waitForSolid(() => expect(input()).toBeTruthy());
+  const draft = input();
+  draft.value = "New draft";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  sessions.publish({ loading: true });
+  await sidebar.updateComplete;
+  await waitForSolid(() => {
+    expect(input()).toBe(draft);
+    expect(input().value).toBe("New draft");
+    expect(
+      document.querySelector<HTMLButtonElement>('.agent-create-dialog button[type="submit"]')!
+        .disabled,
+    ).toBe(false);
+  });
+});
 
 it.each(["cancel button", "modal cancel", "owner close"])(
   "opens a usable successor after %s while avatar conversion is pending",
