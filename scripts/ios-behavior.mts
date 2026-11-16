@@ -425,8 +425,8 @@ type ScreenSample = {
   screen: { width: number; height: number };
   transcript?: Rect;
   exclude: Rect[];
-  /** A progress card was on screen: the agent fixture's tool steps really ran. */
-  progressCard: boolean;
+  /** The progress card read "Plan, N of N steps done": every agent fixture tool step succeeded. */
+  planComplete: boolean;
 };
 let screenCount = 0;
 const screensDir = path.join(outDir, "screens");
@@ -449,7 +449,7 @@ function readLayout(roots: AxNode[]): Layout {
   let transcript: Rect | undefined;
   let composerTop = Infinity;
   const exclude: Rect[] = [];
-  let progressCard = false;
+  let planComplete = false;
   const walk = (node: AxNode) => {
     const id = node.AXUniqueId ?? "";
     const text = node.AXLabel ?? "";
@@ -464,8 +464,8 @@ function readLayout(roots: AxNode[]): Layout {
       if (id.startsWith("chat-progress-card") || /^(Plan, |Done in )/.test(text)) {
         exclude.push(node.frame);
       }
-      // The card above the composer has no identifier; its label starts "Plan, ".
-      progressCard ||= id.startsWith("chat-progress-card") || text.startsWith("Plan, ");
+      // The card above the composer has no identifier, only this label.
+      planComplete ||= /^Plan, (\d+) of \1 steps done/.test(text);
     }
     node.children?.forEach(walk);
   };
@@ -475,7 +475,7 @@ function readLayout(roots: AxNode[]): Layout {
     const bottom = Math.min(transcript.y + transcript.height, composerTop);
     transcript = { ...transcript, height: Math.max(0, bottom - transcript.y) };
   }
-  return { screen, transcript, exclude, progressCard };
+  return { screen, transcript, exclude, planComplete };
 }
 
 /**
@@ -514,8 +514,8 @@ async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
     const { layout } = layouts.reduce((best, entry) =>
       Math.abs(entry.t - t) < Math.abs(best.t - t) ? entry : best,
     );
-    const { screen, transcript, exclude, progressCard } = layout;
-    return { png, screen, transcript, exclude, progressCard };
+    const { screen, transcript, exclude, planComplete } = layout;
+    return { png, screen, transcript, exclude, planComplete };
   });
 }
 
@@ -956,10 +956,11 @@ function blankMatrix(): Record<string, Case> {
               keyboardAtSend === (keyboard === "up");
             result.gates["reply finished (setup)"] = replied;
             if (content === "agent") {
-              // A failed tool step ends the mock's turn early; its card never draws.
-              result.gates["progress card on screen (setup)"] = sent
+              // The mock's last step closes the card only after every earlier step succeeded, and
+              // the long reply follows it; a failed step ends the turn with a short error reply.
+              result.gates["every agent tool step succeeded (setup)"] = sent
                 .flat()
-                .some((sample) => sample.progressCard);
+                .some((sample) => sample.planComplete);
             }
             return result;
           },
