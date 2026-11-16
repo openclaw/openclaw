@@ -216,7 +216,7 @@ describe("managed removal custody", () => {
       const removed = await remove(created.id);
       expect(removed.removed).toBe(true);
       expect(await git(repo, "rev-parse", `${removed.snapshotRef}^{tree}`)).toBe(tree);
-      expect(await git(repo, "rev-parse", `${removed.snapshotRef}^`)).toBe(head);
+      expect(await git(repo, "rev-parse", removed.snapshotRef!)).toBe(head);
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       vi.stubEnv("GIT_ALLOW_PROTOCOL", "");
       const restored = await service.restore({ id: created.id });
