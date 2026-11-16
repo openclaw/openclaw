@@ -20,7 +20,7 @@ and histogram bucket bounds, with synthetic labels, help, and values. It omits
 three exporter-generated drop-counter rows: recreating historical drops would
 require additional live or reserved series and would change the measured shape.
 It is an owner workload, not a traffic replay or a claim about actual scrape byte
-lengths. Omitting `--shape` instead fills the current 16,384-entry exporter budget
+lengths. Omitting `--shape` instead fills the current 16,576-entry exporter budget
 with the existing mixed scalar/histogram saturation fixture.
 
 `render-shape-2026-10-23.json` is a second observed shape with 1,462 histogram

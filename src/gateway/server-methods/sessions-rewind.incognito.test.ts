@@ -66,8 +66,9 @@ it.each(mutationMethods)("acquires memory history for unbound %s", (method) =>
       if (method === "sessions.fork") {
         expect(current?.sessionId).toBe(scope.sessionId);
       } else {
-        expect(current?.previousSessionId).toBe(scope.sessionId);
-        expect(current?.sessionId).not.toBe(scope.sessionId);
+        // In-place cuts keep the transcript identity; no generation is retired.
+        expect(current?.previousSessionId).toBeUndefined();
+        expect(current?.sessionId).toBe(scope.sessionId);
         await expectBranches([
           [method === "sessions.rewind" ? "assistant-1" : "alternate-user", true],
         ]);

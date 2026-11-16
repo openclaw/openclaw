@@ -206,7 +206,10 @@ export type WorkerEnvironmentServiceContract = {
     control: boolean;
     requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult>;
-  launchDesktopApp(request: WorkerDesktopLaunchParams): Promise<WorkerDesktopLaunchResult>;
+  launchDesktopApp(
+    request: WorkerDesktopLaunchParams,
+    authorize?: () => void,
+  ): Promise<WorkerDesktopLaunchResult>;
   ensureRetainedRunning(
     request: import("./provider-retained-lifecycle.js").WorkerRetainedRequest,
   ): Promise<void>;
@@ -243,7 +246,11 @@ export type WorkerPlacementDispatchAdmission = <T>(
 
 export type WorkerPlacementRedispatch = (
   placement: Extract<WorkerSessionPlacementRecord, { state: "reclaimed" | "failed" }>,
-  options: { assertCurrent: () => void; signal?: AbortSignal },
+  options: {
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    readNativeCredential?: GitHubCredentialReader;
+  },
 ) => Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
 
 /** Canonical admission rejected the session owner, not a caller or process cancellation. */

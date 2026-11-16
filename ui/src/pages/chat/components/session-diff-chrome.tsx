@@ -71,6 +71,7 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
           class="session-diff__refresh"
           icon="refresh"
           label={t("chat.sessionDiff.refresh")}
+          tooltip={false}
           disabled={loading() || !props.loader}
           onClick={() => loadDiff()}
         />
@@ -79,6 +80,7 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
           class="session-diff__toolbar-icon"
           icon="moreHorizontal"
           label={t("chat.sessionDiff.viewOptions")}
+          tooltip={t("chat.sessionDiff.viewOptionsTooltip")}
           onClick={(event) =>
             openAnchoredMenu(event, {
               kind: "view",
@@ -145,7 +147,7 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
       <div class="session-diff__summary session-panel-rail" data-presentation="desktop">
         <div class="session-diff__tools">
           <div class="session-diff__navigation session-panel-rail__group">
-            <openclaw-tooltip prop:content={t("chat.sessionDiff.fileTree")}>
+            <openclaw-tooltip prop:content={t("chat.sessionDiff.fileTreeTooltip")}>
               <button
                 type="button"
                 class="session-panel-rail__button"
@@ -156,32 +158,28 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
                 <Icon name="panelLeft" />
               </button>
             </openclaw-tooltip>
-            <openclaw-tooltip prop:content={t("chat.sessionDiff.searchFiles")}>
-              <button
-                type="button"
-                class="session-panel-rail__button"
-                ref={setTreeSearchTrigger}
-                aria-label={t("chat.sessionDiff.searchFiles")}
-                aria-pressed={treeSearchOpen() ? "true" : "false"}
-                onClick={searchTree}
-              >
-                <Icon name="search" />
-              </button>
-            </openclaw-tooltip>
+            <button
+              type="button"
+              class="session-panel-rail__button"
+              ref={setTreeSearchTrigger}
+              aria-label={t("chat.sessionDiff.searchFiles")}
+              aria-pressed={treeSearchOpen() ? "true" : "false"}
+              onClick={searchTree}
+            >
+              <Icon name="search" />
+            </button>
             <span class="session-panel-rail__separator" aria-hidden="true" />
-            <openclaw-tooltip prop:content={t("chat.sessionDiff.refresh")}>
-              <button
-                type="button"
-                class="session-panel-rail__button session-diff__refresh"
-                aria-label={t("chat.sessionDiff.refresh")}
-                disabled={loading()}
-                onClick={() => {
-                  refreshCollapsed();
-                }}
-              >
-                <Icon name="refresh" />
-              </button>
-            </openclaw-tooltip>
+            <button
+              type="button"
+              class="session-panel-rail__button session-diff__refresh"
+              aria-label={t("chat.sessionDiff.refresh")}
+              disabled={loading()}
+              onClick={() => {
+                refreshCollapsed();
+              }}
+            >
+              <Icon name="refresh" />
+            </button>
           </div>
           <div class="session-diff__actions session-panel-rail__group">
             <openclaw-tooltip prop:content={t("chat.sessionDiff.jumpToFile")}>
@@ -256,7 +254,7 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
                 </button>
               </openclaw-tooltip>
             </div>
-            <openclaw-tooltip prop:content={t("chat.sessionDiff.viewOptions")}>
+            <openclaw-tooltip prop:content={t("chat.sessionDiff.viewOptionsTooltip")}>
               <button
                 type="button"
                 class="session-panel-rail__button session-diff__toolbar-icon"
@@ -366,7 +364,7 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
             </button>
           )}
         </Show>
-        <openclaw-tooltip prop:content={t("chat.sessionDiff.viewOptions")}>
+        <openclaw-tooltip prop:content={t("chat.sessionDiff.viewOptionsTooltip")}>
           <IconButton
             size={28}
             class="session-diff__toolbar-icon"
@@ -391,19 +389,17 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
             }
           />
         </openclaw-tooltip>
-        <openclaw-tooltip prop:content={t("chat.sessionDiff.refresh")}>
-          <IconButton
-            size={28}
-            class="session-diff__refresh"
-            icon="refresh"
-            label={t("chat.sessionDiff.refresh")}
-            tooltip={false}
-            disabled={loading()}
-            onClick={() => {
-              loadDiff();
-            }}
-          />
-        </openclaw-tooltip>
+        <IconButton
+          size={28}
+          class="session-diff__refresh"
+          icon="refresh"
+          label={t("chat.sessionDiff.refresh")}
+          tooltip={false}
+          disabled={loading()}
+          onClick={() => {
+            loadDiff();
+          }}
+        />
       </div>
     );
   }

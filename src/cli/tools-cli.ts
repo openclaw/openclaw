@@ -1,5 +1,6 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import {
   addGatewayClientOptions,
@@ -72,6 +73,7 @@ export function registerToolsCli(program: Command): void {
         );
     }
     command.action(async (options: ToolUsageOptions, cmd: Command) => {
+      const signal = action === "status" ? getAsyncWorkSignal() : undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await callGatewayFromCli(
           `toolUsage.${action}`,
@@ -87,8 +89,15 @@ export function registerToolsCli(program: Command): void {
                   }
                 : {}),
           },
-          { scopes: ["operator.admin"] },
-        );
+          { scopes: ["operator.admin"], ...(signal ? { signal } : {}) },
+        ).catch((error: unknown) => {
+          if (!signal?.aborted) {
+            throw error;
+          }
+        });
+        if (signal?.aborted) {
+          return;
+        }
         if (options.json) {
           defaultRuntime.writeJson(result, 2);
           return;

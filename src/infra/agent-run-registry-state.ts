@@ -33,17 +33,18 @@ export function getAgentRunLifecycleGeneration(): string {
   return registryState.lifecycleGeneration;
 }
 
-/** Lists registered runs bound to one current session identity. */
+/** Lists registered runs bound to one current session identity, or to the key alone. */
 export function listAgentRunsForSession(params: {
   sessionKey: string;
   sessionId?: string;
+  anySessionId?: true;
 }): Array<{ runId: string; lifecycleGeneration: string }> {
   const state = getAgentRunRegistryState();
   const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
   for (const [runId, context] of state.contexts) {
     const matches =
       context.sessionKey === params.sessionKey &&
-      (!context.sessionId || context.sessionId === params.sessionId);
+      (params.anySessionId || !context.sessionId || context.sessionId === params.sessionId);
     if (matches && context.lifecycleGeneration === state.lifecycleGeneration) {
       runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
     }

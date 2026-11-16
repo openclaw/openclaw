@@ -34,6 +34,8 @@ const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   protected readonly automaticRebuildNotice: { sequence: number; warning: string };
+  /** Start of the oldest sync whose cache rows were not yet retirable. */
+  private cacheRetireSince?: number;
   protected constructor(notice?: { sequence: number; warning: string }) {
     super();
     this.automaticRebuildNotice = notice ?? { sequence: 0, warning: "" };
@@ -177,6 +179,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
     let hasTargetArchiveFiles = hasTargetSessionRequest;
     let recoveringSessionFullRetry = false;
     let syncingSources = false;
+    // Cache rows from this sync, and from earlier skipped ones, become retirable only
+    // after a sync publishes its memory files cleanly.
+    const cacheWrittenSince = this.cacheRetireSince ?? Date.now();
+    let memoryPublished = false;
     try {
       if (await this.resumeReindex(params)) {
         needsFullReindex = true;
@@ -386,6 +392,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
         progress: progress ?? undefined,
       });
+      memoryPublished = shouldSyncMemory;
       if (recoveringSessionFullRetry && !this.memoryFullRetryDirty) {
         this.clearFullReindexRetryBackoff();
       }
@@ -426,6 +433,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
       // Full rebuilds finalize their cache with the shadow; preflight failures have no shadow work.
       if (!needsFullReindex) {
+        // Deferred or failed memory work stays dirty; its rows stay for the retry.
+        if (memoryPublished && !this.dirty && !this.memoryFullRetryDirty) {
+          this.cacheRetireSince = undefined;
+          await this.retirePublishedEmbeddingCacheRows({ writtenSince: cacheWrittenSince });
+        } else {
+          this.cacheRetireSince = cacheWrittenSince;
+        }
         await this.pruneEmbeddingCacheIfNeeded();
       }
     }

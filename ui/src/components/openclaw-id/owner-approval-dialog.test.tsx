@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
+import type { OwnerApprovalRequest } from "../../lib/openclaw-id/owner-approval.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
 import { showOwnerDevicesDialog } from "./owner-devices-dialog.tsx";
@@ -17,6 +18,7 @@ const fixture = vi.hoisted(() => ({
   code: undefined as string | undefined,
   expired: false,
   uncertain: false,
+  tools: undefined as OwnerApprovalRequest["tools"],
   listeners: new Set<() => void>(),
   decide: vi.fn(),
 }));
@@ -30,6 +32,7 @@ vi.mock("../../lib/openclaw-id/owner-approval-lifetime.ts", () => ({
         {
           id: "request",
           label: "Firefox on Linux",
+          tools: fixture.tools,
           code: fixture.code,
           busy: fixture.uncertain,
           expired: fixture.expired,
@@ -56,10 +59,31 @@ afterEach(async () => {
   fixture.code = undefined;
   fixture.expired = false;
   fixture.uncertain = false;
+  fixture.tools = undefined;
   fixture.decide.mockReset();
 });
 
 describe("local owner matching-number dialog", () => {
+  it("lists overlapping capabilities and commands once without hiding distinct commands", async () => {
+    fixture.tools = {
+      caps: ["canvas", "screen", "camera", "computer", "location", "browser", "system"],
+      commands: ["canvas", "canvas.present", "canvas.hide", "canvas.navigate", "system.run"],
+    };
+    const done = showOwnerApprovalDialog({
+      client: {} as GatewayBrowserClient,
+      onDevices: vi.fn(),
+    });
+    await vi.waitFor(() => {
+      const sentence = [...document.querySelectorAll("p")].find((paragraph) =>
+        paragraph.textContent?.includes("will also be able to run tools"),
+      );
+      expect(sentence?.textContent).toBe(
+        "Firefox on Linux will also be able to run tools for your claw: canvas, screen, camera, computer, location, browser, system, canvas.present, canvas.hide, canvas.navigate, system.run. Its own permissions still apply.",
+      );
+    });
+    document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
+    await done;
+  });
   it("updates without refresh and defaults to no expiry before explicit approval", async () => {
     const done = showOwnerApprovalDialog({
       client: {} as GatewayBrowserClient,

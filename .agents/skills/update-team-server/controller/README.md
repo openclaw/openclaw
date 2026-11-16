@@ -57,6 +57,25 @@ the Gateway. The native backup remains on disk. This also applies to
 `ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
 candidate follows the existing compatibility-checked rollback path.
 
+Session preservation separates live stores from held stores using the native
+deletion journal and reconstruction holds. Held databases retain a physical
+presence/identity witness; the controller does not open SQLite or require their
+schema to match the running release. Native migration receipts may omit them.
+New witnesses mark held stores explicitly, while existing session witnesses keep
+working without rewriting the journal or its artifacts. An explicit native agent
+restore owns migration before the store becomes live again.
+
+If a held canonical agent directory was moved out of `agents/`, recovery accepts
+its database under `held-agent-archive/<agent-id>-held-*/agent/` only with the
+original device/inode identity. This also covers older witnesses without a held
+marker when the original path is absent and that archive contains the exact
+store. A copied/replaced archive, missing store, or incompatible live database
+still refuses recovery. Leave the held directory archived during `--recover`;
+moving it back can break a running release that still discovers held stores.
+Adopt the complete controller pair before recovery and retain the existing
+private operator profile. Successful full acceptance retires the activation
+journal; the held archive, native backup, and original witness stay intact.
+
 For a distinct-release `ROLLBACK_FAILED` journal without a native-update backup,
 recovery records `verified/<current-sha>` after full acceptance and final recovery
 checks, before retiring the journal. This covers both the selected candidate and
@@ -66,7 +85,7 @@ historical failed-attempt records, even after a later verified success.
 
 Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
 until the controller next prunes releases with no activation journal present:
-before a deployment, after an accepted one, and in `--cleanup`. Without a
+after an accepted deployment and in `--cleanup`. Without a
 journal, an earlier transaction's pre-migration snapshot can only undo state
 that was since accepted. Roots whose receipt is absent (Doctor never ran),
 `migrated`, `restored`, or `finished` are then retired: the runtime account
@@ -98,6 +117,12 @@ attempt; an invalid or foreign listener still fails verification. Deadline expir
 still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew that
 deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
 not the whole startup acceptance window.
+
+Convergence samples HTTP health, readiness, then startup after the status/channel
+RPCs. This prevents an earlier `startup-sidecars` response from contradicting a
+later ready response when startup settles during an RPC. The probes remain
+snapshots; persistent startup or channel recovery still fails at the original
+deadline, and malformed or terminal evidence still fails verification.
 
 Before the marker, the owner waits for native `/startupz` to report that critical
 initial startup has settled, `/readyz` to report readiness without a refusal for
@@ -228,6 +253,13 @@ It binds that gate and completion as immutable history, plus the new retained
 V1 incident and independently reviewed actual four-file incumbent and replacement
 closures. It reuses the existing adoption publication and replay owner; neither
 an old completion nor a new operation UUID authorizes today's files or incident.
+
+After a journal has been retired, use
+[`steady-successor`](RETAINED-REPAIR.md#adopt-a-controller-after-journal-retirement)
+to supersede the completed gate without requiring another incident. It binds the
+currently installed closure and serving Gateway, preserves the old closure and
+gate, and publishes the new four-file closure under the same lock. Controller
+adoption does not restart the Gateway or authorize a deployment.
 
 ## Installed closure
 
@@ -435,7 +467,13 @@ candidate files independent of writable store inodes. pnpm owns store format,
 invalidation, and pruning. Operators can reclaim unused packages with
 `pnpm store prune --store-dir <build-home>/cache/store` as the build account when
 the deployment owner is idle. Candidate cleanup removes only the work and
-staging trees. Staging uses reflinks where supported and ordinary copies
+staging trees. Release pruning runs only after full acceptance or through explicit
+`--cleanup`, never to reclaim headroom before a build. Insufficient capacity
+refuses preparation so the operator can schedule cleanup separately. Retention
+still protects current, previous, the three most recently verified releases,
+pins, and journal references. Post-acceptance pruning can still cause a host-wide
+filesystem commit stall and delay other I/O; it no longer overlaps deployment
+drain or verification. Staging uses reflinks where supported and ordinary copies
 otherwise; sealing, filesystem ownership, manifest validation, and directory
 publication remain unchanged. The build account also retains the build owner's
 artifact cache at `cache/build-artifacts`. Input content hashes select reusable

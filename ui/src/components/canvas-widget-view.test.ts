@@ -48,6 +48,50 @@ import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 setupCanvasWidgetTests();
 
 describe("Canvas widget view", () => {
+  it("hands the linked claw shell only to its own bootstrap frame", async () => {
+    const origin = "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz";
+    const shell = "<p>Trusted shell</p>";
+    client.request.mockResolvedValue({
+      ...documentView,
+      sandboxOrigin: origin,
+      sandboxUrl: origin + "/mcp-app-sandbox?claw=studio-k7x2q&cspv=1",
+      sandboxShellHtml: shell,
+    });
+    const view = mount(client);
+    const frame = await frameFor(view);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const data = { method: "ui/notifications/sandbox-bootstrap-ready", params: { version: 1 } };
+    window.dispatchEvent(new MessageEvent("message", { data, origin, source: window }));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data,
+        origin: "https://other.example",
+        source: frame.contentWindow,
+      }),
+    );
+    expect(post).not.toHaveBeenCalled();
+    window.dispatchEvent(
+      new MessageEvent("message", { data, origin, source: frame.contentWindow }),
+    );
+    expect(post).toHaveBeenCalledExactlyOnceWith(
+      {
+        jsonrpc: "2.0",
+        method: "ui/notifications/sandbox-bootstrap-shell",
+        params: { html: shell },
+      },
+      origin,
+    );
+    message(frame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: frame.src },
+    });
+    await settle(view);
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
+      origin,
+    );
+  });
+
   it("waits for scrolling to settle but admits frames even with a short idle deadline", async () => {
     onTestFinished(() => {
       vi.unstubAllGlobals();

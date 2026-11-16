@@ -103,6 +103,26 @@ it("opens a chat-authored draft after lazy loading without creating another draf
   expect(f.request.mock.calls.every(([method]) => method === "templates.drafts.read")).toBe(true);
 });
 
+it("keeps a pending review quiet without starting it before config is known", async () => {
+  const f = await fixture();
+  f.context.runtimeConfig.state.configSnapshot = null;
+  const { openTemplateCreator } = await import("./creator-owner.ts");
+  const target = {
+    agentId: "research",
+    draftId: "draft-request",
+    sessionKey: "agent:research:dashboard:source",
+  };
+  openTemplateCreator(f.context, target);
+  expect(toast).not.toHaveBeenCalled();
+  expect(f.owner.loading).toBe(false);
+  expect(f.request).not.toHaveBeenCalled();
+  f.context.runtimeConfig.state.lastError = "Configuration unavailable";
+  openTemplateCreator(f.context, target);
+  expect(toast.mock.calls[0]?.[0].message).toContain("Template review requires");
+  expect(f.owner.loading).toBe(false);
+  expect(f.request).not.toHaveBeenCalled();
+});
+
 it.each(["Labs", "role"])(
   "explains a chat review blocked by %s without touching its draft",
   async (reason) => {

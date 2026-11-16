@@ -4,7 +4,6 @@ import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-s
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -28,6 +27,7 @@ import {
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
+import { describeSessionToolDefinition } from "./session-tool-definition.js";
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
@@ -123,7 +123,7 @@ function changedPromptRoutePart(previous: unknown, current: string): SystemPromp
   return part ? `route:${part}` : "new";
 }
 
-type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
+type ToolDefinition = ReturnType<typeof describeSessionToolDefinition>;
 type PublicationListing = ToolDefinition &
   Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
 
@@ -144,14 +144,6 @@ type ToolSurfaceInput = {
   historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 };
-
-function describeTool(tool: AnyAgentTool): ToolDefinition {
-  // Published schemas are detached, frozen JSON; checkpointing must not copy them per session.
-  if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
-    retainOwnedTranscriptPayload(tool.parameters);
-  }
-  return { name: tool.name, description: tool.description, parameters: tool.parameters };
-}
 
 function resolvePromptHistoryId(params: {
   state: EmbeddedSessionPromptState;
@@ -319,7 +311,7 @@ export function prepareSessionPublicationToolListing(
       ? previous
       : {
           scope,
-          ...describeTool(current),
+          ...describeSessionToolDefinition(current),
           label: current.label,
           async: current.async,
           catalogMode: current.catalogMode,
@@ -384,7 +376,7 @@ export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentToo
   const built = new Set(tools.map((tool) => tool.name));
   const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
   if (changed) {
-    const current = tools.map(describeTool);
+    const current = tools.map(describeSessionToolDefinition);
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
@@ -436,28 +428,10 @@ export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | 
   return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
 
-/** Unsent preparation belongs to its attempt; an incapable route rebuilds the full prompt. */
-export function beginSessionSystemPrompt(params: {
-  state: EmbeddedSessionPromptState;
-  routeKey: string;
-  enabled: boolean;
-  getEntries: () => SessionEntry[];
-}): boolean {
-  params.state.pendingSystemPrompt = undefined;
-  params.state.historyBoundary = undefined;
-  if (params.enabled) {
-    return false;
-  }
-  params.state.systemPrompt = undefined;
-  params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params
-    .getEntries()
-    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
-  return (
-    previous?.type === "custom" &&
-    isRecord(previous.data) &&
-    previous.data.routeKey !== params.routeKey
-  );
+/** Unsent preparation belongs to its attempt. */
+export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): void {
+  state.pendingSystemPrompt = undefined;
+  state.historyBoundary = undefined;
 }
 
 function promptSections(text: string): Map<string, string> {
@@ -487,7 +461,19 @@ function promptDelta(previous: string, current: string): string[] {
   return sections;
 }
 
-/** Restore the admitted series; refreshed instructions append after its conversation prefix. */
+/**
+ * Restore the admitted series; refreshed instructions append after its conversation prefix.
+ *
+ * Every session pins one system prompt on every route and runtime. Later changes go out
+ * as appended `prompt-update` deltas: an in-history system message where the route
+ * accepts one, otherwise a user-role note. The series rebuilds only at these points:
+ * - `new`: the session's first request, or `/new` and `/reset` (a new session);
+ * - `history`: an explicit compaction or a transcript reset;
+ * - `model-change` and `route:*`: a model or provider switch, including its API, base
+ *   URL, system-message capability, harness or tool surface, or a change of the
+ *   session's selected person.
+ * The operator refresh is one of these: `/compact`, `/new` or a model switch.
+ */
 export function prepareSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
@@ -671,30 +657,6 @@ export async function persistSessionSystemPrompt(
   state.persistedUsageRanking = snapshot.usageRanking;
   state.pendingSystemPrompt = undefined;
   state.toolSurface = toolSurface;
-  state.pendingToolSurface = undefined;
-}
-
-/** Routes without the prompt series checkpoint the tool pin alone. */
-export async function persistSessionToolSurface(
-  state: EmbeddedSessionPromptState,
-  appendEntry: (customType: string, data: unknown) => unknown,
-): Promise<void> {
-  const surface = state.pendingToolSurface ?? state.toolSurface;
-  if (
-    !surface ||
-    (!state.pendingToolSurface && state.persistedUsageRanking === state.usageRanking?.snapshot)
-  ) {
-    return;
-  }
-  await appendEntry("openclaw.system-prompt", {
-    ...surface,
-    ...(state.usageRanking
-      ? { routeKey: state.usageRanking.routeKey, historyId: state.usageRanking.historyId }
-      : {}),
-    usageRanking: state.usageRanking?.snapshot,
-  });
-  state.persistedUsageRanking = state.usageRanking?.snapshot;
-  state.toolSurface = surface;
   state.pendingToolSurface = undefined;
 }
 

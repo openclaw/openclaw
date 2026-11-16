@@ -1,6 +1,7 @@
 import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -15,12 +16,12 @@ type ChannelsDeadLettersOptions = {
 function resolveScope(options: ChannelsDeadLettersOptions) {
   const channelId = options.channel?.trim();
   if (!channelId) {
-    throw new Error("--channel is required.");
+    throwExpectedCliError("--channel is required.");
   }
   // Only omission selects the default queue; an explicit blank selector must not change scope.
   const accountId = options.account?.trim() ?? "default";
   if (!accountId) {
-    throw new Error("--account must not be blank");
+    throwExpectedCliError("--account must not be blank");
   }
   return { channelId, accountId };
 }

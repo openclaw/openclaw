@@ -7,9 +7,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
-import { classifyWorktreeRemovalError, IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { classifyWorktreeRemovalError, ManagedWorktreeService } from "./service.js";
 import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 

@@ -77,7 +77,7 @@ describe("agent-created Template drafts", () => {
     await using prepared = await prepare();
     expect(prepared.items.find((item) => item.kind === "automation")).toMatchObject({
       label: "weekly",
-      detail: `0 9 * * 1 · UTC · ${enabled === false ? "Paused" : "Enabled"}`,
+      detail: `0 9 * * 1 · UTC · ${enabled === false ? "Disabled" : "Enabled"}`,
       automation: { enabled: enabled !== false },
       included: true,
     });
@@ -97,8 +97,8 @@ describe("agent-created Template drafts", () => {
 
     const choices = {
       name: "research-brief",
-      displayName: "Engineering Partner",
-      description: "A collaborative engineering partner.",
+      displayName: "  Engineering Partner  ",
+      description: " A collaborative engineering partner. ",
       excluded: [],
     };
     await using prepared = await prepareTemplateDraft({ ...target, choices });
@@ -109,6 +109,39 @@ describe("agent-created Template drafts", () => {
     expect(prepared.files.find((file) => file.path === "CLAW.md")?.content).toContain(
       "id: research-brief\n  name: Engineering Partner",
     );
+  });
+
+  it("keeps the CLAW.md agent name and description when the seeded description is untouched", async () => {
+    const manifestName = "macOS Follow-up Brief";
+    const manifestDescription = "Compare primary sources into a cited brief.";
+    const workspaceDir = tempDirs.make("template-draft-identity-");
+    const draft = await createTemplateDraft(workspaceDir);
+    const seeded = JSON.parse(await readFile(draft.path, "utf8"));
+    await writeFile(
+      draft.path,
+      JSON.stringify({
+        ...proposal,
+        description: seeded.description,
+        manifest: proposal.manifest.replace(
+          "id: research-brief\n",
+          `id: research-brief\n  name: ${manifestName}\n  description: ${manifestDescription}\n`,
+        ),
+      }),
+    );
+    const target = { workspaceDir, draftId: draft.draftId, publisher: "maker" };
+    const manifestOf = (prepared: { files: Array<{ path: string; content: string }> }) =>
+      prepared.files.find((file) => file.path === "CLAW.md")?.content ?? "";
+
+    await using initial = await prepareTemplateDraft(target);
+    expect(initial).toMatchObject({ displayName: manifestName, description: manifestDescription });
+    expect(manifestOf(initial)).toContain(
+      `name: ${manifestName}\n  description: ${manifestDescription}`,
+    );
+
+    const choices = { name: "research-brief", description: "", excluded: [] };
+    await using cleared = await prepareTemplateDraft({ ...target, choices });
+    expect(cleared.description).toBe("");
+    expect(manifestOf(cleared)).not.toContain(manifestDescription);
   });
 
   it("builds only the reviewed proposal, excluding the source workspace and private draft metadata", async () => {

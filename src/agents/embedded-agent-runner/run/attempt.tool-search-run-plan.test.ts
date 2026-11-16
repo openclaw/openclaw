@@ -105,7 +105,6 @@ async function plan(
         approvalReviewerDeviceId: undefined,
         channelId: undefined,
         trace: { traceId: "1234567890abcdef1234567890abcdef" },
-        loopDetection: undefined,
         onToolOutcome: undefined,
         allocateToolOutcomeOrdinal: undefined,
       },

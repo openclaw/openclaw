@@ -20,6 +20,7 @@ import {
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import { retirePublishedMemoryEmbeddingCacheRows } from "./manager-embedding-cache-retire.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
@@ -526,6 +527,15 @@ export function bindPostgresMemoryPublication(
           cacheSize = { ...cacheSize, size: cacheSize.size - removed };
         }
         return true;
+      });
+    }
+    if (command.type === "cache.retire") {
+      return write(() => {
+        const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+        if (cacheSize !== undefined) {
+          cacheSize = { ...cacheSize, size: cacheSize.size - page.removed };
+        }
+        return page.next ?? null;
       });
     }
     if (command.type === "cache.prune") {

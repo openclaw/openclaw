@@ -102,7 +102,7 @@ suite.define(() => {
         });
         await gateway.rejectDeferred("connect", {
           code: "UNAVAILABLE",
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          message: "protocol mismatch: OpenClaw updated; reload this page to continue",
           details: {
             code: "PROTOCOL_MISMATCH",
             gatewayBuildId: "pending-input-replacement-build",

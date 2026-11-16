@@ -269,7 +269,7 @@ describe("status text truncation", () => {
       phase: "retrying",
       message: input,
     });
-    expect(startupLabel(host)).toBe("Retrying…");
+    expect(startupLabel(host)).toBe("Retrying");
     emitEvent(host, "run-1", 2, "notice", {
       phase: "provider_policy",
       category: "cyber",
@@ -471,13 +471,8 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(card).toMatchObject({
       completed: true,
       live: true,
-      preview: {
-        kind: "browser-tab",
-        profile: "managed",
-        target: "host",
-        targetId: "tab-1",
-        title: "Example",
-      },
+      browserTab: { profile: "managed", target: "host", targetId: "tab-1" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -514,7 +509,7 @@ describe("app-tool-stream approval lifecycle", () => {
       completed: true,
       outputText: "CLI result",
       browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
-      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -917,7 +912,7 @@ it("shows a fallback attempt in the claw until same-run output resumes", () => {
     fallbackStepToModel: "example/backup",
     fallbackStepFinalOutcome: "next_fallback",
   });
-  expect(startupLabel(host)).toBe("Trying fallback model…");
+  expect(startupLabel(host)).toBe("Trying fallback model");
   emitEvent(host, "run-1", 12, "assistant", { text: "Recovered" });
   expect(startupLabel(host)).toBeUndefined();
 });

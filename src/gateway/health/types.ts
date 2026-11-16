@@ -1,5 +1,9 @@
 import type { Snapshot } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
+import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
 type ProtocolHealth = Snapshot["health"];
 type ProtocolPlugin = NonNullable<ProtocolHealth["plugins"]>;
@@ -43,3 +47,19 @@ export type HealthSummary = ProtocolHealth & {
   agents: AgentHealthSummary[];
   sessions: NonNullable<ProtocolHealth["sessions"]>;
 };
+
+export type ReadinessResult = {
+  ready: boolean;
+  coreReady: boolean;
+  failing: string[];
+  degraded?: string[];
+  suppressed?: string[];
+  uptimeMs: number;
+  eventLoop?: GatewayEventLoopHealth;
+  pluginReload?: GatewayPluginReloadStatus;
+  agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentDeletions?: readonly AgentDatabaseAdmissionRefusal[];
+  stateDatabase?: { reason: string };
+};
+
+export type ReadinessChecker = (childRuntime?: ChildRuntimeViability) => ReadinessResult;

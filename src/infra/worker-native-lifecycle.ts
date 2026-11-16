@@ -29,13 +29,14 @@ import {
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
-import type {
-  NativeWorkerReply,
-  NativeWorkerRuntime,
-  NativeWorkerResourceDescriptor,
-  NativeWorkerResourceConnection,
-  NativeWorkerTaskPorts,
-  RetainedNativeWorker,
+import {
+  NATIVE_WORKER_LIFETIMES_KEY,
+  type NativeWorkerReply,
+  type NativeWorkerRuntime,
+  type NativeWorkerResourceDescriptor,
+  type NativeWorkerResourceConnection,
+  type NativeWorkerTaskPorts,
+  type RetainedNativeWorker,
 } from "./worker-native-lifecycle.types.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
 
@@ -79,7 +80,7 @@ type NativeSource = RetainedNativeWorkerSource & {
 };
 
 const lifetime = resolveGlobalSingleton(
-  Symbol.for("openclaw.nativeWorkerLifetimes"),
+  NATIVE_WORKER_LIFETIMES_KEY,
   (): {
     nextId: number;
     sources: WeakMap<RuntimeWorkerGeneration, NativeSource>;
@@ -221,9 +222,6 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         }
       },
       close() {
-        if (handles.size) {
-          return Promise.reject(new Error("Native worker execution owners have not joined"));
-        }
         runtime.failure ??= new Error("Native worker lifetime owner is closing");
         materializeErrorStack(runtime.failure);
         terminateOwner();
@@ -322,6 +320,9 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (errors.length) {
             throw new AggregateError(errors, "Native worker execution owner cleanup failed");
           }
+          if (source.hasActiveWorkers) {
+            throw new Error("Native worker execution owners have not joined");
+          }
           source.closing = true;
           await source.runtime?.close();
           await source.brokerClose;
@@ -329,6 +330,10 @@ export function captureRetainedNativeWorkerSource(options?: {
           forgetNativeSource(source);
           owners.clear();
         } catch (error) {
+          // Refused settlement is retryable; actual native teardown remains terminal.
+          if (!source.closing) {
+            closingOwners = undefined;
+          }
           materializeErrorStack(error);
           throw error;
         }

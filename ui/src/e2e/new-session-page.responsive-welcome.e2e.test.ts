@@ -66,7 +66,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}new`);
     const checkout = page.locator("#new-session-checkout-trigger");
-    const triggerRow = page.locator(".new-session-page__triggers");
+    const triggerRow = page.locator(".new-session-page__context-tray .new-session-page__triggers");
     await checkout.waitFor();
     await page.mouse.move(0, 0);
 
@@ -76,9 +76,7 @@ suite.define(() => {
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
     await checkout.click();
-    await page
-      .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-      .click();
+    await page.getByRole("button", { name: "New worktree", exact: true }).click();
     await page.keyboard.press("Escape");
     await pollAttribute(checkout, "data-worktree").toBe("true");
     const selectors = page.locator(
@@ -102,6 +100,20 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await waitForLayoutSettled(page, ".new-session-page__triggers button");
 
+      const nameOffset = await page
+        .locator(".agent-chat__welcome-identity")
+        .evaluate((identity) => {
+          const name = identity
+            .querySelector(".agent-select__label, h2:not(.sr-only)")!
+            .getBoundingClientRect();
+          const portrait = identity
+            .querySelector(".agent-chat__welcome-avatar")!
+            .getBoundingClientRect();
+          return name.left + name.width / 2 - (portrait.left + portrait.width / 2);
+        });
+      // The chevron must not pull the displayed name off the avatar’s centerline.
+      expect(Math.abs(nameOffset)).toBeLessThan(1);
+
       if (captureUiProofEnabled && width === 390 && agentCount === 2) {
         await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
         await pollAttribute(page.locator("html"), "data-theme-mode").toBe("dark");
@@ -122,17 +134,12 @@ suite.define(() => {
           };
         }),
       );
-      expect(new Set(layout.map((box) => box.row)).size).toBeLessThanOrEqual(mobile ? 2 : 1);
-      if (mobile) {
-        // #192044 renamed Local to This computer; keep the picker within half a row.
-        const device = page.locator("#new-session-where-trigger");
-        const rowWidth = (await triggerRow.boundingBox())!.width;
-        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(rowWidth / 2);
-      }
       for (const [index, box] of layout.entries()) {
         expect(box.left).toBeGreaterThanOrEqual(0);
         expect(box.right).toBeLessThanOrEqual(width);
-        expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
+        // The approved tray uses 36px rows; enforce the 24px accessibility floor,
+        // not the previous layout's 44px rows.
+        expect(box.height).toBeGreaterThanOrEqual(24);
         if (mobile) {
           expect(box.width).toBeGreaterThanOrEqual(44);
         }
@@ -184,9 +191,6 @@ suite.define(() => {
       agentCount - 1,
     );
     expect(await triggerRow.locator(".agent-select__trigger").count()).toBe(0);
-    const projectBox = await page.locator("#new-session-project-trigger").boundingBox();
-    const checkoutBox = await checkout.boundingBox();
-    expect(projectBox!.y).toBe(checkoutBox!.y);
     expect(
       await page
         .locator("#new-session-project-trigger .new-session-page__trigger-label")

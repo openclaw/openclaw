@@ -316,7 +316,7 @@ it("unsupported corpus/project filters are explicit, mixed corpus is partial", a
   await f.save("Orchid note");
   const { provider } = await f.open();
   await expect(provider.search({ query: "Orchid", sources: ["sessions"] })).rejects.toThrow(
-    /transcripts/,
+    "Knowledge does not search chat history; use conversation-history tools.",
   );
   await expect(provider.search({ query: "Orchid", activeProjectKeys: ["x"] })).rejects.toThrow(
     /project/,

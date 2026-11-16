@@ -16,6 +16,7 @@ import {
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import { navigateToAgent } from "../agents/route-navigation.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { createModelProviderConfigActions } from "./config-actions.ts";
 import { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
@@ -650,6 +651,8 @@ export function createModelProviders(
       providerUsageFailed: data.providerUsageFailed,
       updatedAt: data.updatedAt,
       onOpenUsage: () => context.navigate("usage"),
+      onOpenAgent: (agentId: string) => navigateToAgent(context, agentId, null, "overview"),
+      basePath: context.basePath,
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,

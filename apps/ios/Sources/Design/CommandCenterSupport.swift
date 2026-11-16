@@ -193,7 +193,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         .font(OpenClawType.subheadSemiBold)
                 }
             } message: {
-                Text("This permanently deletes the session and its transcript.")
+                Text("This permanently deletes the session and its chat history.")
                     .font(OpenClawType.caption)
             }
     }

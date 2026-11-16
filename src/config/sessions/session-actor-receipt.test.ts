@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -25,8 +26,11 @@ import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-tu
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:v8")>();
-  return { ...actual, serialize: vi.fn(actual.serialize) };
+  const actual = await importOriginal<
+    typeof import("node:v8") & { default: typeof import("node:v8") }
+  >();
+  const overrides = { serialize: vi.fn(actual.serialize) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 // mock-isolation: The fixture owns its database lifetime without background maintenance.
@@ -406,11 +410,11 @@ it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) =
 });
 
 it.each(["append", "tool", "patch", "adopt"] as const)(
-  "bounds receipts against the exact preimage held by a %s command",
+  "bounds receipts against the resident or admitted preimage of a %s command",
   (phase) =>
     withActor(async (f) => {
       f.participant({ identity: { type: "agent", id: "peer" }, promptedAt: 1 });
-      const prompt = "synthetic instructions ".repeat(1600);
+      const prompt = "synthetic instructions ".repeat(12000);
       f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
       assert(f.target.database.kind === "file");
       const handle = createSessionActorReplica({
@@ -477,8 +481,17 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
                     }),
                   },
                 };
+        while (f.receipt() !== undefined) {
+          /* Drain preceding commands. */
+        }
         await f.prepare(selected);
         const outcome = f.mutate(selected);
+        let native: unknown;
+        while ((native = f.receipt()) !== undefined) {
+          if (isRecord(native) && native.kind === "native-commit" && isRecord(native.committed)) {
+            expect(serialize(native.committed.facts).byteLength).toBeLessThan(16 * 1024);
+          }
+        }
         assert(outcome.kind === "committed");
         if (mode !== "stale") {
           expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
