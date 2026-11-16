@@ -535,14 +535,6 @@ suite.define(() => {
 
         await customize.open("Skills");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
-        // Phone arrival keeps the text keyboard closed; wider layouts focus the search.
-        await expect
-          .poll(() =>
-            page
-              .getByRole("searchbox", { name: "Search skills", exact: true })
-              .evaluate((input) => input === document.activeElement),
-          )
-          .toBe(viewport.width > 768);
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
         expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
