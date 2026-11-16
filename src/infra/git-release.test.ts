@@ -95,6 +95,32 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(await fs.readFile(pending, "utf8")).toBe("old pending");
   });
 
+  it("resumes an interrupted rollback before the link moves", async () => {
+    const { stateDir, prefix } = await setup();
+    const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+    await publishGitRelease({ prefix, releaseRoot: good, trial: true });
+    const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
+    await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+    const db = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(db, { recursive: true });
+    await fs.writeFile(path.join(db, "blocker"), "");
+    await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+    const slot = gitReleaseSlot(prefix);
+    const target = await fs.readlink(slot);
+
+    startGateway(prefix);
+    startGateway(prefix);
+    // Restoration fails: the trial still names its release, so the next start retries.
+    expect(startGateway(prefix).status).not.toBe(0);
+    expect(await fs.readlink(slot)).toBe(target);
+    await fs.rm(db, { recursive: true });
+    const resumed = startGateway(prefix);
+
+    expect(resumed.stdout).toContain("old");
+    expect(await fs.readFile(db, "utf8")).toBe("old schema");
+    expect(await fs.readlink(slot)).not.toBe(target);
+  });
+
   it("stops counting once the trial release reports ready", async () => {
     const { prefix } = await setup();
     await publishGitRelease({

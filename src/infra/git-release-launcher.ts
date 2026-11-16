@@ -94,9 +94,7 @@ if (trial && counts) {
   if (fs.readlinkSync(slot) !== trial.target) {
     fs.rmSync(trialFile, { force: true });
   } else if (trial.attempts >= 2) {
-    const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
-    fs.symlinkSync(trial.previous, temporary);
-    fs.renameSync(temporary, slot);
+    // State first, link last: until the link moves, an interrupted rollback reruns here.
     retirePlans(path.dirname(prefix), trial.version);
     const suffix = ".pre-" + trial.version;
     const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
@@ -105,6 +103,9 @@ if (trial && counts) {
       files.push(config);
     }
     restoreState(files, suffix);
+    const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
+    fs.symlinkSync(trial.previous, temporary);
+    fs.renameSync(temporary, slot);
     fs.rmSync(trialFile, { force: true });
     console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
   } else {
