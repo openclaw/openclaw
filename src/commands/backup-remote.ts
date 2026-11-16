@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 import {
@@ -55,7 +56,7 @@ async function openBackupLocation(name: string, namespace?: string): Promise<Sto
   try {
     const probe = await location.probe();
     if (probe.state !== "ok") {
-      throw new Error(
+      throwExpectedCliError(
         probe.message ??
           `Storage location ${name}: ${probe.state}. Run \`openclaw storage test ${name}\`.`,
       );
@@ -148,7 +149,7 @@ export async function createOffsiteBackupArchive(
       stored.sizeBytes !== plaintextBytes ||
       stored.storedBytes !== uploaded.storedBytes
     ) {
-      throw new Error(
+      throwExpectedCliError(
         `Stored backup size could not be confirmed for ${opts.to}/${namespace}/${key}. Run \`openclaw storage test ${opts.to}\`.`,
       );
     }
@@ -255,7 +256,7 @@ async function withDownloadedBackup<T>(
 ): Promise<T> {
   const namespace = resolveBackupNamespace(opts.namespace);
   if (opts.archive !== "latest" && parseRemoteBackupTimestamp(opts.archive) === undefined) {
-    throw new Error(
+    throwExpectedCliError(
       "Expected a backup key from `openclaw backup list --from <location>` or latest.",
     );
   }
@@ -265,11 +266,11 @@ async function withDownloadedBackup<T>(
     const key =
       opts.archive === "latest" ? (await listBackupObjects(location))[0]?.key : opts.archive;
     if (!key) {
-      throw new Error(`No backups in ${opts.from}/${namespace}.`);
+      throwExpectedCliError(`No backups in ${opts.from}/${namespace}.`);
     }
     const body = await location.getObject(key);
     if (!body) {
-      throw new Error(`Backup ${key} was not found in ${opts.from}/${namespace}.`);
+      throwExpectedCliError(`Backup ${key} was not found in ${opts.from}/${namespace}.`);
     }
     scratch = await createBackupScratchDirectory(os.tmpdir());
     const archive = path.join(scratch.directory, "archive.tar.gz");

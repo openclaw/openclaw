@@ -5,7 +5,10 @@ import { json } from "node:stream/consumers";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { claimBackupNamespace } from "../../commands/backup-namespace.js";
-import type { OffsiteBackupResult } from "../../commands/backup-remote.js";
+import {
+  backupRemoteVerifyCommand,
+  type OffsiteBackupResult,
+} from "../../commands/backup-remote.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { createBackupScratchDirectory, finishBackupScratch } from "../../infra/backup-scratch.js";
 import * as deviceIdentity from "../../infra/device-identity-async.js";
@@ -269,13 +272,12 @@ describe("offsite backup CLI", () => {
       await closeOpenClawStateDatabaseAsync();
       expect((await fs.stat(resolveOpenClawStateSqlitePath())).isFile()).toBe(true);
       const localCopy = state.path("retained.tar.gz");
-      const unavailableMessage =
+      const noDirMsg =
         "Storage directory is unavailable. Reconnect the disk and check the configured path; storage init requires an existing directory.";
       const createLocal = () => run("backup", "create", "--to", "archive", "--output", localCopy);
-      await reject(createLocal(), unavailableMessage, {
-        kind: "archive",
-        namespace: "default-host",
-      });
+      const badKey = backupRemoteVerifyCommand(defaultRuntime, { from: "archive", archive: "x" });
+      await expect(badKey).rejects.toSatisfy(isExpectedCliError);
+      await reject(createLocal(), noDirMsg, { kind: "archive", namespace: "default-host" });
       await fs.mkdir(destination);
       await reject(createLocal(), "openclaw storage init archive", {
         kind: "archive",
@@ -312,13 +314,11 @@ describe("offsite backup CLI", () => {
         );
       };
       await writeClaim(foreignClaim);
-      const collisionMessage =
+      const collisionMsg =
         'Backup namespace "test-host" in archive belongs to another OpenClaw installation (test-host, device another-inst). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).';
-      await reject(
-        create("test-host", "--output", localCopy, "--keep-daily", "0"),
-        collisionMessage,
-        { namespace: "test-host" },
-      );
+      await reject(create("test-host", "--output", localCopy, "--keep-daily", "0"), collisionMsg, {
+        namespace: "test-host",
+      });
       await expectAbsent(localCopy);
       await expectListing(scratchRoot, []);
       expect(await fs.readdir(namespaceDir)).toContain(oldKey);
