@@ -13,7 +13,7 @@ export function startGatewayPageActivation(
     > & {
       readonly client: Pick<
         GatewayBrowserClient,
-        "needsWakeReconnect" | "needsReachabilityReconnect" | "gatewayUrl"
+        "needsWakeReconnect" | "needsReachabilityReconnect" | "probeOnWake" | "gatewayUrl"
       > | null;
     };
     connect: () => void;
@@ -133,7 +133,11 @@ export function startGatewayPageActivation(
       failedProbes = Math.min(failedProbes, 1);
       clearTimeout(probeTimer);
       probeTimer = undefined;
-      if (client && recoveryAllowed() && (forceQueuedRecovery || client.needsWakeReconnect)) {
+      if (
+        client &&
+        recoveryAllowed() &&
+        (forceQueuedRecovery || (!client.probeOnWake() && client.needsWakeReconnect))
+      ) {
         // Replacing the client retires Safari's ghost socket synchronously. A
         // socket close would depend on the suspended transport firing `close`.
         gateway.connect();

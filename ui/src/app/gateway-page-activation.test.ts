@@ -28,6 +28,7 @@ function setup(phase: ApplicationGatewayPhase, stale = true, hidden = false) {
     client: {
       needsWakeReconnect: stale,
       needsReachabilityReconnect: false,
+      probeOnWake: () => false,
       gatewayUrl: "ws://localhost",
     },
   };
@@ -168,6 +169,87 @@ function setupRecovery() {
   });
   return { snapshot, connect, fetchProbe, visibility, notify, dispose };
 }
+
+async function connectRecovery() {
+  // Without crypto.subtle the plan skips device identity and sends connect at once.
+  let requestId = 0;
+  vi.stubGlobal("crypto", { randomUUID: () => `wake-${++requestId}` });
+  const recovery = setupRecovery();
+  const socket = wsInstances[0]!;
+  socket.emitOpen();
+  socket.emitConnectChallenge({ nonce: "wake-challenge", ts: Date.now() });
+  await vi.advanceTimersByTimeAsync(0);
+  const request = JSON.parse(socket.sent.at(-1)!);
+  expect(request.method).toBe("connect");
+  socket.emitMessage({
+    type: "res",
+    id: request.id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      policy: { tickIntervalMs: 30_000 },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  recovery.snapshot.phase = "connected";
+  recovery.notify();
+  return { ...recovery, socket };
+}
+
+it.each(["visibility", "focus"])(
+  "probes a recently active open socket on %s and retires it promptly if silent",
+  async (trigger) => {
+    const { socket, visibility } = await connectRecovery();
+    if (trigger === "visibility") {
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    visibility.mockReturnValue("visible");
+    if (trigger === "visibility") {
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    window.dispatchEvent(new FocusEvent("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    const probes = socket.sent
+      .map((frame) => JSON.parse(frame))
+      .filter((frame) => frame.method === "health");
+    expect(probes).toHaveLength(1);
+    expect(probes[0].params).toEqual({ probe: false });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(socket.lastClose).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.lastClose).toEqual({ code: 4000, reason: "inbound silence probe timeout" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(wsInstances).toHaveLength(2);
+  },
+);
+
+it.each([1_000, 120_000])(
+  "keeps a healthy socket when its wake probe answers after %d ms hidden",
+  async (hiddenMs) => {
+    const { socket, visibility, connect } = await connectRecovery();
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(hiddenMs);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new FocusEvent("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    const probe = socket.sent
+      .map((frame) => JSON.parse(frame))
+      .find((frame) => frame.method === "health");
+    expect(probe).toBeDefined();
+    // Reply in the same millisecond as the probe, before the watchdog ticks.
+    socket.emitMessage({ type: "res", id: probe.id, ok: true, payload: {} });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.lastClose).toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+    expect(wsInstances).toHaveLength(1);
+  },
+);
 
 it.each([false, true])(
   "replaces a blackholed opening without an online event (HTTP initially live: %s)",
