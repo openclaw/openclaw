@@ -29,16 +29,17 @@ npx openclaw@latest
 ```
 
 On a fresh install, choose **Quick start** after a one-line pointer to the
-[security guide](/gateway/security). That is the only onboarding prompt when
-usable AI access is already available: OpenClaw
-finds an existing Claude Code or Codex CLI login or API key, verifies it with a
-real completion, saves the config, and opens the web dashboard.
+[security guide](/gateway/security). OpenClaw detects existing AI access, then
+asks you to choose a detected connection or a supported provider. Only the
+connection you select is tested with a real completion. If it fails, review the
+error and retry, choose another provider, or skip setup for now.
 
 Quick start then asks **Keep OpenClaw running in the background?** Yes installs
 a copy of the same OpenClaw version under `~/.openclaw` and runs the Gateway as a
 background service from it, so clearing the npx cache does not stop it. No keeps
 the Gateway in this terminal until you press **Ctrl+C**; your config stays
-saved. If no detected route works, onboarding opens manual provider setup.
+saved. If you skip provider setup, OpenClaw prepares the local baseline and exits
+without starting the Gateway or AI chat.
 Choose **Custom setup** to walk through all guided options instead.
 
 To keep the Gateway running in the background later, install the CLI below and
@@ -75,7 +76,7 @@ is ready. Run `openclaw` for the TUI or
   </Step>
   <Step title="Complete onboarding">
     The installer starts the guided onboarding wizard automatically. Choose
-    **Quick start** to reuse detected AI access and open the dashboard, or
+    **Quick start** to choose detected AI access or a provider and open the dashboard, or
     **Custom setup** for the full guided flow. Provider sign-in and optional
     setup can take longer. Return later with `openclaw configure` for
     additional settings. `openclaw onboard --classic` opens the classic

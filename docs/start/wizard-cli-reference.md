@@ -18,19 +18,22 @@ commands), see [`openclaw onboard`](/cli/onboard).
 Fresh local guided onboarding shows a one-line pointer to the
 [security guide](/gateway/security) and one choice: **Quick start** or
 **Custom setup**. Quick start records the security acknowledgment; Custom setup
-shows the full security note and asks for confirmation. Quick start reuses
-detected AI access, verifies it, offers to keep OpenClaw running in the
+shows the full security note and asks for confirmation. Both lanes detect
+existing AI access and ask you to choose a detected connection or a supported
+provider. Only the selected connection is tested with a real completion. If it
+fails, review the error and retry, select another provider, or skip setup for now.
+After a successful connection, Quick start offers to keep OpenClaw running in the
 background (default yes), saves config, and opens the web dashboard. It uses agent name
-`main` and full access, leaves telemetry consent unset, and skips route
-confirmation, memory import, and app recommendations. If you decline the
+`main` and full access, leaves telemetry consent unset, and skips memory import
+and app recommendations. If you decline the
 background service, the Gateway runs in the foreground: **Ctrl+C** stops it
 without removing config, and `openclaw gateway install` enables background
 operation later.
 
-Custom setup keeps the full guided prompts. If Quick start finds no usable
-route, it continues with manual provider setup and the remaining guided steps,
-including Gateway service installation. The Quick start defaults for agent name
-(`main`), access mode (full access), and telemetry (consent unset) stay.
+Custom setup keeps the full guided prompts. Choosing a provider manually in
+Quick start keeps its defaults for agent name (`main`), access mode (full access),
+and telemetry (consent unset). Choosing **Skip for now** prepares the local
+baseline and exits without starting the Gateway or AI chat.
 See [Guided default](/start/wizard#guided-default).
 
 The classic wizard (`openclaw onboard --classic`) in local mode walks you through:
