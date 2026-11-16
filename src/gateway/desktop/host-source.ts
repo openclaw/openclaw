@@ -221,7 +221,11 @@ async function inspectConfiguredHostDesktop(
     return unavailable(nonRfbError(port), "not-rfb");
   }
   if (probe.kind === "auth-rejected") {
-    return unavailable(unavailableError(port, platform), "unsupported", "VncAuth");
+    return unavailable(
+      "VNC authentication failed; check desktop.host.passwordFile and retry",
+      "unsupported",
+      "VncAuth",
+    );
   }
   const auth = classifyRfbSecurity(probe.securityTypes);
   const security =
@@ -316,7 +320,7 @@ export function createHostDesktopSource(params: {
       throw new Error(configuredPassword.error);
     }
     if (probe.kind === "auth-rejected") {
-      throw new Error(unavailableError(port, platform));
+      throw new Error("VNC authentication failed; check desktop.host.passwordFile and retry");
     }
     return await acquireAttached(probe, configuredPassword.password);
   };
