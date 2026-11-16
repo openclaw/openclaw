@@ -33,9 +33,15 @@ export function admit(report, exitCode, kind, original = false) {
         assert.match(
           errors,
           kind === "wire"
-            ? /MatrixError: \[403\] Cannot send to room/
+            ? /^Error: expected M_FORBIDDEN: MatrixError: \[403\] Cannot se… \{ …\(7\) \} to match object \{ retryable: false, …\(1\) \}/
             : /MatrixError: \[403\] M_FORBIDDEN/,
         );
+        if (kind === "wire") {
+          assert.match(
+            errors,
+            /\/extensions\/matrix\/src\/matrix\/sdk\/transport\.test\.ts:154:35/,
+          );
+        }
         assert.doesNotMatch(errors, /Cannot find|Failed to load|timed out|Timeout|ECONNREFUSED/i);
       }
     }
@@ -173,24 +179,33 @@ function main() {
     assert.equal(run("install", "pnpm", ["install", "--frozen-lockfile"], 900), 0);
     summary.outcome = "test-failure";
     const matrix = "extensions/matrix/src/matrix/";
-    // Run 43790032640 executed all 97 SDK cases successfully (71.404 s wrapper).
-    // Only their legitimate repeated parameterized title tripped the old gate.
-    // The retained JSON was admitted locally with this corrected gate; do not rerun.
-    summary.retainedSdk = {
-      runId: 43790032640,
-      jobId: 133046118335,
-      tooling: "a95800834f9353eb801eebff4a8b274ecb9f1d99",
-      passed: 97,
-      durationMs: 71404,
+    // Re-admit retained reports without executing completed product stages.
+    const retain = (directory, tooling, stages) => {
+      const previous = JSON.parse(
+        fs.readFileSync(path.join(root, directory, "summary.json"), "utf8"),
+      );
+      assert.equal(previous.candidate, candidate);
+      assert.equal(previous.baseline, baseline);
+      assert.equal(previous.tooling, tooling);
+      assert.equal(previous.node, process.version);
+      for (const [name, kind, old = false] of stages) {
+        const stage = previous.stages.find((entry) => entry.name === name);
+        assert.ok(stage && !stage.signal && !stage.error, "missing or incomplete retained stage");
+        const bytes = fs.readFileSync(path.join(root, directory, name + ".json"));
+        const cases = admit(JSON.parse(bytes), stage.exitCode, kind, old);
+        fs.writeFileSync(path.join(output, name + ".json"), bytes);
+        summary.stages.push({ ...stage, cases, retainedFrom: directory, reportHash: hash(bytes) });
+      }
+      return previous;
     };
-    test("candidate-transport", matrix + "sdk/transport.test.ts", "transport");
-    test(
-      "candidate-authority",
-      matrix + "sdk/transport.authority-integration.test.ts",
-      "authority",
-    );
+    retain("retained-sdk", "a95800834f9353eb801eebff4a8b274ecb9f1d99", [["candidate-sdk", "sdk"]]);
+    const previous = retain("retained-candidate", "a4dec2e6e0c3f006aeaf24a195bfc514da4de2eb", [
+      ["candidate-transport", "transport"],
+      ["candidate-authority", "authority"],
+      ["candidate-owner", "owner"],
+      ["original-wire", "wire", true],
+    ]);
     const ownerFile = "src/agents/tools/message-tool-execution.test.ts";
-    test("candidate-owner", ownerFile, "owner", ownerName);
     // Original modules in otherwise identical candidate dependencies/tests.
     // This is an original-module differential, NOT a full baseline checkout run.
     for (const file of [
@@ -208,11 +223,12 @@ function main() {
       file,
       sha256: hash(fs.readFileSync(path.join(source, file))),
     }));
+    assert.deepEqual(summary.modules, previous.modules);
+    assert.deepEqual(summary.testHashes, previous.testHashes);
     save();
     // New process-local compiler cache after changing the original modules.
     env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = path.join(isolated, "original-cache");
     fs.mkdirSync(env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
-    test("original-wire", matrix + "sdk/transport.test.ts", "wire", wireName, true);
     test("original-owner", ownerFile, "owner", ownerName, true);
     summary.outcome = "causal-original-module-red-candidate-green";
   } catch (error) {

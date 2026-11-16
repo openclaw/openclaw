@@ -9,7 +9,7 @@ const report = (kind, original) => ({
         status: original && (kind === "wire" ? !flag : flag) ? "failed" : "passed",
         failureMessages: [
           kind === "wire"
-            ? "AssertionError: expected M_FORBIDDEN: MatrixError: [403] Cannot send to room to match { retryable: false }"
+            ? "Error: expected M_FORBIDDEN: MatrixError: [403] Cannot se… { …(7) } to match object { retryable: false, …(1) }\n    at /source/extensions/matrix/src/matrix/sdk/transport.test.ts:154:35"
             : "MatrixError: [403] M_FORBIDDEN",
         ],
       })),
@@ -78,3 +78,20 @@ test("accepts repeated parameterized titles in complete SDK suite", () => {
 });
 test("rejects partial pinned suite", () =>
   assert.throws(() => admit(report("wire", false), 0, "sdk")));
+
+for (const { name, mutate } of [
+  { name: "wrong assertion", mutate: (value) => value.replace(":154:35", ":155:35") },
+  { name: "wrong error", mutate: (value) => value.replace("M_FORBIDDEN", "M_UNKNOWN") },
+  {
+    name: "wrong expectation",
+    mutate: (value) => value.replace("retryable: false", "retryable: true"),
+  },
+  { name: "unrelated truncation", mutate: (value) => value.replace("Cannot se…", "Cannot re…") },
+]) {
+  test("wire rejects " + name, () => {
+    const value = report("wire", true);
+    const failed = value.testResults[0].assertionResults[0];
+    failed.failureMessages = failed.failureMessages.map(mutate);
+    assert.throws(() => admit(value, 1, "wire", true));
+  });
+}

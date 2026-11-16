@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: goal24-focused-proof
@@ -130,6 +131,20 @@ jobs:
           ref: 937f77cb20ded2e041f5ea876200d01b449d0329
           path: baseline
           persist-credentials: false
+      - name: Recover completed SDK evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: goal24-matrix-43790032640
+          run-id: 43790032640
+          github-token: ${{ github.token }}
+          path: retained-sdk
+      - name: Recover completed candidate and original-wire evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: goal24-matrix-43790694571
+          run-id: 43790694571
+          github-token: ${{ github.token }}
+          path: retained-candidate
       - name: Install pinned Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -140,7 +155,7 @@ jobs:
           package-manager-file: source/package.json
           node-version: 24.22.1
           cache-mode: off
-      - name: Measure candidate suites and original-module differential
+      - name: Re-admit retained evidence and execute only original-owner differential
         run: node tooling/scripts/goal24-matrix-proof.mjs
       - name: Preserve synthetic causal evidence
         if: always()
