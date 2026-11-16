@@ -55,10 +55,12 @@ In the built-in runtime, each steered user input gets its own delivered answer i
 
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
 
-If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+The built-in runtime keeps accepted steering queued until the next runtime boundary, even when a tool runs longer than two minutes. There is no implicit transcript-delivery deadline. Cancellation, turn closure, and handoff still settle the waiting input through the receiving run's lifecycle.
+
+If a caller explicitly requests a delivery deadline and the runtime proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
 
 Rejection logs preserve the owner’s `reason` and, when known, a closed
-`runtimeReason`. `tool_boundary_timeout` means a tool was still active at the
+`runtimeReason`. `tool_boundary_timeout` means a tool was still active at an explicit
 transcript deadline; `transcript_commit_timeout` means the receipt was missing
 without an active tool. Other codes distinguish turn end, handoff, closed
 steering, source cancellation, unavailable compaction state, unsupported

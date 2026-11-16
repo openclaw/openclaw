@@ -278,6 +278,7 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
                   text,
                   {
                     ...options,
+                    deliveryTimeoutMs: 120_000,
                     onQueueAccepted: (accepted) => {
                       options?.onQueueAccepted?.(accepted);
                       if (accepted) {
