@@ -1,7 +1,9 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { Show, createEffect, createSignal, onSettled } from "solid-js";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { createPortalsSidebarSource } from "../../lib/portals-sidebar-source.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { rememberSectionLocation, sectionLocation } from "../../lib/section-navigation.ts";
 import type { PortalsModel } from "./portals-state.ts";
 
@@ -54,4 +56,31 @@ export function PortalsPageAddress(props: {
     open: (id) => props.model.openPortal(id),
   });
   return null;
+}
+
+/** Beside the Portals sidebar the page is the open portal: its title, then its port and
+    description. Otherwise, and until a portal opens, the section's own header. */
+export function PortalsPageHeader(props: { portal: PortalSummary | undefined }) {
+  return (
+    <Show
+      when={props.portal}
+      fallback={
+        <HubPageHeader active="portals" wide docsUrl="https://docs.openclaw.ai/gateway/portals" />
+      }
+    >
+      {(portal) => (
+        <HubPageHeader
+          active="portals"
+          wide
+          title={portal().title}
+          subtitle={[
+            t("portalsPage.portLabel", { port: String(portal().port) }),
+            portal().description,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        />
+      )}
+    </Show>
+  );
 }

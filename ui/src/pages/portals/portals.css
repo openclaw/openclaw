@@ -34,6 +34,50 @@ main.content:where(.content--portals-page) .portals-empty {
   flex: 1 1 auto;
 }
 
+/* Beside the Portals sidebar the open portal is one card filling the rest of the page: its
+   address and controls on top, then the frame inset with concentric corners. */
+/* Like the side-by-side layout, a short window scrolls rather than squeezing the frame below
+   its own floor. */
+.portals-opened {
+  --portals-opened-inset: 8px;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+}
+
+.portals-opened .portals-preview {
+  flex: 1 0 auto;
+  gap: var(--portals-opened-inset);
+  padding: var(--portals-opened-inset);
+  border-radius: var(--composer-radius);
+}
+
+.portals-opened .portals-preview__header {
+  padding: 0;
+  border-bottom: 0;
+}
+
+.portals-opened .portals-preview__url {
+  min-height: 30px;
+  padding-inline: 12px;
+  border-radius: var(--radius-full);
+  background: var(--surface-hover);
+}
+
+.portals-opened .portals-preview__error {
+  margin: 0;
+}
+
+.portals-opened .portals-preview__frame,
+.portals-opened .portals-preview__notice,
+.portals-opened .portals-preview__state {
+  border-radius: max(calc(var(--composer-radius) - var(--portals-opened-inset)), 0px);
+}
+
+.portals-opened .portals-preview__frame {
+  border: 1px solid var(--border);
+}
+
 .portals-rail {
   min-width: 0;
   padding: 4px;

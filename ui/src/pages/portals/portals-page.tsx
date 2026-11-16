@@ -16,7 +16,6 @@ import {
 } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
-import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -27,9 +26,10 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { sectionSidebarShown } from "../../lib/section-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
-import { PortalsPageAddress } from "./portals-page-address.tsx";
+import { PortalsPageAddress, PortalsPageHeader } from "./portals-page-address.tsx";
 import { PendingEnvironment, PortalProbeLoading } from "./portals-read-states.tsx";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
 import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
@@ -533,6 +533,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
       throw new Error(current.environmentFailure.message);
     }
   });
+  const sidebarLists = () => sectionSidebarShown("portals");
   const selectedPortal = createMemo(() =>
     state().portals.find(
       (portal) =>
@@ -548,14 +549,12 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
           fallback={
             <ShellLayoutBoundary traits={{ portalsPage: true }}>
               <PortalsPageAddress model={props.model} selectedPortal={selectedPortal} />
-              <HubPageHeader
-                active="portals"
-                wide
-                docsUrl="https://docs.openclaw.ai/gateway/portals"
-              />
+              {/* Beside the Portals sidebar the page is the open portal; its list is the way
+                  between portals. */}
+              <PortalsPageHeader portal={sidebarLists() ? selectedPortal() : undefined} />
               <PortalReadiness model={props.model} readReady={readReady}>
                 <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
-                  <section class="portals-layout">
+                  <section class={sidebarLists() ? "portals-opened" : "portals-layout"}>
                     <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>
                       <For each={state().portals} keyed={(portal) => portal.id}>
                         {(portal) => (
