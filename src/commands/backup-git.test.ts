@@ -279,8 +279,8 @@ describe("Git backup command agent selection", () => {
   });
 
   it("resolves every current agent and its configured root for an all-scope backup", async () => {
-    const mainAgentDir = path.resolve("/tmp/external-main");
-    const opsAgentDir = path.resolve("/tmp/external-ops");
+    const mainAgentDir = path.resolve("external-main");
+    const opsAgentDir = path.resolve("external-ops");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
         entries: {
