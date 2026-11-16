@@ -74,7 +74,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/gateway.continuation-skip-bootstrap.integration.test.ts",
   "src/gateway/github-personal-publication-outcomes.test.ts",
   "src/gateway/github-personal-publication.lifecycle.test.ts",
-  "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-pr-attribution.test.ts",
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",
@@ -118,7 +117,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-user-identity.test.ts",
   "src/gateway/health/collector.channel-discovery.test.ts",
   "src/gateway/health/collector.deadline.test.ts",
-  "src/gateway/health/collector.session-store-path.test.ts",
   "src/gateway/health/collector.session-store-reuse.test.ts",
   "src/gateway/health/delivery-queue-cache.test.ts",
   "src/gateway/http-auth-utils.openclaw-id-tunnel.test.ts",
@@ -257,7 +255,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection.startup.test.ts",
   "src/gateway/server/ws-connection/authenticated-request-dispatch.policy-close.test.ts",
   "src/gateway/server/ws-connection/authenticated-request-dispatch.storage.test.ts",
-  "src/gateway/server/ws-connection/connect-device-pairing.test.ts",
   "src/gateway/server/ws-connection/connect-hello.setup-completion.test.ts",
   "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
   "src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts",
@@ -385,7 +382,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/tool-resolution.test.ts",
   "src/gateway/tools-invoke-authorization.test.ts",
   "src/gateway/tools-invoke-http.abort.test.ts",
-  "src/gateway/tools-invoke-http.test.ts",
   "src/gateway/trusted-proxy-git-coauthor.admission.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
   "src/gateway/update-recovery-cleanup.authority.integration.test.ts",
@@ -624,6 +620,8 @@ export const gatewayClientTestExclude = [
 export const gatewayServerSerialTestFiles = [
   "src/gateway/server.sessions.fixture-lifecycle.test.ts",
   "src/gateway/server.startup-fixture-lifetime.test.ts",
+  "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+  "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
 ];
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.

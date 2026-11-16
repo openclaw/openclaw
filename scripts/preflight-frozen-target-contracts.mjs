@@ -72,6 +72,7 @@ const shellOwners = {
     [`${prefix}AGENT_BUNDLE_MCP_MODE`, `${prefix}AGENT_BUNDLE_MCP_CLIENT_PATH`],
   ],
   plugins: ["plugin_harness_capabilities", [`${prefix}PLUGIN_UNINSTALL_MODE`]],
+  "update-channel-switch": ["update_channel_switch_contract", [`${prefix}UPDATE_MAIN_TAG`]],
   "upgrade-survivor": [
     ["upgrade_survivor_capabilities", "upgrade_skill_library_contract"],
     [
@@ -477,6 +478,10 @@ async function planWorkflowAdmission(input) {
   if (consumers.has("upgrade-survivor")) {
     sourcePaths.add("src/config/skill-library-tool-split-migration.ts");
     sourcePaths.add("src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts");
+  }
+  if (consumers.has("update-channel-switch")) {
+    sourcePaths.add("src/cli/update-cli/update-command-target.ts");
+    sourcePaths.add("src/infra/update-global.ts");
   }
   if (allow) {
     for (const consumer of consumers) {
@@ -1005,6 +1010,10 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       sources.selected.readText(
         "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts",
       );
+    }
+    if (consumer === "update-channel-switch") {
+      required(sources.selected, "src/cli/update-cli/update-command-target.ts");
+      required(sources.selected, "src/infra/update-global.ts");
     }
     const owner = shellOwners[consumer === "kitchen-sink-plugin" ? "plugins" : consumer];
     if (owner) {

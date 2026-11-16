@@ -13,13 +13,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as fileLocks from "../infra/file-lock.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import * as writeAdmissions from "../state/openclaw-agent-write-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import {
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
@@ -146,6 +152,37 @@ afterEach(async () => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
+  it("publishes and reads catalogs without synchronous main-thread filesystem calls", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      agentDir = state.agentDir();
+      mkdirSync(agentDir, { recursive: true });
+      registerResolvedAgentDir({ agentId: "main", agentDir, env: state.env });
+      const owner = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(state.env),
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: state.configPath,
+          role: "gateway",
+          processNamespace: readGatewayLockProcessNamespace(),
+        },
+      });
+      try {
+        await replaceCatalogs({ zai: catalogContents("zai") });
+        await pluginModelCatalogExecution.loadPersistedPluginModelCatalogs(agentDir);
+        using filesystem = observeMainThreadFs();
+        await replaceCatalogs({ zai: catalogContents("zai", "synthetic-key") });
+        expect(
+          await pluginModelCatalogExecution.loadPersistedPluginModelCatalogs(agentDir),
+        ).toEqual([{ pluginId: "zai", contents: catalogContents("zai", "synthetic-key") }]);
+        expect(filesystem.stacks()).toEqual([]);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync();
+        owner.release();
+      }
+    });
+  });
+
   it("refuses malformed UTF-8 catalogs and continues importing healthy owners", () => {
     const source = writeLegacy(catalogContents("broken", "synthetic-key"), "broken");
     const corrupted = Buffer.from(catalogContents("broken", "synthetic-key"));
@@ -241,38 +278,32 @@ describe("SQLite-backed plugin model catalogs", () => {
     expectCatalogs({ zai: catalogContents("zai") });
   });
 
-  it("waits for an uncommitted catalog publication before skipping a clean catalog", async () => {
+  it("waits for an admitted catalog publication before skipping a clean catalog", async () => {
     const removedKey = "synthetic-uncommitted-credential";
     await replaceCatalogs({ zai: catalogContents("zai") });
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    const database = new DatabaseSync(databasePath);
     const started = createDeferredCore();
     const finish = createDeferredCore();
     const waiting = createDeferredCore();
-    const publishing = pluginModelCatalogExecution.withPluginModelCatalogPublicationLocks(
-      [databasePath],
-      async () => {
-        // Model a writer that validated auth before logout but has not committed its catalog.
-        database.exec("BEGIN IMMEDIATE");
-        try {
-          updateCatalog(database, catalogContents("zai", removedKey));
-          started.resolve();
-          await finish.promise;
-          database.exec("COMMIT");
-        } finally {
-          if (database.isTransaction) {
-            database.exec("ROLLBACK");
-          }
-        }
+    const publishing = pluginModelCatalogExecution.withPluginModelCatalogWorker(
+      { agentId: resolveAuthProfileDatabaseOwnerId(agentDir), path: databasePath },
+      false,
+      async (scope) => {
+        started.resolve();
+        await finish.promise;
+        await scope.execute({
+          type: "catalog.replace",
+          input: { planned: [["zai", catalogContents("zai", removedKey)]], env: process.env },
+        });
       },
     );
     await started.promise;
-    const lock = fileLocks.withFileLock;
+    const admission = writeAdmissions.runOpenClawAgentWriteAdmissions;
     const locking = vi
-      .spyOn(fileLocks, "withFileLock")
-      .mockImplementation((pathname, options, run) => {
+      .spyOn(writeAdmissions, "runOpenClawAgentWriteAdmissions")
+      .mockImplementation((...args) => {
         waiting.resolve();
-        return lock(pathname, options, run);
+        return admission(...args);
       });
     const removing = removePersistedPluginModelCatalogCredentials({
       candidates: [{ agentId: resolveAuthProfileDatabaseOwnerId(agentDir), databasePath }],
@@ -293,7 +324,6 @@ describe("SQLite-backed plugin model catalogs", () => {
       finish.resolve();
       await Promise.allSettled([publishing, removing]);
       locking.mockRestore();
-      database.close();
     }
   });
 

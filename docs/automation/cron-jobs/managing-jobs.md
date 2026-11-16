@@ -290,7 +290,7 @@ To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
-    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) use a built-in retry schedule. Permanent errors disable the job immediately.
+    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to three times after 30 seconds, 60 seconds, and 5 minutes. Watchdog stalls and caller aborts use the same bounded policy; rate-limited model fallback exhaustion retains its provider classification. Explicit user cancellation, revoked authentication, invalid configuration, and missing targets do not retry. Permanent failures and exhausted retries disable the job with a visible notice. Gateway restart/drain interruptions retain the [restart recovery policy](/automation/cron-jobs/how-it-works#task-reconciliation).
 
     **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
 
