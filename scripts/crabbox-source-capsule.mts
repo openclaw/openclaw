@@ -891,7 +891,7 @@ export function prepareCrabboxSourceCapsule(options: {
     // Ask the same policy owner about absent source using empty tracked placeholders.
     // These never enter the source tree. Separate overlapping historical file paths
     // (a -> a/b) so no probe follows a source symlink or shadows another deletion.
-    const groups: Set<string>[] = [new Set()];
+    const groups: Set<string>[] = [];
     for (const path of [...owned].toSorted()) {
       if (frozen.has(path) || directories.has(path)) {
         continue;
@@ -910,7 +910,7 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       group.add(path);
     }
-    const emptyBlob = git(directory, ["hash-object", "-w", "--stdin"], privateEnv, "").trim();
+    let emptyBlob: string | undefined;
     const unstageDeletions = (paths: Iterable<string>) =>
       git(
         directory,
@@ -918,10 +918,13 @@ export function prepareCrabboxSourceCapsule(options: {
         privateEnv,
         [...paths].map((path) => `0 ${"0".repeat(40)}\t${path}\0`).join(""),
       );
-    unstageDeletions(groups.flatMap((group) => [...group]));
+    if (groups.length) {
+      unstageDeletions(groups.flatMap((group) => [...group]));
+    }
     const deleted: string[] = [];
     let selected: Set<string> | undefined;
     for (const group of groups) {
+      emptyBlob ??= git(directory, ["hash-object", "-w", "--stdin"], privateEnv, "").trim();
       for (const path of group) {
         mkdirSync(dirname(join(directory, path)), { recursive: true });
         writeFileSync(join(directory, path), "", { flag: "wx" });
@@ -948,9 +951,7 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       selected = current;
     }
-    if (!selected) {
-      throw new Error("source capsule selection is missing");
-    }
+    selected ??= selectSource();
     for (const path of tracked.keys()) {
       if (frozen.has(path) && !selected.has(path)) {
         throw new Error(
