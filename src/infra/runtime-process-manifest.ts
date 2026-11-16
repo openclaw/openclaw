@@ -1,22 +1,18 @@
 // Keep subprocess metadata independent of executable launcher declarations.
 export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
-  function runtimeProcessEntrypoint(
-    modulePath: string,
-    distModulePath = modulePath,
+  const runtimeProcessEntrypoint = (
+    path: string,
+    distModulePath = path,
     extension = ".js",
     sourceExtension?: ".ts" | ".mts" | ".mjs",
-  ) {
-    return {
+  ) =>
+    ({
       currentModuleUrl,
-      sourceModulePath: `src/${modulePath}${sourceExtension ?? ".ts"}`,
+      sourceModulePath: `src/${path}${sourceExtension ?? ".ts"}`,
       sourceExtension,
-      sourceWorkerName: modulePath.startsWith("infra/")
-        ? modulePath.slice("infra/".length)
-        : `../${modulePath}`,
+      sourceWorkerName: path.startsWith("infra/") ? path.slice("infra/".length) : `../${path}`,
       distWorkerPath: `${distModulePath}${extension}`,
-    } as const;
-  }
-
+    }) as const;
   const loaderFreeEntrypoint = (modulePath: string) =>
     runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
 
@@ -177,6 +173,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
     immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
     updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
+    updateConfigProjection: runtimeProcessEntrypoint("infra/update-config-projection.worker"),
     updateAutomaticCleanup: runtimeProcessEntrypoint("infra/update-automatic-cleanup.worker"),
     updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
     doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),

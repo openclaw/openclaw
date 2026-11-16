@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+A newer Doctor recognizes retained update captures whose state directory used
+an older Windows short-path spelling. Scope comparison resolves the recorded
+state directory and configuration parent without changing sealed capture bytes
+or following the final configuration entry. A different selected state directory
+or configuration entry remains rejected.
+
 On Gateway startup, an older supported SQLite schema is upgraded by copy and
 swap: Doctor runs on a private copy, then a durable plan publishes the changed
 files. Chain failure retains the generic rebuild and pins the previous files;
