@@ -3271,7 +3271,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "pr-gate-base",
     ],
   ],
-  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-git-owner"]],
   [".github/actions/setup-android-toolchain/action.yml", [workflowPlanning]],
   [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
   [".github/workflows/docs-agent.yml", ["docs-agent-workflow"]],
@@ -3647,12 +3647,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
-    [
-      "ci-git-owner",
-      "ci-linux-git",
-      "ci-platform-checkout",
-      "src/scripts/ci-changed-scope.git-owner.test.ts",
-    ],
+    ["ci-git-owner", "ci-platform-checkout", "src/scripts/ci-changed-scope.git-owner.test.ts"],
   ],
   [/^\.github\/actions\/publish-generated-pr\//u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
@@ -4331,7 +4326,6 @@ function resolveToolingTestTargets(
   ) {
     return resolveToolingTestOwnerTargets(
       "ci-git-owner",
-      "ci-linux-git",
       "ci-platform-checkout",
       "openclaw-performance-workflow",
       "openclaw-performance-git-lifecycle",

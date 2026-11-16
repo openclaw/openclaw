@@ -72,7 +72,7 @@ it.each([
     }),
   ).toBe(true);
   if (!file.startsWith("scripts/lib/ci-")) {
-    expect(targets).toContain("test/scripts/ci-workflow-cost.test.ts");
+    expect(targets).toContain("test/scripts/eager-import-closure.test.ts");
   }
 });
 
@@ -122,7 +122,7 @@ describe("selected boundary setup sharing", () => {
   const tooling = () => ({
     ...toolingShard(
       "tooling",
-      ["test/scripts/ci-workflow-cost.test.ts"],
+      ["test/scripts/eager-import-closure.test.ts"],
       40,
       { runner },
       { runner, env: { OPENCLAW_VITEST_MAX_WORKERS: "2" } },
@@ -276,7 +276,6 @@ function targetOwner(shards: ReturnType<typeof createChangedNodeTestShards>, tar
 
 const gitToolingTargets = [
   "ci-git-owner",
-  "ci-linux-git",
   "ci-platform-checkout",
   "openclaw-performance-workflow",
   "openclaw-performance-git-lifecycle",
@@ -625,11 +624,10 @@ describe("CI changed Node test plan", () => {
         "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
         "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",
         "src/infra/update-managed-service-handoff-foreground.test.ts",
-        "src/node-host/node-worker-supervisor.recovery.test.ts",
         "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
-        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-git-owner.test.ts",
         "test/scripts/full-release-validation-at-sha.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-merge-admission.test.ts",
@@ -1513,7 +1511,7 @@ describe("CI changed Node test plan", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "keeps the complete Git tooling family in canonical serial owners (%s)",
     (runnerBackend) => {
-      const changedPaths = ["test/scripts/ci-linux-git.test.ts"];
+      const changedPaths = ["test/scripts/ci-git-owner.test.ts"];
       const expectedTargets = [...gitToolingTargets, "test/scripts/test-projects.test.ts"];
       const shards = createChangedNodeTestShards(changedPaths, { runnerBackend });
       expect(shards).not.toBeNull();
@@ -1604,9 +1602,9 @@ describe("CI changed Node test plan", () => {
       expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     );
     for (const other of ["src/deleted.ts", "tsconfig.json"]) {
-      const mixed = createChangedNodeTestShards(["test/scripts/ci-linux-git.test.ts", other]);
+      const mixed = createChangedNodeTestShards(["test/scripts/ci-git-owner.test.ts", other]);
       expect(mixed).not.toBeNull();
-      expect(selectedFiles(mixed)).toContain("test/scripts/ci-linux-git.test.ts");
+      expect(selectedFiles(mixed)).toContain("test/scripts/ci-git-owner.test.ts");
       expect(selectedFiles(mixed)).not.toContain(
         "extensions/acpx/src/runtime-advertised-model.process.test.ts",
       );
