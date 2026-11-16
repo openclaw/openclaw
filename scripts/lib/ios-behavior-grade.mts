@@ -100,17 +100,22 @@ function visibleShift(before: Edges, after: Edges, visibleBottom: number) {
   return undefined;
 }
 
-/** A small row move held no longer than this, then restored, is a layout pass, not a drawn frame. */
-const SPIKE_MS = 100;
+/**
+ * A small row move reported no longer than this, then restored, is a layout pass, not a drawn
+ * frame. The probe logs only on change, so a reported position "lasts" until the next change.
+ */
+const SPIKE_MS = 250;
 /** Larger moves always count: the real ~80 ms flash to top in `stream-follow` moves thousands. */
 const SPIKE_PT = 50;
 
 /**
- * Probe frames where a row sits up to `SPIKE_PT` away from the position it had just before and has
- * again right after, held for at most `SPIKE_MS`, replaced by that position. The `List` transcript
- * (#192232) reports such intermediate cell layouts while a reply grows: in one `stream-turn` run
- * the probe read 29 moves of 5–37 pt that reverted 17–82 ms later, while the reply's top edge sat
- * on the same pixel row in all 502 native frames of the simulator recording of that stream.
+ * Probe frames where a row sits up to `SPIKE_PT` away from the position it had just before, and
+ * within `SPIKE_MS` is back there or gone, replaced by that position. The `List` transcript
+ * (#192232) reports such intermediate cell layouts while a reply grows. Checked against native
+ * frames of the simulator recordings, the reply's top edge stayed on one pixel row through all of
+ * them: 29 moves of 5–37 pt reverting after 17–82 ms in one stream, a 7 pt move reported for
+ * 221 ms in another, and a 6 pt move in the live bubble's last frame 28 ms before it unmounted.
+ * Accepted edge case: a real move of at most 50 pt that reverts within 250 ms is not counted.
  */
 export function dropLayoutSpikes(frames: ProbeFrame[]) {
   let dropped = 0;
@@ -127,8 +132,7 @@ export function dropLayoutSpikes(frames: ProbeFrame[]) {
       const next = after.f[key];
       if (
         prior &&
-        next &&
-        Math.abs(prior[0] - next[0]) <= STILL_PT &&
+        (next === undefined || Math.abs(prior[0] - next[0]) <= STILL_PT) &&
         Math.abs(edges[0] - prior[0]) > STILL_PT &&
         Math.abs(edges[0] - prior[0]) <= SPIKE_PT
       ) {

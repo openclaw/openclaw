@@ -167,5 +167,16 @@ describe("layout spikes", () => {
       frame(97, { live: 700 }),
     ]);
     expect(flash).toMatchObject({ layoutSpikes: 0, maxDriftPt: 580 });
+    // The live bubble's last frame moves, then the bubble unmounts and its final row lands back.
+    const handoff = motion(
+      [
+        frame(0, { live: 212 }),
+        frame(17, { live: 218 }),
+        frame(45, {}),
+        frame(250, { final: 212 }),
+      ],
+      { aliases: { final: "live" } },
+    );
+    expect(handoff).toMatchObject({ maxDriftPt: 0, layoutSpikes: 1 });
   });
 });

@@ -545,7 +545,7 @@ function screenGates(read: { png: string; lines: number }[], when: string): Resu
       minTextLines: judged.length > 0 ? Math.min(...judged.map((entry) => entry.lines)) : undefined,
     },
     gates: {
-      "transcript on screen to judge (setup)": judged.length >= 3,
+      [`transcript on screen to judge ${when} (setup)`]: judged.length >= 3,
       [`transcript text on screen ${when}`]: blank.length === 0,
     },
   };
@@ -884,18 +884,23 @@ function blankMatrix(): Record<string, Case> {
             tap(/chat-send-message/);
             const sent: ScreenSample[] = [];
             const until = Date.now() + 90_000;
-            while (Date.now() < until) {
+            let replied = false;
+            while (!replied && Date.now() < until) {
               sent.push(...(await watchScreen("send", 2000)));
-              if (ui(["snapshot-ui", "--style", "minimal"]).stdout.includes("Done in")) {
-                break;
-              }
+              // The run footer is static text, which the snapshot's target list leaves out. The
+              // app shows it only for a run it watched from its own send.
+              replied =
+                axFrame((node) => node.AXLabel?.startsWith("Done in") ?? false) !== undefined;
             }
-            sent.push(...(await watchScreen("done", 3000)));
+            if (replied) {
+              sent.push(...(await watchScreen("done", 3000)));
+            }
             // A new chat has no text before the send; judge it from the send on.
             const judged = length === "short" ? sent : [...focused, ...sent];
             const result = screenGates(readScreens(judged), "from focus to after the reply");
             result.gates[`keyboard ${keyboard} at send (setup)`] =
               keyboardAtSend === (keyboard === "up");
+            result.gates["reply finished (setup)"] = replied;
             return result;
           },
         };
@@ -936,8 +941,8 @@ try {
         readScreens(await watchScreen(`${name}-end`, 1500)),
         "at the end",
       );
-      result.gates["transcript text on screen at the end"] =
-        settled.gates["transcript text on screen at the end"] ?? false;
+      // Both gates: without a transcript to read, the text gate passes on zero samples.
+      Object.assign(result.gates, settled.gates);
       result.metrics.endTextLines = settled.metrics.minTextLines;
       video.kill("SIGINT");
       if (video.exitCode === null) {
