@@ -50,8 +50,8 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         ).scheduledLanes.map((entry) => entry.name),
       ),
     ).toEqual([
-      "published-upgrade-survivor-2026.9.3",
       "published-upgrade-survivor-2026.9.3-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.3",
       "published-upgrade-survivor-2026.9.4-custom-plugin-siblings",
     ]);
   });
@@ -170,11 +170,19 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     });
     expect(groups.length).toBeGreaterThan(32);
     expect(groups[0]?.timeout_minutes).toBe(75);
-    expect(groups.slice(0, 3).map((group) => group.docker_lanes)).toEqual([
+    expect(groups.slice(0, 2).map((group) => group.docker_lanes)).toEqual([
       "update-restart-auth",
       "plugin-update",
-      "root-managed-vps-upgrade",
     ]);
+    const rootIndex = groups.findIndex(
+      (group) => group.docker_lanes === "root-managed-vps-upgrade",
+    );
+    expect(rootIndex).toBeGreaterThan(2);
+    expect(
+      groups
+        .slice(2, rootIndex)
+        .every((group) => group.published_upgrade_survivor_scenarios === "legacy-operator-state"),
+    ).toBe(true);
     expect([
       ...new Set(
         groups
@@ -337,4 +345,43 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       }
     });
   });
+});
+
+it("prioritizes long families and preserves every CLI row and the remaining order", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const groups: ReturnType<typeof planTargetedDockerLaneGroups> = JSON.parse(
+    execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LANES:
+          "doctor-switch published-upgrade-survivor update-first-hop-compat-2026.9.2 update-first-hop-compat-2026.9.1 root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
+        GROUP_SIZE: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
+      },
+    }),
+  );
+  const lane = (name: string) => ({ docker_lanes: name, label: name });
+  const scenario = (version: string, name: string, index: number) => ({
+    docker_lanes: "published-upgrade-survivor",
+    label: `published-upgrade-survivor-${version}-scenarios-${index}`,
+    published_upgrade_survivor_baselines: `openclaw@${version}`,
+    published_upgrade_survivor_scenarios: name,
+    timeout_minutes: 90,
+  });
+  expect(groups).toEqual([
+    lane("update-first-hop-compat-2026.9.2"),
+    lane("update-first-hop-compat-2026.9.1"),
+    { ...lane("update-restart-auth"), timeout_minutes: 75 },
+    lane("plugin-update"),
+    scenario("2026.9.4", "legacy-operator-state", 2),
+    scenario("2026.9.3", "legacy-operator-state", 2),
+    lane("root-managed-vps-upgrade"),
+    lane("doctor-switch"),
+    scenario("2026.9.4", "base", 1),
+    scenario("2026.9.3", "base", 1),
+    lane("plugins-offline"),
+  ]);
 });
