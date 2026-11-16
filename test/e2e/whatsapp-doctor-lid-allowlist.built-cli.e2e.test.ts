@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
-import { openBaileysLidMapping } from "../helpers/baileys-lid-mapping.test-support.js";
+import { expect, it, vi } from "vitest";
 import { createOpenClawTestInstance } from "../helpers/openclaw-test-instance.js";
 
 it("migrates persisted LID policies through Doctor without changing stored identities", async () => {
@@ -27,8 +26,11 @@ it("migrates persisted LID policies through Doctor without changing stored ident
   });
   try {
     const authDir = path.join(instance.stateDir, "credentials", "whatsapp", "work");
-    const mappings = await openBaileysLidMapping(authDir);
-    await mappings.storeLIDPNMappings([{ lid: "777@lid", pn: "15551230000@s.whatsapp.net" }]);
+    const { useMultiFileAuthState } = await vi.importActual<typeof import("baileys")>("baileys");
+    const { state } = await useMultiFileAuthState(authDir);
+    await state.keys.set({
+      "lid-mapping": { "777_reverse": "15551230000", "15551230000": "777" },
+    });
     const reversePath = path.join(authDir, "lid-mapping-777_reverse.json");
     const storedMapping = await fs.readFile(reversePath, "utf8");
     const result = await instance.cli([
@@ -52,8 +54,10 @@ it("migrates persisted LID policies through Doctor without changing stored ident
       },
     });
     expect(await fs.readFile(reversePath, "utf8")).toBe(storedMapping);
-    const reloadedMappings = await openBaileysLidMapping(authDir);
-    expect(await reloadedMappings.getPNForLID("777@lid")).toContain("15551230000:");
+    const reloaded = await useMultiFileAuthState(authDir);
+    expect(await reloaded.state.keys.get("lid-mapping", ["777_reverse"])).toEqual({
+      "777_reverse": "15551230000",
+    });
     const validation = await instance.cli(["config", "validate"]);
     expect(validation, validation.stdout + validation.stderr).toMatchObject({
       code: 0,

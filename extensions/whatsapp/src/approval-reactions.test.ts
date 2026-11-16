@@ -2,12 +2,12 @@
 import { cleanMessage } from "baileys";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { openBaileysLidMapping } from "../../../test/helpers/baileys-lid-mapping.test-support.js";
 import {
   maybeResolveWhatsAppApprovalReaction,
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+import { openBaileysLidMapping } from "./lid-mapping.test-support.js";
 import * as whatsappRuntime from "./runtime.js";
 import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "./targets-runtime.js";
 

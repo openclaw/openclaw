@@ -2,9 +2,9 @@
 import { cleanMessage } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { openBaileysLidMapping } from "../../../test/helpers/baileys-lid-mapping.test-support.js";
 import { whatsappInboundLog } from "./auto-reply/loggers.js";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
+import { openBaileysLidMapping } from "./lid-mapping.test-support.js";
 import {
   buildNotifyMessageUpsert,
   getRecordChannelActivityMock,
@@ -114,8 +114,8 @@ describe("web monitor inbox", () => {
     await mappings.storeLIDPNMappings([{ lid: "888@lid", pn: "15551230000@s.whatsapp.net" }]);
     expect(await mappings.getPNForLID("777@lid")).toContain("15551230000:");
     const { onMessage, listener, sock } = await openInboxMonitor();
-    sock.signalRepository.lidMapping.getPNForLID.mockImplementation((jid) =>
-      mappings.getPNForLID(jid),
+    sock.signalRepository.lidMapping.getPNForLID.mockImplementation(
+      mappings.getPNForLID.bind(mappings),
     );
     try {
       emitText(sock, "reassigned-lid", "777@lid", "hello");
