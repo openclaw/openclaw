@@ -58,6 +58,24 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     await fs.writeFile(`${db}-wal`, "new wal");
     await fs.writeFile(`${db}-shm`, "new shm");
     await fs.writeFile(`${db}.seal`, "new seal");
+    // It crashed partway through its durable plan: one file added, one still pending.
+    const plan = path.join(stateDir, ".upgrade-2.0.0-1-1");
+    const added = path.join(stateDir, "state", "added.sqlite");
+    const pending = path.join(stateDir, "state", "pending.sqlite");
+    await fs.mkdir(plan);
+    await fs.writeFile(added, "new only");
+    await fs.writeFile(pending, "old pending");
+    await fs.writeFile(path.join(plan, "pending.next"), "new pending");
+    await fs.writeFile(
+      path.join(plan, "plan.json"),
+      JSON.stringify({
+        appVersion: "2.0.0",
+        ops: [
+          { kind: "add", live: added, next: path.join(plan, "added.next") },
+          { kind: "replace", live: pending, next: path.join(plan, "pending.next") },
+        ],
+      }),
+    );
 
     expect(startGateway(prefix).status).not.toBe(0);
     expect(startGateway(prefix).status).not.toBe(0);
@@ -71,6 +89,10 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     await expect(fs.access(`${db}-shm`)).rejects.toThrow();
     await expect(fs.access(`${db}.seal`)).rejects.toThrow();
     await expect(fs.access(path.join(prefix, "releases", GIT_RELEASE_TRIAL))).rejects.toThrow();
+    // The previous release finds no plan to finish and none of the trial's files.
+    await expect(fs.access(plan)).rejects.toThrow();
+    await expect(fs.access(added)).rejects.toThrow();
+    expect(await fs.readFile(pending, "utf8")).toBe("old pending");
   });
 
   it("stops counting once the trial release reports ready", async () => {
@@ -135,14 +157,39 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
   });
 
-  it("keeps a checkout without an owning Gateway service on the in-place runner", async () => {
-    const { stateDir } = await setup();
+  it("converts a checkout only when its service can be redirected to the launcher", async () => {
+    const servicePlan = await import("../cli/update-cli/update-command-service-plan.js");
+    const { gatewayServiceOwnsGitInstall } =
+      await import("../cli/update-cli/update-command-git.js");
+    const { stateDir, prefix } = await setup();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const checkout = await release(prefix, "1.0.0", "");
+    const service = (entry: string | null, sealed = false) =>
+      vi.spyOn(servicePlan, "readGatewayServiceStateForUpdate").mockResolvedValue({
+        installed: entry !== null,
+        loadState: { status: entry ? "loaded" : "not-loaded" },
+        running: entry !== null,
+        env: {},
+        command: entry ? { programArguments: [process.execPath, entry, "gateway"] } : null,
+        runtime: { status: entry ? "running" : "stopped" },
+        ...(sealed ? { definitionMutationCapability: { kind: "sealed", reason: "symlink" } } : {}),
+      } as Awaited<ReturnType<typeof servicePlan.readGatewayServiceStateForUpdate>>);
     try {
-      // Nothing would start through the release link, so the next start would run the old commit.
-      expect(usesGitReleases(false, false)).toBe(false);
-      expect(usesGitReleases(false, true)).toBe(true);
+      const entry = path.join(checkout, "dist", "index.js");
+      // Run by hand: nothing would start through the release link.
+      service(null);
+      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(false);
+      service(entry);
+      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(true);
+      // A sealed definition keeps starting the checkout, so the switch would never serve.
+      service(entry, true);
+      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(false);
+      // Once the unit names the launcher, switches need no definition write.
+      await publishGitRelease({ prefix, releaseRoot: checkout, trial: false });
+      service(await writeGitReleaseLauncher(prefix), true);
+      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(true);
     } finally {
+      vi.restoreAllMocks();
       vi.unstubAllEnvs();
     }
   });

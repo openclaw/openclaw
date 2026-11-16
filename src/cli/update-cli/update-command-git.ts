@@ -653,8 +653,9 @@ export async function updateGitInstall(params: {
 }
 
 /**
- * Whether an installed Gateway service starts this checkout or its release link. Only
- * then can a release switch reach the next start; a checkout run by hand updates in place.
+ * Whether a release switch reaches the next Gateway start: the installed service already
+ * starts the release link, or it starts this checkout and its definition can be redirected
+ * to the launcher. Otherwise the checkout updates in place.
  */
 export async function gatewayServiceOwnsGitInstall(root: string, timeoutMs?: number) {
   try {
@@ -663,12 +664,13 @@ export async function gatewayServiceOwnsGitInstall(root: string, timeoutMs?: num
       process.env,
       timeoutMs,
     );
-    for (const candidate of [root, gitReleaseSlot(resolveGitReleasePrefix())]) {
-      const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: candidate, state });
-      if (verdict.kind === "owned") {
-        return true;
-      }
+    const slot = gitReleaseSlot(resolveGitReleasePrefix());
+    const release = await inspectManagedGatewayServiceBeforeUpdate({ root: slot, state });
+    if (release.kind === "owned") {
+      return true;
     }
+    const checkout = await inspectManagedGatewayServiceBeforeUpdate({ root, state });
+    return checkout.kind === "owned" && checkout.refreshDefinition;
   } catch {
     // An unreadable service keeps the in-place runner, which needs no service.
   }

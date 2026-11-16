@@ -64,6 +64,28 @@ function restoreState(files, suffix) {
   }
 }
 
+// A trial that crashed mid-upgrade leaves its durable plan ("<stateDir>/.upgrade-<version>-*",
+// owned by src/state/state-upgrade.ts). Retire it before restoring, or the previous release
+// would finish it on start: undo the files it added, and the suffix restore covers the rest.
+function retirePlans(stateDir, version) {
+  for (const entry of fs.readdirSync(stateDir)) {
+    if (!entry.startsWith(".upgrade-" + version + "-")) {
+      continue;
+    }
+    const dir = path.join(stateDir, entry);
+    let plan;
+    try {
+      plan = JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
+    } catch {}
+    for (const op of plan?.ops ?? []) {
+      if (op.kind === "add" && op.next && !fs.existsSync(op.next)) {
+        fs.rmSync(op.live, { force: true });
+      }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 let trial;
 try {
   trial = JSON.parse(fs.readFileSync(trialFile, "utf8"));
@@ -75,6 +97,7 @@ if (trial && counts) {
     const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
     fs.symlinkSync(trial.previous, temporary);
     fs.renameSync(temporary, slot);
+    retirePlans(path.dirname(prefix), trial.version);
     const suffix = ".pre-" + trial.version;
     const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
     const config = process.env.OPENCLAW_CONFIG_PATH;
