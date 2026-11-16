@@ -17,6 +17,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-pat
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js";
 import { resolveConfigIncludes } from "../config/includes.js";
+import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
@@ -175,10 +176,9 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
 function readUpgradeConfig(configPath: string): OpenClawConfig {
   try {
     // Doctor owns validation and migration; path resolvers tolerate legacy shapes.
-    return resolveConfigIncludes(
-      JSON5.parse(fs.readFileSync(configPath, "utf8")),
-      configPath,
-    ) as OpenClawConfig;
+    return coerceConfig(
+      resolveConfigIncludes(JSON5.parse(fs.readFileSync(configPath, "utf8")), configPath),
+    );
   } catch {
     return {};
   }
