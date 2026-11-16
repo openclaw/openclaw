@@ -111,7 +111,7 @@ Shared flags work in either position, so `openclaw migrate --no-auth-credentials
   <Accordion title="Backups">
     Apply creates and verifies an OpenClaw backup before applying the migration. If no local OpenClaw state exists yet, the backup step is skipped and the migration continues. To skip a backup when state exists, pass both `--no-backup` and `--force`.
 
-    `openclaw migrate` writes the archive where `openclaw backup create` does: the current directory, or the `--backup-output` path. Memory imports from the Control UI or Gateway, and migrations started during onboarding, write it to your home directory.
+    `openclaw migrate` writes the archive where `openclaw backup create` does: the current directory, or the `--backup-output` path. Memory imports from the Control UI or Gateway, and migrations started during onboarding, write it to your home directory, or to the current directory when your home directory is itself backed up (for example, when it is an agent workspace).
 
   </Accordion>
   <Accordion title="Conflicts">

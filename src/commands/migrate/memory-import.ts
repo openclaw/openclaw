@@ -12,7 +12,7 @@ import type {
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runMigrationApply } from "./apply.js";
-import { buildMigrationContext, resolveUnattendedMigrationBackupOutput } from "./context.js";
+import { buildMigrationContext } from "./context.js";
 
 const MEMORY_ITEM_KIND = "memory";
 const silentRuntime: RuntimeEnv = {
@@ -125,7 +125,7 @@ export async function applyProviderMemoryImport(params: {
       itemIds: params.itemIds,
       overwrite: params.overwrite,
       preflightPlan: params.preflightPlan,
-      backupOutput: resolveUnattendedMigrationBackupOutput(),
+      preferHomeBackupOutput: true,
       allowPartialResult: true,
     },
   });

@@ -385,6 +385,19 @@ describe("backup commands", () => {
     }),
   );
 
+  it.each([false, true])(
+    "writes a home-preferred archive to home unless home is a backed-up workspace (%s)",
+    backupCase(async (workspaceIsHome) => {
+      await writeWorkspaceBackupConfig(workspaceIsHome ? home : await prepareWorkspace());
+      const cwd = path.join(fixtureRoot, "gateway-cwd");
+      await fs.mkdir(cwd);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const result = await create({ preferHomeOutput: true });
+      expect(path.dirname(result.archivePath)).toBe(workspaceIsHome ? cwd : home);
+      await fs.rm(result.archivePath, { force: true });
+    }),
+  );
+
   it(
     "handles invalid syntax according to backup scope",
     backupCase(async () => {

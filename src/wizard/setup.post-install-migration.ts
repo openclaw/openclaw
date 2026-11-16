@@ -162,15 +162,12 @@ export async function offerPostInstallMigrations(
         let disposingPreparation = false;
         let resultRetained = false;
         try {
-          const [
-            { migrateDefaultCommand },
-            { createMigrationLogger, resolveUnattendedMigrationBackupOutput },
-            { resolveStateDir },
-          ] = await Promise.all([
-            import("../commands/migrate.js"),
-            import("../commands/migrate/context.js"),
-            import("../config/paths.js"),
-          ]);
+          const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
+            await Promise.all([
+              import("../commands/migrate.js"),
+              import("../commands/migrate/context.js"),
+              import("../config/paths.js"),
+            ]);
           const runCommand = async (provider: MigrationProviderPlugin) => {
             let preparation: Awaited<
               ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>
@@ -190,7 +187,7 @@ export async function offerPostInstallMigrations(
                   configOverride: nextConfig,
                   configPatchMode: "return",
                   suppressPlanLog: true,
-                  backupOutput: resolveUnattendedMigrationBackupOutput(),
+                  preferHomeBackupOutput: true,
                 },
                 provider,
               );
