@@ -508,7 +508,7 @@ async function authorizeGatewayConnectCore(
   if (ingressAttribution?.kind === "openclaw-id-tunnel") {
     return await authorizeOpenClawIdTunnel(
       ingressAttribution.peerKey,
-      authSurface === "ws-control-ui",
+      authSurface === "ws-control-ui" || authSurface === "ws",
     );
   }
 
