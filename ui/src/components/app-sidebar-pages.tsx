@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   parseSidebarEntry,
@@ -9,7 +9,12 @@ import {
   USERS_SECTION_PLUGIN_PAGES,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { dashboardAuthor, dashboardsFilter } from "../lib/dashboards-filter.ts";
+import {
+  DASHBOARD_UPDATED_GROUP_LABELS,
+  dashboardAuthor,
+  dashboardsFilter,
+  dashboardUpdatedGroup,
+} from "../lib/dashboards-filter.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -22,6 +27,7 @@ import {
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { SidebarListGroup } from "./sidebar-list-group.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -162,16 +168,90 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
     const fallbackAgentId = resolveSessionNavigationAgentId(app);
     const agents = app.agents.state.agentsList?.agents ?? [];
     return new Map(
-      filteredDashboards().map((row) => [
-        row.key,
-        dashboardAuthor(row, fallbackAgentId, agents).label,
-      ]),
+      filteredDashboards().map((row) => [row.key, dashboardAuthor(row, fallbackAgentId, agents)]),
     );
   });
+  // The header's grouping, as the gallery groups: by when each was updated, or by author.
+  const groups = createMemo(() => {
+    const group = dashboardsFilter().group;
+    if (group === "none") {
+      return undefined;
+    }
+    const selfId = app.gateway.snapshot.selfUser?.id;
+    const byKey = new Map<string, { key: string; label: string; rows: SidebarRecentSession[] }>();
+    for (const row of dashboardRows()) {
+      const author = authors().get(row.key);
+      const bucket = group === "updated" ? dashboardUpdatedGroup(row.updatedAt ?? undefined) : null;
+      const key = bucket ?? author?.id ?? "";
+      const label = bucket
+        ? t(DASHBOARD_UPDATED_GROUP_LABELS[bucket])
+        : author?.id === selfId
+          ? t("dashboardsPage.you")
+          : (author?.label ?? "");
+      const known = byKey.get(key);
+      if (known) {
+        known.rows.push(row);
+      } else {
+        byKey.set(key, { key, label, rows: [row] });
+      }
+    }
+    const entries = [...byKey.values()];
+    // Dates read newest first whatever the order; authors keep the order of their first row.
+    return group === "updated"
+      ? entries.toSorted(
+          (left, right) =>
+            Object.keys(DASHBOARD_UPDATED_GROUP_LABELS).indexOf(left.key) -
+            Object.keys(DASHBOARD_UPDATED_GROUP_LABELS).indexOf(right.key),
+        )
+      : entries;
+  });
+  const [closedGroups, setClosedGroups] = createSignal<ReadonlySet<string>>(new Set());
   const byline = (row: SidebarRecentSession) => {
-    const author = authors().get(row.key);
+    // A row grouped by its author leaves the author to the group heading.
+    const author =
+      dashboardsFilter().group === "author" ? undefined : authors().get(row.key)?.label;
     const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : undefined;
     return [author, updated].filter(Boolean).join(" · ") || undefined;
+  };
+  const Row = (entry: { row: SidebarRecentSession }) => {
+    const row = entry.row;
+    const key = serializeSidebarEntry({ type: "session", key: row.key });
+    // Allocate once per row; the session row owns its reactive fields.
+    const content = props.host.renderPinnedSidebarSession(
+      () => row,
+      () => byline(row),
+    );
+    return (
+      <div class="sidebar-pages__entry">
+        <div
+          class="sidebar-zone-entry"
+          data-sidebar-entry={key}
+          // Remember where the row went, so returning to Dashboards in this tab reopens it.
+          onClick={(event) => {
+            const link = event
+              .composedPath()
+              .find((target): target is HTMLAnchorElement => target instanceof HTMLAnchorElement);
+            // The row handles the click first, so only plain clicks count here.
+            const plain =
+              event.button === 0 &&
+              !event.metaKey &&
+              !event.ctrlKey &&
+              !event.shiftKey &&
+              !event.altKey;
+            if (link && plain) {
+              const url = new URL(link.href);
+              rememberSectionLocation(app.gateway, "dashboards", {
+                route: resolveSessionPreferredFace(row),
+                options: { pathname: url.pathname, search: url.search },
+              });
+            }
+          }}
+        >
+          {content}
+        </div>
+        <PinToggle host={props.host} entry={key} />
+      </div>
+    );
   };
   return (
     <nav
@@ -180,49 +260,30 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
       onDragOver={(event) => props.host.sessionOrganizer.handleSessionListDragOver(event)}
       onDrop={(event) => props.host.sessionOrganizer.handleSessionListDrop(event)}
     >
-      <For each={dashboardRows()}>
-        {(row) => {
-          const key = serializeSidebarEntry({ type: "session", key: row.key });
-          // Allocate once per row; the session row owns its reactive fields.
-          const content = props.host.renderPinnedSidebarSession(
-            () => row,
-            () => byline(row),
-          );
-          return (
-            <div class="sidebar-pages__entry">
-              <div
-                class="sidebar-zone-entry"
-                data-sidebar-entry={key}
-                // Remember where the row went, so returning to Dashboards in this tab reopens it.
-                onClick={(event) => {
-                  const link = event
-                    .composedPath()
-                    .find(
-                      (target): target is HTMLAnchorElement => target instanceof HTMLAnchorElement,
-                    );
-                  // The row handles the click first, so only plain clicks count here.
-                  const plain =
-                    event.button === 0 &&
-                    !event.metaKey &&
-                    !event.ctrlKey &&
-                    !event.shiftKey &&
-                    !event.altKey;
-                  if (link && plain) {
-                    const url = new URL(link.href);
-                    rememberSectionLocation(app.gateway, "dashboards", {
-                      route: resolveSessionPreferredFace(row),
-                      options: { pathname: url.pathname, search: url.search },
-                    });
-                  }
-                }}
+      <Show
+        when={groups()}
+        fallback={<For each={dashboardRows()}>{(row) => <Row row={row} />}</For>}
+      >
+        {(list) => (
+          <For each={list()}>
+            {(group) => (
+              <SidebarListGroup
+                label={group.label}
+                open={!closedGroups().has(group.key)}
+                onToggle={() =>
+                  setClosedGroups((closed) =>
+                    closed.has(group.key)
+                      ? new Set([...closed].filter((key) => key !== group.key))
+                      : new Set([...closed, group.key]),
+                  )
+                }
               >
-                {content}
-              </div>
-              <PinToggle host={props.host} entry={key} />
-            </div>
-          );
-        }}
-      </For>
+                <For each={group.rows}>{(row) => <Row row={row} />}</For>
+              </SidebarListGroup>
+            )}
+          </For>
+        )}
+      </Show>
       <Show when={dashboards()?.error}>{(error) => <span role="alert">{error()}</span>}</Show>
       <Show when={dashboards()?.result?.hasMore}>
         <button

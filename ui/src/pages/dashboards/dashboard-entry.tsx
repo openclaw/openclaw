@@ -3,7 +3,11 @@ import { Show, createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
-import { dashboardAuthor } from "../../lib/dashboards-filter.ts";
+import {
+  DASHBOARD_UPDATED_GROUP_LABELS,
+  dashboardAuthor,
+  dashboardUpdatedGroup,
+} from "../../lib/dashboards-filter.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -24,12 +28,6 @@ export type DashboardRow = SessionsListResult["sessions"][number];
 
 type DashboardGroup = { key: string; label?: JSX.Element; rows: DashboardRow[] };
 
-function startOfDay(time: number) {
-  const date = new Date(time);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-}
-
 export function dashboardGroups(
   data: DashboardsRouteData,
   rows: DashboardRow[],
@@ -37,21 +35,11 @@ export function dashboardGroups(
   selfId: string | undefined,
 ): DashboardGroup[] {
   if (group === "updated") {
-    const today = startOfDay(Date.now());
-    const week = today - 6 * 24 * 60 * 60 * 1000;
-    const bucket = (row: DashboardRow) =>
-      (row.updatedAt ?? 0) >= today ? "today" : (row.updatedAt ?? 0) >= week ? "week" : "earlier";
     return (["today", "week", "earlier"] as const)
       .map((key) => ({
         key,
-        label: t(
-          key === "today"
-            ? "dashboardsPage.groupToday"
-            : key === "week"
-              ? "dashboardsPage.groupThisWeek"
-              : "dashboardsPage.groupEarlier",
-        ),
-        rows: rows.filter((row) => bucket(row) === key),
+        label: t(DASHBOARD_UPDATED_GROUP_LABELS[key]),
+        rows: rows.filter((row) => dashboardUpdatedGroup(row.updatedAt ?? undefined) === key),
       }))
       .filter((entry) => entry.rows.length > 0);
   }

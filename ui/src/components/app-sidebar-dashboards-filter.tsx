@@ -17,11 +17,12 @@ registerEnglishCatalog(registerDashboardsEnglish);
 export function dashboardsFiltered(): boolean {
   return (
     dashboardsFilter().authorId !== DEFAULT_DASHBOARDS_FILTER.authorId ||
-    dashboardsFilter().sort !== DEFAULT_DASHBOARDS_FILTER.sort
+    dashboardsFilter().sort !== DEFAULT_DASHBOARDS_FILTER.sort ||
+    dashboardsFilter().group !== DEFAULT_DASHBOARDS_FILTER.group
   );
 }
 
-/** The Dashboards sidebar filter: one author or all of them, and the order. */
+/** The Dashboards sidebar filter: one author or all of them, the order, and the grouping. */
 export function renderSidebarDashboardsFilterMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
@@ -65,6 +66,21 @@ export function renderSidebarDashboardsFilterMenuForMenus(
           setDashboardsFilter({
             ...dashboardsFilter(),
             sort: value === "title" ? "title" : "updated",
+          }),
+      },
+      {
+        id: "sidebar-dashboards-group",
+        label: t("dashboardsPage.grouping"),
+        value: dashboardsFilter().group,
+        options: [
+          { value: "none", label: t("dashboardsPage.groupNone") },
+          { value: "updated", label: t("dashboardsPage.groupUpdated") },
+          { value: "author", label: t("dashboardsPage.groupAuthor") },
+        ],
+        onChange: (value) =>
+          setDashboardsFilter({
+            ...dashboardsFilter(),
+            group: value === "updated" || value === "author" ? value : "none",
           }),
       },
     ],
