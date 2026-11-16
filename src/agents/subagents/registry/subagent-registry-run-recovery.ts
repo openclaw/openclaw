@@ -11,6 +11,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { moveRunningSessionsToRun } from "../../bash-process-registry.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
@@ -622,6 +623,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             if (!preserveCompletedRun && previousRunId !== nextRunId) {
               // Remapped cohorts must not queue behind their replaced input.
               retireSubagentControllerInputs(value.source);
+              if (value.source.pauseReason === "sessions_yield") {
+                // An exit wake continues the task only for the run the task row carries.
+                moveRunningSessionsToRun(previousRunId, nextRunId);
+              }
             }
             replaceParams.onPublished?.(next);
           },

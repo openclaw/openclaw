@@ -272,7 +272,9 @@ take reviewer IDs from model-authored arguments.
 `toolContext.inputProvenance` is the host-stamped origin of that turn's input,
 when its producer supplied one. A background exec completion wake carries
 `{ kind: "internal_system", sourceTool: "exec", runId }`, where `runId` names
-the run whose `exec` call started the command. Compare it with the `runId` the
+the run whose `exec` call started the command. When a follow-up continues a
+paused subagent task, the commands that are still running move to the new run,
+so `runId` names that run instead. Compare it with the `runId` the
 factory saw on that earlier turn in the same session to recognize the
 completion of work that turn started. Both fields are facts for plugin-owned
 policy, not authority: a wake is never an owner turn (`senderIsOwner` is not
