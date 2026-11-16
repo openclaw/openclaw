@@ -137,7 +137,7 @@ export function recordMemorySample(
         const componentLabels = { request_class: requestClass, component };
         store.counterValue(
           "openclaw_worker_authority_component_sampled_bytes_total",
-          "Sampled worker-to-main actor facts bytes; marginal V8 sizes, one in 128 operations on average.",
+          "Sampled worker-to-main actor facts bytes; bounded marginal V8 sizes, one in 128 operations on average.",
           componentLabels,
           sample.bytes,
         );
@@ -147,7 +147,7 @@ export function recordMemorySample(
         ] as const) {
           store.counterValue(
             "openclaw_worker_authority_component_samples_total",
-            "Actor authority component samples; unmeasured graphs contribute no bytes.",
+            "Actor authority component samples; failed receipt attribution retains known bytes in receipt_other.",
             { ...componentLabels, result },
             count,
           );
