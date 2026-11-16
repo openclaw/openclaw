@@ -60,19 +60,14 @@ it("uses the newest matching checkpoint", () => {
   });
 });
 
-it.each([{ sessionId: "session-2" }, { authProfileId: "anthropic:personal" }])(
-  "keeps full history for a different replay identity: %j",
-  (identity) => {
-    const context = contextWithCheckpoint();
-
-    const plan = buildAnthropicReplayPlan(context.messages, model, {
-      ...replayOptions,
-      ...identity,
-    });
-
-    expect(plan).toEqual({ messages: context.messages });
-  },
-);
+it("keeps full history for a different session", () => {
+  const context = contextWithCheckpoint();
+  const plan = buildAnthropicReplayPlan(context.messages, model, {
+    ...replayOptions,
+    sessionId: "session-2",
+  });
+  expect(plan).toEqual({ messages: context.messages });
+});
 
 it("stops replaying a suppressed checkpoint", () => {
   const context = contextWithCheckpoint();

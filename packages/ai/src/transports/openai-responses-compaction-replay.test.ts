@@ -299,7 +299,6 @@ describe("OpenAI Responses compaction replay", () => {
     ["model", { model: "other-model" }, replayIdentity],
     ["base route", { baseUrlHash: "0000000000000000" }, replayIdentity],
     ["session", {}, { ...replayIdentity, sessionId: "session-b" }],
-    ["auth profile", {}, { ...replayIdentity, authProfileId: "profile-b" }],
     ["missing identity", {}, {}],
   ])("leaves the full transcript unchanged for incompatible %s", (_name, overrides, identity) => {
     const older = createAssistant("older assistant", compactionState(model, { replayIndex: 0 }));

@@ -53,7 +53,6 @@ export function takeResponsesContextUsageInput(
     prepared.messages !== context.messages ||
     prepared.systemPrompt !== context.systemPrompt ||
     prepared.identity.sessionId !== options.sessionId ||
-    prepared.identity.authProfileId !== options.authProfileId ||
     prepared.projection !== "transport" ||
     prepared.includeSystemPrompt !== options.includeSystemPrompt ||
     options.replayResponsesItemIds !== true ||

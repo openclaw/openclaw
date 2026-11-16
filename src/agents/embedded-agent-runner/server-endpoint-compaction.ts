@@ -150,7 +150,6 @@ export async function attemptServerEndpointCompaction(params: {
           replay: {
             model: params.model,
             sessionId: params.requestOptions.sessionId,
-            authProfileId: params.requestOptions.authProfileId,
           },
         }) - estimateRenderedLlmBoundaryTokenPressure({ prompt: "" });
       if (

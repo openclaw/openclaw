@@ -141,7 +141,6 @@ describe("OpenAI Responses reasoning replay", () => {
         { ...metadata, model: "other-model" },
         { ...metadata, baseUrlHash: "other-endpoint" },
         { ...metadata, sessionHash: "other-session" },
-        { ...metadata, authProfileHash: "other-auth" },
       ]) {
         const block = {
           ...thinking(item),
