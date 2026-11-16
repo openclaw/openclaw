@@ -638,9 +638,25 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       }
     }
   }
-  return names.size
-    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
-    : "";
+  const consumers = names.size
+    ? [`import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`]
+    : [];
+  // Preserve the planner's actual member uses; an entry exemption would hide unused exports.
+  const plannerPath = source.match(
+    /["']plugin-prerelease-test-plan["']:\s*["']\.\/(scripts\/[^"'\r\n]+)["']/u,
+  )?.[1];
+  const planner = source.match(
+    /\bconst\s+\w+\s*=\s*await\s+import\(\s*targetPlanPath\(["']plugin-prerelease-test-plan["']\)\s*\);[\s\S]*?(?=\n\s*\}\s*catch\b)/u,
+  )?.[0];
+  if (plannerPath && planner) {
+    consumers.push(
+      planner.replace(
+        /targetPlanPath\(["']plugin-prerelease-test-plan["']\)/u,
+        JSON.stringify(`../../${plannerPath}`),
+      ),
+    );
+  }
+  return consumers.join("\n");
 }
 
 function compileShellConsumers(source: string, filePath: string): string {
