@@ -9,13 +9,10 @@ import { parse } from "yaml";
 import * as publicationArtifacts from "../../scripts/full-release-artifacts.mjs";
 import {
   createPublicationAdmission,
-  createPublicationSourceFact,
   validatePublicationAdmissionBinding,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   authenticateReceiptRecovery,
-  RECEIPT_RECOVERY_SCHEMA,
-  receiptRecoverySourceRequest,
   revalidateReceiptRecoveryRuns,
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
@@ -28,202 +25,34 @@ import {
   retainedPublicationArtifactSource,
 } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
-import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
-import * as qualificationAuthority from "../../scripts/release-qualification-admission.mjs";
-import * as toolingAuthority from "../../scripts/release-tooling-identity.mjs";
-import {
-  canonicalTestSha256,
-  fullReleaseCandidateBindingFixture,
-} from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
-import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import { recoveryConsumptionFixture } from "./release-evidence-consumption.test-support.js";
 
-const roles = [
-  "normalCi",
-  "pluginPrereleaseIndependent",
-  "releaseChecksIndependent",
-  "releaseChecksCandidate",
-  "pluginPrereleaseCandidate",
-];
 function fixture() {
-  const candidate = candidatePublicationFixture();
-  const old = {
-    ...candidate,
-    client: { ...createReleaseEvidenceClient(candidate.repository), ...candidate.client },
-  };
-  const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: "c".repeat(40) };
-  const source = createPublicationSourceFact(
-    receiptRecoverySourceRequest(old.admission.receipt, producer),
-    { packages: [], platforms: [] },
-    old.source.projection,
-  );
-  const baselines = JSON.parse(
-    JSON.parse(old.admission.receipt.request.inputs.trusted_workflow_json).laneInputs
-      .qualification_baselines_json,
-  );
-  const recovery = {
-    schema: RECEIPT_RECOVERY_SCHEMA,
-    requestId: "12345678-1234-4123-8123-123456789abc",
-    repository: old.repository,
-    qualificationAdmission: old.admission.descriptor,
-    originalParent: { runId: old.runId, runAttempt: 1 },
-    candidateBinding: fullReleaseCandidateBindingFixture({
-      targetSha: old.q,
-      toolingSha: old.q,
-      releaseProfile: "beta",
-      releaseSoak: false,
-      upgradeSurvivorBaseline: baselines.upgradeBaseline,
-      upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
-    }),
-    children: Object.fromEntries(
-      roles.map((role, index) => [
-        role,
-        {
-          runId: String(910 + index),
-          runAttempt: 1,
-          workflowRef: old.branch,
-          sourceParentRunId: old.runId,
-          sourceParentAttempt: 1,
-        },
-      ]),
-    ),
-    publicationArtifacts: {
-      ...old.manifest.publicationArtifacts,
-      pluginNpm: { runId: "902", runAttempt: 1 },
-    },
-  };
-  const {
-    executionPlanSha256: _plan,
-    qualificationCoverage: _coverage,
-    ...originalManifest
-  } = old.manifest;
-  const manifest = {
-    ...originalManifest,
-    runId: producer.runId,
-    workflowSha: producer.sha,
-    workflowFullRef: producer.fullRef,
-    workflowRef: "main",
-    sourceAdmission: source,
-    receiptRecovery: recovery,
-    publicationArtifacts: recovery.publicationArtifacts,
-  };
-  return { old, producer, source, recovery, manifest };
+  const test = recoveryConsumptionFixture();
+  return { ...test, old: { ...test.direct, client: test.client } };
 }
 
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 function aggregateFixture() {
   const test = fixture();
-  const { old, source, producer, recovery, manifest } = test;
-  const original = expectDefined(old.manifest.publicationAdmission, "publication admission");
-  const observations = { ...original.observations, sourceDigest: source.digest };
-  const bytes = makeStoredZip({ "publication-observations.json": JSON.stringify(observations) });
-  const observationArtifact = {
-    id: 444,
-    name: "full-release-publication-observations-900-1",
-    digest: "sha256:" + digest(bytes),
-    size_in_bytes: bytes.length,
-    expired: false,
-    expires_at: "2099-01-01T00:00:00Z",
-    created_at: observations.collectionCompletedAt,
-    workflow_run: { id: 900, head_sha: producer.sha },
-  };
-  Object.assign(manifest, {
-    runAttempt: 1,
-    sourceParentRunAttempt: 1,
-    trustedWorkflow: { ref: "main", fullRef: producer.fullRef, sha: producer.sha },
-    publicationAdmission: createPublicationAdmission(
-      source,
-      observations,
-      {
-        id: "444",
-        name: observationArtifact.name,
-        digest: observationArtifact.digest,
-        sizeInBytes: bytes.length,
-      },
-      observations.collectionCompletedAt,
-      { workflowPath: RECEIPT_RECOVERY_WORKFLOW },
-    ),
-    childRuns: Object.fromEntries(
-      roles.map((role) => [role, expectDefined(recovery.children[role], "recovery child").runId]),
-    ),
-    retainedPublicationPayloads: [],
-    waivers: [],
-    advisoryJobs: [],
-  });
-  const steps = [
-    "Authenticate retained qualification and collect fresh admission",
-    "Upload fresh publication observations",
-    "Seal receipt-backed aggregate",
-    "Upload receipt-backed aggregate",
-  ].map((name, index) => ({
-    name,
-    number: index + 1,
-    status: "completed",
-    conclusion: "success",
-    started_at: observations.collectionCompletedAt,
-    completed_at: observations.collectionCompletedAt,
-  }));
-  const run = {
-    ...old.parent,
-    id: 900,
-    run_attempt: 1,
-    head_sha: producer.sha,
-    name: "Full Release Receipt Recovery",
-    path: RECEIPT_RECOVERY_WORKFLOW,
-  };
-  // Authority is independently covered; these tests exercise seal ordering and bytes.
-  vi.spyOn(toolingAuthority, "verifyReleaseToolingIdentity").mockImplementation(vi.fn());
-  vi.spyOn(toolingAuthority, "verifyReleaseWorkflowRun").mockReturnValue(run);
-  vi.spyOn(qualificationAuthority, "verifyReleaseQualificationOperators").mockReturnValue({
-    operator: { id: 1, login: "fixture-operator" },
-    triggeringOperator: { id: 1, login: "fixture-operator" },
-  });
   const originalRead = vi.fn().mockRejectedValue(new Error("original qualification reached"));
-  const downloads: string[] = [];
-  vi.stubEnv("GH_TOKEN", "fixture-token");
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      downloads.push(url.pathname);
-      if (url.pathname.endsWith("/artifacts/444/zip")) {
-        return new Response(new Uint8Array(bytes));
-      }
-      if (url.pathname.endsWith("/artifacts/444")) {
-        return Response.json(observationArtifact);
-      }
-      throw new Error("Unexpected fixture fetch: " + url.pathname);
-    }),
-  );
-  const client = {
-    ...old.client,
-    getRunAttempt: originalRead,
-    getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
-    getArtifact: async () => observationArtifact,
-    getRunAttemptJobs: async () => [
-      {
-        name: "Recover original qualification receipts",
-        status: "completed",
-        conclusion: "success",
-        steps,
-      },
-    ],
-  };
+  const downloads = vi.spyOn(test.client, "downloadArtifactArchive");
   const authenticate = () =>
     authenticateReceiptRecovery({
-      manifest,
-      run,
-      client,
-      artifact: { created_at: observations.collectionCompletedAt },
+      manifest: test.manifest,
+      run: test.run,
+      client: { ...test.client, getRunAttempt: originalRead },
+      artifact: test.aggregateArtifact,
       verifier: undefined,
       expectedRunAttempts: undefined,
     });
   return {
     ...test,
-    steps,
-    observations,
-    observationArtifact,
+    steps: expectDefined(test.jobs.get("900"), "aggregate jobs")[0]!.steps,
+    observations: test.manifest.publicationAdmission.observations,
+    observationArtifact: expectDefined(test.metadata.get("444"), "observations"),
     originalRead,
     downloads,
     authenticate,
@@ -262,14 +91,7 @@ describe("receipt-backed aggregate recovery", () => {
           digest: test.observationArtifact.digest,
           sizeInBytes: changed.length,
         });
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (input: string | URL | Request) =>
-            (input instanceof Request ? input.url : input.toString()).endsWith("/zip")
-              ? new Response(new Uint8Array(changed))
-              : Response.json(test.observationArtifact),
-          ),
-        );
+        test.archives.set("444", changed);
       }
       await expect(test.authenticate()).rejects.toThrow(
         {
@@ -281,7 +103,11 @@ describe("receipt-backed aggregate recovery", () => {
       );
       expect(test.originalRead).toHaveBeenCalledTimes(fault === "valid" ? 1 : 0);
       if (fault === "valid") {
-        expect(test.downloads).toContain("/repos/openclaw/openclaw/actions/artifacts/444/zip");
+        expect(test.downloads).toHaveBeenCalledWith(
+          expect.objectContaining({
+            expected: expect.objectContaining({ artifactId: 444 }),
+          }),
+        );
       }
     },
   );
@@ -315,7 +141,8 @@ describe("receipt-backed aggregate recovery", () => {
   });
 
   it("bounds transfers and verifies adopted child receipts", async () => {
-    const { old, recovery } = fixture();
+    const test = fixture();
+    const { old, recovery } = test;
     const selected = expectDefined(recovery.children.normalCi, "normal CI");
     selected.sourceParentRunId = "800";
     selected.workflowRef = "release-ci/earlier-same-candidate";
@@ -369,10 +196,16 @@ describe("receipt-backed aggregate recovery", () => {
       conclusion: "success",
       runId: expectDefined(recovery.children[child.key], "recovery child").runId,
     }));
-    const parentJobs = [...(await old.client.getRunAttemptJobs(old.runId)), ...dispatches];
+    const parentJobs = [
+      ...(await old.client.getRunAttemptJobs(old.runId)).filter(
+        (job) => !dispatches.some((dispatch) => dispatch.name === job.name),
+      ),
+      ...dispatches,
+    ];
     const client = {
       ...old.client,
       validateChildReuse: verifyChild,
+      verifyRetainedPublicationArtifacts: verifyPayloads,
       getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
       getRunAttemptJobs: async () => parentJobs,
       getJobLog: async (id: number) => {
@@ -404,9 +237,8 @@ describe("receipt-backed aggregate recovery", () => {
       dockerArchiveTimeoutMs: 240_000,
     });
 
-    // The retained-publication owner has separate inventory tests. Keep its
-    // result empty here so only recovery's additional plugin/candidate records
-    // are under test; candidate and child qualification are prerequisites above.
+    // Reuse the immutable archives from the consumer fixture; the retained
+    // publication owner is covered separately, so isolate recovery's extra inventory.
     verifyPayloads.mockImplementation(async () => ({
       outputs: {
         publication_artifacts_reused: "true",
@@ -418,159 +250,61 @@ describe("receipt-backed aggregate recovery", () => {
       },
       payloads: [],
     }));
-    vi.spyOn(
-      qualificationAuthority,
-      "revalidateQualificationAdmissionAuthority",
-    ).mockImplementation(vi.fn());
-    vi.stubEnv("GH_TOKEN", "fixture-token");
-    const pluginProducer = {
-      repository: old.repository,
-      runId: 902,
-      runAttempt: 1,
-      workflowPath: ".github/workflows/plugin-npm-release.yml",
-      workflowEvent: "workflow_dispatch",
-      workflowHeadBranch: old.branch,
-      workflowSha: old.q,
-    };
-    const pluginPackageBytes = makeStoredZip({ "plugin.tgz": "retained plugin package" });
-    const pluginPackage = {
-      ...pluginProducer,
-      artifactId: 905,
-      artifactName: "plugin-npm-package-codex-2026.8.28-beta.1-npm-oidc-902-1",
-      artifactDigest: "sha256:" + digest(pluginPackageBytes),
-      artifactSizeBytes: pluginPackageBytes.length,
-    };
-    const pluginManifest = {
-      schema: "openclaw.plugin-npm-prepared/v1",
-      runtimeQualification: "packed-runtime-v1",
-      sourceSha: old.q,
-      npmDistTag: "default",
-      selectionMode: "all-publishable",
-      publisherPolicySha256: digest(readFileSync(pluginProducer.workflowPath)),
-      producer: pluginProducer,
-      packages: [
-        {
-          extensionId: "codex",
-          packageDir: "extensions/codex",
-          packageName: "@openclaw/codex",
-          version: "2026.8.28-beta.1",
-          channel: "beta",
-          publishTag: "beta",
-          installNpmSpec: "@openclaw/codex@2026.8.28-beta.1",
-          route: "npm-oidc",
-          artifact: pluginPackage,
-        },
-      ],
-    };
-    const manifestBytes = makeStoredZip({
-      "plugin-npm-prepared.json": JSON.stringify(pluginManifest),
-    });
-    Object.assign(recovery.publicationArtifacts.pluginNpm, pluginProducer, {
-      artifactId: 904,
-      artifactName: "plugin-npm-prepared-fixture",
-      artifactDigest: "sha256:" + digest(manifestBytes),
-      artifactSizeBytes: manifestBytes.length,
-    });
     const binding = recovery.candidateBinding;
-    const packageBytes = makeStoredZip({
-      [binding.package.fileName]: "qualified candidate tgz",
-      "package-candidate.json": "{}",
-    });
-    binding.package.packageSha256 = digest("qualified candidate tgz");
-    const candidateBytes = [
-      Buffer.from("shared image"),
-      Buffer.from("plugin registry"),
-      packageBytes,
-    ];
-    const candidateArtifacts = [
-      binding.sharedImage.artifact,
-      binding.prepublishPluginRegistry.artifact,
-      binding.package.artifact,
-    ];
-    const metadata = new Map<string, Record<string, unknown>>();
-    const archives = new Map<string, Buffer>([
-      ["904", manifestBytes],
-      ["905", pluginPackageBytes],
-    ]);
-    const addMetadata = (id: string, name: string, runId: number, bytes: Buffer) => {
-      metadata.set(id, {
-        id: Number(id),
-        name,
-        digest: "sha256:" + digest(bytes),
-        size_in_bytes: bytes.length,
-        expired: false,
-        expires_at: "2099-01-01T00:00:00Z",
-        workflow_run: { id: runId, head_sha: old.q },
-      });
-    };
-    addMetadata("904", "plugin-npm-prepared-fixture", 902, manifestBytes);
-    addMetadata("905", pluginPackage.artifactName, 902, pluginPackageBytes);
-    candidateArtifacts.forEach((artifact, index) => {
-      const bytes = candidateBytes[index]!;
-      Object.assign(artifact, { digest: digest(bytes), expiresAt: "2099-01-01T00:00:00Z" });
-      addMetadata(artifact.id, artifact.name, Number(artifact.runId), bytes);
-      archives.set(artifact.id, bytes);
-    });
-    binding.sharedImage.packageSha256 = binding.package.packageSha256;
-    const {
-      evidenceArtifact: _evidence,
-      manifestSha256: _digest,
-      schema: _schema,
-      ...fields
-    } = binding;
-    binding.manifestSha256 = canonicalTestSha256({
-      schema: "openclaw.full-release-candidate/v2",
-      ...fields,
-    });
-    const downloads: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
-        const id = expectDefined(path.split("/")[6], "artifact URL");
-        if (!path.endsWith("/zip")) {
-          return Response.json(metadata.get(id));
-        }
-        downloads.push(id);
-        return new Response(new Uint8Array(expectDefined(archives.get(id), "archive")));
-      }),
-    );
-    const inventoryClient = {
-      ...client,
-      getRunArtifacts: vi.fn(async () => [expectDefined(metadata.get("905"), "plugin metadata")]),
-      getArtifact: vi.fn(async (id: string | number) =>
-        expectDefined(metadata.get(String(id)), "metadata"),
-      ),
-      getRun: async (id: string) => ({
-        id: Number(id),
-        run_attempt: 1,
-        head_sha: old.q,
-        status: "completed",
-        conclusion: "success",
-      }),
+    const packageMetadata = expectDefined(test.metadata.get("408"), "plugin package");
+    const pluginPackage = {
+      ...recovery.publicationArtifacts.pluginNpm,
+      artifactId: packageMetadata.id,
+      artifactName: packageMetadata.name,
+      artifactDigest: packageMetadata.digest,
+      artifactSizeBytes: packageMetadata.size_in_bytes,
     };
     const expectedPayloads = [
-      { kind: "plugin-npm-package", artifact: pluginPackage, sha256: digest(pluginPackageBytes) },
       {
-        kind: "candidate-shared-image",
-        artifact: binding.sharedImage.artifact,
-        sha256: digest(candidateBytes[0]!),
+        kind: "plugin-npm-package",
+        artifact: pluginPackage,
+        sha256: packageMetadata.digest.slice(7),
       },
-      {
-        kind: "candidate-plugin-registry",
-        artifact: binding.prepublishPluginRegistry.artifact,
-        sha256: digest(candidateBytes[1]!),
-      },
+      ...(
+        [
+          ["candidate-shared-image", binding.sharedImage.artifact],
+          ["candidate-plugin-registry", binding.prepublishPluginRegistry.artifact],
+        ] as const
+      ).map(([kind, artifact]) => ({ kind, artifact, sha256: artifact.digest })),
     ];
+    const downloads: string[] = [];
+    const fetchArtifact = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: string | URL | Request) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (path.endsWith("/zip")) {
+        downloads.push(path.split("/")[6]!);
+      }
+      return fetchArtifact(input);
+    });
+    const inventoryClient = {
+      ...client,
+      getRunArtifacts: vi.fn(test.client.getRunArtifacts),
+      getArtifact: vi.fn(test.client.getArtifact),
+      downloadArtifactArchive: (
+        request: Parameters<typeof test.client.downloadArtifactArchive>[0],
+      ) => {
+        const expected = request.expected;
+        if (!expected || typeof expected !== "object" || !("artifactId" in expected)) {
+          throw new Error("Missing expected download identity");
+        }
+        downloads.push(String(expected.artifactId));
+        return test.client.downloadArtifactArchive(request);
+      },
+    };
     const result = await verifyOriginalReceiptQualification(recovery, {
       client: inventoryClient,
       authenticatedPayloads: expectedPayloads,
     });
     expect(result.children[0]?.sourceParentRunId).toBe("800");
     expect(result.publication.payloads).toEqual(expectedPayloads);
-    expect(downloads).toEqual(["904"]);
+    expect(downloads).toEqual(["407"]);
     expect(inventoryClient.getArtifact.mock.calls.map(([id]) => String(id))).toEqual([
-      "904",
+      "407",
       "103",
       "102",
       "101",
@@ -589,26 +323,26 @@ describe("receipt-backed aggregate recovery", () => {
       ).rejects.toThrow("original publication payload inventory changed");
     }
     for (const [id, changed] of [
-      ["905", { digest: "sha256:" + "0".repeat(64) }],
+      ["408", { digest: "sha256:" + "0".repeat(64) }],
       ["101", { expired: true }],
     ] as const) {
-      const packageMetadata = expectDefined(metadata.get(id), "retained metadata");
-      const original = { ...packageMetadata };
-      Object.assign(packageMetadata, changed);
+      const metadata = expectDefined(test.metadata.get(id), "retained metadata");
+      const original = { ...metadata };
+      Object.assign(metadata, changed);
       await expect(
         verifyOriginalReceiptQualification(recovery, {
           client: inventoryClient,
           authenticatedPayloads: expectedPayloads,
         }),
       ).rejects.toThrow("metadata does not match the immutable publication tuple");
-      Object.assign(packageMetadata, original);
+      Object.assign(metadata, original);
     }
     downloads.length = 0;
     const produced = await verifyOriginalReceiptQualification(recovery, {
       client: inventoryClient,
     });
     expect(produced.publication.payloads).toEqual(expectedPayloads);
-    expect(downloads).toEqual(["904", "905", "103", "102", "101"]);
+    expect(downloads).toEqual(["407", "408", "103", "102", "101"]);
   });
 
   it("retains original selection, baselines and Q artifacts under a distinct P admission", () => {
@@ -628,7 +362,9 @@ describe("receipt-backed aggregate recovery", () => {
       sourceSha: old.q,
       toolingSha: producer.sha,
     };
-    expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(old.npmQualified.producer);
+    expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(
+      recovery.publicationArtifacts.npmPreflight.producer,
+    );
     expect(() =>
       validateFullReleaseNpmPreflight({ ...expected, sourceSha: "d".repeat(40) }),
     ).toThrow();
@@ -717,7 +453,7 @@ describe("receipt-backed aggregate recovery", () => {
       },
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
-    expect(new Set(calls).size).toBe(8);
+    expect(new Set(calls).size).toBe(9);
     const normalCi = recovery.children.normalCi;
     if (!normalCi) {
       throw new Error("fixture is missing the normal CI child");

@@ -301,6 +301,15 @@ export function candidatePublicationFixture(
   };
   const client = {
     ...fixture.client,
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Fresh candidate fixture does not reuse publication artifacts");
+    },
+    downloadArtifactArchive() {
+      throw new Error("Fresh candidate fixture does not download reused artifacts");
+    },
+    getRunArtifacts() {
+      throw new Error("Fresh candidate fixture does not enumerate reused artifacts");
+    },
     validateChildReuse() {
       throw new Error("Fresh candidate fixture does not contain reused children");
     },
