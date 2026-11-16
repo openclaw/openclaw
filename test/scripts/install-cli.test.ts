@@ -120,6 +120,22 @@ function runNpmPolicy(spec: string) {
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
+  it.each([
+    { os: "Linux", arch: "riscv64", error: "Unsupported architecture: riscv64" },
+    { os: "SunOS", arch: "x86_64", error: "Unsupported OS: SunOS" },
+  ])("stops an unsupported $os/$arch before preparing Node", ({ os, arch, error }) => {
+    const f = makeFixture("unsupported-platform");
+    f.shell("bin/uname", `case "$1" in -s) echo ${os};; -m) echo ${arch};; esac`);
+    f.shell("bin/curl", "echo unexpected-download; exit 79");
+    const result = f.run(`
+      export PATH="$ROOT/bin:$PATH"
+      main --json --node-only --prefix "$ROOT/prefix"
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ event: "error", message: error });
+    expect(existsSync(join(f.root, "prefix"))).toBe(false);
+  });
+
   it.each(["--install-method npn", "--method npn", ""])(
     "rejects invalid methods without switching the active runtime (%s)",
     (args) => {

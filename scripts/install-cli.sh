@@ -1307,9 +1307,12 @@ main() {
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
     fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
+  local os arch
+  os="$(os_detect)" || { printf '%s\n' "$os"; return 1; }
+  arch="$(arch_detect)" || { printf '%s\n' "$arch"; return 1; }
   # Reject unsupported source installs before changing runtime links or checkouts.
   # Node-only recovery owns its separate platform refusal and ignores the method.
-  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$os" == "freebsd" ]]; then
     fail_freebsd_source_install
   fi
   PREFIX="$(resolve_installer_path "$PREFIX")"
@@ -1320,7 +1323,7 @@ main() {
     if is_musl_linux; then
       fail "Private Node.js recovery is unavailable on musl Linux; update Node.js with your system package manager."
     fi
-    install_node "$(os_detect)" "$(arch_detect)"
+    install_node "$os" "$arch"
     return
   fi
   GIT_DIR="$(resolve_installer_path "$GIT_DIR")"
@@ -1333,11 +1336,11 @@ main() {
     preflight_fresh_git_disk_space "$GIT_DIR"
   fi
 
-  select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
+  select_node_version_for_platform "$os" "$arch"
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 
-  install_node "$(os_detect)" "$(arch_detect)"
+  install_node "$os" "$arch"
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
   else
