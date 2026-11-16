@@ -17,10 +17,12 @@ import {
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
 // The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
 const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
-// Candidate checks 43754432638 (attempt 1) found first-hop upgrades and
-// legacy-state scenarios among the longest jobs. Admit these groups early;
+// Candidate checks 43773667009 left package recovery waiting behind the 32-job cap.
+// Admit those first, followed by the long first-hop/legacy groups from 43754432638;
 // leave every other group in its original order.
 const LONG_LANE_ORDER = [
+  "package-verification-recovery",
+  "package-publication-recovery",
   "update-first-hop-compat",
   "update-restart-auth",
   "plugin-update",

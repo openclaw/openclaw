@@ -92,7 +92,8 @@ it("prioritizes long families and preserves every CLI row and the remaining orde
         GROUP_SIZE: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+          "base legacy-operator-state package-publication-recovery package-verification-recovery",
       },
     }),
   );
@@ -104,7 +105,17 @@ it("prioritizes long families and preserves every CLI row and the remaining orde
     published_upgrade_survivor_scenarios: name,
     timeout_minutes: 90,
   });
+  const recovery = (version: string, name: string) => ({
+    ...lane(`published-upgrade-survivor-${version}-${name}`),
+    published_upgrade_survivor_baselines: `openclaw@${version}`,
+    published_upgrade_survivor_scenarios: name,
+    timeout_minutes: 90,
+  });
   expect(groups).toEqual([
+    recovery("2026.9.8", "package-verification-recovery"),
+    recovery("2026.9.9", "package-verification-recovery"),
+    recovery("2026.9.8", "package-publication-recovery"),
+    recovery("2026.9.9", "package-publication-recovery"),
     lane("update-first-hop-compat-2026.9.2"),
     lane("update-first-hop-compat-2026.9.1"),
     { ...lane("update-restart-auth"), timeout_minutes: 75 },
