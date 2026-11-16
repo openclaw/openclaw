@@ -83,6 +83,7 @@ describe("catalog reuse across run lifetimes", () => {
                 safeServerName: "reuse",
                 toolName: name,
                 operation: "tool",
+                codexApproval: { mode: undefined },
               },
             });
           }

@@ -113,7 +113,7 @@ export function prepareToolSearchCatalogDescriptors(entries: readonly ToolSearch
           parameters: snapshotSchema(descriptor.parameters, encoded[index]!.parameters?.json),
           outputSchema: snapshotSchema(descriptor.outputSchema, encoded[index]!.outputSchema?.json),
           ...(descriptor.mcp
-            ? { mcp: freezeTrustedJsonSnapshot(JSON.parse(encoded[index]!.descriptor[8]!)) }
+            ? { mcp: freezeTrustedJsonSnapshot(structuredClone(descriptor.mcp)) }
             : {}),
         }),
       ),
