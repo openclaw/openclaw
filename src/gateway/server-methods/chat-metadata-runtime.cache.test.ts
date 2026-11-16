@@ -1,4 +1,6 @@
 import { onTestFinished, assert, expect, test, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -7,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { CurrentReadAuthority } from "../../shared/current-read-authority.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { collectForRetentionCheck, expectCollected } from "../../test-utils/retention.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
@@ -151,7 +154,12 @@ test("bounds retained commands and neutral projections instead of warming the fl
   expect(harness.buildProjection).toHaveBeenCalledTimes(agentIds.length + 1);
 });
 
-test.each(["saved-row revision", "sibling session"] as const)(
+test.each([
+  "saved-row revision",
+  "sibling session",
+  "cold shared pin",
+  "published shared pin",
+] as const)(
   "retains one model list across equivalent %s reads while releasing request inputs",
   async (variant) => {
     await withOpenClawTestState(
@@ -165,6 +173,15 @@ test.each(["saved-row revision", "sibling session"] as const)(
         };
         setRuntimeConfigSnapshot(config);
         const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+        const shared = variant === "cold shared pin" || variant === "published shared pin";
+        const retirement = new AbortController();
+        const accountCatalog = shared
+          ? createPreparedAccountCatalogAccess(() => true, retirement.signal)
+          : undefined;
+        const credential = { type: "api_key", provider: "test", key: "synthetic-key" } as const;
+        if (shared) {
+          harness.setAuthStore({ version: 1, profiles: { "test:shared": credential } });
+        }
         const catalog = Array.from({ length: 64 }, (_, index) =>
           providerCatalogEntry("test", index === 0 ? "first" : `model-${index}`),
         );
@@ -172,10 +189,21 @@ test.each(["saved-row revision", "sibling session"] as const)(
           ...createChatMetadataOwner(config, "first", {}, "test", "openai-completions"),
           pluginRegistry: createEmptyPluginRegistry(),
           modelCatalog: { entries: catalog, routeVariants: catalog },
+          accountCatalog,
         });
         try {
+          if (variant === "published shared pin") {
+            const published = await accountCatalog!.acquire({
+              profileId: "test:shared",
+              credential,
+              allowDiscovery: true,
+              load: async () => [{ provider: "test", profileId: "test:shared", status: "ready" }],
+            });
+            expect(published.hasPublishedCatalog).toBe(true);
+          }
           await harness.refresh();
           using prepare = vi.spyOn(modelLists, "prepareModelsListResult");
+          using acquire = accountCatalog ? vi.spyOn(accountCatalog, "acquire") : undefined;
           const refs = await (async () => {
             const results: WeakRef<object>[] = [];
             const arrays: WeakRef<object>[] = [];
@@ -191,7 +219,10 @@ test.each(["saved-row revision", "sibling session"] as const)(
             let expected: string | undefined;
             for (let index = 0; index < 64; index++) {
               const sessionKey = `agent:main:shared:${variant === "sibling session" ? index : 0}`;
-              const entry = { lifecycleRevision: `revision-${index}` };
+              const entry = {
+                lifecycleRevision: `revision-${index}`,
+                ...(shared && { authProfileOverride: "test:shared" }),
+              };
               const scope: ChatMetadataReadParams = {
                 agentId: "main",
                 sessionKey,
@@ -201,6 +232,12 @@ test.each(["saved-row revision", "sibling session"] as const)(
                 },
                 isCurrent: () => entry.lifecycleRevision === `revision-${index}`,
               };
+              if (shared) {
+                scope.withCurrent = async (consume) => {
+                  scope.assertCurrent?.();
+                  return consume();
+                };
+              }
               const result = await harness.runtime.readModelsList({
                 agentId: "main",
                 params: { agentId: "main", view: "all", sessionKey },
@@ -221,22 +258,28 @@ test.each(["saved-row revision", "sibling session"] as const)(
             return { results, arrays, rows, inputs };
           })();
           const preparations = prepare.mock.calls.length;
+          const accountAcquisitions = acquire?.mock.calls.length;
           // Spy arguments include the original authority; they must not become the retention owner.
           prepare.mockClear();
+          acquire?.mockClear();
           await collectForRetentionCheck("equivalent-model-lists", 8);
           const live = (values: WeakRef<object>[]) =>
             values.filter((value) => value.deref()).length;
-          expect([
-            live(refs.results),
-            live(refs.arrays),
-            live(refs.rows),
-            live(refs.inputs),
-          ]).toEqual([1, 1, 64, 0]);
+          expect(
+            [live(refs.results), live(refs.arrays), live(refs.rows), live(refs.inputs)],
+            `Surviving input indices: ${refs.inputs
+              .flatMap((value, index) => (value.deref() ? [index] : []))
+              .join(",")}`,
+          ).toEqual([1, 1, 64, 0]);
           expect(preparations).toBe(1);
+          if (shared) {
+            expect(accountAcquisitions).toBeGreaterThan(0);
+          }
           // Keep the actual cache owner alive throughout collection.
           await harness.refresh();
           expect(prepare).not.toHaveBeenCalled();
         } finally {
+          retirement.abort();
           await harness.runtime.stop();
           clearRuntimeConfigSnapshot();
         }
@@ -475,11 +518,13 @@ test("keeps saved-selection presence and zero compaction provenance distinct", a
           });
         }
         expect(prepare).toHaveBeenCalledTimes(5);
+        const personalProfileId = `personal:${GATEWAY_OWNER_PROFILE_ID}:00000000-0000-4000-8000-000000000001`;
+        expect(isUserModelAuthProfileId(personalProfileId)).toBe(true);
         harness.runtime.invalidate();
         // A retained unscoped result cannot satisfy a request declined by the shared owner.
         expect(await read({ agentId: "main" })).toBeUndefined();
         expect(
-          await read({ ...saved, sessionEntry: { authProfileOverride: "personal:owner:account" } }),
+          await read({ ...saved, sessionEntry: { authProfileOverride: personalProfileId } }),
         ).toBeUndefined();
         expect(prepare).toHaveBeenCalledTimes(5);
       } finally {
