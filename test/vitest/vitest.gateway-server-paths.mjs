@@ -198,6 +198,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/cron.scratch-read.test.ts",
   "src/gateway/server-methods/cron.self-removal.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
+  "src/gateway/server-methods/exec-approvals.test.ts",
   "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
   "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
   "src/gateway/server-methods/models-auth-refresh.integration.test.ts",

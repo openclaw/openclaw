@@ -2975,6 +2975,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/update-run-watcher.schema-publication.test.ts",
   "src/gateway/user-profiles-http.auth.test.ts",
   "src/gateway/watch-node-http.test.ts",
+  "src/gateway/worker-environments/bootstrap.test.ts",
   "src/gateway/worker-environments/cloud-transcript-write-admission.test.ts",
   "src/gateway/worker-environments/credential-broker.test.ts",
   "src/gateway/worker-environments/desktop-ssh-identity.test.ts",
