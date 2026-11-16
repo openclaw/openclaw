@@ -4449,24 +4449,9 @@ type ProtectedPreflightConsumerParams = {
 };
 
 function writePreflightConsumerTooling(toolingDir: string) {
-  mkdirSync(resolve(toolingDir, "lib"), { recursive: true });
-  for (const source of [
-    "npm-preflight-tooling-identity.mjs",
-    "npm-prepared-bundle.mjs",
-    "openclaw-npm-extended-stable-release.mjs",
-    "plugin-sdk-api-release-evidence.mjs",
-    "release-tooling-identity.mjs",
-    "lib/actions-artifact-archive.mjs",
-    "lib/plain-gh.mjs",
-    "lib/npm-core-release-packages.mjs",
-    "lib/npm-core-release-packages.json",
-    "lib/npm-shrinkwrap-dependencies.mjs",
-    "lib/record-shared.mjs",
-    "lib/release-evidence-identity.mjs",
-    "lib/release-version.mjs",
-  ]) {
-    copyFileSync(resolve(REPO_ROOT, "scripts", source), resolve(toolingDir, source));
-  }
+  // Both trusted consumer checkouts use `sparse-checkout: scripts`, so mirror the
+  // complete tree instead of a hand-kept list of transitive imports.
+  copyTreeCloseOnExec(resolve(REPO_ROOT, "scripts"), toolingDir);
 }
 
 const PREFLIGHT_PRODUCER_GH_CASES = `
@@ -9311,6 +9296,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "Forbid preflight artifact promotion on validation-only runs",
     ]);
     const consumers = [
+      "check_openclaw_npm_stage",
       "check_openclaw_npm",
       "prepare_openclaw_npm",
       "check_sdk_npm",
@@ -9319,11 +9305,11 @@ test "$package_manager" = "pnpm@12.1.0"
       "verify_openclaw_npm",
     ];
     const phases: [string, string, string[]][] = [
-      ["source", "", ["check_openclaw_npm"]],
+      ["source", "", ["check_openclaw_npm_stage", "check_openclaw_npm"]],
       ["prepare", "", ["prepare_openclaw_npm"]],
       ["all", "", consumers],
       ["verify", "", consumers.filter((job) => job !== "prepare_openclaw_npm")],
-      ["verify", "sealed", consumers.slice(2)],
+      ["verify", "sealed", consumers.slice(3)],
     ];
     for (const [phase, sourceEvidence, scheduled] of phases) {
       for (const admission of ["success", "failure", "skipped", "cancelled"] as const) {
@@ -9389,7 +9375,7 @@ test "$package_manager" = "pnpm@12.1.0"
                 ? "boat-xlarge"
                 : "blacksmith-8vcpu-ubuntu-2404";
           for (const jobName of [
-            "check_openclaw_npm",
+            "check_openclaw_npm_stage",
             "prepare_openclaw_npm",
             "check_sdk_npm",
             "check_dependencies_npm",
@@ -10422,6 +10408,7 @@ describe("package artifact reuse", () => {
           "fetch-depth": 1,
           path: ".release-harness",
           "persist-credentials": false,
+          "sparse-checkout": "scripts",
         },
         uses: checkoutAction,
       },
@@ -10444,8 +10431,7 @@ describe("package artifact reuse", () => {
     expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(
       binderSteps.indexOf(binderCheckouts[0]!),
     );
-    expect(binderSetup).toBeDefined();
-    expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(binderSetup!));
+    expect(binderSetup).toBeUndefined();
     expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(evidence));
     expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(upload));
     expect(producerIdentity.env).toMatchObject({
@@ -12732,7 +12718,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const stable = workflowJob(RELEASE_CHECKS_WORKFLOW, "windows_node_stable_e2e");
     const main = workflowJob(RELEASE_CHECKS_WORKFLOW, "windows_node_main_e2e");
     const reusableWorkflow =
-      "openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@f0592215f27100d9ecece33d3069daac76a4125c";
+      "openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@76a48a68607d8cb7cc0ae607dbc46c920f07495a";
 
     expect(resolver.outputs).toMatchObject({
       stable_asset_name: "${{ steps.resolve.outputs.stable_asset_name }}",
@@ -12757,7 +12743,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         candidate_artifact_run_id: "${{ github.run_id }}",
         candidate_sha256:
           "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
-        windows_node_workflow_sha: "f0592215f27100d9ecece33d3069daac76a4125c",
+        windows_node_workflow_sha: "76a48a68607d8cb7cc0ae607dbc46c920f07495a",
       });
     }
     expect(prerelease.with).toMatchObject({
@@ -13922,9 +13908,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "${{ steps.plugin_compatibility.outputs.required }}",
     );
     expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
-    expect(pluginCompatibilityJob.if).toBe(
+    expect(pluginCompatibilityJob.if).toBeUndefined();
+    expect(enforcePluginCompatibility.if).toBe(
       "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
     );
+    const mockExports = workflowStep(pluginCompatibilityJob, "Check target mock exports");
+    expect(mockExports.env).toMatchObject({
+      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
+    });
+    expect(mockExports.run).toContain('pnpm check:test-mock-exports --base "$TARGET_SHA"');
+    expect(mockExports.if).toBeUndefined();
     expect(enforcePluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
     for (const jobName of [
       "normal_ci",
@@ -13946,7 +13939,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     for (const [compatibilityResult, admitted] of [
       ["success", true],
-      ["skipped", true],
+      ["skipped", false],
       ["failure", false],
       ["cancelled", false],
     ] as const) {
@@ -13968,10 +13961,29 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       });
       expect(Boolean(result), compatibilityResult).toBe(admitted);
     }
-    expect(jobNeeds(evidenceReuseJob)).toContain("plugin_compatibility_readiness");
+    expect(jobNeeds(evidenceReuseJob)).toEqual(["resolve_target"]);
     expect(evidenceReuseJob.if).toContain("always()");
     expect(evidenceReuseJob.if).toContain("needs.resolve_target.result == 'success'");
-    expect(evidenceReuseJob.if).toContain("needs.plugin_compatibility_readiness.result");
+    expect(evidenceReuseJob.if).not.toContain("plugin_compatibility_readiness");
+    const summaryReadiness = workflowStep(summaryJob, "Require successful source readiness");
+    expect(summaryJob.steps?.[0]).toBe(summaryReadiness);
+    expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"))).toContain(
+      "plugin_compatibility_readiness",
+    );
+    expect(summaryReadiness.env?.SOURCE_READINESS_RESULT).toBe(
+      "${{ needs.plugin_compatibility_readiness.result }}",
+    );
+    for (const readiness of ["success", "failure", "cancelled", "skipped"]) {
+      const result = spawnSync(
+        "bash",
+        ["--noprofile", "--norc", "-c", summaryReadiness.run ?? ""],
+        {
+          env: { ...process.env, SOURCE_READINESS_RESULT: readiness },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, readiness).toBe(readiness === "success" ? 0 : 1);
+    }
     expect(resolveTargetJob.outputs?.trusted_workflow_json).toBe(
       "${{ steps.tooling_identity.outputs.json }}",
     );
@@ -16113,7 +16125,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         artifact_only_guard: ["resolve_target", "kova", "publish"],
       },
       [FULL_RELEASE_VALIDATION_WORKFLOW]: {
-        evidence_reuse: ["resolve_target", "plugin_compatibility_readiness"],
+        evidence_reuse: ["resolve_target"],
         candidate_acquisition: ["resolve_target", "evidence_reuse", "prepare_npm_package"],
         release_checks_candidate: [
           "resolve_target",
@@ -16573,6 +16585,7 @@ esac
       [OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request", "Checkout"],
       [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_openclaw_npm", "Checkout"],
+      [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_openclaw_npm_stage", "Checkout"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "prepare_openclaw_npm", "Checkout"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm", "Checkout"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm", "Checkout trusted Plugin SDK API tooling"],

@@ -183,7 +183,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       selection: params.codeModeControlsEnabledForRun ? undefined : search,
     });
     clientToolDefs = clientToolSearch.tools;
-    if (clientToolSearch.compacted) {
+    if (clientToolSearch.compacted && !clientToolSearch.catalogReused) {
       emitTrustedDiagnosticEvent({
         type: "tool.catalog",
         source: "client",

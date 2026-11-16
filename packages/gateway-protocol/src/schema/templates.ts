@@ -121,7 +121,15 @@ export const TemplatesCatalogDetailSchema = closedObject({
   mcpServers: Type.Integer({ minimum: 0 }),
   scheduledJobs: Type.Integer({ minimum: 0 }),
   contents: Type.Optional(TemplatesCatalogContentsSchema),
-  scanStatus: Type.Optional(NonEmptyString),
+  createdAtMs: Type.Optional(Type.Number({ minimum: 0 })),
+  categories: Type.Optional(Type.Array(NonEmptyString)),
+  /** The exact release's ClawHub audit; absent when no report describes this release. */
+  security: Type.Optional(
+    closedObject({
+      verdict: Type.Optional(NonEmptyString),
+      auditUrl: NonEmptyString,
+    }),
+  ),
 });
 export const TemplatesCatalogDetailResultSchema = closedObject({
   detail: TemplatesCatalogDetailSchema,

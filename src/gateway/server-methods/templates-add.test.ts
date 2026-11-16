@@ -165,7 +165,22 @@ it("drops a preview if Labs is switched off mid-request", async () => {
   let calls = 0;
   planAdd.mockResolvedValue(plan);
   const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
-  expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+  expect(request[0]?.[2]).toMatchObject({
+    code: "FORBIDDEN",
+    details: { mutationAccepted: false },
+  });
+});
+
+it.each([
+  new ClawHubSourceError("clawhub_manifest_invalid", "Manifest is invalid"),
+  new Error("MCP listing failed"),
+])("reports a failed preview as having no effect: %s", async (error) => {
+  planAdd.mockRejectedValueOnce(error);
+  const replies = await callAdd("plan");
+  expect(replies[0]?.[2]).toMatchObject({
+    code: "UNAVAILABLE",
+    details: { mutationAccepted: false },
+  });
 });
 const schedule = {
   name: "daily-brief",

@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createEffect, createMemo, Errored, For, latest, Loading, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import {
   isSettingsNavigationRouteVisible,
@@ -11,7 +12,7 @@ import {
   visibleSettingsNavigationGroups,
   type SettingsSearchBlock,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import { pathForRoute, pluginTabLocation, type RouteId, pluginTabKey } from "../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
@@ -38,15 +39,16 @@ import {
   settingsSearchTitleRank,
 } from "../lib/settings-navigation.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import { isIconName } from "./icon-data.ts";
 import {
   SettingsSaveIndicator,
   type SettingsSaveIndicatorProps,
 } from "./settings-save-indicator.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
-import { GatewayStatus } from "./solid/gateway-status.tsx";
-import { Icon } from "./solid/icon.tsx";
 import "./agent-select-registration.ts";
 import "../styles/settings.css";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
+import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
@@ -60,6 +62,8 @@ export type SettingsSidebarProps = {
   presentation?: "sidebar" | "embed-list" | "embed-page";
   basePath: string;
   activeRouteId: RouteId;
+  pluginTabs?: readonly GatewayControlUiPluginTab[];
+  activePluginTab?: GatewayControlUiPluginTab;
   agents: readonly AgentRosterRow[];
   agentIdentity: AgentIdentityCapability;
   settingsAgentSelection: AgentSelectionCapability;
@@ -92,6 +96,7 @@ export type SettingsSidebarProps = {
 type SettingsNavigationGroupView = {
   labelKey: string | null;
   items: readonly SettingsNavigationItemView[];
+  plugins?: readonly GatewayControlUiPluginTab[];
 };
 
 type SettingsNavigationItemView = {
@@ -139,23 +144,33 @@ function buildAgentRosterTree(agents: AgentRosterRow[]) {
 function SettingsNavigationItem(props: {
   sidebar: SettingsSidebarProps;
   routeId: RouteId;
+  tab?: GatewayControlUiPluginTab;
   branding: ThemeBranding;
 }) {
-  const active = () => settingsNavigationOwnerRoute(props.sidebar.activeRouteId) === props.routeId;
+  const location = () =>
+    props.tab
+      ? pluginTabLocation(props.tab, props.sidebar.basePath)
+      : { pathname: pathForRoute(props.routeId, props.sidebar.basePath), search: "" };
+  const active = () =>
+    props.tab
+      ? props.sidebar.activePluginTab?.pluginId === props.tab.pluginId &&
+        props.sidebar.activePluginTab?.id === props.tab.id
+      : settingsNavigationOwnerRoute(props.sidebar.activeRouteId) === props.routeId;
+  const icon = () =>
+    isIconName(props.tab?.icon) ? props.tab.icon : navigationIconForRoute(props.routeId);
+  const navigate = () =>
+    props.tab
+      ? props.sidebar.onNavigate(props.routeId, location())
+      : props.sidebar.onNavigate(props.routeId);
   return (
     <a
-      href={pathForRoute(props.routeId, props.sidebar.basePath)}
+      href={`${location().pathname}${location().search}`}
       class={["settings-sidebar__item", { "settings-sidebar__item--active": active() }]}
       aria-current={active() ? "page" : undefined}
-      onClick={(event) =>
-        handleNavigationClick(event, () => props.sidebar.onNavigate(props.routeId))
-      }
+      onClick={(event) => handleNavigationClick(event, navigate)}
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true">
-        <Show
-          when={props.routeId === "custodian"}
-          fallback={<Icon name={navigationIconForRoute(props.routeId)} />}
-        >
+        <Show when={props.routeId === "custodian"} fallback={<Icon name={icon()} />}>
           <ThemeBrandingIcon branding={props.branding} />
         </Show>
       </span>
@@ -163,10 +178,11 @@ function SettingsNavigationItem(props: {
         {
           (i18nRevision(),
           props.branding,
-          settingsNavigationLabelForRoute(
-            props.routeId,
-            props.sidebar.nativeDeviceSettings?.snapshot,
-          ))
+          props.tab?.label ??
+            settingsNavigationLabelForRoute(
+              props.routeId,
+              props.sidebar.nativeDeviceSettings?.snapshot,
+            ))
         }
       </span>
       <Show when={props.sidebar.presentation === "embed-list"}>
@@ -324,10 +340,11 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
       <h1 class="page-title">
         {props.presentation === "embed-list"
           ? t("nav.settings")
-          : settingsNavigationLabelForRoute(
+          : (props.activePluginTab?.label ??
+            settingsNavigationLabelForRoute(
               props.activeRouteId,
               props.nativeDeviceSettings?.snapshot,
-            )}
+            ))}
       </h1>
       <SettingsConnectionStatus {...props} />
     </header>
@@ -418,6 +435,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         return navigationGroups.map((group) => ({
           labelKey: group.labelKey,
           items: group.routes.map((routeId) => ({ routeId, showPage: true, blocks: [] })),
+          plugins: group.labelKey === "nav.settingsGroupAgents" ? props.pluginTabs : undefined,
         }));
       }
       const completed = latest(blockMatches);
@@ -441,6 +459,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         ]),
       ];
       const matches = (value: string) => settingsSearchTextMatches(value, normalizedQuery);
+      const pluginMatches = props.pluginTabs?.filter((tab) => matches(tab.label)) ?? [];
       const titlesForRoute = (routeId: RouteId) => [
         settingsNavigationLabelForRoute(routeId, nativeDeviceSettings?.snapshot),
         titleForRoute(routeId),
@@ -464,7 +483,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             settingsSearchTitleRank(titlesForRoute(b), normalizedQuery),
         );
       let resultBlocks = blocks.filter((block) => matches(block.label));
-      if (pageRoutes.length === 0 && resultBlocks.length === 0) {
+      if (pageRoutes.length === 0 && resultBlocks.length === 0 && pluginMatches.length === 0) {
         const groupRoutes = navigationGroups.flatMap((group) =>
           group.labelKey && matches(t(group.labelKey)) ? group.routes : [],
         );
@@ -510,7 +529,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           blocks: blocksByRoute.get(routeId) ?? [],
         })),
       ];
-      return items.length > 0 ? [{ labelKey: null, items }] : [];
+      return items.length > 0 || pluginMatches.length > 0
+        ? [{ labelKey: null, items, plugins: pluginMatches }]
+        : [];
     });
     function SearchCompletion() {
       return (
@@ -608,6 +629,16 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                           {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
                         </For>
                       </>
+                    )}
+                  </For>
+                  <For each={group().plugins} keyed={pluginTabKey}>
+                    {(tab) => (
+                      <SettingsNavigationItem
+                        sidebar={props}
+                        routeId="plugin"
+                        tab={tab()}
+                        branding={branding.read()}
+                      />
                     )}
                   </For>
                 </div>

@@ -132,7 +132,7 @@ suite.define(() => {
       const retryAfter = await gateway.deferNext("models.list");
       await composer.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: retryAfter });
-      await composer.locator("[data-chat-model-refresh]").waitFor({ state: "visible" });
+      expect(await composer.locator("[data-chat-model-refresh]").count()).toBe(0);
       expect(await effort.isVisible()).toBe(true);
       await expectUnreserved(effortPicker);
       await effort.click();

@@ -53,7 +53,7 @@ describe("doctor SQLite session transcript header repair", () => {
   const health = (shouldRepair = true) =>
     noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair });
   const expectNote = (text: unknown) =>
-    expect(note).toHaveBeenCalledWith(text, "Session transcript headers");
+    expect(note).toHaveBeenCalledWith(text, "Chat history headers");
 
   beforeEach(async () => {
     note.mockClear();
@@ -139,7 +139,7 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(rows()).toEqual(beforeRows);
     expect(recoveryDirectories()).toEqual([]);
     expectNote(
-      '- Found 1 stored session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
+      '- Found 1 stored chat history file without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
     );
 
     note.mockClear();
@@ -203,7 +203,7 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(repairedManager.buildSessionContext().messages).toEqual([
       { role: "user", content: userText },
     ]);
-    expectNote("- Prepended missing headers to 1 session transcript.");
+    expectNote("- Prepended missing headers to 1 chat history file.");
 
     note.mockClear();
     const afterFirstRepair = rows();

@@ -68,6 +68,7 @@ import { readModelsListCatalog } from "./models-list-catalog.js";
 import type { BuildModelsListResultParams } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
+  projectModelCatalogRefreshStatus,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
   retainModelChoiceAccountPin,
@@ -337,18 +338,18 @@ export async function prepareModelsListResult({
     await withCurrentReadAuthority(authority, () => {});
     const readOutcomeProjection = () => {
       const accountSelection = readAccountSelection?.();
-      const pendingProviders = projector.snapshot.pendingProviders?.filter(
-        (provider) =>
-          (!providerFilter || normalizeProvider(provider) === providerFilter) &&
-          (view === "all" ||
-            view === "provider-config" ||
-            visibilityPolicy.allowAny ||
-            [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
-      );
+      const isVisibleProvider = (provider: string) =>
+        (!providerFilter || normalizeProvider(provider) === providerFilter) &&
+        (["all", "provider-config"].includes(view) ||
+          visibilityPolicy.allowAny ||
+          [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`)));
       return {
-        ...(pendingProviders?.length ? { pendingProviders } : {}),
         ...outcomeProjection,
-        ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
+        ...projectModelCatalogRefreshStatus({
+          snapshot,
+          pendingProviders: projector.snapshot.pendingProviders,
+          isVisibleProvider,
+        }),
         ...(accountSelection ? { accountSelection } : {}),
         ...(decisionModels.length ? { decisionModels } : {}),
       };
@@ -425,6 +426,7 @@ export async function prepareModelsListResult({
                 entry,
                 evaluation,
                 pluginRegistry: preparedPluginRegistry,
+                resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
               }) ?? { id: "openclaw", source: "implicit" as const });
           const agentRuntime = preparedPluginRegistry
             ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
@@ -645,6 +647,7 @@ export async function prepareModelsListResult({
                 modelId: entry.id,
                 modelApi: entry.api,
                 modelBaseUrl: entry.baseUrl,
+                resolveOpenAIProviderRoutes: projector.resolveOpenAIProviderRoutes,
               }).runtime
             : undefined;
           const preparedHost = projector.evaluateEntry(entry, variants, baseRuntime);
@@ -671,9 +674,8 @@ export async function prepareModelsListResult({
           return () => {
             const evaluation = evaluateNative(entry, host);
             evaluations.set(key, evaluation);
-            const routeManaged = evaluation.routeResolution !== null;
             const syntheticLocal =
-              !routeManaged &&
+              evaluation.routeResolution === null &&
               normalizeProviderId(entry.provider) !== "openai" &&
               evaluation.availability === undefined &&
               evaluation.evidence === "synthetic";

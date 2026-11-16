@@ -400,7 +400,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),
-    ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
+    ...(openclawIdPrincipal ? { openclawIdPrincipal, openclawIdRolePolicy } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),

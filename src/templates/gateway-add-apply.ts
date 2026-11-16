@@ -35,6 +35,7 @@ import {
   selectTemplateAgentWorkspace,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
+import { projectTemplateAddOutcomes, type TemplateAddOutcomes } from "./gateway-add-result.js";
 import { projectTemplateConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
@@ -59,6 +60,9 @@ export class TemplateGatewayPlanBlockedError extends Error {
 
 export type GatewayTemplateAddApplyResult = {
   agentId: string;
+  workspace?: string;
+  /** Operation receipts, not inferred from the proposed plan. Absent on early failure. */
+  outcomes?: TemplateAddOutcomes;
   status: "complete" | "partial";
   agentRetained?: true;
   initializationPending?: true;
@@ -348,6 +352,8 @@ export async function applyTemplateAddForGateway(
                 ): GatewayTemplateAddApplyResult => {
                   settledResult = {
                     agentId: result.agent.finalId,
+                    workspace: result.agent.workspace,
+                    outcomes: projectTemplateAddOutcomes(result),
                     status: result.status,
                     ...(result.agentRetained ? { agentRetained: true } : {}),
                     ...(admitted && !initialized ? { initializationPending: true } : {}),
@@ -667,6 +673,7 @@ export async function applyTemplateAddForGateway(
     if (admitted) {
       return {
         agentId: admitted.agentId,
+        workspace: admitted.workspace,
         status: "partial",
         agentRetained: true,
         ...(!initialized ? { initializationPending: true } : {}),
