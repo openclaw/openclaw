@@ -42,6 +42,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { SubagentCompletion } from "../../shared/subagent-completion.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -153,6 +154,7 @@ export async function prepareAgentRunUserTurn(params: {
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  subagentCompletions?: readonly SubagentCompletion[];
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
   request: AgentRunRequest;
@@ -354,6 +356,7 @@ export async function prepareAgentRunUserTurn(params: {
         }
       }
       const input: UserTurnInput = {
+        subagentCompletions: params.subagentCompletions,
         ...(params.privateCompletion ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
         isSubagentCoordinationInputProvenance(params.inputProvenance)
