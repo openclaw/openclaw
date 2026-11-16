@@ -45,9 +45,21 @@ export function mountModelPicker(params: Partial<PickerProps>, options?: MountSo
   flush();
   return { ...view, update };
 }
+export function modelPickerReadiness(container: HTMLElement, phase: "menu" | "options") {
+  return `${phase}: ${JSON.stringify({
+    open: container.matches("details[open]") || Boolean(container.querySelector("details[open]")),
+    menu: Boolean(container.querySelector(".chat-controls__model-menu[aria-label]")),
+    options: container.querySelectorAll("[data-chat-model-option]").length,
+    fallback: container.querySelector('[role="alert"]')?.textContent?.slice(0, 200) ?? null,
+    focus: container.ownerDocument.activeElement?.outerHTML.slice(0, 200) ?? null,
+  })}`;
+}
 export const waitForModelMenu = (container: HTMLElement) =>
   waitForSolid(() =>
-    expect(container.querySelector(".chat-controls__model-menu[aria-label]")).not.toBeNull(),
+    expect(
+      container.querySelector(".chat-controls__model-menu[aria-label]"),
+      modelPickerReadiness(container, "menu"),
+    ).not.toBeNull(),
   );
 
 export function selectModelProvider(container: ParentNode, provider: string) {

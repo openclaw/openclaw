@@ -247,12 +247,28 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard(forward);
       const choices = query('[role="listbox"][aria-label="Group by"]')!;
       await expect.element(choices).toBeVisible();
+      let containment: unknown;
       await expect
         .poll(() => {
-          const { left, right, top, bottom } = choices.getBoundingClientRect();
+          const rect = choices.getBoundingClientRect();
+          const { left, right, top, bottom } = rect;
+          const parent = choices.parentElement!;
+          const style = getComputedStyle(parent);
+          containment = {
+            rect: rect.toJSON(),
+            viewport: [innerWidth, innerHeight],
+            parent: parent.getBoundingClientRect().toJSON(),
+            position: style.position.slice(0, 200),
+            transform: style.transform.slice(0, 200),
+            scale: style.scale.slice(0, 200),
+          };
           return left >= 0 && right <= innerWidth && top >= 0 && bottom <= innerHeight;
         })
-        .toBe(true);
+        .toBe(true)
+        .catch((error: unknown) => {
+          console.error("Group by viewport containment", containment);
+          throw error;
+        });
       await userEvent.keyboard(direction === "rtl" ? "{ArrowRight}" : "{ArrowLeft}");
       await expect.element(role("button", "Group by: Custom groups")).toHaveFocus();
       await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
