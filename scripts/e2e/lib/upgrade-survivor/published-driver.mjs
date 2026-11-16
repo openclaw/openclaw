@@ -48,8 +48,8 @@ const followUp = process.env.OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP ?? "";
 // to, its restart rebinds the service to the package path, and the next update switches.
 // "launcher" replaces the prefix launcher with an absolute link the candidate does not stage: the
 // release switch would change a file outside the release, so the update takes the swap, and a
-// second update adopts the layout again. "in-place" starts like "rebind" but
-// updates with --no-restart, so the service cannot be rebound: the selected release is replaced.
+// second update adopts the layout again. "in-place" starts like "rebind" but stops the Gateway
+// and updates with --no-restart, so the service cannot be rebound: the selected release is replaced.
 assert(
   ["", "switch", "rollback", "rebind", "launcher", "in-place"].includes(followUp),
   "Unknown follow-up mode",
@@ -698,6 +698,17 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         assert.equal(fs.readlinkSync(path.join(bin, "openclaw")), npmLauncher);
         fs.rmSync(path.join(bin, "openclaw"));
         fs.symlinkSync(path.join(packageRoot, "openclaw.mjs"), path.join(bin, "openclaw"));
+      }
+      if (followUp === "in-place") {
+        // With the Gateway running, its 30-second installation check can restart it into the
+        // replaced package while update Doctor stops it; Doctor then fails the update. That race
+        // belongs to every --no-restart package update, not to this layout, so this cell
+        // checks the in-place replacement without it.
+        await run("follow-up-stop", path.join(bin, "systemctl"), [
+          "--user",
+          "stop",
+          "openclaw-gateway.service",
+        ]);
       }
       const switched = await updateTo(
         "follow-up-update",

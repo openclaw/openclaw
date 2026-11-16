@@ -206,9 +206,11 @@ update that adopts the layout again. With the linked-root mode, `rebind`
 starts from published `2026.10.9`, whose service install binds the service to a
 release's real path, and checks that the candidate replaces that release in
 place, its restart rebinds the service to the package path, and the next update
-switches releases. `in-place` starts the same way but updates with
-`--no-restart`, and checks that the replaced release serves the new version
-after a service restart. Run them with
+switches releases. `in-place` starts the same way, stops the Gateway, updates
+with `--no-restart`, and checks that the replaced release serves the new version
+after a service restart. The Gateway is stopped first because a running one can
+restart itself into the replaced package while update Doctor stops it, which
+fails any `--no-restart` package update; that race is not specific to releases. Run them with
 `pnpm test:docker:published-driver-release-adoption`,
 `pnpm test:docker:published-driver-release-rollback`,
 `pnpm test:docker:published-driver-release-launcher`,
