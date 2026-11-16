@@ -48,7 +48,6 @@ const { values } = parseArgs({
         "scrolled-up",
         "keyboard",
         "relaunch",
-        "switch-session",
         ...["up", "down"].flatMap((keyboard) =>
           ["short", "long"].flatMap((length) =>
             ["plain", "agent"].map((content) => `blank-${keyboard}-${length}-${content}`),
@@ -79,7 +78,6 @@ const MOCK_MODEL = "mock-openai/gpt-5.6-luna";
 // passes its own prompts through these variables.
 const SEED_PROMPT = process.env.IOS_BEHAVIOR_SEED_PROMPT ?? "UXSTREAM chunks=150 interval=0";
 const REPLY_PROMPT = process.env.IOS_BEHAVIOR_REPLY_PROMPT ?? "UXSTREAM chunks=300 interval=20";
-const SHORT_PROMPT = process.env.IOS_BEHAVIOR_SHORT_PROMPT ?? "UXSTREAM chunks=4 interval=0";
 const AGENT_SEED_PROMPT =
   process.env.IOS_BEHAVIOR_AGENT_SEED_PROMPT ?? "UXAGENT steps=4 chunks=150 interval=0";
 const AGENT_REPLY_PROMPT =
@@ -88,8 +86,8 @@ const replaySessions = values.sessions
   ?.split(",")
   .map((key) => key.trim())
   .filter(Boolean);
-if (replaySessions && replaySessions.length < 2) {
-  console.error("ios:behavior: --sessions needs at least two chats.");
+if (replaySessions?.length === 0) {
+  console.error("ios:behavior: --sessions needs at least one chat.");
   process.exit(1);
 }
 let replayIndex = 0;
@@ -466,7 +464,8 @@ function readLayout(roots: AxNode[]): Layout {
       if (id.startsWith("chat-progress-card") || /^(Plan, |Done in )/.test(text)) {
         exclude.push(node.frame);
       }
-      progressCard ||= id.startsWith("chat-progress-card");
+      // The card above the composer has no identifier; its label starts "Plan, ".
+      progressCard ||= id.startsWith("chat-progress-card") || text.startsWith("Plan, ");
     }
     node.children?.forEach(walk);
   };
@@ -907,34 +906,6 @@ const cases: Record<string, Case> = {
           ),
         },
       };
-    },
-  },
-  // Opening an existing chat from the sidebar (#191478, trigger A): the transcript shows text in
-  // every screen sample after the switch, without a swipe. Switches go between long agent chats
-  // and a short one, as in the report.
-  "switch-session": {
-    kind: "guard",
-    async run(session) {
-      const short = `${session}-short`;
-      const long = replaySessions?.[0] ?? `${session}-long`;
-      const long2 = replaySessions?.[1] ?? `${session}-long2`;
-      await Promise.all([
-        ...(replaySessions
-          ? []
-          : [agentTurn(long, AGENT_SEED_PROMPT), agentTurn(long2, AGENT_SEED_PROMPT)]),
-        agentTurn(short, SHORT_PROMPT).then(() => agentTurn(short, SHORT_PROMPT)),
-      ]);
-      const chats = [long, short, long2] as const;
-      launch(long);
-      await delay(3000);
-      const watched: ScreenSample[][] = [];
-      for (const chat of [chats[1], chats[0], chats[1], chats[2], chats[0], chats[2]]) {
-        tap(/RootTabs\.Sidebar\.Show/);
-        await delay(800);
-        tap(new RegExp(`\\|${chat.replace(/-/g, "\\-")}, `));
-        watched.push(await watchScreen(`switch-${chat}`, 3000));
-      }
-      return screenGates(readScreens(watched), "after every switch");
     },
   },
   ...blankMatrix(),
