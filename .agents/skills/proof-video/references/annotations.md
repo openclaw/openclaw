@@ -27,6 +27,45 @@ or imply that a still proves timing or backend behavior. Place labels in clear
 space and outline strokes outside the text they explain. Keep exact measured
 bounds for alignment/spacing even if an outline needs visual padding.
 
+## Callout appearance and color
+
+Use a filled, softly rounded card with a prominent sans-serif title, quieter
+secondary detail, and an optional compact pill for a meaningful measured delta.
+The shared renderer supplies this layout, fine outlines, and thin pointers; do
+not build a separate per-PR card renderer or recolor its generated markup.
+
+The annotating agent chooses `color` (a `#RRGGBB` accent) after inspecting the
+actual screenshot, its theme, and the area behind the annotation. The renderer
+derives the card, border, text, and pill colors from that accent. Lilac is not a
+fixed default for every image. Keep a matched before/after pair on the same
+palette when it remains readable in both. Check the resulting text, pointer,
+and target outline at the intended display size; color choice is not an
+automatic contrast guarantee. When omitted, the existing mark-specific accent
+is used.
+
+For arrows and outlines, `text` is the title. Add `detail` only when it helps
+explain the observation, and `badge` only for a verified delta or similarly
+useful short value. Alignment and spacing retain their renderer-calculated
+titles; secondary fields never replace those measurements. Do not make up a
+number just to fill the pill.
+
+```json
+{
+  "kind": "arrow",
+  "from": { "x": 470, "y": 532 },
+  "to": { "x": 408, "y": 532 },
+  "labelAt": { "x": 480, "y": 490 },
+  "text": "Wider account menu",
+  "detail": "336 CSS px wide",
+  "badge": "+32",
+  "color": "#8570ad"
+}
+```
+
+This is an annotation example, not a measurement of your screenshot. Use the
+actual saved bounds and comparison values. Cards grow with their content; keep
+the title/detail short and place the whole card in clear space.
+
 ## Geometry
 
 All positions use one capture coordinate system with a top-left origin. For web
@@ -63,8 +102,10 @@ Do not take another screenshot to annotate or modify the app to draw the marks.
 | `alignment` | `axis`, `edge`, `rects`       | `axis: "x"` compares horizontal coordinates with a vertical guide; `"y"` compares vertical coordinates. `edge` is `start`, `center`, or `end`. Label reports maximum absolute offset from the first rectangle. |
 | `spacing`   | `axis`, `from`, `to`, `at`    | Rectangles ordered left-to-right (`x`) or top-to-bottom (`y`). Measures the gap between edges, or the intersecting interval when they overlap. `at` locates the bracket on the other axis.                     |
 
-Every kind accepts optional `labelAt: {x,y}`. Labels are single-line and must fit;
-shorten text instead of shrinking it. Bounds must fit the capture viewport.
+Every kind accepts optional `labelAt: {x,y}`, `color`, `detail` (1–80 characters),
+and `badge` (1–16 characters). Arrow/outline secondary fields require `text`.
+Each text row stays on one line and must fit; shorten text instead of shrinking
+it. Bounds and the complete card must fit the capture viewport.
 
 ## Screenshot
 

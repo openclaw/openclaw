@@ -9,7 +9,8 @@ routine diagnostic captures. Leave those capture/upload pipelines and their
 output directories unchanged.
 
 1. **Choose the comparison.** The implementing agent chooses the affected user
-   flow, representative state, annotation targets, and short labels. Do not ask
+   flow, representative state, annotation targets, short labels, and a readable
+   annotation palette suited to the captured image and theme. Do not ask
    the user to mark screenshots or supply coordinates. Cover affected platforms
    and materially different states, not an automatic four-platform matrix.
 2. **Capture the product.** Use the existing platform workflow: [Control UI

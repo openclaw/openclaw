@@ -52,8 +52,9 @@ Keep final captures separate from the evolving gallery; allocate them with the
 Inside an existing `ui/src/e2e` test, after reaching the asserted state, use the
 same frame for clean and annotated output. Here `suite` is the existing E2E
 suite, `page` its page, `surface` the visible region, and `target` the element
-that explains the change. The agent selects `label` and `labelAt` after inspecting
-the composition; coordinates are viewport CSS pixels. Use matching stage names
+that explains the change. The agent selects `label`, `labelAt`, and an accent
+`color` (`#RRGGBB`) after inspecting the composition and theme; coordinates are
+viewport CSS pixels. Use matching stage names
 (`before` and `after`) in separate artifact directories for the two revisions.
 
 ```ts
@@ -71,7 +72,7 @@ const annotationFrame = {
   viewport: page.viewportSize()!,
   scale: await page.evaluate(() => window.devicePixelRatio),
   annotations: [
-    { kind: "outline" as const, rect: frame.elements[0]!.bounds, text: label, labelAt },
+    { kind: "outline" as const, rect: frame.elements[0]!.bounds, text: label, labelAt, color },
   ],
 };
 await writeFile(path.join(suite.artifactDir, `${stage}-clean.png`), frame.png);
