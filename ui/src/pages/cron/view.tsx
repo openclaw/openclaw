@@ -81,14 +81,17 @@ export function CronView(props: CronProps) {
       {mode() === "overview" && !props.sidebarListsJobs ? (
         <ListView {...props} focus={focus} onRemove={remove} />
       ) : mode() === "overview" ? (
-        // The sidebar lists every automation; the page waits for one to open.
+        // The sidebar lists every automation; the page waits for one to open, or says why the
+        // list could not be read.
         <div class="cron-overview-empty">
           <PanelEmptyState
             icon={<Icon name="automations" />}
-            heading={props.jobs.length > 0 ? t("tabs.cron") : t("cron.list.emptyTitle")}
-            description={t("cron.list.emptyHint")}
+            heading={
+              props.listError || props.jobs.length > 0 ? t("tabs.cron") : t("cron.list.emptyTitle")
+            }
+            description={props.listError ?? t("cron.list.emptyHint")}
             action={
-              (props.canCreate ?? props.canManage) ? (
+              !props.listError && (props.canCreate ?? props.canManage) ? (
                 <button
                   type="button"
                   class="btn primary btn--sm"
