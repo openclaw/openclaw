@@ -73,7 +73,6 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
     path: "none",
     reason: "completion_handoff_pending",
     terminal: true,
-    disposition: "intentional_non_delivery",
   };
 }
 

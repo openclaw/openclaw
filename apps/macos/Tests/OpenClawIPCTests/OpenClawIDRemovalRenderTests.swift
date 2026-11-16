@@ -16,7 +16,12 @@ struct OpenClawIDRemovalRenderTests {
         let model = OpenClawIDSettingsModel(store: MacOpenClawIDDeviceStore(
             defaults: defaults, databaseURL: output.appendingPathComponent("unused.sqlite")))
         let removal = MacOpenClawIDRemoval(hostname: "studio.example.test", origin: .here)
-        for (name, note) in [("3-settings-removed", Optional(removal)), ("4-settings-sign-in", nil)] {
+        for (name, note) in [
+            ("3-settings-removed", Optional(removal)),
+            ("4-settings-sign-in", nil),
+            ("6-settings-member-removed", MacOpenClawIDRemoval(
+                hostname: "team.example.test", origin: .elsewhere, member: true)),
+        ] {
             try OnboardingRenderTests.capture(
                 Form {
                     Section("Status") { LabeledContent("Gateway", value: "Not connected") }
@@ -29,9 +34,10 @@ struct OpenClawIDRemovalRenderTests {
                 width: 720,
                 dark: false)
         }
-        for (name, origin) in [
-            ("1-dashboard-removed-here", MacOpenClawIDRemoval.Origin.here),
-            ("2-dashboard-removed-elsewhere", .elsewhere),
+        for (name, origin, member) in [
+            ("1-dashboard-removed-here", MacOpenClawIDRemoval.Origin.here, false),
+            ("2-dashboard-removed-elsewhere", .elsewhere, false),
+            ("5-dashboard-member-removed", .elsewhere, true),
         ] {
             let configuration = WKWebViewConfiguration()
             configuration.websiteDataStore = .nonPersistent()
@@ -48,7 +54,7 @@ struct OpenClawIDRemovalRenderTests {
                 window.contentView = nil
                 window.close()
             }
-            let removal = MacOpenClawIDRemoval(hostname: "studio.example.test", origin: origin)
+            let removal = MacOpenClawIDRemoval(hostname: "studio.example.test", origin: origin, member: member)
             try await loaded.load(DashboardFailurePage.html(removal: removal), into: webView)
             let image = try await webView.takeSnapshot(configuration: nil)
             let bitmap = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))

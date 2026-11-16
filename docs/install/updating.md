@@ -1066,6 +1066,33 @@ the Node executable in a service definition does not update its OpenClaw package
 openclaw update
 ```
 
+### Host prerequisites
+
+Before it stages anything, `openclaw update` checks the host. On a failure it
+prints one `Update refused: ...` line that names what to install or free, and
+changes nothing. The saved report keeps the details.
+
+- **Node:** the target's `engines.node` must accept the Node that the Gateway
+  service runs. The updater reads it from the launchd plist, systemd unit, or
+  Windows task, not from the shell's `PATH`. If the updater's own Node
+  qualifies, the update moves an owned service to it. Otherwise install the
+  named Node (for example `nvm install 24.22.1`) and run the update with it.
+- **Git (Git checkouts):** Git 2.31 or newer. Older Git misreads
+  `git rev-parse --path-format=absolute` instead of failing. The updater looks
+  for Git next to its Node first, then in system directories such as
+  `/usr/bin`, so the refusal names the Git it found.
+- **Disk (package installs):** the install volume must hold about 4.4 times the
+  target's registry `dist.unpackedSize` (the package, its dependencies and npm's
+  cache). Registries that omit `dist.unpackedSize` skip this check. The state
+  snapshot has its own measured check.
+
+Every attempt ends with one update run record. Its `cause` is one of `none`,
+`node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
+`network`, `config-invalid`, `install-failed`, `state-migration-failed`,
+`plugin-failed`, `service-failed`, `interrupted`, `refused` or `unknown`.
+Reports print it as `Cause:`. It is a closed set, so redaction never hides it.
+`openclaw update status --json` shows it as `lastRun.origin.cause`.
+
 Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),
 package updates privately stage the target and let its code judge configuration,
 database schema, Node requirements, and plugin availability before activation.
@@ -1455,11 +1482,17 @@ After an upgrade, check the [FreeBSD model-runtime limitation](/install/installe
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
 
-Plugin maintenance does not fail an otherwise successful core update. If a plugin
-cannot be updated, OpenClaw continues with the remaining plugins, keeps the previous
-installation where possible, and prints a short next action. A running updated
-Gateway can also report a plugin that did not load without turning the core update
-into a failure. Individual plugin outcomes remain available in `--json` output.
+Plugin failures never fail an update. If a plugin cannot be updated, OpenClaw
+continues with the remaining plugins, keeps the previous installation where possible,
+and prints a short next action. A plugin that cannot load (for example, one built
+against an older plugin SDK) stays off for that Gateway boot while the Gateway
+serves; its config and data are kept, and the next start or update retries it.
+`openclaw status` shows it in a **Plugins not loaded** row and `openclaw doctor`
+names the load error. Gateway restart and readiness checks, including the
+`gateway restart` an updater runs, never count plugin load errors as unhealthy, and
+plugin-owned Doctor checks do not gate the post-plugin readiness pass. Pending plugin
+data migrations stay warnings. Individual plugin outcomes remain available in
+`--json` output.
 When ClawHub has not published a version-matched official runtime plugin, the
 updater tries its declared trusted npm source for that same version, honoring
 catalog pins. Security and integrity refusals do not permit a source fallback.
@@ -1536,7 +1569,11 @@ to another volume. Database snapshots use its physical directory so the backup's
 parent-directory durability check can complete. The installed updater must
 contain this fix; a newer candidate cannot repair an older updater's capture.
 
-The canary uses a temporary loopback Gateway port and suppresses background
+Current updaters do not boot a candidate canary before activation; they load
+the candidate's recovery runtime and prove Doctor and Gateway startup after
+activation, with rollback (see [How updates run](/cli/update/how-updates-run#validation-and-activation)).
+Older installed updaters still run the canary described here against this
+version. The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
 Doctor and policy checks use the copied deployment settings, so an accepted
@@ -2142,7 +2179,9 @@ Update confirmation belongs to the Gateway and profile that opened it. Switching
 Gateways or profiles retires the pending confirmation; open it again on the
 intended Gateway. Native updates also check current administrator access when you
 confirm and show an access error if it was revoked. Once an update starts, its
-progress report remains available through that Gateway's restart.
+progress report remains available through that Gateway's restart. The dialog shows
+"Starting update…" until the progress report arrives and "Reconnecting…" during
+a temporary disconnect.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's

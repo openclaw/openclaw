@@ -82,6 +82,7 @@ export async function startProcess(
     .catch(() => undefined)
     .then(async () => {
       await managed.child?.settled;
+      await managed.inputTail;
       if (managed.terminationRequested) {
         // Transport close can precede a failed remote termination receipt.
         // Join the exact cleanup operation before releasing its custody.
@@ -182,6 +183,7 @@ async function runProcess(
     env: execSpec.env,
     cwd: execSpec.cwd,
     usePty: managed.tty,
+    prepareCurrent: execSpec.prepareCurrent,
     assertCurrent: () => {
       if (spawned) {
         params.source?.assertCurrent();
@@ -225,6 +227,7 @@ async function runProcess(
   };
   child.once("error", onError);
   child.stdin.on("error", onError);
+  await owner.prepareCurrent?.();
   owner.assertCurrent();
   if (!managed.tty && !managed.pipeStdin) {
     child.stdin.end();
@@ -350,10 +353,10 @@ export async function readProcess(
   };
 }
 
-export function writeProcess(
+export async function writeProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
-): JsonObject {
+): Promise<JsonObject> {
   const record = requireObject(params, "process/write params");
   const processId = requireString(record.processId, "processId");
   const managed = processes.get(processId);
@@ -364,17 +367,29 @@ export function writeProcess(
   if ((!managed.tty && !managed.pipeStdin) || managed.closed || !managed.child) {
     return { status: "stdinClosed" };
   }
-  if ("pty" in managed.child) {
-    managed.child.assertCurrent();
-    managed.child.pty.write(chunk);
-  } else {
-    if (!managed.child.process.stdin.writable) {
+  const child = managed.child;
+  // Reserve invocation order before physical preparation can yield or fail.
+  const write = (managed.inputTail ?? Promise.resolve()).then(async (): Promise<JsonObject> => {
+    await child.prepareCurrent?.();
+    child.assertCurrent();
+    if (managed.closed || managed.terminationRequested) {
       return { status: "stdinClosed" };
     }
-    managed.child.assertCurrent();
-    managed.child.process.stdin.write(chunk);
-  }
-  return { status: "accepted" };
+    if ("pty" in child) {
+      child.pty.write(chunk);
+    } else {
+      if (!child.process.stdin.writable) {
+        return { status: "stdinClosed" };
+      }
+      child.process.stdin.write(chunk);
+    }
+    return { status: "accepted" };
+  });
+  managed.inputTail = write.then(
+    () => {},
+    () => {},
+  );
+  return write;
 }
 
 export async function signalProcess(
@@ -415,6 +430,7 @@ async function terminateManagedProcess(managed: ManagedProcess): Promise<JsonObj
   } else if (running && !managed.closed) {
     emitProcessClosed(managed, null);
   }
+  await managed.inputTail;
   return { running };
 }
 

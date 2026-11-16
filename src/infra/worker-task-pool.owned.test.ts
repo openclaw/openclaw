@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { MessagePort } from "node:worker_threads";
@@ -296,6 +297,24 @@ it("retires only idle slots on critical pressure, after result and resource cust
   await finishTask(next, "next");
 });
 
+it("reclaims untimed burst workers under critical pressure", async () => {
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 0 });
+  const first = pool.run("primary", {});
+  const second = pool.run("burst", {});
+  const primary = workerFor("primary");
+  const burst = workerFor("burst");
+  reply(primary, "primary");
+  reply(burst, "burst");
+  await Promise.all([first, second]);
+  expect(primary.terminate).not.toHaveBeenCalled();
+  expect(burst.terminate).not.toHaveBeenCalled();
+  diagnosticsChannel("openclaw.memory.critical").publish(true);
+  await nextTurn();
+  expect(primary.terminate).toHaveBeenCalledOnce();
+  expect(burst.terminate).toHaveBeenCalledOnce();
+  expect(pool.getSnapshot().workers).toBe(0);
+});
+
 it("reuses recently active workers under repeated pressure and retires them after an idle gap", async () => {
   using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
@@ -441,11 +460,21 @@ it.each([false, true])(
 it.each(["receipts", "exit"] as const)(
   "bounds concurrent cleanup listeners until every receipt or native exit settles (%s)",
   async (settlement) => {
-    const pool = createPool();
+    const caller = new AsyncLocalStorage<number>();
+    const decodedIn: Array<number | undefined> = [];
+    const pool = createPool(
+      {},
+      {
+        decodeResourceError() {
+          decodedIn.push(caller.getStore());
+          return new Error("synthetic close failure");
+        },
+      },
+    );
     const worker = await completedWorker(pool);
     const listeners = worker.listenerCount("exit");
     const cleanups = Array.from({ length: 32 }, (_, index) =>
-      pool.closeResources(`source-${index}`),
+      caller.run(index, () => pool.closeResources(`source-${index}`)),
     );
     const results = Promise.allSettled(cleanups);
     const receipts = worker.posted.mock.calls
@@ -453,9 +482,15 @@ it.each(["receipts", "exit"] as const)(
       .map(([message]) => expectDefined(message.resourcePort, "cleanup receipt"));
     expect(worker.listenerCount("exit")).toBe(listeners + 1);
     for (const [index, receipt] of receipts.slice(0, 16).entries()) {
-      acknowledgeCleanup(receipt, index === 0 ? "synthetic close failure" : undefined);
+      if (index === 0) {
+        receipt.postMessage({ ok: false, detail: "synthetic close failure" }, []);
+        receipt.close();
+      } else {
+        acknowledgeCleanup(receipt);
+      }
     }
     const partial = await Promise.allSettled(cleanups.slice(0, 16));
+    expect(decodedIn).toEqual([0]);
     expect(partial.filter((result) => result.status === "fulfilled")).toHaveLength(15);
     expect(partial[0]).toMatchObject({
       status: "rejected",
@@ -475,6 +510,7 @@ it.each(["receipts", "exit"] as const)(
     if (settlement === "receipts") {
       expect(worker.terminate).not.toHaveBeenCalled();
     }
+    caller.disable();
   },
 );
 

@@ -394,7 +394,7 @@ function PublicationButton(props: {
   );
 }
 
-function PublicationAccount(props: { publication: GitHubPublicationView }) {
+function PublicationAccount(props: { publication: GitHubPublicationView; mobile?: boolean }) {
   const publisher = () =>
     props.publication.result
       ? props.publication.result.publisher
@@ -403,7 +403,9 @@ function PublicationAccount(props: { publication: GitHubPublicationView }) {
     <Show when={publisher()}>
       {(value) => (
         <span data-publication-account>
-          {t("githubPublication.publishAs", { account: value().login })} ·{" "}
+          <Show when={!props.mobile}>
+            {t("githubPublication.publishAs", { account: value().login })} ·{" "}
+          </Show>
           {sourceLabel(value().source)}
         </span>
       )}
@@ -611,6 +613,7 @@ export function GitHubPublicationDetails(props: {
                   <PublicationMore
                     publication={props.publication}
                     busy={busy()}
+                    mobile={props.mobile}
                     controls={props.controls}
                   />
                 </details>
@@ -621,6 +624,7 @@ export function GitHubPublicationDetails(props: {
           <PublicationMore
             publication={props.publication}
             busy={busy()}
+            mobile={props.mobile}
             controls={props.controls}
           />
         </Show>
@@ -687,6 +691,7 @@ export function GitHubPublicationDetails(props: {
 function PublicationMore(props: {
   publication: GitHubPublicationView;
   busy: boolean;
+  mobile?: boolean;
   controls?: MenuControls;
 }) {
   const message = () => {
@@ -700,7 +705,7 @@ function PublicationMore(props: {
   return (
     <Show when={props.publication.result || props.publication.locked || props.publication.error}>
       <div class="chat-pr__publication-more">
-        <PublicationAccount publication={props.publication} />
+        <PublicationAccount publication={props.publication} mobile={props.mobile} />
         <Show when={message()}>{(value) => <span>{value()}</span>}</Show>
         <Show when={props.publication.error}>{(error) => <span>{error()}</span>}</Show>
         <Show when={props.publication.locked && !props.publication.result && !props.busy}>

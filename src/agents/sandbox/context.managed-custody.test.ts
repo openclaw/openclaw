@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { create as createTar } from "tar";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { useWorkspaceFilesystemBlock } from "../../../test/helpers/workspace-filesystem-block.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { execContainer } from "./container-engine.js";
 import * as custody from "./context-custody.test-support.js";
@@ -57,6 +57,7 @@ vi.mock("./docker.js", async (importOriginal) => ({
 }));
 
 const state = useSandboxRegistryState("sandbox-managed-custody-");
+const filesystemBlock = useWorkspaceFilesystemBlock("lstat");
 
 it.skipIf(process.platform === "win32")(
   "reuses prepared dependencies when the review installs again",
@@ -238,35 +239,24 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
       [Symbol.dispose]: releaseProjection,
     };
   });
-  const entered = createDeferred();
-  const resume = createDeferred();
-  const lstat = fs.lstat.bind(fs);
-  const read = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-    const result = await lstat(...args);
-    if (nodeFilePath(args[0]) === targetSkills) {
-      entered.resolve();
-      await resume.promise;
-    }
-    return result;
-  });
+  const entered = filesystemBlock.arm(targetSkills, 1);
   const preparation = custody.prepareContext(config, sessionKey, workspaceDir);
   try {
     await awaitGateBeforeSettlement(
-      entered.promise,
+      entered,
       preparation,
       "Sandbox preparation skipped the managed skills read",
     );
     revocation.abort(refusal);
     expect(() => owner.assertCurrent()).not.toThrow();
-    resume.resolve();
+    filesystemBlock.release();
     const result = await preparation.catch((error: unknown) => error);
     expect(result).toMatchObject({ code: "sandbox_provisioning", cause: refusal });
     expect(await fs.readFile(targetSkills, "utf8")).toBe("preserve-managed-skills");
     expect(releaseProjection).toHaveBeenCalledOnce();
   } finally {
-    resume.resolve();
+    filesystemBlock.release();
     await preparation.catch(() => {});
-    read.mockRestore();
   }
 });
 

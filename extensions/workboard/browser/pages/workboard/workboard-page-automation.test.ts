@@ -116,6 +116,47 @@ it("shares board and detail automation loading and ignores an earlier visit's la
   expect(planningLoads).toBe(2);
 });
 
+it("shows a disabled automation in the heading and detail until cron reports it enabled", async () => {
+  const card = createWorkboardCard({ metadata: { automation: { boardId: "planning" } } });
+  let enabled = false;
+  const page = mountAutomation(
+    [{ id: "planning", automationJobId: "job-planning" }],
+    () => ({ ...automationJob("Planning job"), enabled }),
+    [card],
+  );
+  await settle(() => expect(page.heading()?.textContent).toContain("Planning job"));
+  expect
+    .soft(page.container.querySelector(".workboard-heading__automation-meta")?.textContent)
+    .toContain("Disabled");
+  expect
+    .soft(page.container.querySelector(".workboard-automation-info")?.textContent)
+    .toContain("Disabled");
+  page.workboard.state.detailCardId = card.id;
+  page.workboard.notify();
+  await settle(() => expect(page.container.querySelector(".workboard-detail")).not.toBeNull());
+  expect
+    .soft(page.container.querySelector(".workboard-board-draft__automation")?.textContent)
+    .toContain("Disabled");
+  enabled = true;
+  page.fixture.emit("cron", { jobId: "job-planning", action: "updated" });
+  await settle(() =>
+    expect(page.container.querySelector(".workboard-automation-info")?.textContent).toContain(
+      "Enabled",
+    ),
+  );
+  expect(
+    page.container.querySelector(".workboard-heading__automation-meta")?.textContent,
+  ).not.toContain("Disabled");
+  expect(
+    page.container.querySelector(".workboard-board-draft__automation")?.textContent,
+  ).not.toContain("Disabled");
+  expect(
+    page.request.mock.calls.filter(([method]) =>
+      ["cron.run", "cron.update", "cron.remove"].includes(method),
+    ),
+  ).toEqual([]);
+});
+
 const automationJob = (name: string) => ({
   name,
   enabled: true,

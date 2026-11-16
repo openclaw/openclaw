@@ -37,7 +37,7 @@ function toolEvents(callId, code) {
   ];
 }
 
-function assertTerminal(result, runId, reply, tool) {
+function assertTerminal(result, runId, reply, tool, provider) {
   const receipt = result.terminalReceipt;
   // Lifecycle receipts cap text at 4096 characters; history owns the full reply.
   const terminalText = reply.length > 4096 ? `${reply.slice(0, 4095).trimEnd()}…` : reply;
@@ -51,7 +51,7 @@ function assertTerminal(result, runId, reply, tool) {
     !receipt.sessionId ||
     !receipt.turnId ||
     receipt.rerouted ||
-    receipt.effective?.provider !== "openai" ||
+    receipt.effective?.provider !== provider ||
     receipt.terminalDisposition !== "visible" ||
     result.terminalReply?.disposition !== "visible" ||
     result.terminalReply.text !== terminalText ||
@@ -135,7 +135,7 @@ async function readCodeResult(requestLogPath, start, marker, expectFailure = fal
 }
 
 /** Configure the existing mock OpenAI server; the driver owns launch and turn cadence. */
-export async function configureHeapRigTurns(config, root, mockPort) {
+export async function configureHeapRigTurns(config, root, mockPort, provider = "openai") {
   await mkdir(root, { recursive: true });
   const responseControlPath = path.join(root, "mock-turn-responses.json");
   const requestLogPath = path.join(root, "mock-turn-requests.jsonl");
@@ -310,7 +310,13 @@ export async function configureHeapRigTurns(config, root, mockPort) {
         }
         const completed = await rpc("agent.wait", { runId, timeoutMs: 180_000 }, 190_000);
         const chatCompletedAt = Date.now();
-        const receipt = assertTerminal(completed, runId, reply, tool && !options.codeFailure);
+        const receipt = assertTerminal(
+          completed,
+          runId,
+          reply,
+          tool && !options.codeFailure,
+          provider,
+        );
         await assertHistory(rpc, sessionKey, agentId, receipt.sessionId, reply);
         if (hot) {
           counts.hotTurns++;
@@ -341,7 +347,13 @@ export async function configureHeapRigTurns(config, root, mockPort) {
               { runId: child.runId, timeoutMs: 180_000 },
               190_000,
             );
-            const childReceipt = assertTerminal(childCompleted, child.runId, reply, false);
+            const childReceipt = assertTerminal(
+              childCompleted,
+              child.runId,
+              reply,
+              false,
+              provider,
+            );
             await assertHistory(rpc, child.childSessionKey, agentId, childReceipt.sessionId, reply);
             counts.children++;
             if (options.retainSession) {

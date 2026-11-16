@@ -28,6 +28,7 @@ import {
   settleOpenClawAgentDatabaseWorkerClose,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { readAgentDatabaseExecutionAuthority } from "../../state/openclaw-agent-execution-authority.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
 import {
@@ -36,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
+  assertSqliteReclamationAuthority,
   markSqliteReclamationSettled,
   SqliteReclamationRequestRefusedError,
   waitForSqliteReclamationCommit,
@@ -133,10 +135,27 @@ async function runColdMutationWorker(
   data: SessionColdWorkerData,
   operationId: number,
 ) {
-  const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
-    await import("./session-cold-storage-worker.js");
+  const {
+    mutateSessionColdTranscriptInWorker,
+    prepareSessionColdRestoreInWorker,
+    assertSessionColdSourceCurrent,
+  } = await import("./session-cold-storage-worker.js");
   const { prepareSessionColdSourceGuard, SessionColdSourceRefusedError } =
     await import("./session-cold-storage-source-guard.worker.js");
+  const assertPhysicalSource = () =>
+    assertSessionColdSourceCurrent(data.plan.databaseOptions.path, data.source);
+  const assertSourceCurrent = () => {
+    assertPhysicalSource();
+    assertSqliteReclamationAuthority(data.commitGate, () => {
+      if (
+        data.executionAuthority &&
+        !readAgentDatabaseExecutionAuthority(data.executionAuthority)
+      ) {
+        throw new SqliteReclamationRequestRefusedError("Cold transcript execution owner retired");
+      }
+    });
+  };
+  assertSourceCurrent();
   // Restore materialization must finish before requesting any write admission.
   const coldRecords =
     data.plan.kind === "cold-restore"
@@ -179,6 +198,8 @@ async function runColdMutationWorker(
               waitForSqliteReclamationCommit(commitGate, () =>
                 port.postMessage({ type: "commit-request", operationId }),
               );
+              assertPhysicalSource();
+              assertSqliteReclamationAuthority(commitGate);
             },
             sourceGuard,
           );
@@ -203,6 +224,7 @@ async function runColdMutationWorker(
           }
         }
       },
+      assertSourceCurrent,
     );
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);

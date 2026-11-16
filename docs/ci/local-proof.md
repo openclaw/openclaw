@@ -147,6 +147,20 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Independent full-check stages
+
+`pnpm check --stage <name>` selects from the existing `preflight`, `typecheck`,
+`lint`, and `policy` stages. Repeat the option to select several stages; execution
+keeps canonical order and runs each selected stage once. Omitting the option
+retains the complete check. `--base`, `--include-test-types`, and
+`--include-architecture` keep their usual meaning.
+
+The npm source preflight runs `preflight`, `typecheck`, and `policy` in one
+worker and `lint` (including formatting) in another. The aggregate source receipt
+requires both workers to succeed. Frozen sources whose successful help output
+does not advertise `--stage` run the original complete check once instead; they
+do not gain stage parallelism. Capability-probe failures remain failures.
+
 ### Delegating changed compilers in CI
 
 `check:changed --delegate-compilers` retains the selected formatting, lint, guards,

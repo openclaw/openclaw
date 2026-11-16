@@ -42,7 +42,8 @@ export type BackgroundPayloadsCommit =
 export type BackgroundPayloadsCommitParams = {
   agentId: string;
   sessionKey: string;
-  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
+  /** See `commitBackgroundResultToSession`: undefined follows the conversation key. */
+  expectedLifecycleRevision?: string;
   /** The payloads that were shown; the stored row is their transcript projection. */
   payloads: readonly ReplyPayload[];
   idempotencyKey: string;
@@ -74,7 +75,7 @@ export async function commitBackgroundPayloadsToSession(
     return await commitBackgroundResultToSession({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      expectedGeneration: params.expectedGeneration,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
       text,
       prepareDisplayContent: async () => {
         preparedContent = await buildResultDisplayContent({
