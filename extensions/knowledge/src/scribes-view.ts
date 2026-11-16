@@ -216,14 +216,22 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     );
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
-  const runs = snapshot?.job ? await loadRuns(host, snapshot.job, agentId).catch(() => []) : [];
+  let runs: ScribeRun[] = [];
+  let runError: string | undefined;
+  if (snapshot?.job) {
+    try {
+      runs = await loadRuns(host, snapshot.job, agentId);
+    } catch (error) {
+      runError = ui.errorText(error);
+    }
+  }
   if (!live(n)) {
     return;
   }
   renderScribesTab(ui.scribesTab, snapshots.filter((entry) => isOn(entry.status)).length);
   s.scribesCountAgent = agentId;
   target.replaceChildren(
-    snapshot ? detail(ui, snapshot, runs, detection) : list(ui, snapshots, detection),
+    snapshot ? detail(ui, snapshot, runs, detection, runError) : list(ui, snapshots, detection),
   );
 }
 
@@ -283,13 +291,12 @@ function pageNames(ui: Page) {
 
 // Open the start dialog; a successful start shows the scribe's detail.
 function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
-  const { agentId, agentName, storeName } = pageNames(ui);
+  const { agentId, agentName } = pageNames(ui);
   const host = ui.s.context.host;
   const attempt = crypto.randomUUID();
   openStartDialog({
     scribe: snapshot.scribe,
     agentName,
-    storeName,
     detection,
     canWrite: host.connection.canWrite,
     basePath: host.basePath,
@@ -314,7 +321,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      `Scribes keep ${storeName} up to date on their own. Each one is a conversation you own that follows a skill shipped with Knowledge, once or on a schedule. Open one any time to see exactly what it did.`,
+      `Scribes keep ${storeName} up to date on their own. Each one uses a conversation that follows a skill shipped with Knowledge, once or on a schedule. Open one any time to see exactly what it did.`,
       "scribes-intro",
     ),
   );
@@ -341,7 +348,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      "Scribes run as you, with your private access, and use your agent’s default model. Ongoing scribes also appear on the Automations page.",
+      "Ongoing scribes also appear on the Automations page.",
       "knowledge-muted scribes-footnote",
     ),
   );
@@ -449,7 +456,13 @@ function runText(run: ScribeRun) {
   return run.summary ? statusFromText(run.summary)?.summary || run.summary : "Finished";
 }
 
-function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection: ScribeDetection) {
+function detail(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  runs: ScribeRun[],
+  detection: ScribeDetection,
+  runError?: string,
+) {
   const { scribe, job, session, status } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
@@ -669,7 +682,15 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     line.append(el("time", when(run.runAtMs ?? run.ts)), el("span", runText(run)), end);
     rows.append(line);
   }
-  if (!runs.length && firstRunPending(snapshot)) {
+  if (runError !== undefined) {
+    const failure = el(
+      "p",
+      `Could not load recent runs. Reopen this scribe to try again. ${runError}`,
+      "scribe-empty knowledge-error",
+    );
+    failure.setAttribute("role", "alert");
+    rows.append(failure);
+  } else if (!runs.length && firstRunPending(snapshot)) {
     const line = el("div", undefined, "scribe-run");
     line.append(
       el("time", "First run"),
@@ -686,7 +707,9 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     rows.append(
       el(
         "p",
-        job ? "No runs yet." : "No result yet. Open the conversation to follow along.",
+        job
+          ? "No recent run history available."
+          : "No result yet. Open the conversation to follow along.",
         "scribe-empty knowledge-muted",
       ),
     );

@@ -146,7 +146,10 @@ function ConfigUnsupportedNote(props: { message: string; onOpenRaw?: () => void 
   const parts = () => props.message.split(t("configView.raw"));
   return (
     <span class="settings-row__desc">
-      <Show when={props.onOpenRaw && parts().length === 2} fallback={props.message}>
+      <Show
+        when={props.onOpenRaw && parts().length === 2}
+        fallback={props.onOpenRaw ? props.message : t("configForm.editInAdvancedRaw")}
+      >
         {parts()[0]}
         <button type="button" class="config-field__raw-link" onClick={() => props.onOpenRaw?.()}>
           {t("configView.raw")}

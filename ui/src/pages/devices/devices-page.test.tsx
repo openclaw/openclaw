@@ -837,12 +837,13 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(dialog.getAttribute("aria-label")).toBe(
       t("devices.inventory.rotateWithheldTitle", { device: "MacBook Pro" }),
     );
-    expect(document.body.textContent).toContain(t("devices.inventory.rotateWithheldNext"));
+    expect(document.body.textContent).toContain("The previous token no longer works.");
+    expect(document.body.textContent).not.toContain("nothing else to do");
     expect(document.body.querySelector(".secret-reveal__callout")?.textContent).toContain(
       t("devices.inventory.rotateWithheldException"),
     );
     expect(document.body.querySelector(".secret-reveal__note")?.textContent).toContain(
-      t("devices.inventory.rotateWithheldNote"),
+      "The new token isn’t shown here because it belongs to another device.",
     );
     expect(document.body.querySelector(".secret-reveal__code")).toBeNull();
     expect(document.body.querySelector("openclaw-modal-dialog .chat-copy-btn")).toBeNull();

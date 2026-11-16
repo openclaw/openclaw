@@ -44,10 +44,6 @@ export function fsyncPath(pathname: string, directory = false): void {
   }
 }
 
-export function preservedPath(live: string, appVersion: string): string {
-  return `${live}.pre-${appVersion}`;
-}
-
 export function isSqliteFile(pathname: string): boolean {
   let fd: number | undefined;
   try {
@@ -120,7 +116,7 @@ function skipEntry(name: string): boolean {
 }
 
 /** Changes on any write, replacement or mode change of the file. */
-export function fileStamp(pathname: string): string | undefined {
+function fileStamp(pathname: string): string | undefined {
   const stat = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
@@ -372,7 +368,7 @@ export function applyPlan(plan: UpgradePlan): void {
     directories.add(path.dirname(op.live));
     // Shared-memory and seal files are rebuilt on open; they carry no data.
     if (op.kind !== "add" && !/-shm$|\.seal$/u.test(op.live)) {
-      preserve(op.live, preservedPath(op.live, plan.appVersion));
+      preserve(op.live, `${op.live}.pre-${plan.appVersion}`);
     }
     if (op.kind === "remove") {
       fs.rmSync(op.live, { force: true });

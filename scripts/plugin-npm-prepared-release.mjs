@@ -876,9 +876,10 @@ function outputValues(file, values) {
 // Each package can run consume and authorize independently. These are enforced
 // transport ceilings, including retries, not the happy-path fixture counts.
 const PACKAGE_COMMAND_REQUEST_LIMIT = 256;
-// Carrier-backed commands replay immutable reads; their lower ceiling is also
-// enforced at transport, rather than merely estimated by preview admission.
-const CARRIER_COMMAND_REQUEST_LIMIT = 128;
+// Carrier-backed commands replay immutable reads. A 54-request transport cap
+// keeps the 101-package release below 12,000 requests, including 1,024 headroom:
+// 101 * 2 * 54 + 1,024 = 11,932. Admission uses this same enforced cap.
+const CARRIER_COMMAND_REQUEST_LIMIT = 54;
 const PREVIEW_REQUEST_LIMIT = 1024;
 const PUBLICATION_REQUEST_HEADROOM = 1024;
 
