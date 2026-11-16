@@ -49,7 +49,7 @@
    the straight divider. The content side keeps its square edge and the shell's divider. */
 .sidebar--rail .sidebar-shell {
   --sidebar-pad-x: 8px;
-  --sidebar-panel-radius: calc(22px * var(--openclaw-corner-radius-scale));
+  --sidebar-panel-radius: calc(18px * var(--openclaw-corner-radius-scale));
   min-width: 0;
   overflow: hidden;
   --sidebar-panel-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
