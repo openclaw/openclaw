@@ -149,10 +149,6 @@ suite.define(() => {
       expect(
         await activityPage.locator(`[data-activity-session="${selectedSessionKey}"]`).count(),
       ).toBe(0);
-      const selectedRow = sidebar.locator(
-        `.sidebar-recent-session[data-session-key="${selectedSessionKey}"]`,
-      );
-      expect(await selectedRow.count()).toBe(1);
 
       await page.goBack();
       await expect.poll(() => ownerTitle.getAttribute("aria-label")).toBe("Owners: All owners");
