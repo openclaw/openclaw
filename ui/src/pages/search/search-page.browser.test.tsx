@@ -286,27 +286,25 @@ describe("Search settings", () => {
   });
 
   it.each(["success", "failure"] as const)(
-    "loads current status after catalog %s",
+    "shows current status while the background catalog ends in %s",
     async (outcome) => {
       const catalog = createDeferred<ModelCatalogResult>();
       const page = await mount({ modelsResponse: catalog.promise, waitReady: false });
-      expect(page.calls("webSearch.status")).toHaveLength(0);
+      await page.statusRequested;
       await waitForSolid(() =>
-        expect(page.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+        expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull(),
       );
+      expect(page.calls("webSearch.status")).toHaveLength(1);
+      expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
+      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      page.expectText("Configured");
       if (outcome === "success") {
-        page.setResult({ ...ready, agentId: "scout" });
-        page.setAgent("scout");
         catalog.resolve({ models: [{ id: "local", name: "Local model", provider: "example" }] });
       } else {
         catalog.reject(new Error("Model catalog unavailable"));
       }
-      await page.statusRequested;
       await page.settle();
-      const statuses = page.calls("webSearch.status");
-      expect(statuses).toHaveLength(1);
-      expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
-      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(page.calls("webSearch.status")).toHaveLength(1);
       expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
       page.expectText("Configured");
     },

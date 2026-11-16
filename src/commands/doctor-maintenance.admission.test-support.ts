@@ -1,6 +1,5 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import {
@@ -58,7 +57,6 @@ export function setupDoctorAdmissionFixture() {
       directories.cleanup();
     } finally {
       vi.restoreAllMocks();
-      syncBuiltinESMExports();
       vi.unstubAllEnvs();
     }
   });
@@ -77,7 +75,6 @@ export function setupDoctorAdmissionFixture() {
       import fs from 'node:fs';
       import path from 'node:path';
       import sqlite from 'node:sqlite';
-      import { syncBuiltinESMExports } from 'node:module';
       import { fileURLToPath } from 'node:url';
       if (process.versions.bun) {
         const { ensureSqliteLibrarySelected } = await import(${JSON.stringify(new URL("../infra/bun-sqlite-library.js", import.meta.url).href)});
@@ -100,7 +97,6 @@ export function setupDoctorAdmissionFixture() {
           return Reflect.construct(target, args, newTarget);
         }
       });
-      syncBuiltinESMExports();
       // A wrong but disposable path must be refused before SQLite creates it.
       assert.throws(() => new sqlite.DatabaseSync(${JSON.stringify(refused)}),
         /Handoff must use the task-private database/);
@@ -127,13 +123,12 @@ export function setupDoctorAdmissionFixture() {
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
     expect(binding.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(binding.databasePath);
     // Compiled runtime modules use native builtin exports, outside Vitest's facade.
-    // Observe the actual functions and synchronize ESM bindings; calls stay real.
+    // Observe the shared builtin object; calls stay real.
     const spawns = [
       vi.spyOn(childProcess, "spawnSync"),
       vi.spyOn(childProcess, "spawn"),
       vi.spyOn(childProcess, "execFile"),
     ];
-    syncBuiltinESMExports();
     const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" };
     const run = createUpdateRun({ trigger: "cli" }, { env });
     finishUpdateRun(run.runId, { status: "succeeded" }, { env });

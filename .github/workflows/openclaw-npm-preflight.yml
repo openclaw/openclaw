@@ -117,10 +117,14 @@ jobs:
           echo "preflight_run_id is only valid for real publish runs."
           exit 1
 
-  check_openclaw_npm:
-    name: Check npm release source
+  check_openclaw_npm_stage:
+    name: Check npm source (${{ matrix.stage }})
     needs: validate_npm_request
     if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [nonlint, lintformat]
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: &linux_runner_xlarge >-
@@ -129,8 +133,6 @@ jobs:
       inputs.use_github_hosted_runners) && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
       ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
       || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404') }}
-    outputs:
-      source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
       - &checkout_npm_source
         name: Checkout
@@ -213,6 +215,7 @@ jobs:
 
       - name: Check source, test types, and architecture
         env:
+          SOURCE_STAGE: ${{ matrix.stage }}
           OPENCLAW_LOCAL_CHECK: "0"
           # The 32-class delivers only 8 CPUs/31 GiB; concurrent oxlint shards lost the runner.
           OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1"
@@ -223,11 +226,29 @@ jobs:
           mv .release-harness "$harness_root"
           restore_harness() { mv "$harness_root" .release-harness; }
           trap restore_harness EXIT
-          pnpm check --include-test-types --include-architecture
+          # Probe the target CLI, not the trusted harness's current inventory.
+          check_help="$(pnpm check --help)"
+          if grep -qE -- '^[[:space:]]+--stage[[:space:]]' <<< "$check_help"; then
+            case "$SOURCE_STAGE" in
+              nonlint) stages=(--stage preflight --stage typecheck --stage policy) ;;
+              lintformat) stages=(--stage lint) ;;
+              *) echo "Unknown source stage: $SOURCE_STAGE" >&2; exit 1 ;;
+            esac
+            pnpm check --include-test-types --include-architecture "${stages[@]}"
+          elif [[ "$SOURCE_STAGE" == nonlint ]]; then
+            # Frozen pre-selector sources keep their original complete check once.
+            pnpm check --include-test-types --include-architecture
+          elif [[ "$SOURCE_STAGE" == lintformat ]]; then
+            echo 'Frozen target has no --stage support; nonlint owns the full check.'
+          else
+            echo "Unknown source stage: $SOURCE_STAGE" >&2
+            exit 1
+          fi
           restore_harness
           trap - EXIT
 
       - name: Enforce plugin compatibility release readiness
+        if: ${{ matrix.stage == 'nonlint' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -245,15 +266,35 @@ jobs:
           fi
           echo '::warning::Frozen target predates the plugin compatibility release gate; skipping target-owned compatibility readiness.'
 
+  check_openclaw_npm:
+    name: Check npm release source
+    needs: [validate_npm_request, check_openclaw_npm_stage]
+    if: ${{ always() && !cancelled() && needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
+    runs-on: >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    outputs:
+      source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
+    steps:
+      - *checkout_npm_source
+      - *checkout_npm_harness
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Seal source-check evidence
         id: source_evidence
         env:
+          SOURCE_STAGE_RESULT: ${{ needs.check_openclaw_npm_stage.result }}
           GH_TOKEN: ${{ github.token }}
           JOB_CONTEXT: ${{ toJSON(job) }}
           PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
           PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          [[ "$SOURCE_STAGE_RESULT" == success ]] || { echo "Source stage workers did not all succeed." >&2; exit 1; }
           [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
           [[ -z "$(git -C .release-harness status --porcelain)" ]]
           node .release-harness/scripts/npm-prepared-bundle.mjs source-evidence --source-sha "$(git rev-parse HEAD)"

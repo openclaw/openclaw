@@ -5,7 +5,7 @@
  *   --owner-file .local/base-session-catalog-entry-snapshot.ts --iterations 3000 \
  *   --workload cold --mode timing
  * Omit --owner-file for current source. Alternate base/candidate runs; measure
- * allocation separately. Cold advances the projection revision every call; warm
+ * allocation separately. Cold publishes a selection change every call; warm
  * retains it. Work-count regression: --mode counts --expect-temporary-arrays 0
  * fails on the cold base (40 per-agent mapped arrays/call), passes direct flattening.
  * Retention: --mode retention --entries-per-agent 112 --expect-retained-catalogs 0
@@ -81,7 +81,12 @@ export const pairs = new Map(agentIds.map(agentId => [agentId,
 export const cfg = Object.freeze({agents: Object.freeze({entries:
   Object.freeze(Object.fromEntries(agentIds.map(id => [id, Object.freeze({})])))
 })});
-export const projection = {state: {revision: {}}, needsSelectionPreparation: () => false};
+let changed = () => {};
+export const projection = {state: {revision: {}}, needsSelectionPreparation: () => false,
+  onSelectionChange: listener => { changed = listener; },
+  invalidate: () => { projection.state.revision = {}; changed(); }};
+export const getPreparedAgentDeletionDiscovery = () => undefined;
+export const resolveOpenClawStateSqlitePath = () => 'synthetic';
 export const listAgentIds = () => agentIds;
 export const normalizeAgentId = value => value.toLowerCase();
 export const prepareSessionRowSelection = (_projection, {agentId}) => ({entries: () => pairs.get(agentId)});
@@ -114,7 +119,11 @@ type Fixture = {
   temporaryArrays: number;
   pairs: Map<string, readonly (readonly [string, Entry])[]>;
   cfg: object;
-  projection: { state: { revision: object }; needsSelectionPreparation: () => boolean };
+  projection: {
+    state: { revision: object };
+    needsSelectionPreparation: () => boolean;
+    invalidate: () => void;
+  };
 };
 type Snapshot = {
   freeze: () => void;
@@ -146,7 +155,7 @@ if (values.mode === "retention") {
     await inspector.post("HeapProfiler.collectGarbage");
   };
   const captureCompletedPage = () => {
-    fixture.projection.state.revision = {};
+    fixture.projection.invalidate();
     const snapshot = owner.createSessionCatalogRequestEntrySnapshot(request);
     snapshot.freeze();
     const instances = new Map<string, unknown>();
@@ -157,14 +166,14 @@ if (values.mode === "retention") {
     for (let index = 0; index < 10; index++) {
       captureCompletedPage();
     }
-    fixture.projection.state.revision = {};
+    fixture.projection.invalidate();
     await collect();
     const before = process.memoryUsage();
     const loadStart = loadavg();
     const cpuStart = process.threadCpuUsage();
     const started = performance.now();
     const pages = Array.from({ length: 65 }, captureCompletedPage);
-    fixture.projection.state.revision = {};
+    fixture.projection.invalidate();
     const wallMs = performance.now() - started;
     const cpu = process.threadCpuUsage(cpuStart);
     await collect();
@@ -207,7 +216,7 @@ if (values.mode === "retention") {
   const run = (count: number) => {
     for (let i = 0; i < count; i++) {
       if (values.workload === "cold") {
-        fixture.projection.state.revision = {};
+        fixture.projection.invalidate();
       }
       output = capture();
     }

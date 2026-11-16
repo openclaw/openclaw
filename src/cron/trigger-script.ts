@@ -44,7 +44,6 @@ import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
 } from "../agents/scheduled-tool-policy.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -85,6 +84,7 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { observePrAutoFix, prAutoFixFailureCode } from "./session-pr-auto-fix.js";
 import { resolveCronAuthenticatedChannelRequester } from "./tools-allow-provenance.js";
 import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
 import {
@@ -100,7 +100,6 @@ import type {
   CronTriggerFailureCode,
 } from "./types.js";
 
-const MAX_CONCURRENT_TRIGGER_EVALS = 3;
 const MAX_CACHED_TRIGGER_RUNTIMES = 128;
 const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
 const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
@@ -110,8 +109,6 @@ const MIN_TRIGGER_PREPARATION_TIMEOUT_MS = 120_000;
 // Holds a finished evaluation for MCP teardown at most this long; a hung connect or shutdown
 // keeps retiring as tracked work instead of holding the result and trigger slot.
 const CRON_SCRIPT_MCP_CLEANUP_GRACE_MS = 1_000;
-
-let activeTriggerEvaluations = 0;
 
 // Compile-time sync with the leaf contract in ./types.ts: a new code-mode
 // failure code must be added to CronTriggerFailureCode or this line errors.
@@ -318,7 +315,6 @@ async function prepareTriggerRuntime(
         cwd: effectiveWorkspace,
         workspaceDir: effectiveWorkspace,
         sessionKey,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
       };
       const acquireMcpTools: PreparedTriggerRuntime["acquireMcpTools"] = async (
         admitted,
@@ -584,6 +580,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         approvalSignals: [evaluationScope.signal],
       });
       assertActive();
+      const triggerState = await observePrAutoFix(params, caller, evaluationScope, assertActive);
       // Reload during setup is best effort; the next invocation refreshes its cache.
       let tools = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
         runtime.createTools(
@@ -651,7 +648,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           code: params.script,
           wallClockMs: remainingWallClockMs,
           maxToolCalls: params.maxToolCalls,
-          extraNamespaces: [triggerStateNamespace(params.state, params.streamBatch)],
+          extraNamespaces: [triggerStateNamespace(triggerState, params.streamBatch)],
           signal: evaluationScope.signal,
         });
         if (result.status === "failed") {
@@ -671,7 +668,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           ? "timeout"
           : error instanceof CodeModeHeadlessAbortError
             ? "aborted"
-            : "internal_error",
+            : prAutoFixFailureCode(params, error),
       );
     } finally {
       try {
@@ -699,21 +696,13 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
   const run = createCronCodeModeRunner(deps);
   return {
     evaluateTrigger: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
-      if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
-        return { kind: "busy" };
-      }
-      activeTriggerEvaluations += 1;
-      try {
-        const outcome = await run({
-          ...params,
-          wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
-          maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
-          label: "cron trigger evaluation",
-        });
-        return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
-      } finally {
-        activeTriggerEvaluations -= 1;
-      }
+      const outcome = await run({
+        ...params,
+        wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
+        maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
+        label: "cron trigger evaluation",
+      });
+      return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
     },
     executePayload: async (
       params: Parameters<NonNullable<CronServiceDeps["runScriptJob"]>>[0],

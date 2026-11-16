@@ -2,6 +2,52 @@ import type { Selectable, Updateable } from "kysely";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 
+export type LocalWorkspaceCapture = {
+  root: string;
+  sourceDev: bigint;
+  snapshotDev: bigint;
+  capturedAtMs: number;
+};
+
+export type LocalWorkspaceBaselineDocument = {
+  rawManifest: string;
+  manifestRef: string;
+  buildCacheInputs: string[];
+};
+
+export type LocalWorkspaceManifestAction =
+  | {
+      kind: "scan" | "probe";
+      target: "canonical" | "projection";
+      canonicalRoot: string;
+      capture?: LocalWorkspaceCapture;
+    }
+  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
+  | { kind: "materialize" }
+  | { kind: "convert" }
+  | { kind: "repair"; canonicalRoot: string }
+  | {
+      kind: "prepare";
+      manifest: LocalWorkspaceManifestMutation;
+      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
+    }
+  | (LocalWorkspaceBaselineDocument & {
+      kind: "replace";
+      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
+    });
+
+export type LocalWorkspaceManifestCheckpoint = Omit<
+  LocalWorkspaceManifestScan,
+  "observation" | "preparations"
+>;
+
+export type LocalWorkspaceManifestInput = {
+  id: string;
+  revision: number;
+  action: LocalWorkspaceManifestAction;
+  knownTreeRoot?: string;
+};
+
 export type LocalWorkspaceRejectedResult = { ref: string; reason: string; manifestRef?: string };
 export type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]> & {
   rejectedResult?: LocalWorkspaceRejectedResult;
@@ -14,6 +60,8 @@ export type LocalWorkspaceManifestMutation = {
   replace?: boolean;
   treeRoot?: string;
   previousTreeRoot?: string | null;
+  /** Acceptance reuses fingerprints from the revision-checked durable checkpoint. */
+  fingerprintsFromCheckpoint?: true;
   fingerprints?: { target: "canonical" | "projection"; blob: string; oppositeBlob?: string };
 };
 export type LocalWorkspaceMutation =
@@ -31,6 +79,7 @@ export type LocalWorkspaceMutation =
 export type LocalWorkspacePreparedUpdate = {
   revision: number;
   patch: Updateable<DB["local_workspace_projections"]>;
+  rejectedResult?: LocalWorkspaceRejectedResult;
   mutation: Uint8Array;
   preparations?: Uint8Array[];
 };

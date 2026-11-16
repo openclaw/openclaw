@@ -49,6 +49,7 @@ function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid, 
   return {
     metadata: { ...prMeta, headRefOid: head, files: [...paths].map((path) => ({ path })) },
     baselineHead: baseline.baselineHead,
+    pendingFindings: baseline.pendingFindings ?? [],
   };
 }
 
@@ -105,6 +106,7 @@ function runCorrectionReview(
       }
     }
     const review = createReviewArtifactTemplate({ number: pr, headSha: head });
+    review.findings = candidate.pendingFindings;
     review.correction = {
       incomingHeadSha: incoming,
       incomingReviewJsonOid: jsonOid,

@@ -33,7 +33,6 @@ export function createSyntheticPluginRuntimeClient(
       | "openclawIdPrincipal"
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
-      | "cronRunContinuation"
       | "runtimeContextFragments"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
@@ -77,7 +76,6 @@ export function createSyntheticPluginRuntimeClient(
       ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
-      ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
       ...(params?.runtimeContextFragments
         ? { runtimeContextFragments: params.runtimeContextFragments }
         : {}),

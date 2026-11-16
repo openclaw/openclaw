@@ -920,6 +920,37 @@ describe("source-preserving JSON tree", () => {
     }
   });
 
+  it("keeps wrap-only JSON literal and complete without code tools", () => {
+    const json = parseMarkdownJson(
+      JSON.stringify({ lines: Array.from({ length: 12 }, (_, i) => i) }, null, 2),
+    )!;
+    const fragment = interactiveHtml(
+      toSanitizedJsonHtml(json, { codeBlockChrome: "none", codeBlockInteraction: "wrap" }),
+    );
+    expect(fragment.querySelector("pre code")?.textContent).toBe(json.text);
+    expect(
+      fragment.querySelector(".code-block-copy, .code-block-expand, .code-block-json-tree"),
+    ).toBeNull();
+    const toggle = fragment.querySelector<HTMLButtonElement>(".code-block-wrap")!;
+    const wrapper = toggle.closest(".code-block-wrapper")!;
+    expect(wrapper.classList.contains("is-wrapped")).toBe(true);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    // A row that fits the viewport can still scroll once the toggle's padding applies.
+    const viewport = wrapper.querySelector(".code-block-viewport")!;
+    Object.defineProperty(viewport, "clientWidth", { configurable: true, value: 400 });
+    Object.defineProperty(viewport, "scrollWidth", { configurable: true, value: 450 });
+    Object.defineProperty(viewport.querySelector("code"), "scrollWidth", {
+      configurable: true,
+      value: 390,
+    });
+    toggle.click();
+    expect(wrapper.classList.contains("is-wrapped")).toBe(false);
+    expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    toggle.click();
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("waits for a closing fence before offering the tree", () => {
     const source = '```json\n{"a":1}';
     document.body.innerHTML = toStreamingMarkdownParts(source, jsonOptions).join("");

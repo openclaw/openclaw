@@ -24,6 +24,7 @@ import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "./run/runtime-context-prompt.js";
+import { resolveSessionBoundaryPromptCacheKey } from "./run/session-boundary-prompt-cache-key.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
 import {
   createToolResultPromptProjectionState,
@@ -31,6 +32,15 @@ import {
 } from "./session-prompt-state.js";
 import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import { restoreCacheTtlToolResultProjections } from "./tool-result-truncation.js";
+
+function sameModelRoute(left: Model, right: Model): boolean {
+  return (
+    left.provider === right.provider &&
+    left.id === right.id &&
+    left.api === right.api &&
+    left.baseUrl === right.baseUrl
+  );
+}
 
 function matchesModelRoute(routeKey: unknown, model: Model): boolean {
   const route = parseSystemPromptRouteKey(routeKey);
@@ -42,7 +52,10 @@ function matchesModelRoute(routeKey: unknown, model: Model): boolean {
   );
 }
 
-/** Rebuild only when a fork is requested; the transcript and live attempt own history. */
+/**
+ * Rebuild only when a fork is requested; the transcript and live attempt own history.
+ * The fork replays the parent's prefix, so it also sends the parent's prompt-cache key.
+ */
 export async function prepareEmbeddedSessionForkContext(params: {
   target: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId"> &
     Partial<Pick<SessionTranscriptRuntimeTarget, "sessionKey" | "storePath">>;
@@ -59,7 +72,11 @@ export async function prepareEmbeddedSessionForkContext(params: {
   directApiKey?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
-}): Promise<Context> {
+}): Promise<{
+  context: Context;
+  promptCacheKey?: string;
+  preparedRequest?: Record<string, unknown>;
+}> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
@@ -76,13 +93,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
     isCurrentEmbeddedRunAttachment(attachment)
       ? attachment.handle.readSessionForkContext?.()
       : undefined;
-  if (
-    live &&
-    live.model.provider === params.model.provider &&
-    live.model.id === params.model.id &&
-    live.model.api === params.model.api &&
-    live.model.baseUrl === params.model.baseUrl
-  ) {
+  if (live && sameModelRoute(live.model, params.model)) {
     const messages = normalizeMessagesForLlmBoundary(
       live.projectMessages?.(live.messages) ?? live.messages,
       {
@@ -92,7 +103,13 @@ export async function prepareEmbeddedSessionForkContext(params: {
     );
     const cloned = structuredClone({
       systemPrompt: live.systemPrompt,
-      tools: live.tools,
+      // Schema-only definitions; executors never leave the attempt.
+      tools: live.tools?.map(({ name, description, parameters, async }) => ({
+        name,
+        description,
+        parameters,
+        ...(async === false ? { async } : {}),
+      })),
       messages,
     });
     // Structured clone omits the runtime media symbol; preserve its current owner facts.
@@ -110,7 +127,14 @@ export async function prepareEmbeddedSessionForkContext(params: {
       context.messages = convertToLlm(live.projectMessages(context.messages));
     }
     applyRuntimeContextCarrierRetention(context.messages, live.boundary?.appendOnlyRuntimeContext);
-    return context;
+    const prepared = live.preparedRequest;
+    return {
+      context,
+      promptCacheKey: live.promptCacheKey,
+      ...(prepared && sameModelRoute(prepared.model, params.model)
+        ? { preparedRequest: prepared.body }
+        : {}),
+    };
   }
 
   const marker = parseSqliteSessionFileMarker(params.sessionFile);
@@ -271,5 +295,13 @@ export async function prepareEmbeddedSessionForkContext(params: {
   );
   messages = convertToLlm(replayToolResultPromptProjections(messages, toolResultProjectionState));
   applyRuntimeContextCarrierRetention(messages, policy.appendOnlyRuntimeContext);
-  return { systemPrompt, tools, messages };
+  return {
+    context: { systemPrompt, tools, messages },
+    // A run-only explicit key is not recorded, so a completed fork uses the session default.
+    promptCacheKey: resolveSessionBoundaryPromptCacheKey({
+      api: params.model.api,
+      boundaryCount: manager.getBoundaryCount(),
+      sessionId: params.target.sessionId,
+    }),
+  };
 }

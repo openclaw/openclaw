@@ -112,8 +112,8 @@ it.each([
     expect(privateReply).toContain("do not call message(action=send)");
     expect(privateReply).not.toContain("Your replies are automatically sent");
     if (kind === "direct") {
-      expect(automatic).not.toContain("NO_REPLY");
-      expect(privateReply).not.toContain("NO_REPLY");
+      expect(automatic).toContain('reply with exactly "NO_REPLY"');
+      expect(privateReply).toContain('reply with exactly "NO_REPLY"');
     } else {
       expect(privateReply).toContain("send confirmations before ending silently");
     }

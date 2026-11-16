@@ -24,10 +24,10 @@ export async function resolveRequestGitCoauthorPrompt(params: {
     const credit = await resolveGitCoauthorAttribution(params);
     return credit?.trailers.length
       ? [
-          "Git co-author credit for this request: preserve these verified requester trailers in commits and delegation. Do not substitute the main session's roster. Retain other legitimate task co-authors.",
+          "Git co-author credit for this request: preserve these consented requester trailers in commits and delegation. Do not substitute the main session's roster. Retain other legitimate task co-authors.",
           ...credit.trailers,
         ].join("\n")
-      : "Git co-author credit for this request: no host-verified requester trailer is available. Do not infer credit from this main session's roster, earlier tasks, display names, or the publishing account. Preserve any separately verified task contributor credit.";
+      : "Git co-author credit for this request: no host-supplied requester trailer is available. Do not infer credit from this main session's roster, earlier tasks, display names, or the publishing account. Preserve any separately consented task contributor credit.";
   } catch (error) {
     log.warn("failed to resolve request Git co-authors", { error });
     return undefined;
@@ -59,7 +59,7 @@ export async function resolveSessionGitCoauthorPrompt(params: {
       sessionKey: params.sessionKey,
     })
   ) {
-    return "Git co-authors: this main session routes unrelated conversations. Its participant roster is not a task's contributor list. Use only the current request's verified Git co-author trailers when supplied; never copy credit from another conversation or an earlier task. Preserve legitimate task co-authors, and do not replace the requester's credit with session participants.";
+    return "Git co-authors: this main session routes unrelated conversations. Its participant roster is not a task's contributor list. Use only the current request's host-supplied Git co-author trailers when supplied; never copy credit from another conversation or an earlier task. Preserve legitimate task co-authors, and do not replace the requester's credit with session participants.";
   }
   try {
     const attribution = await resolveGitCoauthorAttribution({

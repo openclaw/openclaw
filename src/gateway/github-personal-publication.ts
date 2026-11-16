@@ -49,7 +49,10 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   lifecycleRevision: string | null;
 };
 export type PersonalGitHubSessionActionV2 = PersonalGitHubSessionAction &
-  Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource">;
+  Pick<
+    GitHubPublicationRequesterV2,
+    "version" | "signal" | "prepareSource" | "prepareDispatchCredential"
+  >;
 type Selection = { generation: string; account: { accountId: number; login: string } };
 type PersonalPublicationWorkspace = {
   assertCurrent: () => void;

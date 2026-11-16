@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -22,6 +23,7 @@ import {
   assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
+import type { LocalWorkspacePausePhase } from "./types.js";
 
 const log = createSubsystemLogger("sandbox/quiescence");
 const pauseCounts = {
@@ -33,21 +35,6 @@ const pauseCounts = {
   restore: 0,
 };
 export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
-export type LocalWorkspacePausePhase =
-  | "pause"
-  | "operation"
-  | "recovery"
-  | "capture"
-  | "scan"
-  | "staging"
-  | "materialization"
-  | "preflight"
-  | "patch"
-  | "apply"
-  | "acceptance"
-  | "verification"
-  | "cleanup"
-  | "resume";
 
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(
@@ -222,6 +209,7 @@ export async function quiesceLocalWorkspace(params: {
   using phases = observeDiagnosticsTimelinePhases(
     "attempt.setup.sandbox.workspace_selection.quiesce.registry",
   );
+  const scope = createHash("sha256").update(params.workspaceDir).digest("hex").slice(0, 16);
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir, { env: params.env })).map(
     (runtime) => ({
       runtime,
@@ -244,13 +232,20 @@ export async function quiesceLocalWorkspace(params: {
   };
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
+  const prepared: Array<{
+    runtime: (typeof selected)[number]["runtime"];
+    target: ReturnType<typeof localWorkspaceRuntimeEngine>;
+    id: string;
+    isPaused: boolean;
+    observedAt: number;
+  }> = [];
   for (const { runtime, bridges } of selected) {
     // Stopped custody proves removal of this exact child, but still blocks retirement.
     if (runtime.kind === "persistent" && runtime.record.phase === "stopped") {
       continue;
     }
-    const { engine, backendTarget, containerName, expectedId } =
-      localWorkspaceRuntimeEngine(runtime);
+    const target = localWorkspaceRuntimeEngine(runtime);
+    const { engine, backendTarget, containerName, expectedId } = target;
     // Stopped allocations remain owned resources, but were never live writers.
     const captureRetirement = (id: string | null) => {
       if (runtime.kind === "persistent") {
@@ -326,18 +321,29 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.persist");
       await params.persist(paused);
     }
+    prepared.push({
+      runtime,
+      target,
+      id,
+      isPaused: isPaused === "true",
+      observedAt: performance.now(),
+    });
+  }
+  // Inspect every writer before freezing any; engine admission can wait behind cleanup.
+  for (const { runtime, target, id, isPaused, observedAt } of prepared) {
+    const { engine, backendTarget, containerName } = target;
     const reason = params.reason ?? "reconcile";
-    let startedAt = performance.now();
+    let startedAt = observedAt;
     let phase: LocalWorkspacePausePhase = "pause";
     let phaseStartedAt = startedAt;
-    const durations = new Map<LocalWorkspacePausePhase, number>();
+    const durations: Partial<Record<LocalWorkspacePausePhase, number>> = {};
     const observePhase = (next: LocalWorkspacePausePhase) => {
       const now = performance.now();
-      durations.set(phase, (durations.get(phase) ?? 0) + now - phaseStartedAt);
+      durations[phase] = (durations[phase] ?? 0) + now - phaseStartedAt;
       phase = next;
       phaseStartedAt = now;
     };
-    if (isPaused !== "true") {
+    if (!isPaused) {
       // A retained receipt may outlive an unpause. Re-fence the live writer
       // before reconciliation rather than trusting stale pause metadata.
       params.assertCurrent();
@@ -346,10 +352,13 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
       phaseStartedAt = startedAt = performance.now();
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
-      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
-        engine: engine.id,
-        runtime: runtime.kind,
-      });
+      log.info(
+        `Local workspace pause: reason=${reason} scope=${scope} count=${++pauseCounts[reason]}`,
+        {
+          engine: engine.id,
+          runtime: runtime.kind,
+        },
+      );
     }
     phaseObservers.add(observePhase);
     releases.push(async () => {
@@ -363,6 +372,7 @@ export async function quiesceLocalWorkspace(params: {
       // Archive may have removed this exact generation while settlement held it.
       // A missing or already-running runtime needs receipt cleanup, not unpause.
       resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.inspect");
+      observePhase("resumeInspect");
       const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
         allowFailure: true,
         signal: AbortSignal.timeout(30_000),
@@ -378,8 +388,10 @@ export async function quiesceLocalWorkspace(params: {
         outcome = "removed";
       } else if (observed.stdout.trim() === "true") {
         resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.authority");
+        observePhase("resumeAuthority");
         await runtime.assertCurrent();
         resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.unpause");
+        observePhase("unpause");
         const result = await execContainer(engine, ["unpause", id], {
           allowFailure: true,
           signal: AbortSignal.timeout(30_000),
@@ -396,12 +408,21 @@ export async function quiesceLocalWorkspace(params: {
       }
       if (phaseObservers.delete(observePhase)) {
         observePhase("resume");
-        const [dominantPhase, dominantPhaseMs] = [...durations].reduce((longest, measured) =>
-          measured[1] > longest[1] ? measured : longest,
-        );
+        let dominantPhase = "pause";
+        let dominantPhaseMs = 0;
+        const phaseDurationsMs: Record<string, number> = {};
+        for (const [name, ms] of Object.entries(durations)) {
+          if (ms > dominantPhaseMs) {
+            dominantPhase = name;
+            dominantPhaseMs = ms;
+          }
+          if (ms >= 1_000) {
+            phaseDurationsMs[name] = Math.round(ms);
+          }
+        }
         // Recovered receipts have no timestamp; never present this owner's observation as the full pause.
         log.info(
-          `Local workspace unpause: reason=${reason} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} durationScope=${isPaused === "true" ? "observed" : "owner"} outcome=${outcome}`,
+          `Local workspace unpause: reason=${reason} scope=${scope} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
           { engine: engine.id, runtime: runtime.kind },
         );
       }

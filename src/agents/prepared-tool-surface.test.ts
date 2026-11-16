@@ -179,6 +179,7 @@ it("issues byte-identical definitions to the local session adapter", () => {
         },
         hideFromChannelProgress: true,
         executionMode: "sequential",
+        repeatable: { actions: ["poll"] },
       },
     ],
     modelProvider: "openai",
@@ -190,4 +191,19 @@ it("issues byte-identical definitions to the local session adapter", () => {
   expect(JSON.stringify(placed)).toBe(JSON.stringify(local));
   expect(placed[0]).toMatchObject({ executionMode: "sequential", hideFromChannelProgress: true });
   expect(Object.keys(placed[0]!)).not.toContain("execute");
+  // Workers enforce the same repeat guard, so the plain-data exemption crosses the wire.
+  expect(placed[0]).toMatchObject({ repeatable: { actions: ["poll"] } });
+});
+
+it("tells workers when tools.loopDetection turns the repeat guard off", () => {
+  const off = { tools: { loopDetection: { enabled: false } } } as OpenClawConfig;
+  const agentOn = {
+    ...off,
+    agents: { list: [{ id: "main", tools: { loopDetection: { enabled: true } } }] },
+  } as OpenClawConfig;
+  expect(prepareCoreToolPolicy({}).toolRepeatGuard).toBeUndefined();
+  expect(prepareCoreToolPolicy({ config: off, agentId: "main" }).toolRepeatGuard).toBe(false);
+  expect(
+    prepareCoreToolPolicy({ config: agentOn, agentId: "main" }).toolRepeatGuard,
+  ).toBeUndefined();
 });

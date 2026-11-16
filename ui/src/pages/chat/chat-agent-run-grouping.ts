@@ -1,5 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
@@ -14,6 +15,7 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   assistantGroupIsIndependentBoundary,
+  readProjectedContinuation,
 } from "./chat-turn-boundary.ts";
 import {
   joinActivityRuns,
@@ -70,6 +72,11 @@ export function chatItemGroups(
     return item.groups;
   }
   return [];
+}
+
+/** What woke the work a part resumes, which opens it with a Resumed rule. */
+export function partContinuation(item: AgentRunFrameInput | ChatItem) {
+  return readProjectedContinuation(chatItemGroups(item)[0]?.messages[0]?.message);
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
@@ -182,32 +189,23 @@ export function coalesceAgentRunFrames(
     activeRunId?: string | null;
     /** Session-wide liveness does not grant foreground stream ownership. */
     activeRunIds?: readonly string[];
+    session?: Pick<GatewaySessionRow, "lastRunId" | "abortedLastRun">;
   } = {},
 ): Array<AgentRunFrameInput | AgentRunFrameRenderItem> {
   if (opts.searchActive) {
     return items;
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
-  const lastAssistantByRun = new Map<string, unknown>();
   const terminalRuns = new Set<string>();
   const activeRunIds = new Set(opts.activeRunIds);
   for (const message of opts.messages ?? []) {
     const id = transcriptRunId(message);
     const record = asRecord(message);
     if (id && record?.role === "assistant") {
-      lastAssistantByRun.set(id, message);
       const terminal = hasTerminalRunOutcome(message, id);
       // A delayed active-session snapshot cannot revive a run whose terminal we already observed.
       if (terminal) {
         activeRunIds.delete(id);
-      }
-      if (
-        terminal ||
-        record.stopReason === "stop" ||
-        record.stopReason === "error" ||
-        assistantMessageIsInterrupted(message) ||
-        resolveAssistantReplyPhase(message) === "final_answer"
-      ) {
         terminalRuns.add(id);
       }
     }
@@ -224,11 +222,12 @@ export function coalesceAgentRunFrames(
   // row; `resuming` lets exactly the next run in.
   let opened: { runId: string; boundaryId: string | undefined } | undefined;
   let resuming = false;
-  // No row marks a handoff, so operations on either side of one are one log.
+  // Without a Resumed rule marking the handoff, operations on either side of it are one log.
   let afterHandoff = false;
   const addPart = (item: AgentRunFramePart) => {
     const last = parts.at(-1);
-    const joined = afterHandoff && last ? joinActivityRuns(last, item) : undefined;
+    const joined =
+      afterHandoff && last && !partContinuation(item) ? joinActivityRuns(last, item) : undefined;
     afterHandoff = false;
     if (joined) {
       parts[parts.length - 1] = joined;
@@ -248,14 +247,15 @@ export function coalesceAgentRunFrames(
     }
     const active =
       runId === opts.activeRunId || activeRunIds.has(runId) || parts.some(itemIsActive);
-    // A stopped history snapshot can end between tool iterations. Keep its
-    // saved output, but never claim that the absent final answer completed.
+    // A run stopped between tool iterations has no interrupted reply of its own;
+    // only the session's explicit abort marks it. Yielding to background work is not one.
     const interrupted =
       !active &&
       !handedOff &&
       !terminalRuns.has(runId) &&
       frameRunId !== opts.activeRunId &&
-      asRecord(lastAssistantByRun.get(runId))?.stopReason === "toolUse";
+      opts.session?.abortedLastRun === true &&
+      opts.session.lastRunId === runId;
     const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
     if (!openedBoundaryId && !active && !actionOwner && !interrupted) {
       result.push(...parts);

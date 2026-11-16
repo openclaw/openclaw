@@ -76,6 +76,7 @@ async function compactionParams(required = false) {
     ...target,
     sessionTarget,
     workspaceDir: TEST_WORKSPACE_DIR,
+    skillsSnapshot: { prompt: "stored skills prompt", skills: [] }, // stored copy: no catalogs
     config: {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
       session: { store: storePath },
@@ -109,6 +110,7 @@ it.each([
   });
   const info = buildConfiguredAgentSystemPromptMock.mock.calls.at(-1)?.[0]?.sandboxInfo;
   expect(result.ok).toBe(true);
+  expect(resolveSandboxContextMock.mock.lastCall?.[0].skillsSnapshot?.resolvedSkills).toEqual([]);
   expect(info).toMatchObject({ enabled: true, workspaceDir: TEST_WORKSPACE_DIR });
   if (testCase.enabled) {
     expect(policyRead).toHaveBeenCalled();

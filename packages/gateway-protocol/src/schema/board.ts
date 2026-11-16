@@ -144,6 +144,7 @@ export const BoardWidgetSchema = closedObject({
   sandboxUrl: Type.Optional(Type.String()),
   sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   sandboxOrigin: Type.Optional(Type.String()),
+  sandboxShellHtml: Type.Optional(Type.String()),
   kindLabel: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;

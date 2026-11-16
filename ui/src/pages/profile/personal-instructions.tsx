@@ -332,7 +332,8 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
         </Show>
         <Show when={editorProps.error}>
           <div class="personal-instructions__error" role="alert">
-            {editorProps.error} {t("profilePage.personalInstructions.failureHint")}
+            {editorProps.error}{" "}
+            <Show when={view().dirty}>{t("profilePage.personalInstructions.failureHint")}</Show>
           </div>
         </Show>
         <div class="personal-instructions__actions">

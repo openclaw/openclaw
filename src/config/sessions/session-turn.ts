@@ -53,6 +53,10 @@ import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
+  acceptSessionTurnFreshAuthority,
+  prepareSessionTurnMention,
+} from "./session-turn-fresh-authority.js";
+import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
 } from "./session-turn-publication.js";
@@ -87,6 +91,7 @@ export async function appendSessionTurnInWorker(
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
+  const mentionCommitGuards: Array<(() => void) | undefined> = [];
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
   const assertOwnerCurrent = () =>
@@ -232,11 +237,13 @@ export async function appendSessionTurnInWorker(
     }
     const operation = {
       database,
+      workspaceEvidence: ownerSource?.workspaceEvidence,
+      readCustody: ownerSource?.readCustody,
       retainedExecution: execution,
       agentId: scope.agentId,
       assertCurrent,
       candidateKind: "session-turn",
-      onTransactionFacts(facts) {
+      onTransactionFacts(this: void, facts) {
         if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
           return true;
         }
@@ -252,17 +259,7 @@ export async function appendSessionTurnInWorker(
           return true;
         }
         if (isRecord(facts) && facts.kind === "session-turn-fresh") {
-          const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
-          if (!source) {
-            throw new Error("Session turn omitted its fresh-message authority");
-          }
-          acceptSessionSourceValidation(
-            source,
-            // SAFETY: The paired worker read these facts in the current transaction.
-            facts.sourceValidation as SessionSourceValidation,
-          );
-          source.assertCurrent();
-          freshCommitGuards.add(source.assertCurrent);
+          acceptSessionTurnFreshAuthority(facts, sources, mentionCommitGuards, freshCommitGuards);
           return true;
         }
         if (
@@ -449,6 +446,10 @@ export async function appendSessionTurnInWorker(
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
             message = sanitizeTranscriptMessageForStorage(message);
           }
+          const mentionGuard = prepareSessionTurnMention(append, hooks, facts, message);
+          if (mentionGuard) {
+            mentionCommitGuards[index] = mentionGuard;
+          }
           plan.options.messages[index] = {
             ...append,
             message: prepare ? append.message : message,
@@ -505,6 +506,12 @@ export async function appendSessionTurnInWorker(
           }
         };
         const authority: SessionActorAuthority = {
+          workspaceEvidence: (inputActor.storageAuthority?.workspaceEvidence ?? []).concat(
+            ownerSource?.workspaceEvidence ?? [],
+          ),
+          readCustody: (inputActor.storageAuthority?.readCustody ?? []).concat(
+            ownerSource?.readCustody ?? [],
+          ),
           assertCurrent: () => checkAuthority(assertCurrent),
           authorize(stage, state, publication) {
             checkAuthority(() => {
@@ -535,24 +542,22 @@ export async function appendSessionTurnInWorker(
               database,
               undefined,
               assertCurrent,
-              (preparedExecution, source) =>
-                preparedExecution
-                  .runExisting(source, (worker) =>
-                    worker.execute({ type: "session.turn.prepare", input: plan }),
-                  )
-                  .then((prepared) => {
-                    if (!prepared) {
-                      throw new Error("Input preparation lost its database");
-                    }
-                    return prepared;
-                  }),
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              (publication) => {
-                operation.onTransactionFacts(publication);
+              async (preparedExecution, source) => {
+                source.workspaceEvidence = authority.workspaceEvidence;
+                source.readCustody = authority.readCustody;
+                const prepared = await preparedExecution.runExisting(source, (worker) =>
+                  worker.execute({ type: "session.turn.prepare", input: plan }),
+                );
+                if (!prepared) {
+                  throw new Error("Input preparation lost its database");
+                }
+                return prepared;
               },
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              operation.onTransactionFacts,
             );
           },
           async () => {

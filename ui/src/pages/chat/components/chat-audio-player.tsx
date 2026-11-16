@@ -15,7 +15,6 @@ import {
 } from "./chat-attachment-card.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -93,7 +92,7 @@ function ChatAudioPlayerContent(
   let releaseWaveformBlob: (() => void) | undefined;
   let waveformController: AbortController | null = null;
   let waveformAttempted = false;
-  let waveformVisible = false;
+  let waveformRequested = false;
   let active = true;
   function handleInputsChanged(key: keyof ChatAudioPlayerProps): void {
     if (key === "sizeBytes" || key === "serverDurationMs") {
@@ -117,6 +116,7 @@ function ChatAudioPlayerContent(
       releaseWaveformBlob?.();
       releaseWaveformBlob = undefined;
       waveformAttempted = false;
+      waveformRequested = false;
       setState((draft) =>
         Object.assign(draft, { waveformPeaks: null, currentTime: 0, duration: 0, buffered: 0 }),
       );
@@ -187,11 +187,11 @@ function ChatAudioPlayerContent(
       host.playback,
       host.authToken,
     );
-    if (!pending && waveformVisible) {
+    if (!pending && waveformRequested) {
       void prepareWaveformAudio().catch(() => undefined);
     }
     void pending?.then(() => {
-      if (active && host.isConnected && waveformVisible) {
+      if (active && host.isConnected && waveformRequested) {
         void prepareWaveformAudio().catch(() => undefined);
       }
     });
@@ -353,13 +353,27 @@ function ChatAudioPlayerContent(
     if (media.paused) {
       adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, cancelPendingResume);
+      const requestedSource = resolveWaveformCacheKey();
       // Invoke play in the click task so strict browser media policies retain user activation.
       const playback = media.play();
       const failed = () => {
         releaseChatAudioPlayback(media);
         setState((draft) => Object.assign(draft, { playing: false }));
       };
-      void playback.then(() => prepareWaveformAudio().catch(() => undefined)).catch(failed);
+      void playback
+        .then(() => {
+          if (
+            !active ||
+            !host.isConnected ||
+            mediaElement !== media ||
+            requestedSource !== resolveWaveformCacheKey()
+          ) {
+            return;
+          }
+          waveformRequested = true;
+          void prepareWaveformAudio().catch(() => undefined);
+        })
+        .catch(failed);
     } else {
       media.pause();
     }
@@ -414,7 +428,17 @@ function ChatAudioPlayerContent(
     });
   }
 
-  const progress = () => (state.duration > 0 ? Math.min(1, state.currentTime / state.duration) : 0);
+  const displayedDuration = () => {
+    const serverDuration = props.serverDurationMs;
+    return (
+      state.duration ||
+      (serverDuration !== undefined && Number.isFinite(serverDuration)
+        ? Math.max(0, serverDuration / 1000)
+        : 0)
+    );
+  };
+  const progress = () =>
+    displayedDuration() > 0 ? Math.min(1, state.currentTime / displayedDuration()) : 0;
   const downloadHref = () => safeMediaAttachmentHref(props.src);
   const card = (): AttachmentCardHeaderOptions => ({
     kind: "audio",
@@ -426,7 +450,7 @@ function ChatAudioPlayerContent(
     voiceNote: props.voiceNote,
   });
   const timeLabel = () =>
-    `${formatChatMediaTime(state.currentTime)} / ${formatChatMediaTime(state.duration)}`;
+    `${formatChatMediaTime(state.currentTime)} / ${formatChatMediaTime(displayedDuration())}`;
   const Seek = () => {
     const displayedPeaks = createMemo(() =>
       resampleChatAudioWaveformPeaks(state.waveformPeaks, state.waveformWidth),
@@ -439,9 +463,9 @@ function ChatAudioPlayerContent(
         ]}
         type="range"
         min="0"
-        max={String(state.duration || 0)}
+        max={String(displayedDuration())}
         step="0.01"
-        value={String(Math.min(state.currentTime, state.duration || state.currentTime))}
+        value={String(Math.min(state.currentTime, displayedDuration() || state.currentTime))}
         aria-label={t("chat.mediaPlayer.seek")}
         aria-valuetext={timeLabel()}
         style={{
@@ -501,12 +525,8 @@ function ChatAudioPlayerContent(
     const copyRef = attachmentContextCopyRef(() =>
       props.voiceNote ? null : { name: props.label, href: downloadHref() },
     );
-    const viewport = createChatAttachmentViewportRef(() => {
-      waveformVisible = true;
-      void prepareWaveformAudio().catch(() => undefined);
-    });
     const playerRef = elementRef<HTMLDivElement>(() => () => {
-      waveformVisible = false;
+      waveformRequested = false;
       waveformController?.abort();
       waveformController = null;
       waveformAttempted = false;
@@ -526,7 +546,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={[viewport, copyRef, playerRef]}
+        ref={[copyRef, playerRef]}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)

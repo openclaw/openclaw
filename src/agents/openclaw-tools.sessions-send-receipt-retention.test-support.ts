@@ -129,12 +129,12 @@ export function registerSessionsSendReceiptRetentionTests({
       "receipt-followup-4",
     ];
     const executionRunIds = [...runIds];
-    await writeEntry(requesterSessionKey, { sessionId: "receipt-parent", updatedAt: 1 });
+    await writeEntry(requesterSessionKey, { sessionId: "receipt-parent", updatedAt: Date.now() });
     await resetSubagentRegistryForTests();
     for (let index = 0; index < childKeys.length; index++) {
       await writeEntry(childKeys[index]!, {
         sessionId: childKeys[index]!,
-        updatedAt: 1,
+        updatedAt: Date.now(),
         spawnedBy: requesterSessionKey,
         spawnDepth: 1,
       });

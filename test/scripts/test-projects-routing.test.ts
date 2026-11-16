@@ -146,24 +146,31 @@ describe("test-projects args", () => {
     expect(resolveVitestPretestBuildMode([selection])).toBe("runtime");
   });
 
-  it("keeps first sign-in's native provider graph isolated with its runtime prerequisite", () => {
-    const file = "src/gateway/setup-inference.first-signin.integration.test.ts";
-    const config = "test/vitest/vitest.gateway-server-isolated.config.ts";
-    const plan = expectDefined(planRuns([file])[0], "first sign-in plan");
-    expect(resolveCanonicalNodeTestConfig(file, plan.config)).toBe(config);
-    const project = createGatewayServerIsolatedVitestConfig(
-      {},
-      { argv: ["node", "vitest", "run", file] },
-    );
-    expect(project.test).toMatchObject({
-      include: [file],
-      isolate: true,
-      pool: "forks",
-    });
-    expect(
-      resolveVitestPretestBuildMode([{ configs: [config], includePatterns: plan.includePatterns }]),
-    ).toBe("runtime");
-  });
+  it.each([
+    ["src/gateway/setup-inference.first-signin.integration.test.ts", "runtime"],
+    ["test/plugins/deep-research-recovery.gateway.test.ts", undefined],
+  ] as const)(
+    "keeps %s native provider graph isolated with its runtime prerequisite",
+    (file, mode) => {
+      const config = "test/vitest/vitest.gateway-server-isolated.config.ts";
+      const plan = expectDefined(planRuns([file])[0], "native provider plan");
+      expect(resolveCanonicalNodeTestConfig(file, plan.config)).toBe(config);
+      const project = createGatewayServerIsolatedVitestConfig(
+        {},
+        { argv: ["node", "vitest", "run", file] },
+      );
+      expect(project.test).toMatchObject({
+        include: [file],
+        isolate: true,
+        pool: "forks",
+      });
+      expect(
+        resolveVitestPretestBuildMode([
+          { configs: [config], includePatterns: plan.includePatterns },
+        ]),
+      ).toBe(mode);
+    },
+  );
 
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({

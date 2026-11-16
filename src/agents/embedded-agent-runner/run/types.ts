@@ -7,6 +7,7 @@ import type {
 } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -108,6 +109,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Resume an admitted turn's history without re-admitting its original input after steering. */
+  replayCurrentTranscript?: true;
   /** Set only by prompt admission after validating an already-delivered input. */
   inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
@@ -397,6 +400,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "harness"; readonly data: unknown }
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
+  /** Presentation accepted for this attempt's ordinary final, never evidence of completion. */
+  finalPresentation?: MessagePresentation;
   assistantTexts: string[];
   /** A registered tool was requested as structured text without a native call. */
   textToolCallAttempt?: boolean;

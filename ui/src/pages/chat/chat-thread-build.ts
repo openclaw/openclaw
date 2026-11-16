@@ -84,7 +84,7 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps &
@@ -329,7 +329,9 @@ export function buildChatItems(
       isToolResult &&
       !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
       !hasHandoffToolCall(msg) &&
-      !permissionInMessage(msg)
+      !permissionInMessage(msg) &&
+      // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
+      !readProjectedContinuation(msg)
     ) {
       continue;
     }
@@ -660,7 +662,12 @@ export function buildChatItems(
   // The active claw is telemetry, not a placeholder: it stays through visible
   // assistant text and tool cards until the run settles. The initial-load
   // skeleton still owns an otherwise empty thread, but not an active stream.
-  const initialHistoryLoad = props.stream === null && props.loading === true && items.length === 0;
+  const hasContentBeforeProgress = items.length > 0;
+  if (facts) {
+    facts.hasContentBeforeProgress = hasContentBeforeProgress;
+  }
+  const initialHistoryLoad =
+    props.stream === null && props.loading === true && !hasContentBeforeProgress;
   // A non-null empty stream is the acknowledgement bridge before runWorking
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;

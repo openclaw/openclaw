@@ -303,15 +303,6 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
         expectDefined(process.env.HOME, "isolated test home"),
         profile === "default" ? ".openclaw" : `.openclaw-${profile}`,
       ),
-    reportCandidateSteps: async <T extends { steps: UpdateRunResult["steps"] }>(
-      options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
-      result: T,
-    ): Promise<T> => {
-      for (const step of result.steps) {
-        await options.onStep?.(step);
-      }
-      return result;
-    },
     runControlPlaneUpdate: async (params: {
       meta: Record<string, unknown>;
       options: Parameters<typeof update.updateCommand>[0];

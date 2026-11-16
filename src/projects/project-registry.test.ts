@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
+import nativeFs from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -11,6 +13,10 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
+import { createWorktreeGitMaintenance } from "../agents/worktrees/git-maintenance.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gitExec from "../infra/git-exec.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -22,7 +28,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { observe } from "../state/openclaw-state-lease-async.test-support.js";
+import * as leaseWorker from "../state/openclaw-state-lease-worker-operation.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import * as cloneRuntime from "./project-clone-runtime.js";
 import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
@@ -95,6 +104,96 @@ describe("project registry persistence", () => {
   function registerClone(repoRoot: string, originUrl: string, name = "Recorded", state = options) {
     return registerClonedProjectRegistry({ path: repoRoot, name, originUrl }, state);
   }
+
+  it("renews maintenance and nested checkout leases without main-thread filesystem or SQL", async () => {
+    const repo = await initializeRepository(root, "maintenance");
+    await git(repo, "repack", "-a", "-d");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "lease-state") };
+    await insertRegistryWorktree(env, makeWorktreeRecord(repo, "renewal"));
+    const progress = new WorktreeGcProgress();
+    const remove = fs.rm;
+    let sql: ReturnType<typeof observeMainThreadSql> | undefined;
+    let filesystem: Array<ReturnType<typeof vi.spyOn>> = [];
+    const methods = ["existsSync", "statSync"] as const;
+    const probe = vi.spyOn(fs, "rm").mockImplementation(async (file, removeOptions) => {
+      if (String(file).endsWith("/multi-pack-index") && !sql) {
+        // Both real leases are held at this pack-maintenance boundary.
+        sql = observeMainThreadSql();
+        filesystem = methods.map((method) => vi.spyOn(nativeFs, method));
+        syncBuiltinESMExports();
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      return remove(file, removeOptions);
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await createWorktreeGitMaintenance(env)({ progress });
+      expect(progress.result.gitMaintenance?.stage).toBe("completed");
+      expect(sql).toBeDefined();
+      expect(
+        Object.fromEntries(
+          methods.map((method, index) => [
+            method,
+            filesystem[index]!.mock.calls.filter(
+              (args: readonly unknown[]) =>
+                typeof args[0] === "string" && args[0].startsWith(env.OPENCLAW_STATE_DIR),
+            ).length,
+          ]),
+        ),
+      ).toEqual({ existsSync: 0, statSync: 0 });
+      sql!.expectIdle();
+    } finally {
+      probe.mockRestore();
+      filesystem.forEach((spy) => spy.mockRestore());
+      syncBuiltinESMExports();
+      sql?.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])(
+    "registers a new clone only while both original leases remain owned (lost: %s)",
+    async (lost) => {
+      const source = await initializeRepository(root, "clone-origin");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "clone-state") };
+      const clone = cloneRuntime.cloneProjectCheckout;
+      // Keep the actual clone/registration flow; replace only the remote fixture transport.
+      using transport = vi
+        .spyOn(cloneRuntime, "cloneProjectCheckout")
+        .mockImplementation((input, cloneOptions) =>
+          clone({ ...input, url: source }, cloneOptions),
+        );
+      const admit = leaseWorker.runWithOpenClawStateLeasesWorker;
+      using admission = vi
+        .spyOn(leaseWorker, "runWithOpenClawStateLeasesWorker")
+        .mockImplementation(async (...args) => {
+          if (lost) {
+            const { db } = openOpenClawStateDatabase({ path: args[1].admission.databasePath, env });
+            expect(
+              db.prepare("DELETE FROM state_leases WHERE scope = ?").run("projects.clone").changes,
+            ).toBe(1);
+          }
+          return await admit(...args);
+        });
+      const result = materializeProjectClone(
+        { cfg: {}, gitUrl: "https://github.com/example/lease-fixture.git" },
+        { env },
+      );
+      if (lost) {
+        await expect(result).rejects.toThrow(/lease/i);
+        expect(
+          (await listProjectRegistry({}, { env })).filter((entry) => entry.source !== "workspace"),
+        ).toEqual([]);
+      } else {
+        await expect(result).resolves.toMatchObject({ source: "cloned" });
+        expect(
+          (await listProjectRegistry({}, { env })).filter((entry) => entry.source === "cloned"),
+        ).toHaveLength(1);
+      }
+      expect(admission).toHaveBeenCalledOnce();
+      expect(transport).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["new", "reused", "refreshed"] as const)(
     "keeps ordinary Git commands in a %s managed clone out of auto-GC",

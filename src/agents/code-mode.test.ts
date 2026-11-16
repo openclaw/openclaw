@@ -55,6 +55,7 @@ import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
+import type { ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
@@ -81,8 +82,12 @@ function catalog(targets: AnyAgentTool[], directToolNames?: string[]) {
     ...harness,
     ...compacted,
     exec: compacted.tools[0]!,
-    catalogPrompt: () =>
-      buildCodeModeCatalogPrompt(harness.ctx, harness.catalogRef.current?.entries ?? []),
+    catalogPrompt: (usageRanking?: ToolUsageRankingSnapshot) =>
+      buildCodeModeCatalogPrompt(
+        harness.ctx,
+        harness.catalogRef.current?.entries ?? [],
+        usageRanking,
+      ),
   };
 }
 
@@ -301,6 +306,27 @@ describe("Code Mode catalog and model-visible surface", () => {
     return index;
   }
 
+  it("advertises manual-step handoffs only for the effective core question tool", () => {
+    const { catalogRef, catalogPrompt } = catalog([fakeTool("ask_user", "Deferred instructions")]);
+    expectFragments(catalogPrompt(), [
+      "requiredAction",
+      "browser sign-in",
+      "ready_to_verify",
+      "action_unresolved",
+      "that the human can complete while this run waits",
+      "not the current user-requested turn",
+      "Never wait in ask_user for a native session control that requires this run to end",
+    ]);
+
+    addClientToolsToToolCatalog({
+      tools: [fakeTool("ask_user", "Client-defined question tool")],
+      enabled: true,
+      catalogRef,
+    });
+    expect(catalogPrompt()).not.toContain("requiredAction");
+    expect(catalog([]).catalogPrompt()).not.toContain("requiredAction");
+  });
+
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const pluginId = `fake-${"x".repeat(120)}`;
     const index = catalogIndex([
@@ -323,6 +349,50 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     expectFragments(index, shortNames, ["z".repeat(9_000)]);
   });
+
+  it.each([2, 250])(
+    "uses frozen ranking only to select overflowing catalog rows (%i tools)",
+    (count) => {
+      const { catalogPrompt, catalogRef } = catalog([
+        ...Array.from({ length: count }, (_, index) =>
+          pluginTool(`ranked_${String(index).padStart(3, "0")}`, "Deferred"),
+        ),
+        fakeTool("read", "Read a file"),
+        pluginTool("zz_new", "New tool"),
+        pluginTool("zz_old", "Old unused tool"),
+        mcpTool({ name: "remote", serverName: "remote", toolName: "remote" }),
+      ]);
+      const entries = catalogRef.current!.entries;
+      const id = (name: string) => entries.find((entry) => entry.name === name)!.id;
+      const at = 20 * 24 * 60 * 60 * 1_000;
+      const history = entries
+        .filter((entry) => entry.name.startsWith("ranked_"))
+        .map((entry) => entry.id);
+      const snapshot: ToolUsageRankingSnapshot = {
+        version: 1,
+        at,
+        orderedToolIds: history.toReversed(),
+        newcomers: { [id("zz_new")]: at, [id("zz_old")]: 0 },
+      };
+      const baseline = catalogPrompt();
+      expect(catalogPrompt({ ...snapshot, orderedToolIds: [] })).toBe(baseline);
+      const ranked = catalogPrompt(snapshot);
+      if (count === 2) {
+        expect(ranked).toBe(baseline);
+        return;
+      }
+      const index = ranked.slice(ranked.indexOf("Enabled async tool globals"));
+      expect(index.length).toBeLessThanOrEqual(8_000);
+      expectFragments(index, ["- read ", "- ranked_249 ", "- zz_new "], ["- zz_old ", "- remote "]);
+      expect(baseline).not.toContain("- zz_new ");
+      const lines = index.split("\n").filter((line) => line.startsWith("- "));
+      expect(lines[0]).toMatch(/^- read /);
+      expect(lines.slice(1)).toEqual(lines.slice(1).toSorted());
+      const swapped = [...snapshot.orderedToolIds];
+      [swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!];
+      expect(catalogPrompt({ ...snapshot, orderedToolIds: swapped })).toBe(ranked);
+    },
+  );
 });
 
 describe("Code Mode search", () => {

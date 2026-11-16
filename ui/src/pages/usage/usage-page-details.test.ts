@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { SessionsUsageResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import * as downloads from "../../lib/download.ts";
 import { suspendingGatewayError as suspensionError } from "../../test-helpers/gateway-errors.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -71,9 +72,11 @@ describe("UsagePage detail requests", () => {
     });
     const { page } = await loadUsagePage(request);
     selectUsageSession(page);
-    await waitForFast(() => expect(page.textContent).toContain("Accepted conversation"));
+    await waitForFast(() =>
+      expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Accepted conversation"),
+    );
     const chart = page.querySelector(".timeseries-svg");
-    const log = page.querySelector(".session-log-content");
+    const log = page.read().detail.sessionLogs;
     expect(chart).not.toBeNull();
 
     hold = true;
@@ -81,24 +84,24 @@ describe("UsagePage detail requests", () => {
     await waitForFast(() => expect(usageCalls(request, "sessions.usage.logs")).toHaveLength(2));
     await page.updateComplete;
     expect(page.querySelector(".timeseries-svg")).toBe(chart);
-    expect(page.querySelector(".session-log-content")).toBe(log);
+    expect(page.read().detail.sessionLogs).toBe(log);
     expect(page.textContent).toContain("accepted");
 
     for (const read of Object.values(pending)) {
       read.reject(new Error("Refresh unavailable"));
     }
     await waitForFast(() => {
-      for (const kind of ["timeline", "conversation", "context"]) {
+      for (const kind of ["timeline", "interval-counts", "context"]) {
         expect(textOf(page, `.usage-detail-error--${kind}`)).toContain("Refresh unavailable");
       }
     });
     expect(page.querySelector(".timeseries-svg")).toBe(chart);
-    expect(page.querySelector(".session-log-content")).toBe(log);
+    expect(page.read().detail.sessionLogs).toBe(log);
 
     hold = false;
     refreshButton(page).click();
     await waitForFast(() => expect(page.querySelector(".usage-detail-error")).toBeNull());
-    expect(page.textContent).toContain("Accepted conversation");
+    expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Accepted conversation");
   });
 
   it("keeps selected comparisons across pages and refreshes them with their overview", async () => {
@@ -183,11 +186,19 @@ describe("UsagePage detail requests", () => {
   });
 
   it.each([
-    { key: "global", agentId: "opus", needsOwnerHint: true },
-    { key: "agent:openclaw:usage", agentId: "openclaw", needsOwnerHint: false },
+    { key: "global", agentId: "opus", needsOwnerHint: true, globalScope: false, href: null },
+    { key: "global", agentId: "opus", needsOwnerHint: true, globalScope: true, href: "/chat/opus" },
+    { key: "unknown", agentId: "opus", needsOwnerHint: true, globalScope: true, href: null },
+    {
+      key: "agent:openclaw:usage",
+      agentId: "openclaw",
+      needsOwnerHint: false,
+      globalScope: false,
+      href: "/chat/openclaw/usage",
+    },
   ])(
     "routes every selected $key detail through its listed agent",
-    async ({ key, agentId, needsOwnerHint }) => {
+    async ({ key, agentId, needsOwnerHint, globalScope, href }) => {
       const snapshot = cacheSnapshot("fresh");
       const session = {
         key,
@@ -210,9 +221,25 @@ describe("UsagePage detail requests", () => {
         }
         return { providers: [], points: [] };
       });
-      const { page } = await loadUsagePage(request);
+      const { page, context } = await loadUsagePage(request, true, (fixtureContext) => {
+        fixtureContext.agents.state.agentsList = makeBootRoster({
+          scope: globalScope ? "global" : "per-sender",
+        });
+      });
       selectUsageSession(page);
-      await waitForFast(() => expect(page.textContent).toContain(`${agentId} turn`));
+      await waitForFast(() =>
+        expect(page.read().detail.sessionLogs?.[0]?.content).toBe(`${agentId} turn`),
+      );
+
+      expect(page.read().detail.conversationHref).toBe(href);
+      const link = page.querySelector<HTMLAnchorElement>(".session-detail-header a");
+      if (href) {
+        expect(link?.getAttribute("href")).toBe(href);
+        link!.click();
+        expect(context.navigate).toHaveBeenCalledWith("chat", { pathname: href });
+      } else {
+        expect(link).toBeNull();
+      }
 
       for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
         const detail = request.mock.calls.find(([name, params]) => name === method && params?.key);
@@ -311,14 +338,16 @@ describe("UsagePage detail requests", () => {
     );
     await page.updateComplete;
     expect(
-      page.querySelector(".usage-detail-error--timeline, .usage-detail-error--conversation"),
+      page.querySelector(".usage-detail-error--timeline, .usage-detail-error--interval-counts"),
     ).toBeNull();
-    expect(textOf(page, ".session-logs-compact")).toContain("Loading usage…");
+    expect(page.read().detail.sessionLogsStatus.awaitingGateway).toBe(true);
 
     unavailable = false;
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    await waitForFast(() => expect(page.textContent).toContain("Recovered conversation"));
+    await waitForFast(() =>
+      expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered conversation"),
+    );
     expect(page.querySelector(".timeseries-svg")).not.toBeNull();
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
       expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
@@ -560,7 +589,7 @@ describe("UsagePage detail requests", () => {
     selectUsageSession(page);
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
     expect(textOf(page, ".timeseries-summary")).toContain("200");
-    expect(textOf(page, ".session-log-content")).toBe("2 completed turns");
+    expect(page.read().detail.sessionLogs?.[0]?.content).toBe("2 completed turns");
 
     turns = 3;
     report = "refreshed-context";
@@ -568,7 +597,7 @@ describe("UsagePage detail requests", () => {
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
     expect(textOf(page, ".session-detail-stats")).toContain("300");
     expect.soft(textOf(page, ".timeseries-summary")).toContain("300");
-    expect.soft(textOf(page, ".session-log-content")).toBe("3 completed turns");
+    expect.soft(page.read().detail.sessionLogs?.[0]?.content).toBe("3 completed turns");
     const contextRequests = request.mock.calls.filter(
       ([method, params]) => method === "sessions.usage" && params?.key,
     ).length;

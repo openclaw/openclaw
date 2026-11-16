@@ -1,8 +1,8 @@
 // Plugin install config tests cover install specs and generated plugin config.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
@@ -13,6 +13,8 @@ import {
   type PluginInstallRequestContext,
 } from "../plugins/install-config.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),
@@ -118,7 +120,7 @@ describe("loadConfigForInstall", () => {
   });
 
   it("does not borrow local recovery authority for a resolved registry source", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-context-"));
+    const root = tempDirs.make("plugin-source-context-");
     const localPath = path.join(root, "fixture-package");
     fs.mkdirSync(localPath);
     writeFixtureJsonSync(path.join(localPath, "package.json"), {
@@ -149,7 +151,6 @@ describe("loadConfigForInstall", () => {
       });
     } finally {
       cwd.mockRestore();
-      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -437,7 +438,7 @@ describe("loadConfigForInstall", () => {
   });
 
   it("allows recovery through an exact single-file top-level plugins include", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-include-"));
+    const tempRoot = tempDirs.make("openclaw-plugin-include-");
     const configPath = path.join(tempRoot, "config.json5");
     const pluginsPath = path.join(tempRoot, "plugins.json5");
     const pluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
@@ -456,12 +457,8 @@ describe("loadConfigForInstall", () => {
       issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
     });
 
-    try {
-      const result = await loadConfigForInstall(discordNpmRequest);
-      expect(result.config).toBe(snapshotCfg);
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    const result = await loadConfigForInstall(discordNpmRequest);
+    expect(result.config).toBe(snapshotCfg);
   });
 
   it("rejects external include aliases even when their target is under the config directory", async () => {
@@ -530,7 +527,7 @@ describe("loadConfigForInstall", () => {
   );
 
   it("blocks both mutations when an external include aliases the other section target", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-aliased-include-"));
+    const tempRoot = tempDirs.make("openclaw-aliased-include-");
     const configPath = path.join(tempRoot, "config.json5");
     const sharedPath = path.join(tempRoot, "shared.json5");
     const externalHooksPath = path.join(
@@ -560,26 +557,22 @@ describe("loadConfigForInstall", () => {
       issues: [],
     });
 
-    try {
-      const result = await loadConfigForInstall({
-        rawSpec: "maybe-hook-pack",
-      });
-      expect(result.hookMutation).toEqual({
-        mode: "blocked",
-        scope: "config",
-        reason: expect.stringContaining("share the same top-level $include target"),
-      });
-      expect(result.pluginMutation).toEqual(result.hookMutation);
-      await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-        "share the same top-level $include target",
-      );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    const result = await loadConfigForInstall({
+      rawSpec: "maybe-hook-pack",
+    });
+    expect(result.hookMutation).toEqual({
+      mode: "blocked",
+      scope: "config",
+      reason: expect.stringContaining("share the same top-level $include target"),
+    });
+    expect(result.pluginMutation).toEqual(result.hookMutation);
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+      "share the same top-level $include target",
+    );
   });
 
   it("blocks nested plugins includes before plugin installation", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-nested-include-"));
+    const tempRoot = tempDirs.make("openclaw-plugin-nested-include-");
     const configPath = path.join(tempRoot, "config.json5");
     const pluginsPath = path.join(tempRoot, "plugins.json5");
     const pluginsRaw = `${JSON.stringify({ entries: { $include: "./entries.json5" } }, null, 2)}\n`;
@@ -600,19 +593,15 @@ describe("loadConfigForInstall", () => {
       issues: [],
     });
 
-    try {
-      const ambiguousResult = await loadConfigForInstall({
-        rawSpec: "maybe-hook-pack",
-      });
-      expect(ambiguousResult.pluginMutation).toEqual({
-        mode: "blocked",
-        scope: "plugins",
-        reason: expect.stringContaining("nested $include"),
-      });
-      await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow("nested $include");
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    const ambiguousResult = await loadConfigForInstall({
+      rawSpec: "maybe-hook-pack",
+    });
+    expect(ambiguousResult.pluginMutation).toEqual({
+      mode: "blocked",
+      scope: "plugins",
+      reason: expect.stringContaining("nested $include"),
+    });
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow("nested $include");
   });
 
   it("rejects recovery through an unsupported plugins include array", async () => {

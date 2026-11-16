@@ -6,9 +6,9 @@ import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import { resolveTurnPersonalProfiles } from "../../sessions/session-participant-input.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
@@ -363,9 +363,14 @@ export async function executeFollowupTurn(params: {
         outcome: { kind: "rejected", payload: turn.preflightFailurePayload },
       };
     } else {
-      turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
-        ? sessionPersonalProfileId(turn.session.current())
-        : undefined;
+      Object.assign(
+        turn.queued.run,
+        resolveTurnPersonalProfiles(
+          turn.queued.run.sessionKey,
+          turn.session.current(),
+          turn.queued.personalBootstrapEligible === true,
+        ),
+      );
       await turn.operation.bindToolAuthoritySnapshotAsync(
         prepareReplyRunToolAuthority(
           turn.queued,

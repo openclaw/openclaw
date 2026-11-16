@@ -33,7 +33,6 @@ import {
   SettingsRow,
   SettingsSection,
   SettingsStatus,
-  SettingsToggleRow,
   SettingsValue,
   SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
@@ -42,19 +41,21 @@ import { GitHubConnections } from "../../features/github-connections/github-conn
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../components/solid/viewer-facepile.tsx";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/profile.css";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
+import { OpenClawIdIdentity } from "./openclaw-id-identity.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
+import { ProfileAttribution } from "./profile-attribution.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { ProfileHero } from "./profile-hero.tsx";
 import { type IdentityChange, ProfileState } from "./profile-state.ts";
@@ -186,13 +187,11 @@ export function ProfilePage() {
     );
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (
-        !state.identityBusy &&
-        event.event === "sessions.changed" &&
-        asOptionalRecord(event.payload)?.reason === "profile-identity"
+        event.event === "users.prefs.changed" ||
+        (event.event === "sessions.changed" &&
+          asOptionalRecord(event.payload)?.reason === "profile-identity")
       ) {
-        state.identityRequestId += 1;
-        state.identityLoading = false;
-        state.loadIdentity();
+        state.refreshPublishedIdentity();
       }
     });
     state.applyGatewaySnapshot(context.gateway.snapshot);
@@ -402,17 +401,16 @@ export function ProfilePage() {
                     </form>
                   }
                 />
-                <Show when={!isOwnerProfile()}>
+                <Show when={!isOwnerProfile() && profile().emails.length > 0}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
-                    description={
-                      profile().emails.length ? (
-                        <span class="identity-emails">
-                          <For each={profile().emails}>
-                            {(email) => <span class="identity-account">{email}</span>}
-                          </For>
-                        </span>
-                      ) : undefined
+                    description={t("profilePage.identity.linkedEmailsDescription")}
+                    control={
+                      <span class="identity-emails">
+                        <For each={profile().emails}>
+                          {(email) => <span class="identity-account">{email}</span>}
+                        </For>
+                      </span>
                     }
                   />
                 </Show>
@@ -447,6 +445,9 @@ export function ProfilePage() {
                     </span>
                   }
                 />
+                <Show when={!isOwnerProfile()}>
+                  <OpenClawIdIdentity />
+                </Show>
                 <Show when={view().identityError}>
                   <div class="settings-row identity-error" role="alert">
                     <span class="settings-row__desc">{view().identityError}</span>
@@ -460,76 +461,6 @@ export function ProfilePage() {
       }}
     </Show>
   );
-
-  const AttributionSection = () => {
-    const busy = () => identityBusy() ?? (view().identityLoading ? "loading" : null);
-    const canEdit = () => latest(canWrite);
-    const isOwnerProfile = () => view().ownProfile?.id === GATEWAY_OWNER_PROFILE_ID;
-    return (
-      <Show when={view().selfUser && view().ownProfile}>
-        <div id={PROFILE_SETTINGS_TARGET_IDS.attribution}>
-          <SettingsSection
-            title={t("profilePage.identity.attribution")}
-            actions={
-              <SettingsSectionHelp
-                id="settings-profile-attribution-help"
-                section={t("profilePage.identity.attribution")}
-              >
-                <p>
-                  <strong>{t("profilePage.identity.gitCoauthor")}</strong>{" "}
-                  {t("profilePage.identity.gitCoauthorDescription")}
-                </p>
-                <p>
-                  <strong>{t("profilePage.identity.prAttribution")}</strong>{" "}
-                  {t("profilePage.identity.prAttributionDescription")}
-                </p>
-              </SettingsSectionHelp>
-            }
-          >
-            <SettingsToggleRow
-              title={t("profilePage.identity.gitCoauthor")}
-              description={
-                // Publication selects its host independently of the displayed primary account.
-                isOwnerProfile()
-                  ? t("profilePage.identity.ownerGitCoauthorDescription")
-                  : t("profilePage.identity.gitCoauthorShort")
-              }
-              checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
-              disabled={
-                !canEdit() || (busy() !== null && busy() !== "git-coauthor") || isOwnerProfile()
-              }
-              saving={busy() === "git-coauthor"}
-              onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
-            />
-            <SettingsToggleRow
-              title={t("profilePage.identity.prAttribution")}
-              description={
-                <>
-                  {t("profilePage.identity.prAttributionShort")}{" "}
-                  <a
-                    class="identity-attribution-link"
-                    href="https://openclaw.ai"
-                    target={EXTERNAL_LINK_TARGET}
-                    rel={buildExternalLinkRel()}
-                  >
-                    {t("profilePage.identity.prAttributionLink")}
-                  </a>
-                </>
-              }
-              checked={presentation().prAttributionEnabled()}
-              disabled={!canEdit() || busy() !== null}
-              onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
-            />
-            <Show when={view().attributionError}>
-              <div class="settings-row identity-error" role="alert">
-                <span class="settings-row__desc">{view().attributionError}</span>
-              </div>
-            </Show>
-          </SettingsSection>
-        </div>
-      </Show>
-    );
-  };
 
   return (
     <openclaw-profile-page>
@@ -624,7 +555,14 @@ export function ProfilePage() {
               }
             />
             <GitHubConnections />
-            <AttributionSection />
+            <ProfileAttribution
+              getView={view}
+              canEdit={latest(canWrite)}
+              busy={identityBusy() ?? (view().identityLoading ? "loading" : null)}
+              gitCoauthorEnabled={presentation().gitCoauthorEnabled()}
+              prAttributionEnabled={presentation().prAttributionEnabled()}
+              onSave={saveIdentity}
+            />
           </Show>
           <Show when={hasPresentation()}>
             <div id="settings-profile-access">

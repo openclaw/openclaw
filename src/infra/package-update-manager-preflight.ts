@@ -9,6 +9,7 @@ import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { packageActivationIdentity } from "./package-update-activation-paths.js";
 import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
+import { realpathOrResolve } from "./path-existence.js";
 import { createPackageUpdateErrorFacts, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
@@ -21,10 +22,6 @@ import {
   readPackageManagerProbeValue,
 } from "./update-npm-prefix.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-
-export async function resolveCanonicalPath(filePath: string): Promise<string> {
-  return path.resolve(await fs.realpath(filePath).catch(() => filePath));
-}
 
 export async function runPnpmPreflightProbe(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -144,8 +141,7 @@ export async function validatePnpmIsolatedUpdate(params: {
   if (
     !reportedGlobalRoot ||
     !expectedGlobalRoot ||
-    (await resolveCanonicalPath(reportedGlobalRoot)) !==
-      (await resolveCanonicalPath(expectedGlobalRoot))
+    (await realpathOrResolve(reportedGlobalRoot)) !== (await realpathOrResolve(expectedGlobalRoot))
   ) {
     return {
       globalBinDir: null,

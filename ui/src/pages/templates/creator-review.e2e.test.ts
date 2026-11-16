@@ -1,22 +1,16 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import type { TemplatesDraftsReviewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
 import { expect, inject, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../../test/helpers/openclaw-test-instance.ts";
 import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
 import {
-  takeControlUiScreenshotFrame,
-  waitForControlUiProofSurface,
-} from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import {
+  controlUiSessionUrl,
   installMockGateway,
-  pauseVirtualClock,
   reconnectMockGateway,
   startControlUiE2eServer,
   waitForControlUiRoute,
@@ -149,11 +143,21 @@ it.skipIf(!chromiumAvailable)(
       expect(creates).toHaveLength(1);
       expect(creates[0]?.params).toEqual({ agentId: "main" });
       expect(imports).toHaveLength(1);
-      const dialog = page.getByRole("dialog", { name: "Review your Template" });
-      expect(await dialog.count()).toBe(0);
+      const card = page.getByRole("region", { name: "Review your Template" });
+      expect(await card.count()).toBe(0);
+      // Duplicate admission must also stay closed after create has completed
+      // while the original chat write is still awaiting its acknowledgement.
+      await openAction();
+      expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await gateway.resolveDeferred("chat.send", { status: "started" });
-      await dialog.waitFor({ state: "visible" });
-      expect(await dialog.getByLabel("Name").inputValue()).toBe("First use");
+      await card
+        .getByRole("heading", { name: "First use", exact: true })
+        .waitFor({ state: "attached" });
+      await card.scrollIntoViewIfNeeded();
+      await card.getByRole("heading", { name: "First use", exact: true }).waitFor();
+      expect(await card.locator("input, textarea").count()).toBe(0);
+      expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
       expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       console.log(
@@ -249,7 +253,7 @@ it.skipIf(!chromiumAvailable).each([
   { width: 390, colorScheme: "light" as const },
   { width: 1440, colorScheme: "dark" as const },
 ])(
-  "keeps optional previews readable and publishes the reviewed selection at $width/$colorScheme",
+  "keeps file previews readable and retains publication across navigation at $width/$colorScheme",
   async ({ width, colorScheme }) => {
     const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
@@ -260,13 +264,11 @@ it.skipIf(!chromiumAvailable).each([
         viewport: { width, height: 844 },
         colorScheme,
       });
-      const artifact = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
-        ? createControlUiE2eArtifactDir(`template-review-${width}-${colorScheme}`)
-        : undefined;
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+      const sessionKey = "agent:main:dashboard:release-brief";
       const optionalFile = "workspace/checklist.md";
       const scope = { input: "Repository", job: "Summarize", output: "Brief", authority: "Read" };
-      const reviewed: TemplatesDraftsReviewResult = {
+      const reviewed = {
         revision: "a".repeat(64),
         reviewToken: "b".repeat(64),
         publisher: "maker",
@@ -279,38 +281,58 @@ it.skipIf(!chromiumAvailable).each([
             id: `file:${optionalFile}`,
             kind: "file",
             label: optionalFile,
-            detail: [
-              "# Release checklist",
-              "Compare the release notes with the linked changes and verify every date and citation.",
-              "Summarize user-visible changes first. Include a link to the source for each claim.",
-              "Separate confirmed fixes from known limitations. Do not promise unverified behavior.",
-              "Call out migration steps and configuration changes only when the release requires them.",
-              "Review the final brief for private information before sharing it outside the team.",
-              "Keep unresolved questions in a separate section with the next verification step.",
-              "End of checklist.",
-            ].join("\n\n"),
-            included: true,
-          },
-          {
-            id: "skill:release-research",
-            kind: "skill",
-            label: "Release research",
-            detail:
-              "Read release notes and linked changes.\nVerify citations before drafting a brief.\nDo not publish or change repository settings.",
+            detail: "Check each date and citation.",
             included: true,
           },
         ],
         files: [
           { path: "CLAW.md", content: "Portable release instructions" },
-          { path: optionalFile, content: "Check each date and citation." },
+          { path: optionalFile, content: "Check each date and citation.\n\n".repeat(50) },
         ],
         scope,
       };
       const config = { gateway: { controlUi: { experimental: { templates: true } } } };
       const gateway = await installMockGateway(page, {
-        featureMethods: ["create", "read", "review", "publish"].map(
-          (op) => `templates.drafts.${op}`,
-        ),
+        sessionKey,
+        // Synthetic persisted tool result: this exercises the real browser
+        // review owner, not model execution or real registry publication.
+        historyMessages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Create a reusable release brief." }],
+            timestamp: 1_790_000_000_000,
+          },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "The private proposal is ready. Nothing has been published." },
+            ],
+            timestamp: 1_790_000_001_000,
+          },
+          {
+            role: "toolResult",
+            toolName: "screen",
+            toolCallId: "release-review",
+            content: [{ type: "text", text: "Template ready for review" }],
+            timestamp: 1_790_000_002_000,
+            details: {
+              pluginView: {
+                type: "plugin_view",
+                pluginId: "openclaw",
+                viewId: "template-review",
+                version: 1,
+                toolName: "screen",
+                toolCallId: "release-review",
+                summary: "Template ready for review",
+                payload: { agentId: "main", draftId, sessionKey },
+              },
+            },
+          },
+        ],
+        featureMethods: [
+          "chat.send",
+          ...["create", "read", "review", "publish"].map((op) => `templates.drafts.${op}`),
+        ],
         methodResponses: {
           "config.get": {
             config,
@@ -332,134 +354,102 @@ it.skipIf(!chromiumAvailable).each([
           },
         },
       });
-      const withoutFile = (token: string): TemplatesDraftsReviewResult => ({
-        ...reviewed,
-        reviewToken: token.repeat(64),
-        items: reviewed.items.map((item) => ({
-          ...item,
-          included: item.id !== `file:${optionalFile}`,
-        })),
-        files: reviewed.files.filter((file) => file.path !== optionalFile),
-      });
-      const setReview = (token: string) =>
-        gateway.setMethodResponse("templates.drafts.review", withoutFile(token));
       const waitForRequests = (method: string, count: number) =>
         expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count);
-      await page.goto(`${server.baseUrl}templates?draft=${draftId}&agent=main`);
-      const dialog = page.getByRole("dialog", { name: "Review your Template" });
-      await waitForControlUiProofSurface(dialog, [
-        dialog.getByRole("checkbox", { name: optionalFile }),
-      ]);
-      expect(await dialog.getByText("View", { exact: true }).count()).toBe(2);
-      for (const item of reviewed.items) {
-        const row = dialog.locator(".template-creator__row").filter({
-          has: page.getByRole("checkbox", { name: item.label, exact: true }),
-        });
-        const choice = row.locator("label");
-        const details = row.locator("details");
-        const closed = await row.boundingBox();
-        await details.locator("summary").click();
-        const preview = row.locator("pre");
-        await preview.waitFor({ state: "visible" });
-        const boxes = {
-          row: (await row.boundingBox())!,
-          choice: (await choice.boundingBox())!,
-          details: (await details.boundingBox())!,
-        };
-        if (artifact) {
-          const frame = await takeControlUiScreenshotFrame(page, dialog, [preview], {
-            animations: "disabled",
-            scrollTo: row,
-          });
-          await writeFile(path.join(artifact, `${item.kind}-expanded.png`), frame.png);
-        }
-        console.log("TEMPLATE_REVIEW_GEOMETRY", { width, colorScheme, kind: item.kind, boxes });
-        if (width < 560) {
-          expect.soft(boxes.details.width).toBeGreaterThanOrEqual(boxes.row.width - 1);
-          expect.soft(boxes.details.y).toBeGreaterThanOrEqual(boxes.choice.y + boxes.choice.height);
-        } else {
-          expect(boxes.details.x).toBeGreaterThanOrEqual(boxes.choice.x + boxes.choice.width);
-        }
-        expect(await row.getByRole("checkbox").isChecked()).toBe(true);
-        expect(await preview.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-        await preview.evaluate((el) => {
-          el.scrollTop = el.scrollHeight;
-        });
-        expect(
-          await preview.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1),
-        ).toBe(true);
-        await details.locator("summary").click();
-        expect((await row.boundingBox())!.height).toBeCloseTo(closed!.height, 0);
-      }
-      expect(await dialog.getByLabel("Description").inputValue()).toBe("Summarizes releases");
-      await page.clock.install();
-      await pauseVirtualClock(page);
-      await gateway.deferNext("templates.drafts.review");
-      const fileRow = dialog.locator(".template-creator__row").first();
-      await fileRow.locator("summary").click();
-      await dialog.getByRole("checkbox", { name: optionalFile }).uncheck();
-      await page.clock.runFor(349);
-      await waitForRequests("templates.drafts.review", 1);
-      expect(await dialog.getByRole("button", { name: "Publish", exact: true }).isDisabled()).toBe(
+      await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      await waitForControlUiGatewayReady(page);
+      const inline = page.locator('[data-plugin-inline-view="release-review"]');
+      await inline.scrollIntoViewIfNeeded();
+      const card = inline.getByRole("region", { name: "Review your Template" });
+      await card.getByRole("heading", { name: "Release Brief", exact: true }).waitFor();
+      expect(await card.getByText("Summarizes releases", { exact: true }).count()).toBe(1);
+      expect(await card.locator("input, textarea").count()).toBe(0);
+      expect(await card.getByRole("checkbox").count()).toBe(0);
+      await card.getByRole("button", { name: /Workspace files/ }).click();
+      await card.getByRole("button", { name: "View all", exact: true }).click();
+      await card.getByRole("button", { name: optionalFile, exact: true }).click();
+      const document = card.locator(".template-creator__detail-panel article");
+      await document.getByText("Check each date and citation.", { exact: true }).first().waitFor();
+      expect(await document.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );
-      await page.clock.runFor(1);
-      await waitForRequests("templates.drafts.review", 2);
-      expect((await gateway.getRequests("templates.drafts.review"))[1]?.params).toMatchObject({
-        choices: { excluded: [`file:${optionalFile}`] },
+      const body = card.locator(".template-creator__body");
+      await body.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
       });
-      await gateway.resolveDeferred("templates.drafts.review", withoutFile("d"));
-      await expect
-        .poll(() => dialog.getByRole("button", { name: "Publish", exact: true }).isEnabled())
-        .toBe(true);
-      expect(await fileRow.locator("details").getAttribute("open")).not.toBeNull();
-      expect(await dialog.getByRole("checkbox", { name: optionalFile }).isChecked()).toBe(false);
-      expect(await dialog.getByRole("checkbox", { name: "Release research" }).isChecked()).toBe(
-        true,
-      );
-      await page.clock.resume();
-      const card = dialog.locator(".template-creator");
-      await card.evaluate((el) => {
-        el.scrollTop = el.scrollHeight;
-      });
-      const footer = (await dialog.locator("openclaw-modal-actions").boundingBox())!;
-      const cardBox = (await card.boundingBox())!;
-      expect(footer.y + footer.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+      expect(
+        await body.evaluate(
+          (element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+        ),
+      ).toBe(true);
+      await card.getByRole("button", { name: "Back to contents", exact: true }).click();
+      await card.getByRole("button", { name: "Back to contents", exact: true }).click();
+      await card.getByRole("button", { name: "Back to Template", exact: true }).click();
+      expect(await gateway.getRequests("templates.drafts.review")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
       await gateway.deferNext("templates.drafts.publish");
-      await dialog.getByRole("button", { name: "Publish", exact: true }).click();
+      await card.getByRole("button", { name: "Publish", exact: true }).click();
       await gateway.waitForRequest("templates.drafts.publish");
-      await expect
-        .poll(() => dialog.locator("button.btn.primary").getAttribute("aria-busy"))
-        .toBe("true");
-      await dialog.locator(".btn__spinner").waitFor({ state: "visible" });
-      await page.keyboard.press("Escape");
-      await dialog.waitFor({ state: "detached" });
-      await gateway.rejectDeferred("templates.drafts.publish", {
-        code: "UNAVAILABLE",
-        message: "The package upload was interrupted.",
-      });
-      const publicationError = page.getByRole("alert");
-      await publicationError.waitFor();
-      expect(await publicationError.textContent()).toContain("The package upload was interrupted.");
-      expect(await page.getByRole("button", { name: "Review Template package" }).count()).toBe(0);
-      await setReview("e");
-      await publicationError.getByRole("button", { name: "Retry review" }).click();
-      await waitForRequests("templates.drafts.review", 3);
-      await dialog.getByRole("button", { name: "Publish", exact: true }).click();
-      await waitForRequests("templates.drafts.publish", 2);
-      const published = await gateway.getRequests("templates.drafts.publish");
-      expect(published[1]?.params).toMatchObject({
-        reviewToken: "e".repeat(64),
-        choices: {
-          excluded: [`file:${optionalFile}`],
-        },
-      });
-      await page
-        .getByText("Submitted to ClawHub. Publication pending security review.")
-        .waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "View on ClawHub" }).waitFor({ state: "visible" });
-      expect(await page.locator(".template-creator__notice").count()).toBe(0);
-      expect(await dialog.count()).toBe(0);
+      await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
+      expect(
+        await card.getByRole("button", { name: "Publishing…", exact: true }).isDisabled(),
+      ).toBe(true);
+      await card.locator(".btn__spinner").waitFor({ state: "visible" });
+      const application = await getControlUiContextHandle(page);
+      try {
+        await application.evaluate((context) => context.navigate("connection"));
+        await waitForControlUiRoute(page, { routeId: "connection" });
+        await card.waitFor({ state: "detached" });
+        await application.evaluate(
+          (context, pathname) => context.navigate("chat", { pathname }),
+          new URL(controlUiSessionUrl(server.baseUrl, sessionKey)).pathname,
+        );
+        await waitForControlUiRoute(page, { routeId: "chat" });
+        await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
+        expect(
+          await card.getByRole("button", { name: "Publishing…", exact: true }).isDisabled(),
+        ).toBe(true);
+        expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
+        await gateway.rejectDeferred("templates.drafts.publish", {
+          code: "UNAVAILABLE",
+          message: "The package upload was interrupted.",
+          details: { templatePublication: { effect: "none" } },
+        });
+        const publicationError = card.getByRole("alert");
+        await publicationError.waitFor();
+        expect(await publicationError.textContent()).toContain(
+          "The package upload was interrupted.",
+        );
+        await card.getByText("Not published", { exact: true }).waitFor();
+        expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
+        await gateway.setMethodResponse("templates.drafts.review", {
+          ...reviewed,
+          reviewToken: "e".repeat(64),
+        });
+        await card.getByRole("button", { name: "Retry", exact: true }).click();
+        await card.getByRole("button", { name: "Publish", exact: true }).waitFor();
+        await card.getByRole("button", { name: "Publish", exact: true }).click();
+        await waitForRequests("templates.drafts.publish", 2);
+        const published = await gateway.getRequests("templates.drafts.publish");
+        expect(published[1]?.params).toMatchObject({
+          agentId: "main",
+          draftId,
+          reviewToken: "e".repeat(64),
+          choices: {
+            name: "release-brief",
+            displayName: "Release Brief",
+            description: "Summarizes releases",
+            excluded: [],
+          },
+        });
+        await card.getByText("Pending", { exact: true }).waitFor();
+        await card.getByRole("link", { name: "View submission", exact: true }).waitFor();
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
+      } finally {
+        await application.dispose();
+      }
     } finally {
       await browser?.close();
       await server.close();

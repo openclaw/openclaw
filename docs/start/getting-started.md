@@ -211,6 +211,7 @@ Full reference: [Environment variables](/help/environment).
 - [Channels overview](/channels)
 - [Setup](/start/setup)
 - [Personal assistant setup](/start/openclaw) - end-to-end guide to a dedicated number that behaves like an always-on assistant
+- [Agents and Templates](/concepts/agents-and-templates) - when to give a job its own agent and how to share that agent as a Template
 - [Triage](/cli/triage)
 - [Troubleshooting](/help/troubleshooting)
 - [Get support](/help/support) - official OpenClaw support and reporting routes

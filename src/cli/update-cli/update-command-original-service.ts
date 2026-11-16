@@ -12,7 +12,7 @@ import {
 } from "../../daemon/service-layout.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import {
-  hasGatewayServiceDefinitionOverrides,
+  canPreserveGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
 } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -213,7 +213,10 @@ export async function observeOriginalManagedServiceRuntime(
     if (!state.command) {
       throw new Error("Original service definition is unavailable.");
     }
-    if (hasGatewayServiceDefinitionOverrides(state.command) || state.command.reloadPending) {
+    if (
+      !canPreserveGatewayServiceDefinitionOverrides(state.command) ||
+      state.command.reloadPending
+    ) {
       throw new Error(
         "Original service has overrides that cannot be restored by the service writer.",
       );
