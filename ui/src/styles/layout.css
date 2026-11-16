@@ -2314,7 +2314,7 @@ div.shell.shell--onboarding {
   gap: 2px;
 }
 
-.sidebar-automations__group {
+.sidebar-list-group {
   display: flex;
   flex-direction: column;
   gap: 2px;
