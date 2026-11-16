@@ -29,9 +29,10 @@ The plugin is included with OpenClaw and off by default. Enable it in
 }
 ```
 
-Then open **New session**, type at least two characters in the repository
-picker, and choose a result under **GitLab**. You can also paste a project URL
-such as `https://gitlab.com/group/project`.
+Then open **New session**, type at least two characters of a project name in
+the repository picker, and choose a result under **GitLab**. Pasting a URL
+into the picker still selects the built-in GitHub path, so choose GitLab
+projects from search.
 
 ## Self-managed GitLab
 

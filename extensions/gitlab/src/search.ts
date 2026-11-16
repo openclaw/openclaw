@@ -58,7 +58,8 @@ export async function searchGitLabProjects(params: {
   url.searchParams.set("search", params.query);
   url.searchParams.set("simple", "true");
   url.searchParams.set("visibility", "public");
-  url.searchParams.set("order_by", "last_activity_at");
+  // Anonymous gitlab.com search is noisy; stars rank canonical projects above forks.
+  url.searchParams.set("order_by", "star_count");
   url.searchParams.set("per_page", String(MAX_RESULTS));
   const host = new URL(params.origin).hostname;
   const { response, release } = await fetchWithSsrFGuard({
