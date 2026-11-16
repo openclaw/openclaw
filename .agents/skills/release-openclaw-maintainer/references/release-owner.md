@@ -190,6 +190,8 @@ Report verified artifacts, included/deferred fixes, evidence gaps, retrospective
 PR, and any explicitly handed-off work. Do not call a pending handoff or
 publication approval wait “released.”
 
+Track ledger repairs in the [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent).
+
 ## Resume or hand off
 
 Keep the [handoff record](release-handoff-template.md) current at meaningful
