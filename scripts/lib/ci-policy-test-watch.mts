@@ -785,7 +785,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/config/sessions/session-accessor.sqlite-byte-size.test.ts",
     "src/config/sessions/session-accessor.sqlite-handle-lifecycle.test.ts",
     "src/config/sessions/session-accessor.sqlite-replacement-projection.test.ts",
-    "src/config/sessions/transcript.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
