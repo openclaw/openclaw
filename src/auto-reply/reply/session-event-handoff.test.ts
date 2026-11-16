@@ -22,7 +22,6 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.reset.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

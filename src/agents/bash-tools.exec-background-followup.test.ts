@@ -10,7 +10,6 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
-  readLatestSessionTranscriptReport,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   upsertSessionEntryCore,
