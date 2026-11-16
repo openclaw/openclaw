@@ -10,6 +10,7 @@ export type SessionColdMutationResult = {
   archivedTranscripts: number;
   externalizedTranscripts: number;
   restored: boolean;
+  ftsSweep?: { rows: number; elapsedMs: number };
   sessionKey?: string;
   turnRebound?: SqliteExpectedSessionTranscriptTurnResult;
   refusedSource?: NonNullable<SessionSourceValidation["refusedSource"]>;

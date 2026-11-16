@@ -41,7 +41,10 @@ import { readSessionColdStorageProtection } from "./session-cold-storage-eligibi
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import { retainSessionColdNavigationInTransaction } from "./session-cold-storage-navigation.js";
 import { writeSessionColdRecordsInTransaction } from "./session-cold-storage-records.js";
-import { readSessionAdmissionProtectionKeys } from "./session-cold-storage-selection.js";
+import {
+  readSessionAdmissionProtectionKeys,
+  selectSessionColdFtsSession,
+} from "./session-cold-storage-selection.js";
 import {
   readSessionColdLockedValidation,
   type prepareSessionColdSourceGuard,
@@ -68,6 +71,7 @@ import { resolveSessionWorkStartError } from "./session-work-start.js";
 
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
+  | { kind: "cold-sweep"; maxRows: number }
   | {
       kind: "cold-batch";
       prepared: SessionColdPrepared[];
@@ -153,13 +157,25 @@ export async function prepareSessionColdRestoreInWorker(
   return (database) => iterateSessionColdRecords(database.db, plan.databaseOptions.path, archive);
 }
 
+/** Select cold state under the writer so restoration can never lose its rebuilt search rows. */
+export function sweepSessionColdFtsInTransaction(
+  database: OpenClawAgentDatabase,
+  maxRows: number,
+): number {
+  const sessionId = selectSessionColdFtsSession(database);
+  return sessionId === undefined
+    ? 0
+    : deleteSessionTranscriptFtsRowsInTransaction(database.db, sessionId, { maxRows });
+}
+
 export function mutateSessionColdTranscriptInWorker(
   plan: SessionColdMutationPlan,
   records: ((database: OpenClawAgentDatabase) => Iterable<SessionColdRecord>) | undefined,
   onCommit: (database: OpenClawAgentDatabase, validation?: SessionSourceValidation) => void,
   sourceGuard?: ReturnType<typeof prepareSessionColdSourceGuard>,
 ): SessionColdMutationResult {
-  return runOpenClawAgentWriteTransaction(
+  const startedAt = performance.now();
+  const completed = runOpenClawAgentWriteTransaction(
     (database) => {
       const db = getNodeSqliteKysely<DB>(database.db);
       const result: SessionColdMutationResult = {
@@ -169,6 +185,14 @@ export function mutateSessionColdTranscriptInWorker(
       };
       let sourceValidation: SessionSourceValidation | undefined;
       if (plan.kind === "cold-maintain") {
+        onCommit(database);
+        return result;
+      }
+      if (plan.kind === "cold-sweep") {
+        result.ftsSweep = {
+          rows: sweepSessionColdFtsInTransaction(database, plan.maxRows),
+          elapsedMs: 0,
+        };
         onCommit(database);
         return result;
       }
@@ -182,7 +206,6 @@ export function mutateSessionColdTranscriptInWorker(
           throw new Error("Transcript ownership changed; cold archival was canceled");
         }
         let protectedIds: Set<string> | undefined;
-        const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
           protectedIds ??= readSessionColdStorageProtection(
             database,
@@ -218,15 +241,11 @@ export function mutateSessionColdTranscriptInWorker(
               );
             }
             retainSessionColdNavigationInTransaction(database, sessionId);
-            archivedIds.push(sessionId);
           });
           if (fresh.sessionKey) {
             publishUnchangedSessionTranscriptAuthority(database, fresh.sessionKey);
           }
           result.archivedTranscripts++;
-        }
-        if (archivedIds.length > 0) {
-          deleteSessionTranscriptFtsRowsInTransaction(database.db, archivedIds);
         }
         for (const { archive, chunks } of plan.externalizations) {
           const current = readSessionColdTranscript(database.db, archive.session_id);
@@ -337,6 +356,8 @@ export function mutateSessionColdTranscriptInWorker(
             database.db,
             db.deleteFrom("session_transcript_index_state").where("session_id", "=", session_id),
           );
+          // A crash or an early restore can precede the deferred cold FTS sweep.
+          deleteSessionTranscriptFtsRowsInTransaction(database.db, session_id);
           writeSessionColdRecordsInTransaction(database, session_id, records(database), "restore");
           executeSqliteQuerySync(
             database.db,
@@ -363,4 +384,8 @@ export function mutateSessionColdTranscriptInWorker(
     plan.databaseOptions,
     { operationLabel: "session cold storage" },
   );
+  if (completed.ftsSweep) {
+    completed.ftsSweep.elapsedMs = performance.now() - startedAt;
+  }
+  return completed;
 }

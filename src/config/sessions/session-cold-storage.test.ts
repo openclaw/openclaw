@@ -521,14 +521,14 @@ describe("cold transcript storage workers", () => {
         .filter((record) => record.message === "slow SQLite reclamation Worker operation")
         .map((record) => record["1"]);
       expect(summaries).toMatchObject(
-        ["cold-batch", "cold-restore", "cold-restore"].map((reclamationKind) => ({
+        ["cold-batch", "cold-maintain", "cold-restore", "cold-restore"].map((reclamationKind) => ({
           reclamationKind,
           elapsedMs: 1_500,
           outcome: "resolved",
         })),
       );
       expect(archiveDiagnostics.map((item) => workers.get(item.workerThreadId!)?.threadId)).toEqual(
-        [-1, -1, -1],
+        [-1, -1, -1, -1],
       );
     } finally {
       process.off("worker", observeWorker);

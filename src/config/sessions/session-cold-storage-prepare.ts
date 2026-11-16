@@ -134,6 +134,7 @@ export async function prepareSessionColdBatchInWorker(
 ): Promise<SessionColdBatchPrepared> {
   const result: SessionColdBatchPrepared = {
     freePages: 0,
+    hasColdFtsRows: false,
     protectionKeys: [],
     prepared: [],
     externalizations: [],
@@ -145,6 +146,7 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
+  result.hasColdFtsRows = selection.value.hasColdFtsRows;
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({

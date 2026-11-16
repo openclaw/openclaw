@@ -314,6 +314,22 @@ async function loadAgentArchiveOperations() {
   } satisfies Handlers;
 }
 
+async function loadSessionColdFtsOperations() {
+  const { sweepSessionColdFtsInTransaction } =
+    await import("../config/sessions/session-cold-storage-worker.js");
+  return {
+    "session.cold.ftsSweep": (input: { maxRows: number }, { writeTransaction, admit }) => {
+      const startedAt = performance.now();
+      const rows = writeTransaction("session.cold.fts-sweep", "Cold search cleanup", (database) => {
+        const deleted = sweepSessionColdFtsInTransaction(database, input.maxRows);
+        admit("commit");
+        return deleted;
+      });
+      return { rows, elapsedMs: performance.now() - startedAt };
+    },
+  } satisfies Handlers;
+}
+
 async function loadAgentAcpOperations() {
   const kernel = await import("../acp/runtime/session-meta-entry.worker.js");
   return {
@@ -525,6 +541,7 @@ export function createAgentWorkerOperationLoaders(
     "trajectory.retention.delete": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
+    "session.cold.ftsSweep": loadSessionColdFtsOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,

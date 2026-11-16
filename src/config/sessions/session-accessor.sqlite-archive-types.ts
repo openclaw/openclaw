@@ -44,6 +44,7 @@ export type SessionColdBatchInput = {
 };
 export type SessionColdBatchPrepared = {
   freePages: number;
+  hasColdFtsRows: boolean;
   protectionKeys: string[];
   prepared: SessionColdPrepared[];
   externalizations: SessionColdExternalization[];

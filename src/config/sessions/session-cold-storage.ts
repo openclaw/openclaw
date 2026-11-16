@@ -65,6 +65,7 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "./session-transcript-writer-claim-error.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import {
   resolveMaintenanceConfigFromInput,
@@ -120,6 +121,36 @@ async function runColdMutation(
           assertRequestCurrent();
           assertCurrent?.();
         };
+        if (plan.kind === "cold-sweep" && execution) {
+          // Derived FTS cleanup can reuse the canonical writer. Offline maintenance
+          // keeps its existing exclusive-custody worker path below.
+          const admitted = createSessionWorkerExecutionSource(
+            assertOpeningCurrent,
+            "Cold search cleanup retired",
+            source.readCustody,
+          );
+          return await runExclusiveSqliteSessionWrite(
+            plan.databaseOptions,
+            async () => {
+              const ftsSweep = await execution.runExisting(admitted, (worker) =>
+                worker.execute({ type: "session.cold.ftsSweep", input: { maxRows: plan.maxRows } }),
+              );
+              if (!ftsSweep) {
+                throw new Error("Cold search cleanup lost its database");
+              }
+              return {
+                archivedTranscripts: 0,
+                externalizedTranscripts: 0,
+                restored: false,
+                ftsSweep,
+              };
+            },
+            "session.cold.fts-sweep",
+            { kind: "cold-sweep" },
+            "worker",
+            signal,
+          );
+        }
         if (!execution) {
           retained = await runExclusiveSqliteSessionWrite(
             plan.databaseOptions,
@@ -243,7 +274,7 @@ async function runColdMutation(
           );
         }
         publishUnchangedSessionTranscriptReceipts(completed.result.transcriptPublication);
-        if (plan.kind !== "cold-restore") {
+        if (plan.kind === "cold-maintain") {
           await withSqliteSessionPageReclamation(
             plan.databaseOptions,
             (reclaimPages) =>
@@ -386,13 +417,33 @@ async function archiveSessionColdBatch(
                 }
               },
             )
-          : batch.freePages > 0
-            ? await runColdMutation(
-                { kind: "cold-maintain", databaseOptions: input.databaseOptions },
-                source,
-                assertCurrent,
-              )
-            : { archivedTranscripts: 0, externalizedTranscripts: 0 };
+          : { archivedTranscripts: 0, externalizedTranscripts: 0 };
+      if (result.archivedTranscripts > 0 || batch.hasColdFtsRows) {
+        let maxRows = 512;
+        while (true) {
+          const swept = await runColdMutation(
+            { kind: "cold-sweep", databaseOptions: input.databaseOptions, maxRows },
+            source,
+            assertCurrent,
+          );
+          const { rows, elapsedMs } = swept.ftsSweep!;
+          if (rows === 0) {
+            break;
+          }
+          // Size from the previous cost with headroom below 250 ms; re-admit through the FIFO.
+          maxRows = Math.max(
+            1,
+            Math.min(16_384, Math.floor((rows * 200) / Math.max(1, elapsedMs))),
+          );
+        }
+      }
+      if (included.length > 0 || batch.hasColdFtsRows || batch.freePages > 0) {
+        await runColdMutation(
+          { kind: "cold-maintain", databaseOptions: input.databaseOptions },
+          source,
+          assertCurrent,
+        );
+      }
       assertCurrent();
       return {
         archivedTranscripts: result.archivedTranscripts,

@@ -1,5 +1,6 @@
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
@@ -106,12 +107,33 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
             );
           }
-          return { plans, externalizations, freePages };
+          const hasColdFtsRows = selectSessionColdFtsSession(database) !== undefined;
+          return { plans, externalizations, freePages, hasColdFtsRows };
         },
         { databaseLabel: database.path, operationLabel: "cold transcript selection" },
       ),
     input.databaseOptions,
   );
+}
+
+/** The cold marker is the durable cleanup queue, including interrupted maintenance passes. */
+export function selectSessionColdFtsSession(database: Pick<OpenClawAgentDatabase, "db">) {
+  const db = getNodeSqliteKysely<DB>(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_cold_archives as cold")
+      .select("cold.session_id")
+      .where((eb) =>
+        eb.exists(
+          eb
+            .selectFrom("session_transcript_fts_rows as fts")
+            .select("fts.id")
+            .whereRef("fts.session_id", "=", "cold.session_id"),
+        ),
+      )
+      .limit(1),
+  )?.session_id;
 }
 
 /** Keys whose live admissions protect any selected generation, including entry references. */

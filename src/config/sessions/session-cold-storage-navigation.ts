@@ -18,6 +18,7 @@ import {
   clearSessionTranscriptActiveFacts,
   prepareColdTranscriptPayload,
   readTranscriptPayload,
+  type TranscriptPayloadRecord,
 } from "./transcript-payload.js";
 
 type ColdDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
@@ -31,26 +32,52 @@ export function retainSessionColdNavigationInTransaction(
   reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   clearSessionTranscriptActiveFacts(database.db, sessionId);
   const db = getNodeSqliteKysely<DB>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("transcript_events")
+      .set({ event_json: null, event_zstd: null })
+      .where("session_id", "=", sessionId)
+      .where("navigation_json", "is not", null),
+  );
+  const update = prepareSqliteQuerySync<TranscriptPayloadRecord & { seq: number }>(
+    database.db,
+    (parameter) =>
+      db
+        .updateTable("transcript_events")
+        .set({
+          event_json: parameter((row) => row.event_json),
+          event_zstd: parameter((row) => row.event_zstd),
+          event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
+          navigation_json: parameter((row) => row.navigation_json),
+          navigation_type: parameter((row) => row.navigation_type),
+          navigation_custom_type: parameter((row) => row.navigation_custom_type),
+          navigation_display: parameter((row) => row.navigation_display),
+          message_role: parameter((row) => row.message_role),
+          navigation_last_type: parameter((row) => row.navigation_last_type),
+          navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+          navigation_valid: parameter((row) => row.navigation_valid),
+        })
+        .where("session_id", "=", sessionId)
+        .where(
+          "seq",
+          "=",
+          parameter((row) => row.seq),
+        ),
+  );
   for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("transcript_events")
       .select(["seq", "event_json", "event_zstd", "event_utf8_bytes", "navigation_json"])
       .where("session_id", "=", sessionId)
+      .where("navigation_json", "is", null)
       .orderBy("seq"),
   )) {
-    const payload =
-      row.navigation_json !== null
-        ? { event_json: null, event_zstd: null }
-        : prepareColdTranscriptPayload(database.db, readTranscriptPayload(row));
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("transcript_events")
-        .set(payload)
-        .where("session_id", "=", sessionId)
-        .where("seq", "=", row.seq),
-    );
+    update({
+      seq: row.seq,
+      ...prepareColdTranscriptPayload(database.db, readTranscriptPayload(row)),
+    });
   }
 }
 

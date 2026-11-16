@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -12,7 +13,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import { resetSessionStore } from "./session-accessor.sqlite-reset.js";
+import * as sessionWrites from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { embedSessionColdArchivesInSnapshot } from "./session-cold-storage-backup.js";
 import {
@@ -27,11 +30,14 @@ import {
   mutateSessionColdTranscriptInWorker,
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
+import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   historicalId,
+  maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.worker.js";
 
 vi.mock("./session-cold-storage-codec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-cold-storage-codec.js")>()),
@@ -122,6 +128,61 @@ function restorationPlan(descriptor: NonNullable<ReturnType<typeof readSessionCo
     archive: descriptor,
   };
 }
+
+it.each(["restore", "maintenance"] as const)(
+  "recovers cold FTS after interruption and a bounded partial sweep through %s",
+  async (recovery) => {
+    await archive(); // Simulate losing the process after the atomic flip, before its sweep.
+    const remaining = () =>
+      fixture
+        .database()
+        .prepare("SELECT count(*) AS n FROM session_transcript_fts_rows WHERE session_id = ?")
+        .get(historicalId)!.n;
+    expect(remaining()).toBe(12);
+    for (const query of ["hello", "🦞"]) {
+      expect(
+        searchSessionTranscriptsReadOnlySync(
+          { agentId: "main", query, sessionId: historicalId },
+          fixture.options,
+        ),
+      ).toMatchObject({ hits: [], archivedTranscriptsExcluded: 1 });
+    }
+    const sweep = () =>
+      mutateSessionColdTranscriptInWorker(
+        { kind: "cold-sweep", databaseOptions: fixture.options, maxRows: 3 },
+        undefined,
+        () => {},
+      );
+    const rollback = new Error("interrupted sweep");
+    expect(() =>
+      mutateSessionColdTranscriptInWorker(
+        { kind: "cold-sweep", databaseOptions: fixture.options, maxRows: 3 },
+        undefined,
+        () => {
+          throw rollback;
+        },
+      ),
+    ).toThrow(rollback);
+    expect(remaining()).toBe(12);
+    expect(sweep().ftsSweep?.rows).toBe(3);
+    expect(remaining()).toBe(9);
+    if (recovery === "maintenance") {
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.options.path) });
+      expect(remaining()).toBe(0);
+    }
+    const plan = restorationPlan(readSessionColdTranscript(fixture.database(), historicalId)!);
+    mutateSessionColdTranscriptInWorker(
+      plan,
+      await prepareSessionColdRestoreInWorker(plan),
+      () => {},
+    );
+    expect(fixture.snapshot()).toEqual(original);
+    expect(sweep().ftsSweep?.rows).toBe(0);
+    expect(remaining()).toBe(12);
+  },
+);
 
 it("archives a window larger than the per-file bound and restores all bytes and metadata", async () => {
   expect((await archive()).archivedTranscripts).toBe(1);
@@ -322,4 +383,59 @@ it("removes every chunk file and cascading child row on full-history deletion", 
       fs.stat(resolveSessionColdArchivePath(fixture.scope.storePath, chunk.archive_name)),
     ).rejects.toMatchObject({ code: "ENOENT" });
   }
+});
+
+it("admits an interactive entry patch between cold FTS sweep transactions", async () => {
+  await replaceTranscriptEvents(
+    fixture.scope,
+    Array.from({ length: 600 }, (_, index) => ({
+      type: "message",
+      id: `sweep-${index}`,
+      parentId: index ? `sweep-${index - 1}` : null,
+      message: { role: "user", content: [{ type: "text", text: `message ${index}` }] },
+    })),
+  );
+  await waitForSessionTranscriptIndexReconcile(fixture.options);
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+    )
+    .run(historicalId);
+  const remaining = () =>
+    Number(
+      fixture
+        .database()
+        .prepare("SELECT count(*) AS n FROM session_transcript_fts_rows WHERE session_id = ?")
+        .get(historicalId)!.n,
+    );
+  expect(remaining()).toBe(600);
+  const originalWrite = sessionWrites.runExclusiveSqliteSessionWrite;
+  let sweeps = 0;
+  let patched = false;
+  vi.spyOn(sessionWrites, "runExclusiveSqliteSessionWrite").mockImplementation(async (...args) => {
+    if (args[2] === "session.cold.fts-sweep" && sweeps > 0) {
+      expect(patched).toBe(true);
+    }
+    const result = await originalWrite(...args);
+    if (args[2] === "session.cold.fts-sweep" && ++sweeps === 1) {
+      expect(remaining()).toBe(88); // The first transaction may delete only its 512-row budget.
+      await withTestTimeout(
+        applySessionEntryOperation(fixture.scope, {
+          kind: "fields",
+          patch: { label: "interactive between sweeps" },
+        }),
+        5_000,
+        "Cold sweep retained the agent writer",
+      );
+      patched = true;
+    }
+    return result;
+  });
+  await expect(
+    runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.options.path) }),
+  ).resolves.toMatchObject({ archivedTranscripts: 1 });
+  expect(patched).toBe(true);
+  expect(sweeps).toBeGreaterThan(2);
+  expect(remaining()).toBe(0);
 });
