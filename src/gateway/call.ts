@@ -36,6 +36,7 @@ import {
   GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
+  withEdgeAuthPairingHint,
 } from "./call-device-auth.js";
 import type {
   CallGatewayBaseOptions,
@@ -71,7 +72,6 @@ import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
-  type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
 import {
   canSkipGatewayConfigLoad,
@@ -556,12 +556,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     }
   }
   const tlsFingerprint = bootstrap.tlsFingerprint;
-  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
-    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
-  );
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config: context.config,
-    value: edgeAuthConfig,
+    value: normalizeEdgeAuthHeadersConfig(
+      gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
+    ),
     targetUrl: url,
     env: process.env,
   });
@@ -765,7 +764,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (settled || dispatchGeneration !== connectionGeneration) {
               return;
             }
-            stop(err as Error);
+            stop(withEdgeAuthPairingHint(err as Error, edgeAuthHeaders, deviceIdentity));
           }
         })();
       },

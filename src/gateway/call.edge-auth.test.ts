@@ -1,6 +1,7 @@
 // A CLI behind an identity-aware proxy has only gateway.remote.edgeAuth: the
 // proxy authenticates the upgrade, so the first connect must still be sent.
 import { beforeEach, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayClientOptions } from "./client.js";
 
@@ -8,6 +9,8 @@ const state = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   clientOptions: null as GatewayClientOptions | null,
   starts: 0,
+  hasIdentity: true,
+  requestError: null as Error | null,
 }));
 
 vi.mock("../config/gateway-dispatch-config.js", async (importOriginal) => ({
@@ -29,7 +32,7 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
     loadOrCreateDeviceIdentityAsync: async () => identity,
-    loadDeviceIdentityIfPresentAsync: async () => identity,
+    loadDeviceIdentityIfPresentAsync: async () => (state.hasIdentity ? identity : null),
   };
 });
 
@@ -40,6 +43,9 @@ vi.mock("./client.js", async (importOriginal) => ({
       state.clientOptions = opts;
     }
     async request() {
+      if (state.requestError) {
+        throw state.requestError;
+      }
       return { ok: true };
     }
     start() {
@@ -72,6 +78,8 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
   state.clientOptions = null;
   state.starts = 0;
+  state.hasIdentity = true;
+  state.requestError = null;
 });
 
 it.each([undefined, "wss://gateway.example"])(
@@ -103,4 +111,31 @@ it("still requires credentials for a remote without edgeAuth", async () => {
     name: "GatewayCredentialsRequiredError",
   });
   expect(state.starts).toBe(0);
+});
+
+it.each([
+  [false, /Run `openclaw tui` once to pair this device/],
+  [true, /^missing scope: operator\.read$/],
+])("names the TUI for an unpaired edgeAuth device (identity %s)", async (hasIdentity, message) => {
+  // The proxy admits a device with no identity, but with no scopes.
+  state.config = {
+    gateway: {
+      mode: "remote",
+      remote: { url: "wss://gateway.example", edgeAuth: { "Cf-Access-Token": "access-token" } },
+    },
+  };
+  state.hasIdentity = hasIdentity;
+  state.requestError = new GatewayClientRequestError({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.read",
+    details: {
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    },
+  });
+
+  await expect(
+    callGatewayCli({ method: "sessions.list", sharedStateMode: "read-only" }),
+  ).rejects.toThrow(message);
 });
