@@ -524,8 +524,6 @@ async function wakeMediaGenerationTaskCompletionOnce(
     targetRequesterSessionKey: target.sessionKey,
     preparedRequester: { binding: requesterBinding, entry: requesterEntry },
     resolveGatewayContext: handle.resolveGatewayContext,
-    completionRequesterSessionId: target.sessionId,
-    completionRequesterLifecycleRevision: target.lifecycleRevision ?? undefined,
     triggerMessage,
     internalEvents,
     ...(inputAttachments.length ? { inputAttachments } : {}),
