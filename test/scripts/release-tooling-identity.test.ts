@@ -44,6 +44,30 @@ function protectedIdentity(
 }
 
 describe("release tooling identity", () => {
+  it("keeps admitted product C separate from the exact executing Q", () => {
+    const ref = "release-ci/" + SHA.slice(0, 12) + "-123";
+    const identity = { ref, fullRef: "refs/heads/" + ref, sha: SHA };
+    const request = {
+      workflowContract: "2",
+      workflowFullRef: identity.fullRef,
+      workflowRef: ref,
+      workflowSha: SHA,
+      requestedIdentityJson: JSON.stringify(identity),
+      qualificationAdmission: {},
+      candidateSha: OTHER_SHA,
+    };
+    expect(resolveReleaseToolingIdentity(request)).toEqual(identity);
+    expect(() => resolveReleaseToolingIdentity({ ...request, candidateSha: "invalid" })).toThrow(
+      "valid C",
+    );
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        ...request,
+        requestedIdentityJson: JSON.stringify({ ...identity, sha: OTHER_SHA }),
+      }),
+    ).toThrow("exact executing Q");
+  });
+
   it("rejects a raw commit SHA as the workflow transport ref", () => {
     expect(() =>
       resolveReleaseToolingIdentity({

@@ -289,7 +289,6 @@ function captureQualificationIdentity(
     runAttempt = fields.get("runAttempt"),
     artifactId = fields.get("artifactId");
   if (
-    params.candidateSha !== params.toolingSha ||
     params.qualificationInputs === undefined ||
     fields.get("repository") !== REPOSITORY ||
     typeof workflowSha !== "string" ||
@@ -370,6 +369,15 @@ function captureQualificationIdentity(
   api("actions/artifacts/" + artifactId);
   api("actions/runs/" + runId + "/attempts/" + runAttempt + "/jobs?per_page=100");
   api("actions/artifacts/" + artifactId + "/zip", true);
+  if (params.candidateSha !== params.toolingSha) {
+    // Independent Q must be a main ancestor. Retain the exact observation for
+    // the verified child; P still owns descriptor, tuple, and authority validation.
+    verifyRemoteTooling(
+      { ...params, toolingFullRef: "refs/heads/main" },
+      (args) => String(capture(args)),
+      false,
+    );
+  }
   api("actions/artifacts/" + artifactId);
   producer();
   return responses;

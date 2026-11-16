@@ -50,7 +50,7 @@ Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v4 phased evidence is accepted by the current trusted-main
 verifier identified by --verifier-source-sha (defaults to --workflow-sha).
-Candidate-owned qualification requires independently admitted exact code-parent C=Q/P and inputs.
+Candidate qualification requires independently admitted exact C/Q/P and inputs.
 The historical producer workflow SHA
 remains independent. A descendant target may reuse product validation only
 when GitHub proves the entire delta is the selected release changelog. Writes reuse=true plus
@@ -184,7 +184,7 @@ if [[ -n "$QUALIFICATION_ADMISSION_JSON" || -n "$QUALIFICATION_INPUTS_JSON" ]]; 
     no_reuse "candidate qualification reuse requires complete admission inputs"
   fi
   qualification_args=(--qualification-reuse-json "$(jq -nc \
-    --arg candidateSha "$VERIFIER_WORKFLOW_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
+    --arg candidateSha "$TARGET_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
     --arg workflowRef "$WORKFLOW_REF" \
     --argjson descriptor "$QUALIFICATION_ADMISSION_JSON" \
     --argjson inputs "$QUALIFICATION_INPUTS_JSON" \

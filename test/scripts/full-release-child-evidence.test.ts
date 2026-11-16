@@ -54,7 +54,7 @@ function fixture(role = "normalCi") {
   };
 }
 
-function seal(data = fixture(), runAttempt = 1) {
+function seal(data = fixture(), runAttempt = 1, targetInput = TARGET) {
   const role = data.role;
   const spec = releaseChildSpec(role);
   const root = tempDirs.make("frv-child-receipt-");
@@ -70,7 +70,11 @@ function seal(data = fixture(), runAttempt = 1) {
     JSON.stringify({
       inputs: {
         dispatch_id: `full-release-validation-77-1${spec.suffix}`,
-        target_ref: TARGET,
+        [role === "npmTelegram"
+          ? "harness_ref"
+          : role.startsWith("releaseChecks")
+            ? "ref"
+            : "target_ref"]: targetInput,
         release_scope: "full",
       },
     }),
@@ -307,14 +311,21 @@ describe("full release child evidence producer", () => {
     },
   );
 
+  it("seals independent Q without substituting the dispatched C", () => {
+    const data = fixture();
+    data.run.head_sha = SHA;
+    const accepted = seal(data);
+    expect(accepted.result.status, accepted.result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(accepted.receipt, "utf8"))).toMatchObject({
+      targetSha: TARGET,
+      workflowSha: SHA,
+    });
+    const rejected = seal(data, 1, SHA);
+    expect(rejected.result.status).toBe(1);
+    expect(rejected.result.stderr).toContain("exact dispatched product source");
+  });
+
   it.each([
-    {
-      name: "workflow SHA different from the target",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.head_sha = SHA;
-      },
-      error: "does not match the target SHA",
-    },
     {
       name: "stale run attempt",
       mutate: (data: ReturnType<typeof fixture>) => {
