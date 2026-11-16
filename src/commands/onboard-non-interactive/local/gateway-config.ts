@@ -66,7 +66,7 @@ export async function applyNonInteractiveGatewayConfig(params: {
     );
     if (customBindHostIssue) {
       const setCommand = formatCliCommand("openclaw config set gateway.customBindHost <ipv4>");
-      const interactiveCommand = formatCliCommand("openclaw onboard");
+      const interactiveCommand = formatCliCommand("openclaw onboard --gateway-bind custom");
       return reject(
         `--gateway-bind custom requires gateway.customBindHost: ${customBindHostIssue}. Set it with ${setCommand} and rerun, or run ${interactiveCommand} interactively to be prompted for it.`,
       );

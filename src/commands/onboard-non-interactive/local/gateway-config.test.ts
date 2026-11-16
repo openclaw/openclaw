@@ -215,7 +215,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
       { auth: { mode: "password", password: "test-password" }, opts: { gatewayPassword: " " } },
       "Missing --gateway-password",
     ],
-    [{ opts: { gatewayBind: "custom" } }, "--gateway-bind custom requires gateway.customBindHost"],
+    [
+      { opts: { gatewayBind: "custom" } },
+      "or run openclaw onboard --gateway-bind custom interactively to be prompted for it.",
+    ],
     [
       { gateway: { customBindHost: "not-an-ip" }, opts: { gatewayBind: "custom" } },
       "Invalid IPv4 address",
