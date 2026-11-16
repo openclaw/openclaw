@@ -7,6 +7,7 @@ import type {
   ProviderDecisionOutcomeV2,
   ProviderFailureReason,
 } from "../decisions/provider-outcomes.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import type { ModelRequestHeaders } from "../llm/types.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
@@ -207,8 +208,10 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
     const response = responseWithRelease(guarded.response, release);
     try {
       if (!response.ok) {
-        // Error bodies can reflect credentials or state; never read them.
-        await response.body?.cancel();
+        // Error bodies can reflect credentials or state; never read them. A stalled
+        // or rejected body cancel must not delay classification past the deadline
+        // or degrade 401/403/429 into a transport failure, so discard without waiting.
+        void cancelUnreadResponseBody(response);
         return failureForStatus(response, execution.statusReason);
       }
       let payload: unknown;

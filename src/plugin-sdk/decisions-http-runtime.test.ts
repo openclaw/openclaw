@@ -152,6 +152,30 @@ it("releases a capture tee when an error body is cancelled", async () => {
   expect(mocks.release).toHaveBeenCalledOnce();
 });
 
+it.each(["pending", "rejected"])(
+  "keeps failure classification when error-body cancellation is %s",
+  async (settlement) => {
+    const cancel = vi.fn(() =>
+      settlement === "pending"
+        ? new Promise<void>(() => {})
+        : Promise.reject(new Error("synthetic cancellation failure")),
+    );
+    mocks.fetch.mockResolvedValue(
+      new Response(new ReadableStream({ cancel }), {
+        status: 429,
+        headers: { "retry-after": "2" },
+      }),
+    );
+    await expect(evaluate()).resolves.toEqual({
+      status: "unavailable",
+      reason: "rate-limited",
+      retryAfterMs: 2000,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(mocks.release).toHaveBeenCalledOnce();
+  },
+);
+
 it("applies a provider status quirk before the shared mapping", async () => {
   mocks.fetch.mockResolvedValue(
     new Response(null, { status: 529, headers: { "retry-after": "1" } }),
