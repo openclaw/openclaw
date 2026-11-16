@@ -3,9 +3,6 @@ import { en } from "./en.ts";
 
 const enApps = {
   appsPage: {
-    heroTitle: "Take OpenClaw everywhere",
-    heroTagline:
-      "Companion apps for your phone, watch, desktop, and browser — plus plugins to extend what your agent can do.",
     sectionMobile: "On your phone",
     havePhone: "Already have the app?",
     pairDevice: "Pair your device",

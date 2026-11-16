@@ -194,7 +194,7 @@ afterEach(() => {
 });
 
 describe("AppsPage", () => {
-  it("names the page with one level-one heading above the hero", () => {
+  it("names the page with one level-one heading", () => {
     const provider = createSolidApplicationContextProvider({
       gateway: createApplicationGateway().gateway,
       agentSelection: {
@@ -212,6 +212,5 @@ describe("AppsPage", () => {
     expect(container.querySelectorAll("h1")).toHaveLength(1);
     expect(page.getByRole("heading", { name: "Plugins and ClawHub" })).toBeTruthy();
     expect(page.getByText("Chrome extension")).toBeTruthy();
-    expect(page.getByRole("heading", { level: 2, name: "Take OpenClaw everywhere" })).toBeTruthy();
   });
 });
