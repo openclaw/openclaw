@@ -221,11 +221,11 @@ export function collectPreparationRangeMessages(
 export function readSessionBranch(
   sessionManager: ExtensionContext["sessionManager"],
 ): CoreSessionTreeEntry[] {
-  return sessionManager.getBranch() as CoreSessionTreeEntry[];
+  return sessionManager.getBranch();
 }
 
 export function projectBranchEntries(entries: CoreSessionTreeEntry[]): AgentMessage[] {
-  return buildCoreSessionContext(entries).messages as AgentMessage[];
+  return buildCoreSessionContext(entries).messages;
 }
 
 export function containsRealConversation(messages: AgentMessage[]): boolean {

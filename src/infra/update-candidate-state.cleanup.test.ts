@@ -251,7 +251,10 @@ it.each([
       expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
     }
     const logged = fsSync.existsSync(log) ? await fs.readFile(log, "utf8") : "";
-    expect(logged.includes(attempts[0]!.directory)).toBe(scenario.cleanup !== "healthy");
+    // File logs encode structured paths as JSON, including Windows backslashes.
+    expect(logged.includes(JSON.stringify(attempts[0]!.directory))).toBe(
+      scenario.cleanup !== "healthy",
+    );
   },
   30_000,
 );
