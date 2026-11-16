@@ -442,6 +442,7 @@ describe("app-tool-stream approval lifecycle", () => {
           type: "toolresult",
           name: "read",
           text: "",
+          timestamp: TOOL_STREAM_TEST_NOW,
         });
       }
     } finally {

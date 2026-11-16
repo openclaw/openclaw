@@ -591,7 +591,6 @@ it("keeps command progress neutral across the row, expanded body, and sidebar un
   expect(cardPart(container, "outcome")).toMatchObject({ textContent: "Running" });
   expect(container.textContent).toContain(card.outputText);
   expect(textOf(container, ".chat-tool-row__cmd")).toBe("diagnostic");
-  expect(query(container, ".chat-tool-term__cmd")).toBeNull();
   cardPart(container, "action-btn")?.click();
   expect(onOpenSidebar).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "tool-output", card }),

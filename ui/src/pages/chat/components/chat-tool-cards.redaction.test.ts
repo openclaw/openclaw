@@ -5,10 +5,10 @@ import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 describe("tool-card source fidelity", () => {
   it.each([
-    ["/Users/alice/Pictures/base.png", "~/Pictures/base.png"],
-    ["D:\\Users\\alice\\Pictures\\base.png", "~\\Pictures\\base.png"],
-    ["/var/folders/demo/screenshots/base.png", "/var/folders/demo/screenshots/base.png"],
-  ])("keeps image path %s readable in the tool row", async (path, expected) => {
+    "/Users/alice/Pictures/base.png",
+    "D:\\Users\\alice\\Pictures\\base.png",
+    "/var/folders/demo/screenshots/base.png",
+  ])("names image path %s by its file in the tool row", async (path) => {
     const container = document.createElement("div");
     await mountCard(
       { id: "msg:image", name: "view_image", args: { path } },
@@ -17,7 +17,7 @@ describe("tool-card source fidelity", () => {
     );
 
     expect(container.querySelector("[role=img]")?.ariaLabel).toBe("view_image");
-    expect(container.querySelector(".chat-tool-row")?.textContent).toContain(expected);
+    expect(container.querySelector(".chat-tool-row")?.textContent).toBe("View image base.png");
   });
 
   const publicUrl = "https://x.com/EliXPampa/status/2097727549400871286";

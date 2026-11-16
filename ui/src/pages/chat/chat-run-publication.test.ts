@@ -132,6 +132,7 @@ describe("chat run publication", () => {
       type: "toolresult",
       name: "exec",
       text: "Result 5",
+      timestamp: 5,
     });
     vi.advanceTimersByTime(100);
     expect(invocation).toHaveBeenCalledOnce();
