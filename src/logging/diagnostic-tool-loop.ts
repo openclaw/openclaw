@@ -15,7 +15,7 @@ import {
   type SessionRef,
 } from "./diagnostic-session-state.js";
 
-export function logToolLoopAction(
+function logToolLoopAction(
   params: SessionRef & Omit<DiagnosticToolLoopEvent, "type" | "seq" | "ts" | "trace">,
 ) {
   if (!areDiagnosticsEnabledForProcess()) {

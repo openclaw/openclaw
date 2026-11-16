@@ -42,7 +42,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
-import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-context.js";
 import { withArtifactPreservingStateReads } from "../../../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";

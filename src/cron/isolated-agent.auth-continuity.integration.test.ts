@@ -1,5 +1,5 @@
 import { zstdDecompressSync } from "node:zlib";
-import { getAiTransportHost } from "@openclaw/ai";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -189,6 +189,8 @@ function completedResponse(model: string): Response {
   });
 }
 
+const originalTransportHost = getAiTransportHost();
+
 beforeEach(bindSessionMcpRuntimeTestScheduler);
 
 afterEach(async () => {
@@ -196,6 +198,8 @@ afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   vi.restoreAllMocks();
+  // Native module loading can copy the spied host; restore the process-wide fixture too.
+  configureAiTransportHost(originalTransportHost);
 });
 
 it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(

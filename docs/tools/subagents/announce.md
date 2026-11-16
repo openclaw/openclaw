@@ -85,6 +85,13 @@ After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
 
+Private results remain bound to the session that requested them. If a new session
+or reset replaces it before the batch can deliver, OpenClaw records the reason and
+shows a notice in the replacement session when it rejects the batch. The notice
+points to the previous session's completed tasks; it does not include child
+findings or resume the old request in the new session. A failed notice write keeps
+the batch pending for retry.
+
 Completion and settle run IDs stay within the 256-character execution-identity
 admission limit, including nested completions. IDs that fit remain unchanged;
 longer IDs retain their routing prefix and continuation markers with a SHA-256

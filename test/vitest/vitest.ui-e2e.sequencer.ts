@@ -109,6 +109,7 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 // These source fixtures borrow one invocation's compiled subprocess generation.
 // New borrowers may add preparation elsewhere until this measured group is refreshed.
 const UI_E2E_SHARED_WORKER_FILES = new Set([
+  "ui/src/e2e/guest-person-identities.e2e.test.ts",
   "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/question-guest.e2e.test.ts",

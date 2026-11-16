@@ -172,8 +172,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     api: attempt.model.api,
     baseUrl: attempt.model.baseUrl,
     inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
-    // Personal bootstrap follows the session's selected human, not only the session ID.
-    personalProfile: attempt.bootstrapUserProfileId,
+    // The session's selected human, never the current turn's sender classification.
+    personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
     surface: codeModeControlsEnabledForRun
       ? "code-mode"
