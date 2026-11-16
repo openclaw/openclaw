@@ -496,6 +496,25 @@ describe("grouped chat rendering", () => {
     ).toEqual(["Launched Worker01", "Listed subagents"]);
   });
 
+  it("keeps a collection wait visible when an ID returned an error", async () => {
+    const groups = buildItems({
+      messages: [
+        createAssistantMessage([createToolCall("wait", "agents_wait", { ids: ["missing"] })]),
+        createToolResultMessage(
+          "wait",
+          "agents_wait",
+          JSON.stringify({
+            completed: [],
+            pending: [],
+            errors: [{ runId: "missing", error: "not_found" }],
+          }),
+        ),
+      ],
+    }).filter((item) => item.kind === "group");
+    await renderToolGroups(groups, {});
+    expectCount(".chat-tool-msg-summary", 1);
+  });
+
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(
       [

@@ -215,12 +215,14 @@ block, for example when the request is older than the loaded history, both
 lines describe the resumed run alone. A message you send after the handoff
 starts a block of its own, with that run's own clock and closing line.
 
-In the tool activity, a subagent's launch row shows the label its launch gave
-it, when it gave one, rather than its instructions, followed by **running**
-while it works and by its duration once it has finished. A subagent that failed
-or timed out reads **failed** instead, and one that was stopped reads
-**stopped**. Selecting the name opens that subagent in the **Subagents** panel;
-the rest of the row still expands the launch's details. The panel labels elapsed
+In the tool activity, a subagent's launch row records the launch itself, such
+as **Launched Atlas**, using the label its launch gave it rather than its
+instructions. Consecutive launches share one row. A later row reports how each
+subagent ended: **Atlas finished**, **Atlas timed out**, **Atlas failed** or
+**Atlas stopped**, placed when that result arrived. Stopping a subagent and
+listing subagents read **Stopped** and **Listed subagents**. Selecting a name
+opens that subagent in the **Subagents** panel; the rest of the row still
+expands the call's details. The panel labels elapsed
 work as **Duration** and shows **No subagents yet.** before any are listed. Collapsed activity counts subagents on
 their own, such as **1 other operation · 3 subagents**. A launch that was
 refused started no subagent and is counted with the other operations. While the

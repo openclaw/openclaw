@@ -20,6 +20,22 @@ function readOutcome(value: unknown): SubagentCompletionOutcome | undefined {
   return SUBAGENT_COMPLETION_OUTCOMES.find((outcome) => outcome === value);
 }
 
+/** A child's terminal producer status as a display fact; an unknown end yields none. */
+export function subagentCompletionForOutcome(
+  child: { runId: string; sessionKey: string; label?: string },
+  status: string | undefined,
+  killed = false,
+): SubagentCompletion | undefined {
+  const outcome = killed
+    ? "killed"
+    : status === "timeout"
+      ? "timeout"
+      : status === "error"
+        ? "failed"
+        : undefined;
+  return outcome || status === "ok" ? { ...child, ...(outcome ? { outcome } : {}) } : undefined;
+}
+
 export function readSubagentCompletions(value: unknown): SubagentCompletion[] {
   if (!Array.isArray(value)) {
     return [];

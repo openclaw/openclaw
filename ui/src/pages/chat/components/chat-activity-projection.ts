@@ -1,6 +1,10 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
@@ -112,12 +116,26 @@ export function collectActivityGroup(
       preparedByCard.set(card, item);
     }
   }
-  // Successful waits are transport coordination, not completed narration.
+  // Successful waits are transport coordination, not completed narration. Per-ID
+  // errors (not found, not owned) have no completion row, so their wait stays.
+  const errorWaits = new Set<ReturnType<typeof readPreparedActivity>[number]>();
   for (const card of cards) {
     if (
-      unwrapToolCallForDisplay(card).name.trim().toLowerCase() === "agents_wait" &&
-      resolveToolCardOutcome(card, opts.runActive) === "succeeded"
+      unwrapToolCallForDisplay(card).name.trim().toLowerCase() !== "agents_wait" ||
+      resolveToolCardOutcome(card, opts.runActive) !== "succeeded"
     ) {
+      continue;
+    }
+    const result = {
+      ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+      ...asNullableRecord(card.details),
+    };
+    if (Array.isArray(result.errors) && result.errors.length > 0) {
+      const item = preparedByCard.get(card);
+      if (item) {
+        errorWaits.add(item);
+      }
+    } else {
       suppressedCards.add(card);
     }
   }
@@ -134,7 +152,7 @@ export function collectActivityGroup(
       !hiddenActivity.has(item) &&
       !item.hideFromChannelProgress &&
       !item.suppressChannelProgress &&
-      !(item.name === "agents_wait" && item.status === "completed"),
+      !(item.name === "agents_wait" && item.status === "completed" && !errorWaits.has(item)),
   );
   const cardGroups = projection.groups;
   const order = new Map(cards.map((card, index) => [card, index]));
