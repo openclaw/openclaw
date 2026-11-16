@@ -1,3 +1,4 @@
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
@@ -7,7 +8,11 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
-import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+} from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -640,15 +645,37 @@ export function syncToolCardExpansionState(
     let groupCallId: string | undefined;
     for (const entry of item.messages) {
       const cards = extractToolCardsCached(entry.message);
+      const standalone = isStandaloneToolMessageForDisplay(entry.message);
+      const imageCard =
+        cards.length === 1 && unwrapToolCallForDisplay(cards[0]!).name === "view_image"
+          ? cards[0]
+          : undefined;
+      // Bare live tool envelopes still render the card; text/media owns the outer disclosure.
+      const imageMessage = Boolean(
+        imageCard &&
+        standalone &&
+        resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message)) !== "none",
+      );
+      const imageIdentity = imageCard?.callId
+        ? JSON.stringify([imageCard.runId, imageCard.callId])
+        : undefined;
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
         const card = cards[cardIndex]!;
         groupCallId ??= card.callId;
-        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`, card.callId, "card");
+        retainDisclosure(
+          `${entry.key}:toolcard:${cardIndex}`,
+          imageCard ? (imageMessage ? undefined : imageIdentity) : card.callId,
+          imageCard ? "image" : "card",
+        );
       }
-      if (!isStandaloneToolMessageForDisplay(entry.message)) {
+      if (!standalone) {
         continue;
       }
-      retainDisclosure(`toolmsg:${entry.key}`, cards[0]?.callId, "message");
+      retainDisclosure(
+        `toolmsg:${entry.key}`,
+        imageCard ? (imageMessage ? imageIdentity : undefined) : cards[0]?.callId,
+        imageCard ? "image" : "message",
+      );
     }
     if (groupCallId && !transcriptItems) {
       calls.set(`activity:${item.key}`, `activity:${groupCallId}`);
@@ -660,6 +687,9 @@ export function syncToolCardExpansionState(
       bubbleMode,
       Boolean(inlineCommands),
     )) {
+      if (id.startsWith("lifecycle:")) {
+        retainDisclosure(id, undefined, "lifecycle");
+      }
       calls.set(id, call);
     }
   }
@@ -671,7 +701,7 @@ export function syncToolCardExpansionState(
       const represented = new Set(calls.values());
       for (const [id, call] of state.calls ?? []) {
         if (
-          id.startsWith("activity:") &&
+          (id.startsWith("activity:") || id.startsWith("lifecycle:")) &&
           explicit.has(id) &&
           !calls.has(id) &&
           !represented.has(call)

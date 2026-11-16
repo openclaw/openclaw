@@ -225,6 +225,11 @@
   color: inherit;
 }
 
+.chat-tool-row__subagent-name,
+.chat-tool-row__subagent-link {
+  color: color-mix(in oklab, var(--text) 80%, transparent);
+}
+
 /* The state stays whole; a long name gives way instead. */
 .chat-tool-row__subagent-state {
   flex: none;
@@ -1000,6 +1005,14 @@
   padding-left: 0;
   border-left: 0;
   overflow-y: auto;
+}
+
+.chat-activity-group__body[hidden] {
+  display: none;
+}
+
+.chat-tool-msg-collapse--lifecycle {
+  gap: 4px;
 }
 
 /* Run bodies use display: contents, so both paths share the outer 2px gap. */

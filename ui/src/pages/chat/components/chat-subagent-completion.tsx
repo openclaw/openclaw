@@ -38,7 +38,7 @@ export function ChatSubagentCompletion(props: {
           <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
             {sentence()[0]}
           </span>
-          <span class="chat-tool-row__title" title={names()}>
+          <span class="chat-tool-row__title chat-tool-row__subagent-name" title={names()}>
             <For each={parts()} keyed={(part) => part.type + part.value}>
               {(part) => (
                 <Show when={part().type === "element"} fallback={part().value}>

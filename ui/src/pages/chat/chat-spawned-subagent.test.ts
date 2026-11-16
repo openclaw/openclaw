@@ -355,8 +355,8 @@ describe("a launched subagent", () => {
     expect(read([])).toBe("Reading chat");
     expect(address("sessions_history", {}, "Read session history")([])).toBe("Reading chat");
     const wait = address("agents_wait", { ids: ["known-run"] }, "Wait for Agents");
-    expect(wait([{ ...addressedChild, activeRunIds: ["known-run"] }])).toBe("Waiting for agents…");
-    expect(wait([])).toBe("Waiting for agents…");
+    expect(wait([{ ...addressedChild, activeRunIds: ["known-run"] }])).toBe("Wait for subagents");
+    expect(wait([])).toBe("Wait for subagents");
     expect(
       address("agents_wait", { ids: ["known-run"] }, "Wait for Agents", {
         details: {
@@ -364,7 +364,7 @@ describe("a launched subagent", () => {
           pending: [],
         },
       })([]),
-    ).toBe("Waiting for agents…");
+    ).toBe("Wait for subagents");
     // An unlabeled launch is named by the session its result names.
     const unlabeled = address("sessions_spawn", { task: "Write" }, "Start subagent", {
       outputText: accepted(addressedChild.key),
@@ -427,6 +427,14 @@ it("coalesces adjacent active and confirmed lifecycle calls without changing the
   const first = container.querySelector<HTMLButtonElement>(".chat-tool-row")!;
   const toggle = first.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")!;
   toggle.focus();
+  toggle.click();
+  render(call("a", false));
+  await settleToolBridges(container);
+  expect(container.querySelectorAll(".chat-tool-msg-summary")).toHaveLength(1);
+  expect(container.querySelector(".chat-tool-msg-body")).not.toBeNull();
+  toggle.click();
+  render(call("a", false));
+  await settleToolBridges(container);
   for (const firstCompleted of [false, true]) {
     render([...call("a", firstCompleted), ...call("b", false)]);
     await settleToolBridges(container);
@@ -440,6 +448,21 @@ it("coalesces adjacent active and confirmed lifecycle calls without changing the
   expect(container.querySelector(".chat-tool-row")).toBe(first);
   expect(document.activeElement).toBe(toggle);
   expect(first.textContent).toBe("Launched Cinder and Cinder");
+  toggle.click();
+  render([...call("a"), ...call("b")]);
+  await settleToolBridges(container);
+  const rows = [...container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary")];
+  expect(rows).toHaveLength(3);
+  const childToggles = rows
+    .slice(1)
+    .map((row) => row.querySelector<HTMLButtonElement>(".chat-tool-row__toggle") ?? row);
+  expect(childToggles.map((row) => row.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
+  childToggles[0]!.click();
+  render([...call("a"), ...call("b")]);
+  await settleToolBridges(container);
+  expect(childToggles.map((row) => row.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  opened.clear();
   render([
     ...call("a"),
     ...call("b"),

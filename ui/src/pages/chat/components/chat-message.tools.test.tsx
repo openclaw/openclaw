@@ -534,6 +534,13 @@ describe("grouped chat rendering", () => {
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
         expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
+        if (expanded) {
+          expect(
+            [...harness.view.querySelectorAll(".chat-tool-msg-summary")].filter((row) =>
+              row.textContent?.trim().startsWith("Viewed image"),
+            ),
+          ).toHaveLength(1);
+        }
         expectCount(".chat-message-image", expanded ? 6 : 3);
       }
     },

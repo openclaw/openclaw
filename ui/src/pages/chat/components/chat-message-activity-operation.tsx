@@ -29,7 +29,9 @@ function operationRunInterrupted(operation: ActivityOperationProps): boolean {
 export function ActivityOperation(props: ActivityOperationProps & { hideSummary?: boolean }) {
   const context = () => props.contexts.get(props.group.card)!;
   const expanded = createMemo(
-    () => props.options.isToolExpanded?.(context().disclosureId, props.group.card) ?? false,
+    () =>
+      props.hideSummary ||
+      (props.options.isToolExpanded?.(context().disclosureId, props.group.card) ?? false),
   );
   return (
     <ChatToolCard
@@ -113,8 +115,9 @@ export function LifecycleOperations(props: {
 }) {
   const first = () => props.operations[0]!;
   const context = () => first().contexts.get(first().group.card)!;
+  const disclosureId = () => `lifecycle:${context().disclosureId}`;
   const expanded = () =>
-    first().options.isToolExpanded?.(context().disclosureId, first().group.card) ?? false;
+    first().options.isToolExpanded?.(disclosureId(), first().group.card) ?? false;
   const entries = () =>
     props.operations.map((operation) => {
       const card = operation.group.card;
@@ -213,14 +216,14 @@ export function LifecycleOperations(props: {
         )
       : [verb(), ...entries().map((entry) => entry.name)].filter(Boolean).join(" "));
   return (
-    <div class="chat-tool-msg-collapse">
+    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--lifecycle">
       <div class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--subagent">
         <button
           class="chat-tool-row__toggle"
           type="button"
           aria-expanded={expanded() ? "true" : "false"}
           aria-label={label()}
-          onClick={() => first().options.onToggleToolExpanded?.(context().disclosureId, expanded())}
+          onClick={() => first().options.onToggleToolExpanded?.(disclosureId(), expanded())}
         />
         <span class="chat-tool-msg-summary__icon" aria-hidden="true">
           <Icon name="bot" />
@@ -232,37 +235,39 @@ export function LifecycleOperations(props: {
           >
             <span class="chat-tool-row__title">
               <span class="chat-tool-row__verb">{verb()}</span>{" "}
-              <For each={parts()} keyed={(part) => part.type + part.value}>
-                {(part) => (
-                  <Show when={part().type === "element"} fallback={part().value}>
-                    <Show
-                      when={part().value !== "more"}
-                      fallback={t("chat.toolCards.lifecycleMoreCount", {
-                        count: String(entries().length - 2),
-                      })}
-                    >
+              <span class="chat-tool-row__subagent-name">
+                <For each={parts()} keyed={(part) => part.type + part.value}>
+                  {(part) => (
+                    <Show when={part().type === "element"} fallback={part().value}>
                       <Show
-                        when={
-                          entries()[Number(part().value)]?.key &&
-                          entries()[Number(part().value)]?.open
-                        }
-                        fallback={entries()[Number(part().value)]?.name}
+                        when={part().value !== "more"}
+                        fallback={t("chat.toolCards.lifecycleMoreCount", {
+                          count: String(entries().length - 2),
+                        })}
                       >
-                        <button
-                          type="button"
-                          class="chat-tool-row__subagent-link"
-                          onClick={() => {
-                            const entry = entries()[Number(part().value)]!;
-                            entry.open?.(entry.key!);
-                          }}
+                        <Show
+                          when={
+                            entries()[Number(part().value)]?.key &&
+                            entries()[Number(part().value)]?.open
+                          }
+                          fallback={entries()[Number(part().value)]?.name}
                         >
-                          {entries()[Number(part().value)]?.name}
-                        </button>
+                          <button
+                            type="button"
+                            class="chat-tool-row__subagent-link"
+                            onClick={() => {
+                              const entry = entries()[Number(part().value)]!;
+                              entry.open?.(entry.key!);
+                            }}
+                          >
+                            {entries()[Number(part().value)]?.name}
+                          </button>
+                        </Show>
                       </Show>
                     </Show>
-                  </Show>
-                )}
-              </For>
+                  )}
+                </For>
+              </span>
             </span>
           </Show>
         </span>
@@ -290,14 +295,17 @@ export function LifecycleOperations(props: {
         </span>
       </div>
       <Show when={expanded()}>
-        <For
-          each={props.operations}
-          keyed={(operation) => operation.contexts.get(operation.group.card)!.disclosureId}
+        <Show
+          when={props.operations.length > 1}
+          fallback={<ActivityOperation {...first()} hideSummary />}
         >
-          {(operation) => (
-            <ActivityOperation {...operation()} hideSummary={operation() === first()} />
-          )}
-        </For>
+          <For
+            each={props.operations}
+            keyed={(operation) => operation.contexts.get(operation.group.card)!.disclosureId}
+          >
+            {(operation) => <ActivityOperation {...operation()} />}
+          </For>
+        </Show>
       </Show>
     </div>
   );

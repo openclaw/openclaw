@@ -123,6 +123,14 @@ function ToolRowContent(props: {
         </span>
       }
     >
+      <Match when={readSubagentCancellation(props.card) && props.addressed?.name}>
+        <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
+          <span class="chat-tool-row__verb">
+            {resolveToolOperationLabel(props.card, props.outcome)}
+          </span>{" "}
+          <span class="chat-tool-row__subagent-name">{props.addressed?.name}</span>
+        </span>
+      </Match>
       <Match when={props.view.kind === "command" && props.view.command}>
         <span class="chat-tool-row__prompt">
           {t(
@@ -179,7 +187,11 @@ function SessionLaunchRowContent(props: {
       <Show when={props.launch.label}>
         <Show
           when={props.onOpen}
-          fallback={<span class="chat-tool-row__title">{props.launch.label}</span>}
+          fallback={
+            <span class="chat-tool-row__title chat-tool-row__subagent-name">
+              {props.launch.label}
+            </span>
+          }
         >
           <ToolRowLink
             kind="subagent"

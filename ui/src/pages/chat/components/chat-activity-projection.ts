@@ -434,7 +434,7 @@ export function* activityDisclosureCalls(
         continue;
       }
       for (const segment of segmentActivityGroup(groups, options, state, inlineCommands)) {
-        if (segment.standalone) {
+        if (segment.standalone && !segment.lifecycle) {
           continue;
         }
         const entry = segment.entries[0]!;
@@ -451,7 +451,8 @@ export function* activityDisclosureCalls(
             ? state.activityKeys.get(prepared)
             : undefined;
         if (identity) {
-          yield [`activity:${segment.key}`, `activity:${identity}`];
+          const kind = segment.lifecycle ? "lifecycle" : "activity";
+          yield [`${kind}:${segment.key}`, `${kind}:${identity}`];
         }
       }
     }

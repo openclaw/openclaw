@@ -1,6 +1,7 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
@@ -424,11 +425,13 @@ export function prepareGroupedMessage(
   const toolMessageExpanded =
     opts.isToolMessageExpanded?.(toolMessageDisclosureId, toolCards[0]) ?? false;
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const singleImageTool =
+    singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image";
   const standaloneToolPayload =
     isStandaloneToolMessage &&
     Boolean(markdown) &&
     !jsonResult &&
-    !hasImages &&
+    (!hasImages || singleImageTool) &&
     singleToolCard?.outputText?.trim() === markdown?.trim();
   const bodyMarkdown = standaloneToolPayload ? null : markdown;
   const renderInOrder = rendersMediaInOrder({
@@ -449,7 +452,9 @@ export function prepareGroupedMessage(
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
   const expandsSingleToolCard =
-    Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
+    Boolean(singleToolCard) &&
+    (!markdown || standaloneToolPayload) &&
+    (!hasImages || singleImageTool);
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
 
   // Pure tool messages (no text/images/attachments) skip the "Tool output"

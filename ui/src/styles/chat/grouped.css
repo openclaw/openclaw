@@ -88,7 +88,9 @@
 .chat-group-messages
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
+    .chat-tool-msg-collapse + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-tool-msg-collapse
   ) {
   margin-block-start: var(--space-1);
 }
@@ -97,6 +99,8 @@
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
+    .chat-tool-msg-collapse + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-tool-msg-collapse,
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-activity-group,
     .chat-activity-group + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-work-group + .chat-bubble,

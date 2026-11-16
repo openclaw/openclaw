@@ -1,7 +1,7 @@
 # Tool-activity lifecycle coverage after consolidating command preview tests and
 # removing obsolete renderer assertions and tests for an unused argument helper.
 # Prior coverage contributes 2253 net lines against integrated baseline ce49266.
-# These corrections add 391 net lines after removing inline-blocking placement
+# These corrections add 499 net lines after removing inline-blocking placement
 # coverage; it does not allocate room for future growth.
 # Retained owners cover nested calls, execution outcomes, permission boundaries,
 # file ownership, disclosure/focus, live/history/steer identity, browser-cache
@@ -9,5 +9,7 @@
 # New completion owners cover durable output caps, private history projection,
 # canonical result placement, search, deduplication across older pages, and
 # historical stop names after child deletion with exact-run and ordering controls.
-# Exact excess: 2644 net test lines minus the normal 400-line allowance.
-2244
+# Latest owner extensions cover post-commit image publication and independent
+# lifecycle/image disclosure retention; no pixel or color assertions were added.
+# Exact excess: 2752 net test lines minus the normal 400-line allowance.
+2352
