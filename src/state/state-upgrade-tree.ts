@@ -13,6 +13,7 @@ import {
   setSqliteDirectoryNoCow,
   prepareSqliteDatabaseDirectory,
 } from "../infra/sqlite-wal-filesystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -101,6 +102,9 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
     if (!(fs.statSync(journal, { throwIfNoEntry: false })?.size ?? 0)) {
       throw error;
     }
+    const bytes = fs.statSync(pathname).size + fs.statSync(journal).size;
+    checkCopySpace(os.tmpdir(), bytes);
+    const completed = reportCopy(bytes, 2);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-recover-"));
     try {
       const copy = path.join(dir, path.basename(pathname));
@@ -121,6 +125,7 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
           fs.closeSync(input);
         }
       }
+      completed();
       // The first read on a writable connection rolls the journal back.
       const db = openNodeSqliteDatabase(copy);
       try {
@@ -150,29 +155,72 @@ function fileStamp(pathname: string): string | undefined {
 const ANCILLARY_SQLITE_MAX_BYTES = 64 * 1024 * 1024;
 const LARGE_COPY_BYTES = 256 * 1024 * 1024;
 
+function checkCopySpace(volumePath: string, bytes: number): void {
+  const volume = fs.statfsSync(volumePath, { bigint: true });
+  const available = volume.bavail * volume.bsize;
+  // Allow a second copy for migration scratch, and at least 256 MiB for journals.
+  const margin = Math.max(bytes, LARGE_COPY_BYTES);
+  if (available < BigInt(bytes + margin)) {
+    throw Object.assign(
+      new Error(
+        `State upgrade copy needs ${bytes} bytes plus ${margin} bytes margin (${bytes + margin} bytes total); only ${available} bytes available. Free ${BigInt(bytes + margin) - available} bytes on ${volumePath} and start the Gateway again`,
+      ),
+      { code: "ENOSPC" },
+    );
+  }
+}
+
+function reportCopy(
+  bytes: number,
+  files: number,
+  log?: { info: (message: string) => void },
+): () => void {
+  if (bytes < LARGE_COPY_BYTES) {
+    return () => {};
+  }
+  const logger = log ?? createSubsystemLogger("state/upgrade");
+  logger.info(`State upgrade copying ${bytes} bytes in ${files} files.`);
+  const started = performance.now();
+  return () => {
+    const seconds = (performance.now() - started) / 1000;
+    logger.info(
+      `State upgrade copied ${bytes} bytes in ${files} files in ${seconds.toFixed(1)}s (${(bytes / seconds / 1e6).toFixed(1)} MB/s).`,
+    );
+  };
+}
+
 export type UpgradeCopyScope = {
   directories: Set<string>;
   retiredBackups: { count: number; bytes: number };
 };
 
 /** Byte copies avoid copy_file_range sharing NOCOW database extents on btrfs. */
-export async function copySqliteFamily(source: string, target: string): Promise<void> {
+export async function copySqliteFamily(
+  source: string,
+  target: string,
+  log?: { info: (message: string) => void },
+): Promise<void> {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   if (isSqlitePathOnBtrfs(source)) {
     setSqliteDirectoryNoCow(path.dirname(target));
   } else {
     prepareSqliteDatabaseDirectory(target);
   }
-  let recover = false;
-  for (const suffix of ["", "-wal", "-journal"]) {
+  const files = ["", "-wal", "-journal"].flatMap((suffix) => {
     const stat = fs.statSync(`${source}${suffix}`, { throwIfNoEntry: false });
-    if (!stat?.isFile()) {
-      continue;
-    }
-    recover ||= suffix !== "" && stat.size > 0;
+    return stat?.isFile() ? [{ suffix, size: stat.size, mode: stat.mode }] : [];
+  });
+  const completed = log
+    ? reportCopy(
+        files.reduce((sum, file) => sum + file.size, 0),
+        files.length,
+        log,
+      )
+    : undefined;
+  for (const { suffix, mode } of files) {
     const input = await fs.promises.open(`${source}${suffix}`, "r");
     try {
-      const output = await fs.promises.open(`${target}${suffix}`, "w", stat.mode & 0o7777);
+      const output = await fs.promises.open(`${target}${suffix}`, "w", mode & 0o7777);
       try {
         await copyFileHandle(input, output);
       } finally {
@@ -184,7 +232,8 @@ export async function copySqliteFamily(source: string, target: string): Promise<
   }
   // The caller holds exclusive custody. Recover the copied WAL/journal locally;
   // VACUUM is reserved for the generic rebuild's independent source snapshot.
-  if (recover) {
+  completed?.();
+  if (files.some(({ suffix, size }) => suffix !== "" && size > 0)) {
     const db = openNodeSqliteDatabase(target);
     try {
       db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
@@ -307,23 +356,8 @@ export async function copyTree(
       );
     }
   }
-  const volume = fs.statfsSync(live, { bigint: true });
-  const available = volume.bavail * volume.bsize;
-  // One extra copy allows the chain/rebuild to create migration scratch, with at
-  // least 256 MiB for journals and small-file metadata. This is not a quota.
-  const margin = Math.max(bytes, LARGE_COPY_BYTES);
-  if (available < BigInt(bytes + margin)) {
-    throw Object.assign(
-      new Error(
-        `State upgrade copy needs ${bytes} bytes plus ${margin} bytes margin (${bytes + margin} bytes total); only ${available} bytes available. Free ${BigInt(bytes + margin) - available} bytes on ${live} and start the Gateway again`,
-      ),
-      { code: "ENOSPC" },
-    );
-  }
-  const started = performance.now();
-  if (bytes >= LARGE_COPY_BYTES) {
-    options.log?.info(`State upgrade copying ${bytes} bytes in ${files.length} files.`);
-  }
+  checkCopySpace(live, bytes);
+  const completed = reportCopy(bytes, files.length, options.log);
   for (const directory of scope.directories) {
     fs.mkdirSync(path.join(shadow, path.relative(live, directory)), {
       recursive: true,
@@ -343,12 +377,7 @@ export async function copyTree(
     }
     baseline.set(file.target, fileStamp(file.target));
   }
-  if (bytes >= LARGE_COPY_BYTES) {
-    const seconds = (performance.now() - started) / 1000;
-    options.log?.info(
-      `State upgrade copied ${bytes} bytes in ${files.length} files in ${seconds.toFixed(1)}s (${(bytes / seconds / 1e6).toFixed(1)} MB/s).`,
-    );
-  }
+  completed();
   return scope;
 }
 

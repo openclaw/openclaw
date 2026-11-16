@@ -469,7 +469,7 @@ export async function upgradeStateDirectory(params: {
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           fs.rmSync(`${toShadow(liveState)}${suffix}`, { force: true });
         }
-        await copySqliteFamily(liveState, toShadow(liveState));
+        await copySqliteFamily(liveState, toShadow(liveState), params.log);
         fallbackAdds.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
       }
       warnings.push(...fallback.foldInFailures);
