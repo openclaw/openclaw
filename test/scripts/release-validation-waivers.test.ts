@@ -261,3 +261,63 @@ describe("2026.11.4 exact-candidate exceptions", () => {
     }
   });
 });
+
+// Grant entries share the matching and rejection contract exercised above.
+it.each([
+  {
+    sha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
+    role: "releaseChecksIndependent",
+    names: ["Native live gateway core", "Native live test harnesses"].map(
+      (suite) => `Run repo/live E2E validation / Native live suites (${suite})`,
+    ),
+    aggregate: "Verify release checks",
+    step: "Verify release check results",
+    cause: "live_repo_e2e_release_checks ended with failure",
+  },
+  {
+    sha: "d843d6af39a42cd3c30084edbeabeece732fd93a",
+    role: "normalCi",
+    names: ["checks-node-agentic-gateway-server-isolated-4"],
+    aggregate: "openclaw/ci-gate",
+    step: "Verify selected CI lanes",
+    cause: "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+  },
+  {
+    sha: "d843d6af39a42cd3c30084edbeabeece732fd93a",
+    role: "releaseChecksIndependent",
+    names: ["Run repo/live E2E validation / Native live suites (Native live gateway core)"],
+    aggregate: "Verify release checks",
+    step: "Verify release check results",
+    cause: "live_repo_e2e_release_checks ended with failure",
+  },
+])("admits $role grants on $sha", async ({ sha, role, names, aggregate, step, cause }) => {
+  const currentChild = {
+    ...child,
+    key: role,
+    jobs: [
+      ...names.map((name, id) => ({ ...failedJob, id, name })),
+      { ...gate, name: aggregate, steps: [{ name: step, conclusion: "failure" }] },
+    ],
+  };
+  const policy = evaluateReleaseChildPolicy({
+    child: currentChild,
+    targetVersion: stableVersion,
+    targetSha: sha,
+  });
+  expect(policy.waivers.map((waiver) => waiver.jobName)).toEqual(names);
+  expect(terminalPolicyPass(currentChild, stableVersion, sha)).toBe(true);
+  expect(() =>
+    validateReleaseManifestAdvisoryJobs({
+      targetSha: sha,
+      validationInputs: { targetVersion: stableVersion },
+      childEvidence: { [role]: currentChild },
+    }),
+  ).not.toThrow();
+  await expect(
+    validateReleaseWaiverAggregates({
+      policy,
+      jobs: currentChild.jobs,
+      getJobLog: () => "##[error]" + cause,
+    }),
+  ).resolves.toBeUndefined();
+});

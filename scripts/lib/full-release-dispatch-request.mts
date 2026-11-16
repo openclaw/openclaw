@@ -110,14 +110,17 @@ export function dispatchInputsDigest(inputs: DispatchInputs): string {
 }
 
 export function formatDispatchSelection(
-  request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
+  request: Pick<
+    DispatchRequest,
+    "targetSha" | "workflowSha" | "inputs" | "effectiveSoak" | "trustedWorkflowRef"
+  >,
 ): string {
   const { inputs } = request;
   const selection = `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
-  if (request.targetSha === request.workflowSha) {
+  if (request.targetSha === request.workflowSha || request.trustedWorkflowRef === "candidate") {
     return selection;
   }
-  return `${selection}\nWARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts. Release verification may fail even when workloads succeed. Use matching candidate and tooling SHAs (Q=C) for candidate qualification.`;
+  return `${selection}\nWARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts. Release verification may fail even when workloads succeed. Use the admitted candidate route for publication qualification, with Q=C by default or an explicit reviewed Q.`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
@@ -171,9 +174,7 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       /^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(request.targetVersion) &&
       typeof request.targetContextRef === "string" &&
       typeof request.trustedWorkflowRef === "string" &&
-      ((value.kind === CANDIDATE_REQUEST_KIND &&
-        request.trustedWorkflowRef === "candidate" &&
-        request.targetSha === request.workflowSha) ||
+      ((value.kind === CANDIDATE_REQUEST_KIND && request.trustedWorkflowRef === "candidate") ||
         request.trustedWorkflowRef === "main" ||
         TRUSTED_WORKFLOW_TAG_PATTERN.test(request.trustedWorkflowRef)) &&
       typeof request.workflowRef === "string" &&
@@ -249,8 +250,8 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
   }
   if (value.kind === CANDIDATE_REQUEST_KIND) {
     requireDispatch(
-      request.trustedWorkflowRef === "candidate" && request.workflowSha === request.targetSha,
-      "Candidate request cannot change its qualification mode or C=Q identity",
+      request.trustedWorkflowRef === "candidate",
+      "Candidate request cannot change its admitted qualification mode",
     );
     const admission = value.admission;
     const admissionKeys = [

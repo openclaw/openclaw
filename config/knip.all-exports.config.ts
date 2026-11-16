@@ -98,6 +98,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
+  // Gateway upgrade tests copy these installed plugins with their manifest-declared entries.
+  "test/fixtures/state-corpus-populated/*/state/extensions/corpus-plugin/index.js!",
   // The prerelease manifest runs this frozen planner and checks its historical config is present.
   "test/fixtures/plugin-prerelease-frozen-target/scripts/lib/extension-test-plan.mjs!",
   "test/fixtures/plugin-prerelease-frozen-target/test/vitest/vitest.extension-telegram.config.mjs!",
@@ -211,10 +213,6 @@ const workspaces = Object.fromEntries(
             ]
           : [
               TEST_ENTRY_GLOB,
-              // The floor test launches this heap-retention probe as a Node subprocess by path.
-              ...(workspace === "packages/agent-core"
-                ? ["src/harness/compaction/compaction-floor.retention.test-support.ts!"]
-                : []),
               // Realtime codec tests spawn these fixtures by basename.
               ...(workspace === "extensions/openai"
                 ? [

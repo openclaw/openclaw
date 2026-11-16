@@ -227,6 +227,22 @@ are ignored; conflicting receipts are rejected.
 
 ## Current coverage
 
+PR canonical plans can carry optional `volume` provenance. The planner captures
+each supported config's eligible file inventory using the original PR flags and
+changed paths, before projecting selected files. It records counts and SHA-256
+digests only. The runner emits `[shard:volume]` records for the scheduled config,
+runtime, engine and timing profile; these describe planned files, not outcomes.
+
+Count a shared `full.id` once across split shards. Node and Bun copies have
+different identities. Named worker, memory and watchdog settings do not change
+this logical identity. Scenario variables still do. The runner separately
+records `admittedProfile` after environment merging and worker fallback; a
+semantic environment or argument mismatch leaves the denominator unknown.
+Missing ownership, eligibility context or a matching runtime/profile also
+remains unknown (`full: null`); it is never a zero denominator.
+These are file counts for scheduled configurations, not case counts or a
+whole-repository inventory. They establish neither failure recall nor savings.
+
 Resource-reporter users receive the additional versioned inventory and case
 counts. This includes existing UI and diagnostic lanes. Ordinary Node shard CI
 enables collection only for the sampled `unit-fast` invocations described above.

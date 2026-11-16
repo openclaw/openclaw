@@ -349,7 +349,10 @@ it("restarts a turned-off scribe in its existing conversation with a fresh attem
   });
   const view = await render();
   buttonNamed(view, "Set up…").click();
-  buttonNamed(page.querySelector("dialog")!, "Start").click();
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("creating it if needed");
+  expect(dialog.textContent).toContain("This request uses the conversation’s model settings.");
+  buttonNamed(dialog, "Start").click();
   await vi.waitFor(() => expect(calls.some(([method]) => method === "chat.send")).toBe(true));
   expect(create).not.toHaveBeenCalled();
   const send = calls.find(([method]) => method === "chat.send")![1]!;
@@ -1029,4 +1032,26 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
   );
   expect(ui.announce).not.toHaveBeenCalledWith("Run requested for Knowledge Consolidation.");
   expect(load).not.toHaveBeenCalled();
+});
+
+it("keeps failed run-history reads distinct from an empty history and recovers on reopen", async () => {
+  const { render, ui, request, calls } = fixture({ sessions: reviewSession, jobs: [reviewJob] });
+  ui.s.scribe = "claim-consolidation";
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, params) => {
+    if (method === "cron.runs") {
+      throw new Error("History unavailable");
+    }
+    return original(method, params);
+  });
+  const failed = await render();
+  expect(failed.querySelector(".scribe-history")?.textContent).toContain(
+    "Could not load recent runs.",
+  );
+  expect(failed.querySelector(".scribe-history")?.textContent).not.toContain("No runs yet.");
+  request.mockImplementation(original);
+  expect((await render()).querySelector(".scribe-history")?.textContent).toContain(
+    "9 filed · 2 pages created",
+  );
+  expect(calls.some(([method]) => method === "cron.run")).toBe(false);
 });

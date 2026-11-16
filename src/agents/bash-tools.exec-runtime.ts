@@ -60,6 +60,7 @@ import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exe
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
+  EXEC_OUTPUT_FILE_MAX_BYTES,
   joinExecFailureOutput,
   type ExecProcessOutcome,
   renderExecUpdateText,
@@ -72,6 +73,7 @@ import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.j
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { openPrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -199,7 +201,7 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 export async function runExecProcess({
   startupSignal: initialStartupSignal,
   onUpdate: initialOnUpdate,
-  beforeSpawn: initialBeforeSpawn,
+  beforeSpawn,
   assertCurrent: initialAssertCurrent,
   initiateSpawn: initialInitiateSpawn,
   releaseSpawn: initialReleaseSpawn,
@@ -325,7 +327,6 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
-  let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent: (() => void) | undefined = opts.approvalTransport
     ? () => {
         initialAssertCurrent?.();
@@ -387,6 +388,7 @@ export async function runExecProcess({
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
+  let prepareSandboxCurrent: (() => Promise<void>) | undefined;
   let sandboxPrepared = false;
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
@@ -501,6 +503,7 @@ export async function runExecProcess({
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
       assertSandboxCurrent = backendExecSpec.assertCurrent;
+      prepareSandboxCurrent = backendExecSpec.prepareCurrent;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
       // double-finalize backend failures, while removing it leaks the registered exec session.
       sandboxPrepared = true;
@@ -550,7 +553,6 @@ export async function runExecProcess({
       sessionKey: opts.sessionKey,
       target: diagnosticTarget,
     });
-  const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = (input: SpawnInput) =>
     runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
       const assertSourceCurrent = assertSourceActive;
@@ -600,6 +602,7 @@ export async function runExecProcess({
                 grant?.revoke();
               },
               assertCurrent,
+              ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
               beforeSpawn: assertHostPolicyCurrent,
               initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
             }),
@@ -611,6 +614,10 @@ export async function runExecProcess({
       }
     });
 
+  // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
+  if (!opts.sandbox && !opts.durable) {
+    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
+  }
   try {
     assertSourceActive?.();
     operatorAuthority?.assertCurrent();
@@ -630,7 +637,7 @@ export async function runExecProcess({
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
-    await assertPreSpawnAuthorized();
+    await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
     if (spawnSpec.mode === "pty") {
       try {
         managedRun = await spawn({
@@ -651,7 +658,7 @@ export async function runExecProcess({
         );
         opts.warnings.push(warning);
         usingPty = false;
-        await assertPreSpawnAuthorized();
+        await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
       }
     }
     if (!managedRun) {
@@ -682,11 +689,11 @@ export async function runExecProcess({
     throw error;
   } finally {
     launchLifecycle.dispose();
-    beforeSpawn = undefined;
     assertPolicyCurrent = undefined;
     assertSourceActive = undefined;
     operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
+    prepareSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
   recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);
@@ -725,9 +732,7 @@ export async function runExecProcess({
     startedAt,
     pid: session.pid ?? undefined,
     promise,
-    kill: () => {
-      managedRun?.cancel("manual-cancel");
-    },
+    kill: () => managedRun?.cancel("manual-cancel"),
     disableUpdates: () => {
       onUpdate = undefined;
     },

@@ -31,7 +31,6 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
   relays.testing.setNativeHookRelayPermissionApprovalRequesterForTests(requestApproval);
   const identity = {
     relayId: "remote-relay",
-    preToolUseLoopDetection: false,
   } as const;
   const relay = fixture.registerOwnedTestNativeHookRelay({
     ...identity,

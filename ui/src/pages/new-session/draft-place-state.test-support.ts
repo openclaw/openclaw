@@ -30,6 +30,7 @@ export function createRepositoryFixture(
   }
   const changed = vi.fn();
   const persistPreference = vi.fn();
+  const persistModelPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
   const request = vi.fn<(method: string, params?: Record<string, unknown>) => Promise<unknown>>(
     async (method) =>
@@ -82,6 +83,7 @@ export function createRepositoryFixture(
       },
     ],
     persistPreference,
+    persistModelPreference,
     readPreference,
   } as unknown as DraftGatewayState;
   const browser = new DraftPlaceBrowser(gateway, () => ({ context, isAdmin: true }), {
@@ -104,6 +106,7 @@ export function createRepositoryFixture(
     context,
     gateway,
     persistPreference,
+    persistModelPreference,
     readPreference,
     request,
     changed,

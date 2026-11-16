@@ -1,3 +1,4 @@
+import { getDefaultAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import {
   createAnthropicMessagesTransportStreamFn,
@@ -18,6 +19,7 @@ import { expectText } from "../../test-utils/text-assertions.js";
 import { providerResponse, type WireApi } from "../embedded-agent-runner.wire.test-support.js";
 import { attachModelProviderRequestTransport } from "../provider-request-config.js";
 import { closeProviderTransportDispatcherPool } from "../provider-transport-dispatcher-pool.js";
+import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -93,16 +95,21 @@ function fork(
   requestContext = context,
   overrides: Partial<Parameters<typeof runEmbeddedSessionFork>[0]> = {},
 ) {
-  return runEmbeddedSessionFork({
-    context: requestContext,
-    streamFn,
-    model: requestModel,
-    apiKey: "synthetic-key",
-    options: { transport: "sse" },
-    question: "Review only",
-    assertCurrent() {},
-    ...overrides,
-  });
+  // Match this fixture's guarded DNS/dispatcher spies without replacing the process host.
+  return runWithAiTransportHost(
+    { ...getDefaultAiTransportHost(), buildModelFetch: buildGuardedModelFetch },
+    () =>
+      runEmbeddedSessionFork({
+        context: requestContext,
+        streamFn,
+        model: requestModel,
+        apiKey: "synthetic-key",
+        options: { transport: "sse" },
+        question: "Review only",
+        assertCurrent() {},
+        ...overrides,
+      }),
+  );
 }
 
 function wireResponse(api: WireApi = "openai-responses"): Response {

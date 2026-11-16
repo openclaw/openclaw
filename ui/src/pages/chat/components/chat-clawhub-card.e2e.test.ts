@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureScreenshot,
   describeControlUiE2e,
@@ -22,12 +25,12 @@ describeControlUiE2e("Chat plugin installation status", () => {
   it("updates mounted recommendations without navigation or reconnect", async () => {
     const context = await newContext(mobileViewport);
     const page = await context.newPage();
-    const recommendations = ["calendar", "notes"].map((id) => ({
+    const recommendations = ["calendar", "travel-themes"].map((id) => ({
       type: "clawhub",
       kind: "plugin",
       id: "ch_" + id,
-      name: id === "calendar" ? "Calendar" : "Notes",
-      official: true,
+      name: id === "calendar" ? "Calendar" : "Travel Themes",
+      official: id === "calendar",
       installed: false,
     }));
     const details = (installed: boolean) => ({
@@ -36,7 +39,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
         response: {
           plugin: {
             id: card.id,
-            catalog: { name: card.name, official: true, categories: [] },
+            catalog: { name: card.name, official: card.official, categories: [] },
             local: { installed, action: installed ? "manage" : "install" },
           },
         },
@@ -56,10 +59,25 @@ describeControlUiE2e("Chat plugin installation status", () => {
       await page.goto(server.baseUrl + "chat");
       const cards = page.locator("openclaw-chat-clawhub-card");
       await expect.poll(() => cards.locator(".chat-clawhub-card__install").count()).toBe(2);
-      await expect.poll(() => cards.locator(".chat-clawhub-card__dismiss").count()).toBe(2);
       const mounted = await cards.first().elementHandle();
       const connects = (await gateway.getRequests("connect")).length;
-      await captureScreenshot(page, "chat-plugin-cards-before.png", "viewport");
+      if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
+        const artifactDir = createControlUiE2eArtifactDir("chat-plugin-actions");
+        const surface = cards.last();
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          surface,
+          [
+            surface.getByText("Travel Themes", { exact: true }),
+            surface.locator(".chat-clawhub-card__install"),
+          ],
+          { animations: "disabled", elements: [surface], scrollTo: surface },
+        );
+        await writeFile(artifactDir + "/page.png", frame.png);
+        await writeFile(artifactDir + "/travel-themes.png", frame.elements[0]!.png);
+      }
+      expect(await cards.getByRole("button", { name: "Dismiss", exact: true }).count()).toBe(0);
+      expect(await cards.getByRole("button", { name: "Install", exact: true }).count()).toBe(2);
       await gateway.setMethodResponse("plugins.catalog.get", details(true));
       await gateway.setMethodResponse("plugins.uiDescriptors", enabledWorkboardCapabilities());
       await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });

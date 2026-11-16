@@ -367,7 +367,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
       await pollDisabled(page.locator(".agent-chat__composer-combobox textarea")).toBe(false);
-      await pollLocatorText(startupStatus).toContain("Provisioning environment…");
+      await pollLocatorText(startupStatus).toContain("Provisioning environment");
       const publishPlacement = async (
         state: "provisioning" | "syncing" | "starting",
         generation: number,
@@ -413,9 +413,9 @@ export function defineSessionPlacementModuleBoundaryTests(
       };
 
       const transitions = [
-        ["provisioning", 2, "Provisioning environment…"],
-        ["syncing", 3, "Preparing workspace…"],
-        ["starting", 4, "Starting…"],
+        ["provisioning", 2, "Provisioning environment"],
+        ["syncing", 3, "Preparing workspace"],
+        ["starting", 4, "Starting"],
       ] as const;
       for (const [state, generation, label] of transitions) {
         await publishPlacement(state, generation, label);
@@ -439,7 +439,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         controlUiSessionPath(sessionKey),
       );
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Starting…");
+      await pollLocatorText(startupStatus).toContain("Starting");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);

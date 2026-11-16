@@ -460,15 +460,12 @@ Plugin authors must not mutate values after handing them to the host, including
 nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
-invocation. Post-turn `subagent_ended` and `subagent_delivery_target` dispatches
-acquire fresh admission for the registered plugin instance, independent of the
-finished turn. Removed or replaced instances
-and callbacks explicitly bound to a closed turn remain unavailable.
-
-Gateway access-policy authorization, resumption, and retained grant checks also
-acquire bounded admission on their original plugin instance, independently of the
-caller's turn. Quiesced or retired instances still refuse evaluation; a policy
-evaluation error means unavailable access and never grants permission.
+invocation. When that scope is released, later calls into a registered instance,
+such as post-turn hooks, Gateway access-policy checks, and deferred deliveries,
+take ordinary counted admission on the instance: they run while it accepts
+calls and are refused only while it is quiesced, replaced, or retired. Callbacks
+explicitly bound to a closed consumer remain unavailable. A policy evaluation
+error means unavailable access and never grants permission.
 
 Tool factories and provider schema normalizers keep the same tool-object API.
 The host separates their definition data from executable callbacks: schemas and
@@ -913,8 +910,10 @@ surfaces through normal database admission checks; Gateway shutdown cancels the 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`
 and return `drain()` and `resume()`. Preparation synchronously fences affected
 manager acquisition, including lazy and fallback work. Match the exact acquired
-adapter objects rather than provider IDs. Drain removes affected managers from
-reuse before attempting to close them. It may return `{ errors }` to report
+adapter objects rather than provider IDs. Managers whose lazy embedding
+dependency is not known yet drain conservatively when any embedding adapter
+retires; managers with known, unaffected adapters stay live. Drain removes
+affected managers from reuse before attempting to close them. It may return `{ errors }` to report
 cleanup failures. Resume reopens admission after cancellation, or after publication
 when the runtime is retained, even if old cleanup remains unfinished. Retiring
 managers must not publish late results into a replacement manager's caches.

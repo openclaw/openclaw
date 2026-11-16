@@ -66,8 +66,6 @@ it.each([
       const taint = createAgentTurnTaintState(state === "tainted");
       const networkObservation = {
         toolName: "web_fetch",
-        argsHash: "github-profile-request",
-        resultHash: "public-profile-result",
         resultContentSource: "network" as const,
       };
       if (state === "owner-admin-already-tainted") {

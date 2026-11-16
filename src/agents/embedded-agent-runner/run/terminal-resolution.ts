@@ -169,7 +169,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     | "activateCompactionContinuation"
     | "clearCompactionContinuation"
   >;
-  armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
@@ -352,7 +351,6 @@ export async function resolveEmbeddedRunTerminal(input: {
       `compaction interrupted visible final answer: ${runLogContext} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
     );
-    input.armPostCompactionGuard();
     return { action: "retry" };
   }
   // Invisible retries return above; visible and terminal paths release this retained constraint.

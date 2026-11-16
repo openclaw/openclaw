@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { LegacyStateMigrationPlan } from "../infra/state-migrations.types.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
@@ -17,6 +18,7 @@ import {
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { updateExecutorNativeEntrypoints } from "./update-cli/update-command-executor-native-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const blockedStep = { outcome: "deferred", refusal: { code: "blocked-by-prior-refusal" } };
@@ -171,19 +173,22 @@ describe("update process state", () => {
     };
     await writeFixture(configPath, { gateway: { mode: "local" } });
     const entry = path.join(root, "admit.mjs");
-    const admissionModule = pathToFileURL(
-      path.resolve("src/cli/update-cli/update-command-run.ts"),
-    ).href;
+    const admissionModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun);
     await fs.writeFile(
       entry,
-      `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule)};
+      `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule.href)};
 const run = await admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root: ${JSON.stringify(path.resolve("."))} });
 process.stdout.write(JSON.stringify({ runId: run.runId }) + "\\n");
 process.stdin.resume();
 `,
     );
     const admitted = await runCliProcessChild({
-      nodeArgs: ["--import", path.resolve("scripts/tsx.mjs"), entry],
+      nodeArgs: [
+        ...(admissionModule.pathname.endsWith(".ts")
+          ? ["--import", path.resolve("scripts/tsx.mjs")]
+          : []),
+        entry,
+      ],
       env,
       interact: async (child) => {
         await once(child.stdout, "data");
