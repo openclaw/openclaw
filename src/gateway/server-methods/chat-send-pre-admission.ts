@@ -359,7 +359,6 @@ export async function runChatSendPreAdmission(
             },
             session.agentId,
             session.expectedLeafEntryId,
-            session.requestedSessionId,
           );
         }
         assertCurrent();

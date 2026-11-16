@@ -1,16 +1,24 @@
 import { execFileSync } from "node:child_process";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
+  listRatchetRenames,
   parseRatchetArgs,
   reportRatchetFailures,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-// A chat's address is its session key. These tokens pin one transcript or incarnation;
-// production src may only use fewer of them over time.
-const TOKENS = ["expectedSessionId", "expectedLifecycleRevision", ".lifecycleRevision"];
+// A chat's address is its session key. A transcript id or lifecycle revision names one
+// transcript, so only the session store and the transcript lease may compare or pin one.
+// Elsewhere no file may add a pin name or an id compare.
+const ROOTS = ["src", "extensions"];
+const OWNER = /^src\/config\/sessions\//u;
+const NAMES = /\bexpected(?:SessionId|LifecycleRevision)\b/gu;
+const COMPARES = [
+  /\.(?:sessionId|lifecycleRevision)\s*[!=]==/gu,
+  /[!=]==\s*[\w$.?()[\]]*\.(?:sessionId|lifecycleRevision)\b/gu,
+];
 const PATHSPEC = [
-  "src",
+  ...ROOTS,
   ":(exclude,glob)**/*.test.ts",
   ":(exclude,glob)**/*.test-*.ts",
   ":(exclude,glob)**/*test-support*",
@@ -21,31 +29,54 @@ const PATHSPEC = [
   ":(exclude,glob)**/*.e2e.ts",
 ];
 
-function countToken(root: string, token: string, ref: string | undefined) {
+/** Counts each line once per pin name and once per id compare. */
+export function countSessionIdentityPins(line: string) {
+  return (
+    (line.match(NAMES)?.length ?? 0) +
+    COMPARES.reduce((sum, pattern) => sum + (line.match(pattern)?.length ?? 0), 0)
+  );
+}
+
+function countFiles(root: string, ref: string | undefined) {
+  let output = "";
   try {
-    const output = execFileSync(
+    output = execFileSync(
       "git",
       [
         "grep",
+        "-I",
         ...(ref ? [] : ["--cached"]),
-        "-o",
         "-F",
-        "-e",
-        token,
+        ...["sessionId", "SessionId", "lifecycleRevision", "LifecycleRevision"].flatMap((token) => [
+          "-e",
+          token,
+        ]),
         ...(ref ? [ref] : []),
         "--",
         ...PATHSPEC,
       ],
-      { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+      { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
     );
-    return output.split("\n").filter(Boolean).length;
   } catch (error) {
     // git grep exits 1 when nothing matches.
-    if ((error as { status?: number }).status === 1) {
-      return 0;
+    if ((error as { status?: number }).status !== 1) {
+      throw error;
     }
-    throw error;
   }
+  const counts = new Map<string, number>();
+  for (const row of output.split("\n")) {
+    const withoutRef = ref ? row.slice(ref.length + 1) : row;
+    const separator = withoutRef.indexOf(":");
+    const file = withoutRef.slice(0, separator);
+    if (separator <= 0 || OWNER.test(file)) {
+      continue;
+    }
+    const found = countSessionIdentityPins(withoutRef.slice(separator + 1));
+    if (found > 0) {
+      counts.set(file, (counts.get(file) ?? 0) + found);
+    }
+  }
+  return counts;
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
@@ -58,19 +89,23 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (!base) {
       throw new Error("Session identity ratchet requires a Git base commit.");
     }
-    const entries: string[] = [];
-    for (const token of TOKENS) {
-      const before = countToken(root, token, base);
-      const after = countToken(root, token, args.staged ? undefined : "HEAD");
-      console.log(`Session identity ${token}: ${before} -> ${after}.`);
-      if (after > before) {
-        entries.push(`${token}: ${before} -> ${after}`);
-      }
+    const before = countFiles(root, base);
+    for (const { from, to } of listRatchetRenames(root, base, args.staged, ROOTS)) {
+      before.set(to, (before.get(to) ?? 0) + (before.get(from) ?? 0));
     }
+    const after = countFiles(root, args.staged ? undefined : "HEAD");
+    const sum = (counts: Map<string, number>) => [...counts.values()].reduce((a, b) => a + b, 0);
+    console.log(
+      `Session identity pins outside the session store: ${sum(before)} -> ${sum(after)}.`,
+    );
+    const entries = [...after]
+      .filter(([file, count]) => count > (before.get(file) ?? 0))
+      .map(([file, count]) => `${file}: ${before.get(file) ?? 0} -> ${count}`)
+      .toSorted();
     if (
       reportRatchetFailures(
         [{ title: `Session identity pins grew against ${base}`, entries }],
-        "Address a chat by its session key. Only a live transcript writer may pin a session id or lifecycle revision; reuse an existing fence instead of adding one.",
+        "Address a chat by its key (ChatRef). Only a live writer holds a transcript, through TranscriptLease; do not compare sessionId or lifecycleRevision, and do not add expectedSessionId or expectedLifecycleRevision.",
       )
     ) {
       return 1;

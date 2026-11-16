@@ -28,16 +28,9 @@ class FakeRevokedError extends Error {
   readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
 }
 
-function assertGeneration(input: {
-  sessionKey: string;
-  sessionId: string | null;
-  lifecycleRevision: string | null;
-}) {
-  const row = fakeSessionOwner.rows.get(input.sessionKey);
-  if (
-    (row?.sessionId ?? null) !== input.sessionId ||
-    (row?.lifecycleRevision ?? null) !== input.lifecycleRevision
-  ) {
+// A chat lease follows the key: only the row's presence (or leased absence) matters.
+function assertGeneration(input: { sessionKey: string; absent: boolean }) {
+  if (fakeSessionOwner.rows.has(input.sessionKey) === input.absent) {
     throw new FakeRevokedError("The original session generation no longer accepts this delivery.");
   }
 }
@@ -45,11 +38,8 @@ function assertGeneration(input: {
 /** Module factory for `config/sessions/session-delivery-generation.js`. */
 export const fakeSessionGenerationModule = {
   isSessionDeliveryGenerationRevokedError: (error: unknown) => error instanceof FakeRevokedError,
-  prepareSessionGenerationFacts: async (input: {
-    sessionKey: string;
-    sessionId: string | null;
-    lifecycleRevision: string | null;
-  }) => {
+  prepareChatLease: async (chat: { sessionKey: string }, options?: { absent?: true }) => {
+    const input = { sessionKey: chat.sessionKey, absent: options?.absent === true };
     assertGeneration(input);
     let active = true;
     fakeSessionOwner.activeLeases += 1;

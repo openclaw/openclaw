@@ -1,6 +1,7 @@
 import {
   isSessionDeliveryGenerationRevokedError,
-  prepareSessionGenerationFacts,
+  prepareChatLease,
+  type ChatLease,
 } from "../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type {
@@ -10,13 +11,14 @@ import type {
 } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 
 const MAX_LINEAGE_HOPS = 64;
 const SESSION_ID_PATTERN = /^[a-f0-9-]{36}$/;
 
-type GenerationLease = Awaited<ReturnType<typeof prepareSessionGenerationFacts>>;
+type GenerationLease = ChatLease;
 
 // One record per minted audience. A delegated record owns its child-session
 // lease and borrows its parent's record, so either side going stale rejects it.
@@ -109,13 +111,14 @@ async function leaseSessionGeneration(params: {
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
 }): Promise<GenerationLease | undefined> {
   try {
-    return await prepareSessionGenerationFacts({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
-      sessionId: params.entry?.sessionId ?? null,
-      lifecycleRevision: params.entry?.lifecycleRevision ?? null,
-    });
+    return await prepareChatLease(
+      chatRef({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
+      }),
+      params.entry ? undefined : { absent: true },
+    );
   } catch (error) {
     if (isSessionDeliveryGenerationRevokedError(error)) {
       return undefined;

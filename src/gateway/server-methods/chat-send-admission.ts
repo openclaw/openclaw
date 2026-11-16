@@ -334,9 +334,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
         }
         if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-          assertExpectedLeafActive(latestSession, expectedLeafEntryId, requestedSessionId, {
-            allowEmptyAncestor: true,
-          });
+          assertExpectedLeafActive(latestSession, expectedLeafEntryId);
         }
         // Check the leaf first for typed errors; a reset must never redirect this request.
         const expectedSessionId = requestedSessionId ?? backingSessionId;
