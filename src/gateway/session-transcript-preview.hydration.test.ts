@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import {
+  loadSessionEntry,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -16,6 +18,7 @@ import {
 import * as hydration from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db-lifecycle.js";
 import { clearOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db.js";
 import {
@@ -78,12 +81,20 @@ async function persistHistory(
   scope: ReturnType<typeof previewScope>,
   texts: string[],
   toolCount = 0,
+  alternateRoles = false,
 ) {
   const history = SessionManager.inMemory("/synthetic/preview-history");
   history.newSession({ id: scope.sessionId });
-  texts.forEach((content, index) =>
-    history.appendMessage({ role: "user", content, timestamp: index + 1 }),
-  );
+  for (const [index, content] of texts.entries()) {
+    await history.appendMessageAsync(
+      alternateRoles && index % 2 === 1
+        ? makeAgentAssistantMessage({
+            content: [{ type: "text", text: content }],
+            timestamp: index + 1,
+          })
+        : { role: "user", content, timestamp: index + 1 },
+    );
+  }
   for (let index = 0; index < toolCount; index++) {
     history.appendMessage({
       role: "toolResult",
@@ -98,12 +109,52 @@ async function persistHistory(
   await waitForSessionTranscriptProjection(scope);
 }
 
-function readTalk(scope: ReturnType<typeof previewScope>, assertCurrent: () => void = vi.fn()) {
+function readTalk(
+  scope: ReturnType<typeof previewScope>,
+  assertCurrent: () => void = vi.fn(),
+  cfg = {},
+) {
   return readTalkRealtimeInitialItems(
     { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
     assertCurrent,
+    cfg,
   );
 }
+
+// A due call previews the reset's retained history without changing the Gateway's pinned target.
+it.each([
+  { age: 2 * 24 * 60, mode: "daily" as const, due: true, alternateRoles: true },
+  { age: 20, mode: "idle" as const, due: true, alternateRoles: true },
+  { age: 1, mode: "daily" as const, due: false, alternateRoles: true },
+  { age: 2 * 24 * 60, mode: "daily" as const, due: true, alternateRoles: false },
+])(
+  "starts a Talk call with the reset's history ($mode, $age minutes old, alternating=$alternateRoles)",
+  async ({ age, mode, due, alternateRoles }) => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 27, 12).getTime(), toFake: ["Date"] });
+    await withOpenClawTestState({ label: "talk-call-reset" }, async (state) => {
+      const scope = previewScope(state, "talk-call");
+      const startedAt = Date.now() - age * 60_000;
+      const target = { agentId: "main", sessionKey: scope.sessionKey, storePath: scope.storePath };
+      const entry = {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "day-one",
+        updatedAt: startedAt,
+      };
+      await replaceSessionEntry(target, {
+        ...entry,
+        sessionStartedAt: startedAt,
+        lastInteractionAt: startedAt,
+      });
+      const fillers = Array.from({ length: 9 }, (_, index) => `Filler message ${index + 2}.`);
+      const messages = ["Remember the code word PELICAN-DAY1.", ...fillers];
+      await persistHistory(scope, messages, 0, alternateRoles);
+      const cfg: OpenClawConfig = { session: { reset: { mode, atHour: 4, idleMinutes: 15 } } };
+      const texts = (await readTalk(scope, vi.fn(), cfg)).map((item) => item.text);
+      expect(texts).toEqual(due ? messages.slice(alternateRoles ? -6 : -1) : messages);
+      expect(loadSessionEntry(target)?.lifecycleRevision).toBe("day-one");
+    }).finally(() => vi.useRealTimers());
+  },
+);
 
 it("keeps missing preview storage absent and propagates terminal read refusal", async () => {
   await withOpenClawTestState({ label: "preview-reader-refusal" }, async (state) => {

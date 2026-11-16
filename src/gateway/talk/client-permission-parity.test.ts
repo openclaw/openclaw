@@ -5,11 +5,16 @@ import { createExecTool } from "../../agents/bash-tools.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
@@ -30,14 +35,32 @@ import {
   createTalkClientAgentConsultRunner,
   prepareTalkClientControlAuthority,
 } from "./client-agent-consult.js";
+import { createControlFixture } from "./client-control-fixture.test-support.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
 import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
+import { readTalkRealtimeInitialItems } from "./session-history.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: replace inference while exercising real source guards and native effects.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
+const freshness = vi.hoisted(() => ({
+  beforeCheck: undefined as (() => Promise<void>) | undefined,
+  afterStaleCheck: undefined as (() => void) | undefined,
+}));
+// mock-isolation: pause a voice consult between its reset-freshness check and the reset write.
+vi.mock("../../config/sessions/entry-freshness.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/entry-freshness.js")>();
+  const read = actual.resolveSessionEntryResetFreshnessAsync;
+  return {
+    ...actual,
+    resolveSessionEntryResetFreshnessAsync: async (...args: Parameters<typeof read>) => {
+      await freshness.beforeCheck?.();
+      return read(...args).finally(() => freshness.afterStaleCheck?.());
+    },
+  };
+});
 
 describe("authenticated Talk permission parity", () => {
   let state: OpenClawTestState;
@@ -231,6 +254,151 @@ describe("authenticated Talk permission parity", () => {
       source.release();
     }
   });
+  // #185942: a stale session's consult reset commits only for a current caller; a real revocation
+  // between the freshness check and the write leaves the session untouched and starts no run.
+  it.each([false, true])(
+    "preserves queued browser requests across a reset for a current caller (revoked=%s)",
+    async (revoke) => {
+      model.run.mockReset();
+      const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      const stale = { sessionStartedAt: twoDaysAgo, lastInteractionAt: twoDaysAgo };
+      await writeSession({ sessionStartedAt: Date.now(), lastInteractionAt: Date.now() });
+      const { context, source, retained } = await retainSource();
+      const previousSession = config.session;
+      config.session = { reset: { mode: "daily", atHour: 4 } };
+      const scope = {
+        agentId: "main",
+        sessionKey,
+        sessionId: "parity-session",
+        storePath: sessionTarget.storePath,
+      };
+      const manager = SessionManager.inMemory(state.workspaceDir);
+      manager.newSession({ id: scope.sessionId });
+      const messages = [
+        "PELICAN-DAY1",
+        ...Array.from({ length: 9 }, (_, index) => `Retained message ${index + 2}.`),
+      ];
+      for (const [index, text] of messages.entries()) {
+        await manager.appendMessageAsync(
+          index % 2 === 1
+            ? makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: index + 1 })
+            : { role: "user", content: text, timestamp: index + 1 },
+        );
+      }
+      await replaceTranscriptEvents(scope, manager.getPersistedEntries());
+      await waitForSessionTranscriptProjection(scope);
+      const initialItems = await readTalkRealtimeInitialItems(sessionTarget, () => {}, config);
+      expect(initialItems.map((item) => item.text)).toEqual(messages);
+      await writeSession({ lifecycleRevision: "before-reset", ...stale });
+      let staleChecks = 0;
+      freshness.afterStaleCheck = () => {
+        staleChecks += 1;
+        if (revoke) {
+          invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");
+        }
+      };
+      model.run
+        .mockResolvedValueOnce({ payloads: [{ text: "Answered A." }], meta: {} })
+        .mockResolvedValueOnce({ payloads: [{ text: "Answered B." }], meta: {} });
+      const revision = () =>
+        loadSessionEntry({ agentId: "main", sessionKey, storePath: sessionTarget.storePath })
+          ?.lifecycleRevision;
+      const flush = createDeferredCore();
+      const response = createDeferredCore<unknown>();
+      const complete = createDeferredCore();
+      const outcomes: Array<{ callId: string; result: unknown }> = [];
+      const secondPreparing = createDeferredCore();
+      let freshnessReads = 0;
+      freshness.beforeCheck = async () => {
+        if (++freshnessReads === 1) {
+          await secondPreparing.promise;
+        } else if (freshnessReads === 2) {
+          secondPreparing.resolve();
+          await response.promise;
+        }
+      };
+      const runner = createRunner({
+        context,
+        runAuthority: retained,
+        ownerConnId: "parity-conn",
+        initialItems,
+      });
+      const { owner, bridge } = createControlFixture({
+        voiceSessionId,
+        connId: "parity-conn",
+        sessionTarget,
+        runToolAgentConsult: runner.runArgs,
+        runAgentConsult: runner.runOwnedArgs,
+        flushTranscript: async () => {
+          await flush.promise;
+        },
+      });
+      owner.control.bindBridge({
+        ...bridge,
+        submitToolResult: async (callId, result) => {
+          outcomes.push({ callId, result });
+          response.resolve(result);
+          if (outcomes.length === 2) {
+            complete.resolve();
+          }
+        },
+      });
+      owner.activate();
+      try {
+        assert(owner.control.onToolCall);
+        for (const request of ["A", "B"]) {
+          owner.control.onToolCall({
+            itemId: `reset-item-${request}`,
+            callId: `reset-consult-${request}`,
+            name: "openclaw_agent_consult",
+            args: { question: `Question ${request}` },
+          });
+        }
+        flush.resolve();
+        await complete.promise;
+        // Persistence first: a revoked caller's reset never commits.
+        expect(revision() === "before-reset").toBe(revoke);
+        expect(outcomes).toEqual(
+          ["A", "B"].map((request) => ({
+            callId: `reset-consult-${request}`,
+            result: revoke
+              ? {
+                  error: expect.stringContaining(
+                    "Talk caller source authority is no longer active",
+                  ),
+                }
+              : { result: `Answered ${request}.` },
+          })),
+        );
+        expect(model.run).toHaveBeenCalledTimes(revoke ? 0 : 2);
+        for (const [index, [params]] of model.run.mock.calls.entries()) {
+          expect(params.prompt).toContain(`Question ${index === 0 ? "A" : "B"}`);
+          expect(params.prompt).not.toContain("PELICAN-DAY1");
+          for (const text of messages.slice(-6)) {
+            expect(params.prompt).toContain(text);
+          }
+          expect(params.sessionTarget).toMatchObject({
+            agentId: "main",
+            sessionKey,
+            storePath: sessionTarget.storePath,
+          });
+        }
+        expect(staleChecks).toBe(revoke ? 2 : 3);
+      } finally {
+        flush.resolve();
+        response.resolve(undefined);
+        secondPreparing.resolve();
+        await owner.close();
+        freshness.beforeCheck = undefined;
+        freshness.afterStaleCheck = undefined;
+        config.session = previousSession;
+        model.run.mockReset();
+        retained.release();
+        source.release();
+      }
+    },
+  );
+
   it("retains but does not accept a pending voice-creation request", async () => {
     let pendingCurrent = true;
     const { source, retained } = await retainSource(() => pendingCurrent);

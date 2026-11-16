@@ -45,6 +45,7 @@ import {
   type TalkAgentConsultAuthority,
 } from "./client-tool-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
+import { readTalkRealtimeInitialItems } from "./session-history.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
@@ -104,6 +105,7 @@ export function createTalkClientAgentConsultRunner(params: {
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
+  let historicalItems = Promise.resolve(params.initialItems);
   const authority: TalkAgentConsultAuthority = {
     ...(params.authority ?? resolveTalkAgentConsultAuthority(undefined)),
     operatorAuthority:
@@ -229,6 +231,19 @@ export function createTalkClientAgentConsultRunner(params: {
           runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
           args: parsedArgs,
           transcript: params.initialItems,
+          onSessionReset: async () => {
+            historicalItems = readTalkRealtimeInitialItems(
+              params.sessionTarget,
+              assertConsultCurrent,
+              getConfig(),
+            );
+            await historicalItems;
+          },
+          getTranscript: () => historicalItems,
+          assertSourceCurrent: () => {
+            assertConsultCurrent();
+            params.runAuthority?.assertCurrent();
+          },
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",
