@@ -312,7 +312,7 @@ describe("Teams native final text preparation", () => {
     controller.preparePayload({ text });
     await expect(controller.finalize()).resolves.toMatchObject({ visibleReplySent: true });
     const final = requests.findLast((request) => request.scenario === "presentation-timeout");
-    expect(final?.text).toBe("**Status**");
+    expect(final?.text).toBe("# Status");
     expect(final?.entities).toEqual(
       expect.arrayContaining([
         {
@@ -337,7 +337,7 @@ describe("Teams native final text preparation", () => {
       const { controller } = await acknowledgedController(scenario, text);
       controller.preparePayload({ text, presentation });
       await expect(controller.finalize()).resolves.toEqual({
-        ...receipt(scenario, canceled ? text : "**Deployment status**\n\n<at>Alex</at>"),
+        ...receipt(scenario, canceled ? text : "# Deployment status\n\n<at>Alex</at>"),
         ...(canceled
           ? {}
           : { logicalContent: text, fallbackPayload: { text: undefined, presentation } }),

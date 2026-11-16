@@ -376,7 +376,7 @@ describe("Teams text preparation at the SDK HTTP boundary", () => {
   const sourceName = String.raw`Alice \[Ops\]`;
   const displayName = "Alice [Ops]";
   const source = `# Deployment status\n\n${teamsQuotedRawTable}\n\n@[${sourceName}](11111111-2222-3333-4444-555555555555)`;
-  const expectedText = `**Deployment status**\n\n${teamsQuotedRawTable}\n\n<at>${displayName}</at>`;
+  const expectedText = `# Deployment status\n\n${teamsQuotedRawTable}\n\n<at>${displayName}</at>`;
   const expectedMention = {
     type: "mention",
     text: `<at>${displayName}</at>`,
