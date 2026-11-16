@@ -497,7 +497,7 @@ export async function executeSessionsSend(
         communication = await prepareSessionsSendCommunication({
           config: cfg,
           allowApproval: opts?.retainedReplay ? false : undefined,
-          expectedTask: opts?.expectedTargetRun,
+          expectTask: opts?.expectTargetTask,
           source,
           target: targetEndpoint(),
           message,
@@ -592,13 +592,11 @@ export async function executeSessionsSend(
             sessionKey: resolvedKey,
             displayKey,
             runId,
-            expectedSessionId,
-            expectedTask: opts?.expectedTargetTask,
             sendParams,
             callGateway: communication.callGateway,
           });
           if (attempt.selfHeld && retainedSend && targetSessionEntry) {
-            return retainedSend(attempt.selfHeld, "resume", attempt.targetTask);
+            return retainedSend(attempt.selfHeld, "resume");
           }
           return attempt.result;
         }

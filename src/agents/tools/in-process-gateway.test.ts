@@ -11,6 +11,7 @@ import {
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
@@ -158,13 +159,11 @@ describe("trusted in-process Gateway session creation", () => {
     generation: 1,
     createdAt: 100,
   };
-  const generation = {
+  const generation = chatRef({
     agentId: "main",
     storePath: "/test/agents/main/sessions/sessions.json",
     sessionKey: "agent:main:main",
-    sessionId: "session-one",
-    lifecycleRevision: null,
-  };
+  });
 
   it.each([
     {

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClient } from "../../gateway/server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   readFollowupRequest,
@@ -137,11 +138,10 @@ describe("followup retained session authorization", () => {
       replyTimeoutMs: 30000,
       replyMode: "one-way" as const,
       requesterSession,
-      requesterDeliveryGeneration: {
+      requesterDeliveryGeneration: chatRef({
         ...storageOwner,
         sessionKey: input.requesterSessionKey,
-        ...requesterSession,
-      },
+      }),
       requesterOrigin: {
         channel: "telegram",
         to: "chat-123",

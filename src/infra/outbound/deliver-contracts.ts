@@ -6,12 +6,12 @@ import type {
   ChannelOutboundAdapter,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
@@ -276,7 +276,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 /** Private owner facts excluded from SDK delivery parameters and stored payloads. */
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
   /** Host-captured session generation retained independently by this delivery intent. */
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   conversationDeliveryTarget?: ConversationDeliveryTarget;
   deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

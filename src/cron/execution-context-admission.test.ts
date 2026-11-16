@@ -17,7 +17,7 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOrigina
 }));
 vi.mock("../config/sessions/session-delivery-generation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-delivery-generation.js")>()),
-  prepareSessionGenerationFacts: (input: unknown) => prepareSessionGenerationFacts(input),
+  prepareLeaseFacts: (input: unknown) => prepareSessionGenerationFacts(input),
 }));
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
