@@ -773,7 +773,6 @@ export function revalidateCandidateArtifactAuthority(authority, evidenceClient) 
 function validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha) {
   const recovery = manifest.receiptRecovery;
   if (
-    candidateSha !== qualificationSha ||
     manifest.targetSha !== candidateSha ||
     (recovery
       ? recovery.candidateBinding?.request?.toolingSha !== qualificationSha

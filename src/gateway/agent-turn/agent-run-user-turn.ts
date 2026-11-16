@@ -342,11 +342,13 @@ export async function prepareAgentRunUserTurn(params: {
         params.assertCurrent();
         const sender = senderFields.sender;
         const metadata = submitted?.["__openclaw"];
-        if (sender?.id && metadata?.senderId === sender.id) {
-          // Profile labels can change after acceptance; replay keeps the recorded
-          // presentation while the input owner still compares the complete request.
+        const senderId = sender?.id ?? requesterOrigin?.operatorProfileId;
+        if (senderId && metadata?.senderId === senderId) {
+          // Restart authority retains the profile without its presentation client.
+          // Replay preserves accepted attribution, never authority from the transcript.
           senderFields.sender = {
             ...sender,
+            id: senderId,
             name: typeof metadata.senderName === "string" ? metadata.senderName : undefined,
           };
         }
