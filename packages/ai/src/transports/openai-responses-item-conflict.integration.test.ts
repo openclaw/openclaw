@@ -204,15 +204,26 @@ it.each([
   },
 );
 
-it.each(['{ "n": 1 }', '{"n":9007199254740993}'])(
-  "retains completed tool argument bytes across a cold reopen: %s",
-  async (argumentsText) => {
+it.each([
+  ['{ "n": 1 }', false],
+  ['{"n":9007199254740993}', false],
+  ['{ "n": 9007199254740993 }', true],
+] as const)(
+  "retains completed tool argument bytes across a cold reopen: %s (streamed=%s)",
+  async (argumentsText, streamed) => {
     const call = wireCall("exact", "record_value", argumentsText);
     const server = await createResponsesLoopbackServer((turn) =>
       turn === 1
         ? [
             outputItem("added", reasoning),
             outputItem("done", reasoning),
+            ...(streamed
+              ? [
+                  outputItem("added", { ...call, arguments: "", status: "in_progress" }, 1),
+                  argumentDelta(call.id, argumentsText, 1),
+                  outputItem("done", { ...call, arguments: '{"n":0}' }, 1),
+                ]
+              : []),
             completedResponse("resp_exact", [reasoning, call]),
           ]
         : [completedResponse("resp_next", [wireMessage("msg_next", "Continued.")])],

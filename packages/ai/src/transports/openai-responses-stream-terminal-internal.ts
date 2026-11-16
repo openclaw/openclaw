@@ -81,7 +81,11 @@ export function resolveResponsesToolCallId(
 
 export function resolveCompletedResponsesToolCall(
   item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  streamed?: { name?: string; arguments?: string | Record<string, unknown> },
+  streamed?: {
+    name?: string;
+    arguments?: string | Record<string, unknown>;
+    rawArguments?: string;
+  },
 ): Pick<ToolCall, "name" | "arguments" | "argumentsSignature"> {
   if (item.status && item.status !== "completed") {
     throw new IncompleteToolCallError(
@@ -99,18 +103,16 @@ export function resolveCompletedResponsesToolCall(
   if (!name) {
     throw new Error("Responses stream completed tool call without a function name");
   }
-  const raw = streamed?.arguments ?? item.arguments;
+  const raw = streamed?.rawArguments ?? streamed?.arguments ?? item.arguments;
   const argumentsValue = parseTerminalToolCallArguments(
-    raw,
+    streamed?.arguments ?? item.arguments,
     "Responses stream completed tool call with invalid JSON arguments",
   );
   const value = JSON.stringify(argumentsValue);
   return {
     name,
     arguments: argumentsValue,
-    ...(typeof raw === "string" && raw !== value
-      ? { argumentsSignature: JSON.stringify({ value, raw }) }
-      : {}),
+    ...(typeof raw === "string" && raw !== value ? { argumentsSignature: { value, raw } } : {}),
   };
 }
 

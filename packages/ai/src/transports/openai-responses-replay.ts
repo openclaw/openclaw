@@ -1,4 +1,3 @@
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Api, ToolCall } from "../types.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
@@ -33,8 +32,7 @@ export function replayOpenAIResponsesToolArguments(
     : typeof block.arguments === "string"
       ? block.arguments
       : JSON.stringify(block.arguments ?? {});
-  const signature =
-    !isDifferentModel && block.argumentsSignature && safeParseJsonRecord(block.argumentsSignature);
+  const signature = !isDifferentModel && block.argumentsSignature;
   return signature && signature.value === value && typeof signature.raw === "string"
     ? signature.raw
     : value;
