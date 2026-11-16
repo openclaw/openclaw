@@ -171,20 +171,23 @@ for (const scenario of ["baseline", "fixed", "zero", "setup-failure", "partial",
 // Synthetic admission tests, not macOS product proof: execute the real gate.
 for (const scenario of [
   "candidate",
-  "legacy-control",
+  "baseline",
   "zero",
   "extra",
   "setup",
   "wrong-stack",
+  "missing-callback",
   "completed-control",
-  "nonreproducing-control",
+  "nonreproducing-baseline",
 ]) {
   test("permission causal evidence gate: " + scenario, () => {
     const source = fs.readFileSync(driver, "utf8");
-    const start = source.indexOf("    const functionIds = new Set(");
+    const start = source.indexOf(
+      '    const log = fs.readFileSync(path.join(output, "permissions-test.log"), "utf8");',
+    );
     const end = source.indexOf('\n  }\n  summary.outcome = "pass";', start);
     assert.ok(start >= 0 && end > start);
-    const variant = scenario === "candidate" ? "candidate" : "legacy-control";
+    const variant = scenario === "candidate" ? "candidate" : "baseline";
     const records = [
       { kind: "test", payload: { kind: "function", id: "off-main" } },
       { kind: "test", payload: { kind: "suite", id: "suite" } },
@@ -197,17 +200,21 @@ for (const scenario of [
     if (scenario === "extra") {
       records.push(records.at(-1));
     }
-    if (["candidate", "completed-control", "nonreproducing-control"].includes(scenario)) {
+    if (["candidate", "completed-control", "nonreproducing-baseline"].includes(scenario)) {
       records.push({ kind: "event", payload: { kind: "testEnded", testID: "off-main" } });
       records.push({ kind: "event", payload: { kind: "runEnded" } });
     }
     let log =
-      "Signal 4 _dispatch_assert_queue_fail closure in PermissionManager.requestSpeechRecognitionAuthorization";
+      "GOAL24_SPEECH_CALLBACK background=1 requests=1\nSignal 4 _dispatch_assert_queue_fail closure in PermissionManager.ensureSpeechRecognition";
     if (scenario === "setup") {
       log = "compiler failed";
     }
     if (scenario === "wrong-stack") {
-      log = "Signal 4 _dispatch_assert_queue_fail unrelated callback";
+      log =
+        "GOAL24_SPEECH_CALLBACK background=1 requests=1\nSignal 4 _dispatch_assert_queue_fail unrelated callback";
+    }
+    if (scenario === "missing-callback") {
+      log = log.replace("background=1", "background=0");
     }
     const check = () =>
       vm.runInNewContext(source.slice(start, end), {
@@ -215,13 +222,13 @@ for (const scenario of [
         records,
         variant,
         id: "off-main",
-        permissionExit: ["candidate", "nonreproducing-control"].includes(scenario) ? 0 : 1,
+        permissionExit: ["candidate", "nonreproducing-baseline"].includes(scenario) ? 0 : 1,
         summary: {},
         fs: { readFileSync: () => log },
         path,
         output: "/synthetic",
       });
-    if (["candidate", "legacy-control"].includes(scenario)) {
+    if (["candidate", "baseline"].includes(scenario)) {
       assert.doesNotThrow(check);
     } else {
       assert.throws(check);

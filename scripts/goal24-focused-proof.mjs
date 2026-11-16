@@ -7,7 +7,10 @@ import path from "node:path";
 
 const targets = {
   history: "eb919fb0d0b19dfa86c3e7055145b5a83ae27ef9",
-  permissions: "77ee3e8424d789b7bad5804a9dc5a1693f34c91e",
+  permissions:
+    process.env.GOAL24_PERMISSION_VARIANT === "baseline"
+      ? "2f4ae4d3284bf17ad4930cf6770dac14c025bfc1"
+      : "77ee3e8424d789b7bad5804a9dc5a1693f34c91e",
   audio: "a9a084486e3df10193dfa9ac5ab9faa9f53a4619",
 };
 const proof = process.env.GOAL24_PROOF;
@@ -241,35 +244,41 @@ try {
       "Swift 6.3 or newer is required by the pinned Package.swift",
     );
     const variant = process.env.GOAL24_PERMISSION_VARIANT;
-    assert.ok(["candidate", "legacy-control"].includes(variant), "unknown permission variant");
+    assert.ok(["candidate", "baseline"].includes(variant), "unknown permission variant");
     summary.permissionVariant = variant;
     summary.evidenceKind =
-      "Swift-seam negative control; not original framework boundary or baseline build";
-    if (variant === "legacy-control") {
-      const permissionFile = path.join(
-        source,
-        "apps/macos/Sources/OpenClaw/PermissionManager.swift",
-      );
-      const original = fs.readFileSync(permissionFile, "utf8");
-      const fixed = "request { @Sendable _ in continuation.resume() }";
-      const legacy = `request { _ in
-                DispatchQueue.main.async { continuation.resume() }
-            }`;
-      assert.equal(original.split(fixed).length, 2, "exactly one fixed callback required");
-      fs.writeFileSync(permissionFile, original.replace(fixed, legacy));
-      // Restore the legacy callback shape inside the unchanged Swift request seam.
-      // This does not restore the original imported Objective-C API call boundary.
-      const patch = capture("git", [
-        "diff",
-        "--",
-        "apps/macos/Sources/OpenClaw/PermissionManager.swift",
-      ]);
-      fs.writeFileSync(path.join(output, "legacy-control.patch"), patch + "\n");
-      summary.controlPatchSha256 = createHash("sha256")
-        .update(patch + "\n")
-        .digest("hex");
-      summary.legacyReferenceSha = "2f4ae4d3284bf17ad4930cf6770dac14c025bfc1";
+      "Same test transplanted into full baseline and candidate; Objective-C OS I/O interception; unchanged production code";
+    const support = path.join(source, "apps/macos/Tests/OpenClawWebKitTestSupport");
+    const fixtures = path.join(root, "tooling/scripts");
+    const header = path.join(support, "include/OpenClawWebKitTestSupport.h");
+    fs.appendFileSync(
+      header,
+      "\nBOOL Goal24InstallSpeechFixture(void);\nint Goal24SpeechRequestCount(void);\nvoid Goal24RestoreSpeechFixture(void);\n",
+    );
+    for (const [from, to] of [
+      ["goal24-speech-fixture.m", path.join(support, "Goal24SpeechFixture.m")],
+      [
+        "goal24-speech-fixture.swift",
+        path.join(
+          source,
+          "apps/macos/Tests/OpenClawIPCTests/Goal24SpeechFrameworkBoundaryTests.swift",
+        ),
+      ],
+    ]) {
+      const bytes = fs.readFileSync(path.join(fixtures, from));
+      fs.writeFileSync(to, bytes);
+      fs.writeFileSync(path.join(output, from), bytes);
+      summary[from] = createHash("sha256").update(bytes).digest("hex");
     }
+    assert.equal(
+      capture("git", ["diff", "--", "apps/macos/Sources", "apps/macos/Package.swift"]),
+      "",
+      "production sources and build settings must remain unchanged",
+    );
+    fs.writeFileSync(
+      path.join(output, "fixture-overlay.patch"),
+      capture("git", ["diff", "--", "apps/macos/Tests"]) + "\n",
+    );
     run("native-assets", "node", ["scripts/prepare-apple-mermaid.mjs"], 300000);
     run(
       "swift-build",
@@ -323,11 +332,11 @@ try {
         "-gline-tables-only",
         "--skip-build",
         "--filter",
-        "PermissionManagerTests.*speech authorization completion can enter from a background queue",
+        "Goal24SpeechFrameworkBoundaryTests.*offMainFrameworkCompletion",
         "--no-parallel",
       ],
       300000,
-      variant === "legacy-control",
+      variant === "baseline",
     );
     const records = fs
       .readFileSync(events, "utf8")
@@ -338,12 +347,17 @@ try {
       (record) =>
         record.kind === "test" &&
         record.payload.kind === "function" &&
-        JSON.stringify(record.payload).includes(
-          "speech authorization completion can enter from a background queue",
-        ),
+        JSON.stringify(record.payload).includes("offMainFrameworkCompletion"),
     );
     assert.equal(tests.length, 1, "exact PermissionManager regression not discovered");
     const id = tests[0].payload.id;
+    const log = fs.readFileSync(path.join(output, "permissions-test.log"), "utf8");
+    assert.equal(
+      log.split("GOAL24_SPEECH_CALLBACK background=1 requests=1").length,
+      2,
+      "real framework boundary must invoke exactly one completion off the main thread",
+    );
+    summary.offMainCallback = true;
     const functionIds = new Set(
       records
         .filter((record) => record.kind === "test" && record.payload.kind === "function")
@@ -366,13 +380,12 @@ try {
     summary.permissionStarted = started.length;
     summary.permissionCompleted = ended.length;
     summary.permissionRegression = id;
-    if (variant === "legacy-control") {
+    if (variant === "baseline") {
       if (permissionExit === 0) {
         summary.outcome = "control-not-reproduced";
       }
-      assert.notEqual(permissionExit, 0, "legacy callback must fail");
-      assert.equal(ended.length, 0, "legacy callback must trap before test completion");
-      const log = fs.readFileSync(path.join(output, "permissions-test.log"), "utf8");
+      assert.notEqual(permissionExit, 0, "baseline callback must fail");
+      assert.equal(ended.length, 0, "baseline callback must trap before test completion");
       assert.match(
         log,
         /(?:Signal 4|signal code 4|SIGILL|SIGTRAP|Trace\/BPT trap)/i,
@@ -385,7 +398,7 @@ try {
       );
       assert.match(
         log,
-        /PermissionManager.*requestSpeechRecognitionAuthorization|requestSpeechRecognitionAuthorization.*PermissionManager/,
+        /PermissionManager.*ensureSpeechRecognition|ensureSpeechRecognition.*PermissionManager/,
         "control must identify the production permission callback in its crash stack",
       );
       summary.controlFailure = "native executor assertion at production speech callback entry";

@@ -16,8 +16,6 @@ concurrency:
 
 jobs:
   proof:
-    # The bounded attempt is collected; do not spend more runner time on a nonreproducing control.
-    if: ${{ false }}
     name: permissions-${{ matrix.variant }}
     strategy:
       fail-fast: false
@@ -29,10 +27,10 @@ jobs:
             deadline: 45
             sha: 77ee3e8424d789b7bad5804a9dc5a1693f34c91e
           - proof: permissions
-            variant: legacy-control
+            variant: baseline
             runner: xcode-27
             deadline: 45
-            sha: 77ee3e8424d789b7bad5804a9dc5a1693f34c91e
+            sha: 2f4ae4d3284bf17ad4930cf6770dac14c025bfc1
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.deadline }}
     steps:
@@ -73,6 +71,8 @@ jobs:
           retention-days: 7
 
   speech-import-probe:
+    # Compiler discriminator collected in run 43782722861; no duplicate spend.
+    if: ${{ false }}
     name: speech-import-probe
     runs-on: xcode-27
     timeout-minutes: 5
