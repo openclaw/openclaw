@@ -246,6 +246,17 @@ export async function attachAuthenticatedGatewayConnect(
       rolesConfigured,
       openclawIdOwner: openclawIdPrincipal?.kind === "owner" && !linkedOwnerProfile,
     });
+  const effectiveScopes = remoteIngressPrincipal
+    ? deviceScopes
+    : authResult.delegation
+      ? [...authResult.delegation.scopes]
+      : resolveEffectiveConnectionScopes({
+          role,
+          deviceScopes,
+          verifiedIdentity: state.authPolicy.verifiedIdentity,
+          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+          upgradeReq: context.handler.upgradeReq,
+        });
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
     ? { ok: true as const, prepared: undefined }
@@ -253,6 +264,7 @@ export async function attachAuthenticatedGatewayConnect(
         context,
         state,
         ownerProfileExpected,
+        connectionScopes: effectiveScopes,
         linkedOwnerProfile,
         authenticatedUserId,
         requestHeaders: context.handler.upgradeReq.headers,
@@ -270,17 +282,6 @@ export async function attachAuthenticatedGatewayConnect(
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const scopesStartedAt = performance.now();
-  const effectiveScopes = remoteIngressPrincipal
-    ? deviceScopes
-    : authResult.delegation
-      ? [...authResult.delegation.scopes]
-      : resolveEffectiveConnectionScopes({
-          role,
-          deviceScopes,
-          verifiedIdentity: state.authPolicy.verifiedIdentity,
-          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-          upgradeReq: context.handler.upgradeReq,
-        });
   // OpenClaw ID members are capped by their membership role, whatever the device requested.
   const openclawIdRolePolicy =
     role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
