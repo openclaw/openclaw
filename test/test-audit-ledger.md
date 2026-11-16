@@ -1064,10 +1064,16 @@ pre/post-read limits, decoding, mapper error behavior and live file mutations
 through both collect and map. Keep the asynchronous hook and the `rm` import
 used by the deletion mutation. Production and shared-helper code are unchanged.
 
-Direct execution of the original hook preserves the injected removal error and
-waits for pending work, but forgets the failed root and never retries it.
-Actual Vitest-hook failure/settlement/retry proof and clean consumer runs are
-pending in the native PR workspace.
+Actual Vitest-hook fault injection preserves the original removal error on both
+heads. With a real held scan, every root remains intact until settlement and the
+pending scan is reset before removal. The original hook loses the failed root
+and makes no retry; the candidate retains it, removes a healthy sibling and
+succeeds on the next attempt. Each fault run has one intentional hook failure
+and seven passing cases. Temporary instrumentation was removed and the exact
+candidate bytes restored. All eight clean cases pass on both heads (1.71 s
+baseline; 1.88 s candidate command time); these are correctness runs, not a
+performance comparison. Scoped scripts-test typecheck, lint, formatting and
+both line-cap ratchets pass. Production and shared-helper code are unchanged.
 
 ## Pending qualification and proof repairs
 
