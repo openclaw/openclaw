@@ -188,7 +188,7 @@ it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "o
       `;
       const result = await fixture.track(
         runNodeScript(
-          ["--import=tsx", "--input-type=module", "--eval", supervisor],
+          ["--input-type=module", "--eval", supervisor],
           {
             PATH: process.env.PATH,
             HOME: root,
