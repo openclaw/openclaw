@@ -133,8 +133,8 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-// Credential capture is exercised by cron.inference-binding.test.ts and
-// isolated-agent.auth-continuity.integration.test.ts. These delivery/management
+// Credential capture is exercised by isolated-agent.auth-continuity.integration.test.ts.
+// These delivery/management
 // validation fixtures intentionally have no inference account.
 vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
