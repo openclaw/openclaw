@@ -93,16 +93,31 @@ function sourcePlan(
 /**
  * Resolve a local install spec through the filesystem, so a directory symlink
  * followed by `..` names the source the operator selected instead of a
- * lexically equal sibling. Missing paths keep the lexical result so the
- * existing "Plugin path not found" diagnostic still names what was typed.
+ * lexically equal sibling. The surrounding-whitespace trim and the lexical
+ * fallback stay with `resolveUserPath`, so previously accepted inputs and the
+ * "Plugin path not found" diagnostic keep their behavior.
  */
 function resolvePhysicalInstallPath(spec: string): string {
-  const expanded = expandHomePrefix(spec);
-  const parent = resolvePathPrefixSync(path.dirname(expanded));
-  if (parent.unresolvedSegments.includes("..")) {
+  const trimmed = spec.trim();
+  if (!trimmed) {
     return resolveUserPath(spec);
   }
-  return path.join(parent.existingPath, ...parent.unresolvedSegments, path.basename(expanded));
+  const lexical = resolveUserPath(spec);
+  let parent: ReturnType<typeof resolvePathPrefixSync>;
+  try {
+    parent = resolvePathPrefixSync(path.dirname(expandHomePrefix(trimmed)));
+  } catch {
+    // A regular file in the parent chain is not a traversable source.
+    return lexical;
+  }
+  if (parent.unresolvedSegments.includes("..")) {
+    return lexical;
+  }
+  return path.join(
+    parent.existingPath,
+    ...parent.unresolvedSegments,
+    path.basename(expandHomePrefix(trimmed)),
+  );
 }
 
 export function resolvePluginInstallSourcePlan(params: {

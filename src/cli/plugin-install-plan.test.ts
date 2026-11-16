@@ -41,6 +41,41 @@ describe("plugin install plan helpers", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "keeps trimming surrounding whitespace from an accepted local source",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-plan-"));
+      tempDirs.push(root);
+      fs.mkdirSync(path.join(root, "plugin"));
+
+      const plan = resolvePluginInstallSourcePlan({ raw: `${root}/plugin `, mode: "install" });
+
+      expect(plan).toMatchObject({
+        ok: true,
+        request: { source: "local", path: path.join(root, "plugin") },
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports a not-found plan when a regular file blocks the parent traversal",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-plan-"));
+      tempDirs.push(root);
+      fs.writeFileSync(path.join(root, "file"), "");
+
+      const plan = resolvePluginInstallSourcePlan({
+        raw: `${root}/file/child/plugin`,
+        mode: "install",
+      });
+
+      expect(plan).toMatchObject({
+        ok: false,
+        error: `Plugin path not found: ${root}/file/child/plugin`,
+      });
+    },
+  );
+
   it.each([" ClAwHuB:demo@ "])(
     "rejects the malformed explicit ClawHub selector %s before npm fallback",
     (raw) => {
