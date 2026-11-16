@@ -18,7 +18,6 @@ import {
 import {
   bindActiveCronCreatorAuthorityResolver,
   runWithCronCreatorAuthorityCapabilityResolver,
-  type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
@@ -72,6 +71,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
@@ -162,6 +162,7 @@ const mockState = vi.hoisted(() => {
     lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
     lastDispatchImageOrder: undefined as string[] | undefined,
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
+    lastDispatchNormalizeThinking: undefined as boolean | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
     lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
     lastMessageInjectionDisposition: undefined as GetReplyOptions["messageInjectionDisposition"],
@@ -332,6 +333,7 @@ dispatchInboundMessageMock.mockImplementation(
     mockState.lastDispatchImages = params.replyOptions?.images;
     mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
     mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+    mockState.lastDispatchNormalizeThinking = params.replyOptions?.normalizeThinkingLevelOverride;
     mockState.lastDispatchOriginatingLeafEntryId =
       params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
     mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
@@ -3969,6 +3971,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       | undefined;
     expect(userTurnInput?.content).toBe("hello from phone");
     expect(mockState.lastDispatchThinkingLevelOverride).toBe("low");
+    expect(mockState.lastDispatchNormalizeThinking).toBe(false);
   });
 
   it.each([

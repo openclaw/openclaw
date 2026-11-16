@@ -8,7 +8,7 @@ const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
 const NOW = 2_000_000_000;
-const PHRASE_TEXT = /^·\s\S+…$/;
+const PHRASE_TEXT = /^·\s\S+$/;
 type WorkingPhraseElement = HTMLElementTagNameMap["openclaw-working-phrase"];
 const text = (element: Element) => element.textContent?.replace(/\s+/g, " ").trim() ?? "";
 
@@ -66,10 +66,10 @@ describe("openclaw-working-phrase", () => {
       for (let bucket = 0; bucket < Math.max(1, length); bucket++) {
         displayed.add(await atBucket(element, bucket));
       }
-      expect(displayed).toEqual(new Set(length ? phrases.map((phrase) => `· ${phrase}…`) : [""]));
+      expect(displayed).toEqual(new Set(length ? phrases.map((phrase) => `· ${phrase}`) : [""]));
       if (length === 1) {
         for (const bucket of [1, 100_000]) {
-          expect(await atBucket(element, bucket)).toBe("· Phrase 1…");
+          expect(await atBucket(element, bucket)).toBe("· Phrase 1");
         }
       }
       element.phrases = undefined;

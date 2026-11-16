@@ -34,6 +34,19 @@ delivery notice. The child result remains available in its session and the
 to answer the user: later parent turns own any outstanding answer. A child task
 itself still owes its result; this quiet settlement applies to the parent reviewing it.
 
+An interrupted requester completion turn is not a quiet settlement. Typed cancellation,
+worker timeout, preparation invalidation, and saved-state or transcript conflicts
+retain the existing bounded retry schedule when replay is safe: three attempts,
+with 30-second and two-minute delays. Cancellation before dispatch also uses that
+schedule. Every retryable settle outcome keeps its wake; exhausting the budget
+records a permanent failure and the existing blocked-delivery notice. Runs with
+committed or unknown effects remain failed for explicit recovery instead of
+repeating their work.
+Ordinary completion delivery retains its existing frozen-result retry policy and
+delivery identity; it does not start a new requester-settle attempt.
+Explicit Stop, retired work, and intentional delivery suppression still take
+precedence; cancellation does not revive work those owners have closed.
+
 By default, delivery depends on requester depth:
 
 - Top-level requester sessions use a follow-up `agent` call. External conversations use `deliver=true`; WebChat conversations stay in-session with `deliver=false`.
@@ -85,6 +98,12 @@ After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
 
+Private results are addressed to the requester chat by its session key. If a new
+session, a reset or a compaction successor replaces the chat's session before the
+batch can deliver, the results go to the chat as it is now, as private input. A
+deleted chat drops them. A full reset also cancels the chat's unfinished children
+(see [Reset a conversation](/tools/subagents/nesting#reset-a-conversation)).
+
 Completion and settle run IDs stay within the 256-character execution-identity
 admission limit, including nested completions. IDs that fit remain unchanged;
 longer IDs retain their routing prefix and continuation markers with a SHA-256
@@ -105,7 +124,7 @@ close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 Completion failures retain the concrete delivery error in the run's delivery state.
 A required parent completion that permanently fails also records a visible failure
 notice in the original requester conversation, without starting another agent turn.
-A deleted or reset requester never redirects that notice into a replacement session.
+The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
@@ -144,10 +163,9 @@ resumes and answers the original conversation under its normal reply rules: with
 automatic replies its final text is delivered; with `visibleReplies:
 "message_tool"` it must send the answer with the `message` tool, and plain final
 text stays internal. Child results stay internal input, and nothing is sent
-automatically on the child's behalf. The resumed turn stays bound to the parent
-session that spawned the children: if that session is reset (for example with
-`/new`) or replaced before the parent resumes, the results are dropped and
-nothing is sent.
+automatically on the child's behalf. The resumed turn goes to the parent chat
+by its session key: if the session is replaced (for example by compaction) before
+the parent resumes, the current session receives the results as private input.
 
 This option supports hidden, native, one-shot runs only. It cannot be combined
 with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
@@ -155,8 +173,8 @@ with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, o
 
 Finished private results remain in the registry until the spawning parent turn
 settles. A normal parent finish releases each ready result for private review;
-`sessions_yield` hands the results to its existing child batch instead. A reset or
-removed parent does not transfer the result to another session. When a settled
+`sessions_yield` hands the results to its existing child batch instead. A removed
+parent drops the result; any other chat never receives it. When a settled
 batch contains a private result, the child findings stay private input to the
 parent's review or yielded continuation; ordinary siblings retain their individual
 completion delivery.
@@ -207,7 +225,12 @@ yielded work keep their payloads until those obligations settle.
 Restart recovery includes finished results whose requester has already settled,
 even when that requester has no interrupted-run marker. Retired process authority
 alone does not mean the requester or its store was replaced. Retryable delivery
-is not eligible for completed-run retention cleanup.
+is not eligible for completed-run retention cleanup. Existing wakes resume through
+startup recovery under fresh requester authority. An older build may already have
+removed a wake and suppressed completion delivery while leaving a retryable label.
+Upgrading does not recreate that retired wake or replay its possibly consumed input;
+those results require explicit recovery. Permanently suspended deliveries also stay
+suspended.
 
 Registry removal records a `child_delivery_removed` session-state event in the
 same transaction. It identifies the run, its delivered, suspended, or discarded

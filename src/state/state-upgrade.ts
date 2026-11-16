@@ -1,7 +1,7 @@
 // Copy-and-swap state upgrade. Gateway startup is the only owner.
 //
-// When a shared or agent database is older than this build, the whole state
-// directory is copied into a private shadow. The shipped migration chain (this
+// When a shared or agent database is older than this build, the migration-owned state
+// inputs are copied into a private shadow. The shipped migration chain (this
 // build's Doctor) runs on the shadow only. The result is validated, written to a
 // durable plan, and renamed into place; every replaced or retired live file stays
 // as `<name>.pre-<version>`. The live files are never written before the plan is
@@ -12,9 +12,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import JSON5 from "json5";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-path.js";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js";
+import { resolveConfigIncludes } from "../config/includes.js";
+import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { getMediaDir } from "../media/store-path.js";
 import { VERSION } from "../version.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
@@ -33,6 +42,7 @@ import {
   companionRemovals,
   changedShadowFiles,
   copyTree,
+  copySqliteFamily,
   countSqlitePrefix,
   diffTree,
   fsyncPath,
@@ -43,7 +53,6 @@ import {
   readPlan,
   rewriteFilePrefix,
   rewriteSqlitePrefix,
-  vacuumSqliteInto,
   withRecoveredSource,
   writePlan,
   type UpgradeOp,
@@ -164,20 +173,14 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
   );
 }
 
-function readConfiguredWorkspaces(configPath: string, stateDir: string): string[] {
+function readUpgradeConfig(configPath: string): OpenClawConfig {
   try {
-    // SAFETY: only optional fields are read, and each is type-checked before use.
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-      agents?: { defaults?: { workspace?: unknown }; list?: Array<{ workspace?: unknown }> };
-    };
-    return [
-      config.agents?.defaults?.workspace,
-      ...(config.agents?.list ?? []).map((a) => a.workspace),
-    ]
-      .filter((value): value is string => typeof value === "string" && path.isAbsolute(value))
-      .map((value) => path.resolve(value));
+    // Doctor owns validation and migration; path resolvers tolerate legacy shapes.
+    return coerceConfig(
+      resolveConfigIncludes(JSON5.parse(fs.readFileSync(configPath, "utf8")), configPath),
+    );
   } catch {
-    return [path.join(stateDir, "workspace")];
+    return {};
   }
 }
 
@@ -270,12 +273,16 @@ function readPinnedVersions(statePath: string): Set<string> {
   }
 }
 
-function finish(stateDir: string, workDir: string | undefined, skip: (p: string) => boolean): void {
+function finish(
+  stateDir: string,
+  workDir: string | undefined,
+  ownedFiles: ReadonlySet<string>,
+): void {
   pruneGenerations(
     stateDir,
     VERSION,
     readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
-    skip,
+    ownedFiles,
   );
   if (workDir) {
     fs.rmSync(workDir, { recursive: true, force: true });
@@ -304,17 +311,40 @@ export async function upgradeStateDirectory(params: {
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
-  const workspaces = readConfiguredWorkspaces(configPath, stateDir);
+  const config = readUpgradeConfig(configPath);
+  const excludedRoots = [
+    resolveDefaultAgentWorkspaceDir(env),
+    ...listAgentWorkspaceDirs(config, env),
+    ...(config.agents?.defaults?.workspace
+      ? [resolveUserPath(config.agents.defaults.workspace, env)]
+      : []),
+    resolveManagedWorktreeRoot(env),
+    resolveManagedWorktreeRoot(env, config.worktreeRoot),
+    // Plugin storage is not a core migration input. Knowledge Doctor only
+    // normalizes config; browser profile storage belongs to the browser plugin.
+    ...["knowledge", "browser", "backups", "cache", "locks", "tmp"].map((name) =>
+      path.join(stateDir, name),
+    ),
+  ].flatMap((dir) => {
+    const absolute = path.resolve(dir);
+    return fs.existsSync(absolute) ? [absolute, fs.realpathSync(absolute)] : [absolute];
+  });
+  const media = getMediaDir({ ...env, OPENCLAW_STATE_DIR: stateDir });
+  const mediaRecords = path.join(media, "outgoing", "records");
+  const within = (file: string, dir: string) =>
+    file === dir || file.startsWith(`${dir}${path.sep}`);
   const skip = (absolute: string) => {
-    const relative = path.relative(stateDir, absolute);
-    const top = relative.split(path.sep)[0] ?? "";
+    const top = path.relative(stateDir, absolute).split(path.sep)[0] ?? "";
     return (
       top.startsWith(WORK_PREFIX) ||
-      top === "locks" ||
-      top === "tmp" ||
-      workspaces.some((dir) => absolute === dir || absolute.startsWith(`${dir}${path.sep}`))
+      excludedRoots.some((dir) => within(absolute, dir)) ||
+      // Managed outgoing JSON is still a Doctor input; payloads are not.
+      (within(absolute, media) &&
+        !within(mediaRecords, absolute) &&
+        !within(absolute, mediaRecords))
     );
   };
+  const resumedFiles = new Set<string>();
   // A durable plan from an interrupted swap is finished before anything else.
   let resumed = false;
   for (const entry of fs.readdirSync(stateDir)) {
@@ -327,6 +357,11 @@ export async function upgradeStateDirectory(params: {
       // Environment selection may already hold the shared database being replaced.
       await params.beforeSwap?.();
       applyPlan(plan);
+      for (const op of plan.ops) {
+        if (!skip(op.live)) {
+          resumedFiles.add(op.live);
+        }
+      }
       params.log.info(`Finished an interrupted state upgrade to ${plan.appVersion}.`);
       resumed = true;
     }
@@ -335,7 +370,7 @@ export async function upgradeStateDirectory(params: {
   const outdated = outdatedDatabases(stateDir);
   if (outdated.length === 0) {
     if (resumed) {
-      finish(stateDir, undefined, skip);
+      finish(stateDir, undefined, resumedFiles);
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
@@ -356,7 +391,15 @@ export async function upgradeStateDirectory(params: {
       `Upgrading state to ${VERSION}: ${outdated.map((t) => `${path.relative(stateDir, t.path)} v${t.version}`).join(", ")}`,
     );
     const baseline = new Map<string, string | undefined>();
-    copyTree(stateDir, shadowRoot, skip, baseline);
+    const liveState = path.join(stateDir, "state", "openclaw.sqlite");
+    const requiredSqlite = new Set([...outdated.map((target) => target.path), liveState]);
+    const copyScope = await copyTree(stateDir, shadowRoot, skip, baseline, {
+      requiredSqlite,
+      log: params.log,
+      additionalCopyBytes: configInside
+        ? 0
+        : (fs.statSync(configPath, { throwIfNoEntry: false })?.size ?? 0),
+    });
     if (!configInside && fs.existsSync(configPath)) {
       fs.mkdirSync(path.dirname(shadowConfig), { recursive: true });
       fs.copyFileSync(configPath, shadowConfig);
@@ -418,12 +461,15 @@ export async function upgradeStateDirectory(params: {
       const fallback = buildFallback(outdated, toShadow, workDir);
       // The upgrade report, set-aside rows and pin live in the shared database, so a
       // current one is copied too and swapped with them.
-      const liveState = path.join(stateDir, "state", "openclaw.sqlite");
-      if (!outdated.some((t) => t.kind === "state") && isSqliteFile(liveState)) {
+      if (
+        !outdated.some((t) => t.kind === "state") &&
+        baseline.has(toShadow(liveState)) &&
+        isSqliteFile(liveState)
+      ) {
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           fs.rmSync(`${toShadow(liveState)}${suffix}`, { force: true });
         }
-        vacuumSqliteInto(liveState, toShadow(liveState));
+        await copySqliteFamily(liveState, toShadow(liveState), params.log);
         fallbackAdds.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
       }
       warnings.push(...fallback.foldInFailures);
@@ -455,27 +501,15 @@ export async function upgradeStateDirectory(params: {
     }
     const pinned = mode === "fallback" || mismatches.length > 0;
     const setAsideCount = setAside.reduce((sum, entry) => sum + entry.rows.length, 0);
-    recordDiagnostics(
-      toShadow(path.join(stateDir, "state", "openclaw.sqlite")),
-      {
-        appVersion: VERSION,
-        mode,
-        failedStep,
-        from: Object.fromEntries(outdated.map((t) => [path.relative(stateDir, t.path), t.version])),
-        conservationMismatches: mismatches,
-        setAside: setAsideCount,
-        warnings,
-        preserved: `.pre-${VERSION}`,
-        pinned,
-      },
-      setAside,
-      pinned,
-    );
-    // The report row may have touched a shared database the run left alone.
+    const warn = (message: string) => {
+      warnings.push(message);
+      params.log.warn(message);
+    };
     checkpointShadowDatabases(changedShadowFiles(shadowRoot, baseline));
+    // Decide before recording diagnostics so uncopied-file warnings survive restart.
     const ops: UpgradeOp[] =
       mode === "chain"
-        ? diffTree(stateDir, shadowRoot, baseline)
+        ? diffTree(stateDir, shadowRoot, baseline, warn)
         : [
             ...outdated.map((t) => ({
               kind: "replace" as const,
@@ -484,6 +518,13 @@ export async function upgradeStateDirectory(params: {
             })),
             ...fallbackAdds,
           ];
+    if (
+      mode === "chain" &&
+      baseline.has(toShadow(liveState)) &&
+      !ops.some((op) => op.live === liveState)
+    ) {
+      ops.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
+    }
     if (mode === "fallback" && configInside && fs.existsSync(shadowConfig)) {
       const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
       if (!original?.equals(fs.readFileSync(shadowConfig))) {
@@ -503,6 +544,38 @@ export async function upgradeStateDirectory(params: {
         ops.push({ kind: original ? "replace" : "add", live: configPath, next: stagedConfig });
       }
     }
+    for (let index = ops.length - 1; index >= 0; index--) {
+      const op = ops[index]!;
+      if (op.live === configPath && !configInside) {
+        continue;
+      }
+      if (fs.lstatSync(op.live, { throwIfNoEntry: false }) && !baseline.has(toShadow(op.live))) {
+        warn(`Left uncopied live file unchanged: ${path.relative(stateDir, op.live)}`);
+        ops.splice(index, 1);
+      }
+    }
+    const retired = copyScope.retiredBackups;
+    params.log.info(
+      `State upgrade retained ${retired.count} retired backup file(s), ${retired.bytes} bytes; cleanup remains with the operator or Doctor.`,
+    );
+    recordDiagnostics(
+      toShadow(path.join(stateDir, "state", "openclaw.sqlite")),
+      {
+        appVersion: VERSION,
+        mode,
+        failedStep,
+        from: Object.fromEntries(outdated.map((t) => [path.relative(stateDir, t.path), t.version])),
+        conservationMismatches: mismatches,
+        setAside: setAsideCount,
+        warnings,
+        retiredBackups: retired,
+        preserved: `.pre-${VERSION}`,
+        pinned,
+      },
+      setAside,
+      pinned,
+    );
+    checkpointShadowDatabases([toShadow(liveState)]);
     ops.push(...companionRemovals(ops));
     for (const op of ops) {
       if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
@@ -528,7 +601,7 @@ export async function upgradeStateDirectory(params: {
       fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
       fs.copyFileSync(chainLog, path.join(stateDir, "logs", `state-upgrade-${VERSION}.log`));
     }
-    finish(stateDir, workDir, skip);
+    finish(stateDir, workDir, new Set(ops.map((op) => op.live).filter((file) => !skip(file))));
     const summary = `State upgraded to ${VERSION} by ${mode === "chain" ? "migration chain" : "generic copy"}; previous files kept as *.pre-${VERSION}.`;
     if (pinned) {
       params.log.warn(
@@ -561,7 +634,7 @@ export function explainMachineFailure(error: unknown, stateDir: string): unknown
   return isMachineFailure(error)
     ? new Error(
         // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space (about the size of the state directory) and start the Gateway again.`,
+        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space for the migration inputs and scratch margin and start the Gateway again.`,
         { cause: error },
       )
     : error;

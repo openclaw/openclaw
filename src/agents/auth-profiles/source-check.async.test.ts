@@ -50,12 +50,18 @@ async function expectSource(
   calibrate = false,
 ) {
   const sql = observeMainThreadSql();
+  using sourceExists = vi.spyOn(fs, "existsSync");
   try {
     if (calibrate) {
       sql.calibrate();
     }
     expect(await hasSource(agentDir, reader)).toBe(expected);
     sql.expectIdle();
+    expect(
+      sourceExists.mock.calls.filter(([pathname]) =>
+        /(?:^|[/\\])(?:auth-profiles|auth-state|auth|oauth)\.json$/.test(String(pathname)),
+      ),
+    ).toEqual([]);
   } finally {
     sql.restore();
   }
@@ -90,7 +96,8 @@ function sourceRow(table: "store" | "state", json: string) {
 it("retains read failure classification when cleanup fails", () =>
   withState(async (state) => {
     const failure = new SqliteWorkerError("source read closed", "closed");
-    vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockReturnValue({
+    vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockResolvedValue({
+      agentId: "main",
       identity: undefined,
       databaseIdentity: undefined,
       source: { kind: "shared-state", databasePath: "/fixture/shared.sqlite" },
@@ -191,8 +198,8 @@ it("keeps the captured shared root after a local read yields", () =>
     writeAuthProfileJsonCell(shared.db, "store", "shared-state", { version: 1, profiles: {} });
     expect(await hasLocalAuthProfileStoreSourceAsync(state.agentDir("absent"))).toBe(false);
     const original = readers.prepareAgentAuthProfileRowsRead;
-    vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockImplementation((input) => {
-      const reader = original(input);
+    vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockImplementation(async (input) => {
+      const reader = await original(input);
       return {
         ...reader,
         read: async () => {

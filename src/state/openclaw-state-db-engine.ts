@@ -144,23 +144,6 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   publishStateRuntimeSchemaAdmission(db, true);
 }
 
-const statePostgresSchema = {
-  postgres: runtime.eagerSql,
-  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
-    const { activation } = fragment;
-    if (activation !== "first-use" && activation !== "version-additive") {
-      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
-    }
-    return {
-      id: fragment.id,
-      tables: fragment.tables,
-      sql: fragment.sql,
-      dependencies: fragment.dependencies,
-      activation,
-    };
-  }),
-};
-
 function statePostgresVersionSql(version: number): string {
   return `UPDATE schema_meta
         SET schema_version = ${version},
@@ -175,6 +158,10 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchema = {
+    postgres: stateEngineSchema.postgres,
+    postgresFragments: stateEngineSchema.postgresFragments,
+  };
   const statePostgresSchemaV39 = {
     ...statePostgresSchema,
     postgres: withLegacyWorkerProvisionSource(statePostgresSchema.postgres),
@@ -411,11 +398,45 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
   ];
 }
 
-export const stateEngineSchema: StoreSchema = {
+export const stateEngineSchema: StoreSchema & {
+  postgres: string;
+  postgresFragments: PostgresSchemaFragment[];
+} = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
-  ...statePostgresSchema,
+  get postgres() {
+    const value = runtime.eagerSql;
+    Object.defineProperty(this, "postgres", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
+  get postgresFragments() {
+    const value = runtime.fragments.map((fragment): PostgresSchemaFragment => {
+      const { activation } = fragment;
+      if (activation !== "first-use" && activation !== "version-additive") {
+        throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+      }
+      return {
+        id: fragment.id,
+        tables: fragment.tables,
+        sql: fragment.sql,
+        dependencies: fragment.dependencies,
+        activation,
+      };
+    });
+    Object.defineProperty(this, "postgresFragments", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
   get postgresMigrations() {
     // SQLite workers never need historical PostgreSQL schemas. Materialize once on first use.
     const value = createStatePostgresMigrations();

@@ -44,6 +44,7 @@ export function resolveSessionEventTerminalOutcome(params: {
     buildAgentRunTerminalOutcomeFromLifecycleEvent({
       phase: failed || aborted || failure ? "error" : "end",
       data: {
+        ...(failed && result.code === "run_stalled" ? { status: "timeout" } : {}),
         ...(aborted ? { aborted: true } : {}),
         ...(aborted && result.code === "aborted_for_supersession"
           ? { stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON }
