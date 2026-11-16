@@ -9,6 +9,7 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
@@ -62,6 +63,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
+  gatewayRequestContext.restartResumeWindows = runtime.opts.restartResumeWindows;
   const projectionReady = runtime.opts.updateCanary
     ? undefined
     : startupTrace.measure("sessions.projection", async () => {
@@ -113,7 +115,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         shouldUseGatewayOwnerProfile({
           role: "operator",
           authMethod: runtime.getResolvedAuth().mode,
-          rolesConfigured: Boolean(getRuntimeConfig().gateway?.roles),
+          rolesConfigured: isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()),
         })
       ) {
         try {
@@ -137,30 +139,34 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");
       }
-      // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
-      void runtime.connectionWork
-        .track(() =>
-          runWithGatewayIndependentRootWorkAdmission(
-            async () => {
-              const { listProjectedSessions } = await import("./session-utils-list.js");
-              runtime.connectionWork.signal.throwIfAborted();
-              await startupTrace.measure("sessions.first-page", () =>
-                listProjectedSessions({
-                  projection,
-                  opts: { limit: 100, archived: false, rowMode: "sidebar" },
-                  acceptsSerializedJson: true,
-                }),
-              );
-            },
-            "startup:session-row-prewarm",
-            runtime.connectionWork.signal,
-          ),
-        )
-        .catch((error: unknown) => {
-          if (!runtime.connectionWork.signal.aborted) {
-            log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
-          }
-        });
+      const controlUiEnabled =
+        runtime.opts.controlUiEnabled ?? getRuntimeConfig().gateway?.controlUi?.enabled ?? true;
+      if (controlUiEnabled) {
+        // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
+        void runtime.connectionWork
+          .track(() =>
+            runWithGatewayIndependentRootWorkAdmission(
+              async () => {
+                const { listProjectedSessions } = await import("./session-utils-list.js");
+                runtime.connectionWork.signal.throwIfAborted();
+                await startupTrace.measure("sessions.first-page", () =>
+                  listProjectedSessions({
+                    projection,
+                    opts: { limit: 100, archived: false, rowMode: "sidebar" },
+                    acceptsSerializedJson: true,
+                  }),
+                );
+              },
+              "startup:session-row-prewarm",
+              runtime.connectionWork.signal,
+            ),
+          )
+          .catch((error: unknown) => {
+            if (!runtime.connectionWork.signal.aborted) {
+              log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
+            }
+          });
+      }
     }
     if (!runtime.opts.updateCanary) {
       await startupTrace.measure("gateway.lifetime-sidecars", () =>

@@ -4,7 +4,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
 import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 

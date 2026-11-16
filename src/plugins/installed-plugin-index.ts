@@ -1,4 +1,5 @@
 /** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
+import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -387,7 +388,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
         resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
       isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==
         isInstalledPluginIndexInstallOwnerAmbiguous(currentPlugin) ||
-      previousPlugin.installRecordHash !== currentPlugin.installRecordHash
+      previousPlugin.installRecordHash !== currentPlugin.installRecordHash ||
+      !isDeepStrictEqual(previousPlugin.sourceSnapshot, currentPlugin.sourceSnapshot)
     ) {
       reasons.add("source-changed");
     }

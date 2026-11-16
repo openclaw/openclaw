@@ -7,6 +7,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
@@ -100,13 +101,15 @@ function readSessionModelPreviewItems(
 ): Promise<SessionPreviewItem[]> {
   return readBoundedSessionPreviewItemsAsync(maxItems, async (maxEvents, maxBytes) => {
     let truncated = false;
-    const manager = await SessionManager.openBoundedAsync(target, {
-      maxEvents,
-      maxBytes,
-      onTruncated: () => {
-        truncated = true;
-      },
-    });
+    const manager = await withSessionTranscriptHydrationCaller("preview", () =>
+      SessionManager.openBoundedAsync(target, {
+        maxEvents,
+        maxBytes,
+        onTruncated: () => {
+          truncated = true;
+        },
+      }),
+    );
     return {
       items: buildSessionPreviewItems(
         manager.buildSessionContext().messages,

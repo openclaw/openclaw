@@ -21,18 +21,18 @@ import type {
 import { createPluginStateKeyedStoreForTests } from "../../plugin-sdk/plugin-state-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
+import type { EmbeddingInput } from "../../plugins/embedding-provider-runtime-types.js";
 import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
-  type EmbeddingInput,
 } from "../../plugins/embedding-providers.js";
 import type { MemoryPluginRuntime } from "../../plugins/registry-contribution-types.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
-import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -172,11 +172,10 @@ function selectStateRoot(stateRoot: string) {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateRoot, "openclaw.json"));
 }
 
-function selectEngine(url: string) {
-  installDatabaseEngineSelection({
-    effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-    postgres: { connection: url, schemaPrefix: prefix },
-  });
+async function selectEngine(url: string) {
+  installDatabaseEngineSelection(
+    await resolveDatabaseEngineSelection(config(), { OPENCLAW_MEMORY_PUBLIC_POSTGRES: url }),
+  );
 }
 
 async function searchWithConfig(cfg: OpenClawConfig, agentId = "main") {
@@ -195,7 +194,7 @@ async function selectCapabilityDatabase(name: string) {
   url.pathname = `/${name}`;
   vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", url.href);
   resetDatabaseEngineSelectionForTest();
-  selectEngine(url.href);
+  await selectEngine(url.href);
   admitStateAnchor(stateRoot);
 }
 
@@ -224,7 +223,7 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     await fs.writeFile(path.join(workspace, "memory/sapphire.md"), "Sapphire northern harbor.\n");
     await fs.writeFile(path.join(workspace, "memory/ruby.md"), "Ruby orchard.\n");
     selectStateRoot(root);
-    selectEngine(connection!);
+    await selectEngine(connection!);
     vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", connection!);
     client = new pg.Client({ connectionString: connection });
     await client.connect();

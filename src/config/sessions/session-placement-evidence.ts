@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/boundary-path.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
@@ -10,18 +11,15 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
-import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { prepareCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
   SessionIdentityEvidenceIdentity,
   SessionIdentityEvidenceResult,
 } from "./session-entry-read-source.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
-import {
-  captureSessionStoreReadCandidate,
-  isSessionStoreReadCandidateCurrent,
-} from "./session-store-read-candidates.js";
-import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import { captureSessionStoreTargetInventory } from "./session-store-target-routing.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
@@ -82,12 +80,22 @@ export async function readPlacementSessionIdentityEvidence(
     readIncognito();
     return results;
   }
-  const prepareDisk = () => {
-    const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
+  const prepareDisk = async () => {
+    const captured = captureSessionStoreTargetInventory(
       cfg,
       disk.map(({ probe }) => probe.agentId),
       env,
     );
+    const qualified = await prepareSessionStoreCandidatesInWorker({ inventory: true, ...captured });
+    signal?.throwIfAborted();
+    if (!qualified.inventory) {
+      throw new Error("Session discovery worker did not return its prepared inventory");
+    }
+    const { candidates, ...prepared } = {
+      ...qualified.inventory,
+      config: captured.config,
+      env: captured.env,
+    };
     const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
     const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
       candidates.flatMap((candidate) => [
@@ -98,10 +106,11 @@ export async function readPlacementSessionIdentityEvidence(
     );
     return { candidates, prepared, inventoryRead, nativeReaders };
   };
-  let diskPreparation: ReturnType<typeof prepareDisk>;
+  let diskPreparation: Awaited<ReturnType<typeof prepareDisk>>;
   try {
-    diskPreparation = prepareDisk();
+    diskPreparation = await prepareDisk();
   } catch {
+    signal?.throwIfAborted();
     for (const { index } of disk) {
       results[index] = { status: "unknown", reason: "read-failed" };
     }
@@ -111,7 +120,7 @@ export async function readPlacementSessionIdentityEvidence(
   const { candidates, prepared, inventoryRead, nativeReaders } = diskPreparation;
   const continuations: Array<{
     path: string;
-    owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;
+    owner: NonNullable<Awaited<ReturnType<typeof prepareCanonicalSessionReaderContinuation>>>;
   }> = [];
   const releaseContinuations = () => {
     for (const { owner } of continuations.toReversed()) {
@@ -121,11 +130,13 @@ export async function readPlacementSessionIdentityEvidence(
   };
   try {
     for (const database of nativeReaders.databases) {
-      const physicalPath = captureSessionStoreReadCandidate(database.path).physicalPath;
-      const owner = captureCanonicalSessionReaderContinuation(database);
+      const physicalPath = await resolveIdentityPathViaExistingAncestor(database.path);
+      signal?.throwIfAborted();
+      const owner = await prepareCanonicalSessionReaderContinuation(database);
       if (owner) {
         continuations.push({ path: physicalPath, owner });
       }
+      signal?.throwIfAborted();
     }
   } catch (error) {
     releaseContinuations();
@@ -240,12 +251,12 @@ export async function readPlacementSessionIdentityEvidence(
       undefined,
       signal,
     );
-    inventoryRead.assertRegistryCurrent();
-    for (const candidate of candidates) {
-      if (!isSessionStoreReadCandidateCurrent(candidate)) {
-        throw new Error("Session store alias changed during discovery; retry the read.");
-      }
+    await prepareSessionStoreCandidatesInWorker({ validate: { candidates, sources: [] } });
+    for (const { owner } of continuations) {
+      await owner.prepareCurrent();
     }
+    signal?.throwIfAborted();
+    inventoryRead.assertRegistryCurrent();
     for (const { owner } of continuations) {
       owner.assertCurrent();
     }

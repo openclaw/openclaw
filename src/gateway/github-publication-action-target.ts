@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionGitHubPublicationPublished } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
+import type {
+  SessionGitHubPublicationPublished,
+  SessionGitHubPullRequestInspectResult,
+} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 
@@ -24,9 +26,8 @@ export async function preparePublishingSession(
           await prepareGitHubPublicationSession(params.publishingSessionKey, { assertCurrent }),
         )
       : source;
-  const readers: SessionRead[] = [source, selected];
+  const readers: SessionRead[] = source === selected ? [source] : [source, selected];
   const assertSessions = () => {
-    assertCurrent();
     for (const reader of readers) {
       if (!reader.readCurrent().entry?.sessionId) {
         throw new Error("The GitHub publication session is unavailable.");
@@ -72,7 +73,7 @@ export async function preparePublishingSession(
 export function pullRequestState(
   value: unknown,
   publication: Pick<SessionGitHubPublicationPublished, "url" | "repository" | "branch">,
-  binding?: SessionGitHubPullRequestBinding,
+  binding?: Pick<SessionGitHubPullRequestInspectResult, "number" | "base" | "head">,
   authorAccountId?: number,
 ) {
   if (
@@ -106,9 +107,11 @@ export function pullRequestState(
     (value.number !== binding.number ||
       value.base.repo.id !== binding.base.repositoryId ||
       value.base.ref !== binding.base.branch ||
-      !isRecord(value.head.repo) ||
-      value.head.repo.id !== binding.head.repositoryId ||
-      value.head.repo.full_name !== binding.head.repository ||
+      (binding.head
+        ? !isRecord(value.head.repo) ||
+          value.head.repo.id !== binding.head.repositoryId ||
+          value.head.repo.full_name !== binding.head.repository
+        : value.head.repo !== null) ||
       (authorAccountId !== undefined &&
         (!isRecord(value.user) || value.user.id !== authorAccountId)))
   ) {

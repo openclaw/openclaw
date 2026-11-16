@@ -14,6 +14,7 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
 import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
@@ -36,6 +37,13 @@ it("model reads recover a failed shared-worker publication and retain the failed
   const provider = "recovery-fixture";
   const sibling = "healthy-fixture";
   const providers = [provider, sibling];
+  const preparationFailure = new UnresolvedSecretInputError({
+    path: `models.providers.${provider}.apiKey`,
+    ref: { source: "env", provider: "default", id: "UNRESOLVED_FIXTURE_KEY" },
+  });
+  // Static preparation crosses native plugin and Vitest loaders; retain the host error identity.
+  const failureKey = `__catalog_recovery_${state.root}`;
+  Object.defineProperty(globalThis, failureKey, { configurable: true, value: preparationFailure });
   const events = new EventEmitter();
   const workers = new Map<number, Worker>();
   const workerChannel = channel("worker_threads");
@@ -113,7 +121,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
             staticCatalog: provider === ${JSON.stringify(provider)} ? {
               order: "simple", async run() {
                 const response = await fetch(${JSON.stringify(`${baseUrl}/prepare`)});
-                if (!response.ok) throw new Error("Fixture runtime preparation failed");
+                if (!response.ok) throw globalThis[${JSON.stringify(failureKey)}];
                 return null;
               },
             } : undefined,
@@ -211,7 +219,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       failedPreparations = 1;
       await worker!.terminate();
       expect((await withinTest(recoveryFailed.promise, signal)).message).toContain(
-        "Fixture runtime preparation failed",
+        preparationFailure.message,
       );
       // Picker and chat must repair stale errors without a Gateway restart or plugin reload.
       const [rechecked, metadata] = await Promise.all([
@@ -269,6 +277,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       releaseResponses();
     }
   } finally {
+    Reflect.deleteProperty(globalThis, failureKey);
     workerChannel.unsubscribe(recordWorker);
     await Promise.all(providerWork);
   }

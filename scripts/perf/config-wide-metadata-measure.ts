@@ -8,14 +8,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, PerformanceObserver, type PerformanceNodeEntry } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values, positionals } = parseArgs({
   options: { owner: { type: "string" } },
@@ -28,21 +27,10 @@ assert(mode === "timing" || mode === "allocation");
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(global.gc, "Run with --expose-gc");
 const ownerUrl = new URL("../../src/config/io.plugin-metadata.ts", import.meta.url).href;
-const replacement = values.owner ? pathToFileURL(path.resolve(values.owner)).href : undefined;
-let replaced = false;
-registerHooks({
-  load(url, context, nextLoad) {
-    if (url !== ownerUrl || !replacement) {
-      return nextLoad(url, context);
-    }
-    replaced = true;
-    const result = nextLoad(replacement, context);
-    return { format: result.format, source: result.source, shortCircuit: true };
-  },
-});
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { resolveConfigWidePluginMetadataSnapshotAsync } =
   await import("../../src/config/io.plugin-metadata.js");
-assert(!replacement || replaced, "Requested baseline source was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Requested baseline source was not loaded");
 const stateDir = process.env.OPENCLAW_STATE_DIR;
 assert(stateDir && path.isAbsolute(stateDir), "Set an isolated absolute OPENCLAW_STATE_DIR");
 await fs.mkdir(stateDir, { recursive: true });

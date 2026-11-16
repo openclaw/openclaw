@@ -186,32 +186,56 @@ describe("sidebar people workload", () => {
     vi.setSystemTime(NOW);
   });
 
-  it("defers person activity links while Online is hidden and shows current people when opened", async () => {
-    const { gateway, sessions } = createWorkloadGateway(async () => summary());
+  it("defers people reads while Online is hidden and shows current counts when opened", async () => {
+    let workload = COUNTS;
+    const { gateway, sessions, summaryRequest } = createWorkloadGateway(async () =>
+      summary(workload),
+    );
     await sessions.refresh({ agentId: "main", limit: 1 });
     const link = vi.spyOn(personActivity, "personActivityLink");
     const { sidebar } = await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS);
     sidebar.connected = true;
     await settle(sidebar);
     expect(link).not.toHaveBeenCalled();
+    expect(summaryRequest).not.toHaveBeenCalled();
+    expect(sidebar.sidebarSnapshotSettled()).toBe(true);
 
     await selectSidebarView(sidebar, "online");
     await vi.dynamicImportSettled();
     await settle(sidebar);
     expect(person(sidebar, "ada").getAttribute("href")).toBe("/activity/ada");
     expect(link).toHaveBeenCalled();
+    expect(summaryRequest).toHaveBeenCalledOnce();
     await selectSidebarView(sidebar, "sessions");
     link.mockClear();
+    workload = [{ profileId: "ada", open: 8, running: 2 }];
+    gateway.publishEvent("sessions.changed", { key: "agent:main:visible", reason: "patch" });
     gateway.publishEvent("presence", { presence: [profile("ada", "Ada renamed", NOW)] });
+    await vi.advanceTimersByTimeAsync(60_000);
     await settle(sidebar);
     expect(link).not.toHaveBeenCalled();
+    expect(summaryRequest).toHaveBeenCalledOnce();
     await selectSidebarView(sidebar, "online");
+    await settle(sidebar);
     const row = person(sidebar, "Ada renamed");
     expect(row.getAttribute("href")).toBe("/activity/ada");
     expect(row.getAttribute("aria-label")).toContain("Ada renamed");
+    expect(summaryRequest).toHaveBeenCalledTimes(2);
+    expect(counts(sidebar, "Ada renamed")).toEqual(["2", "8"]);
+    sidebar.navigationCollapsed = true;
+    await settle(sidebar);
+    workload = [{ profileId: "ada", open: 9, running: 3 }];
+    gateway.publishEvent("sessions.changed", { key: "agent:main:visible", reason: "patch" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle(sidebar);
+    expect(summaryRequest).toHaveBeenCalledTimes(2);
+    sidebar.navigationCollapsed = false;
+    await settle(sidebar);
+    expect(summaryRequest).toHaveBeenCalledTimes(3);
+    expect(counts(sidebar, "Ada renamed")).toEqual(["3", "9"]);
   });
 
-  it("keeps a pending snapshot hidden until newly present profiles have counts", async () => {
+  it("keeps a pending Online snapshot hidden until newly present profiles have counts", async () => {
     const snapshot = createDeferred<SidebarSnapshotModel | null>();
     const delayedCounts = createDeferred<SessionsListResult>();
     vi.spyOn(SessionSnapshotStore.prototype, "readSidebar").mockReturnValue(snapshot.promise);
@@ -236,6 +260,7 @@ describe("sidebar people workload", () => {
     });
     await sessions.refresh({ agentId: "main", limit: 1 });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS);
+    sidebar.navigationView = "online";
     await settle(sidebar);
     expect(sidebar.querySelector("aside.sidebar")).toBeNull();
 
@@ -454,7 +479,7 @@ describe("sidebar people workload", () => {
     expect(dom.text(".sidebar-online .sidebar-session-empty-hint")).toBe(
       "No people match this filter",
     );
-    expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
     sidebar.people.resetView();
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);

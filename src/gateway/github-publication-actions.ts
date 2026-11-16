@@ -15,8 +15,6 @@ import { preparePublishingSession, pullRequestState } from "./github-publication
 import {
   assertExpectedSharedGitHubPublisher,
   currentGitHubPublicationConfig,
-  matchesCurrentGitHubPublicationIdentity,
-  prepareCurrentGitHubPublicationIdentity,
 } from "./github-publication-availability.js";
 import { uploadGitHubPublicationEvidence } from "./github-publication-evidence.js";
 import {
@@ -26,6 +24,7 @@ import {
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
@@ -44,7 +43,7 @@ function assertPreservedPublicationFooter(before: string, after: string) {
   }
 }
 
-/** Execute one explicit operation against the session's bound original PR or shared publication. */
+/** Execute an authorized action against an explicitly verified PR or the session's PR. */
 export async function performSessionGitHubAction(options: Options): Promise<void> {
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
@@ -59,6 +58,13 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
+  const explicitPullRequestUrl = "pullRequestUrl" in params ? params.pullRequestUrl : undefined;
+  if (explicitPullRequestUrl && params.requestId) {
+    throw new Error("An explicit PR URL accepts no publication requestId; read that PR with edit.");
+  }
+  if (explicitPullRequestUrl && "publishingSessionKey" in params && params.publishingSessionKey) {
+    throw new Error("Select a PR by pullRequestUrl or publishingSessionKey, not both.");
+  }
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
   const ownPublicationAction = Boolean(edit || requestReview || evidenceUpload);
@@ -124,21 +130,44 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       throw new Error("GitHub pull request actions require full operator write permission.");
     }
   };
-  assertRequester();
-  const binding = entry.worktree?.githubPullRequest;
+  const explicit = explicitPullRequestUrl
+    ? await inspectOwnGitHubPullRequest({
+        pullRequestUrl: explicitPullRequestUrl,
+        session,
+        requester: admitted.requester,
+        assertCurrent: assertRequester,
+      })
+    : undefined;
+  let explicitPullRequest: Parameters<typeof pullRequestState>[1] | undefined;
+  if (explicit) {
+    const head = explicit.details.head;
+    if (!isRecord(head) || typeof head.ref !== "string" || !head.ref) {
+      throw new Error(
+        "GitHub returned an invalid PR head reference; inspect the PR before retrying.",
+      );
+    }
+    explicitPullRequest = {
+      url: explicit.result.url,
+      repository: explicit.result.base.repository,
+      branch: head.ref,
+    };
+  }
+  let inspection = explicit;
+  const binding = explicit ? undefined : entry.worktree?.githubPullRequest;
+  const originalTarget = explicit?.result ?? binding;
   const readCurrent = () => target.selected.readCurrent();
-  let receipt = binding
-    ? undefined
-    : ownPublicationAction
-      ? await service.latestPublishedShared(session, readCurrent)
-      : await service.latestShared(session, undefined, undefined, readCurrent);
+  let receipt =
+    explicit || binding
+      ? undefined
+      : ownPublicationAction
+        ? await service.latestPublishedShared(session, readCurrent)
+        : await service.latestShared(session, undefined, undefined, readCurrent);
   // A failed later push leaves the published PR as it was; an in-flight one still refuses.
   if (receipt?.result.status === "failed") {
     receipt = await service.latestPublishedShared(session, readCurrent);
   }
-  assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
-  if (!binding && !publication) {
+  if (!explicit && !binding && !publication) {
     throw new Error(
       edit
         ? "This session has no completed shared publication to edit."
@@ -162,81 +191,50 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       "The publication changed; inspect the current PR and review its head before retrying.",
     );
   }
-  const pullRequest = binding
-    ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
-    : publication!;
-  const identity = await prepareCurrentGitHubPublicationIdentity(session.agentId);
-  assertRequester();
+  const pullRequest =
+    explicitPullRequest ??
+    (binding
+      ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
+      : publication!);
+  const nativeReader = await prepareSelectedGitHubPullRequestReader({
+    session,
+    pullRequest,
+    binding,
+    requester: admitted.requester,
+    assertCurrent: assertRequester,
+  });
+  const { identity, endpoint } = nativeReader;
+  const host = identity.host ?? "github.com";
+  const number = endpoint.split("/").at(-1);
   if (publication) {
     assertExpectedSharedGitHubPublisher(publication.publisher, {
       source: identity.source,
       ...identity.account,
     });
   }
-  const fullWrite = roleScopesAllow({
-    role: "operator",
-    requestedScopes: ["operator.write"],
-    allowedScopes: admitted.requester.snapshot.scopes,
-  });
-  let inspection: Awaited<ReturnType<typeof inspectOwnGitHubPullRequest>> | undefined;
-  const assertIdentity = () => {
-    assertRequester();
-    if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {
-      throw new Error(
-        "The GitHub publisher changed; inspect the current identity before retrying.",
-      );
-    }
-  };
+  const assertIdentity = nativeReader.assertCurrent;
   const assertCurrent = () => {
     assertIdentity();
     inspection?.assertCurrent();
   };
-  const url = URL.parse(pullRequest.url);
-  const host = identity.host ?? "github.com";
-  const expectedPath = `/${pullRequest.repository}/pull/`;
-  const number = url?.pathname.slice(expectedPath.length);
-  if (
-    !url ||
-    url.protocol !== "https:" ||
-    url.host !== host ||
-    (binding && binding.host !== host) ||
-    url.username ||
-    url.password ||
-    !url.pathname.startsWith(expectedPath) ||
-    !number ||
-    !/^[1-9][0-9]*$/u.test(number) ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error("The publication's GitHub target is invalid.");
-  }
-  const endpoint = `repos/${pullRequest.repository}/pulls/${number}`;
   const read = async () => {
-    assertCurrent();
-    if (binding && !fullWrite) {
+    if (explicitPullRequestUrl) {
       inspection = await inspectOwnGitHubPullRequest({
-        pullRequestUrl: binding.url,
+        pullRequestUrl: explicitPullRequestUrl,
         session,
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });
-    }
-    const result = await runPublicationCommand(githubPublicationApiArgs(endpoint, "GET", host), {
-      env: identity.env,
-      beforeRun: assertCurrent,
-    });
-    assertCurrent();
-    if (result.code !== 0) {
-      throw new Error(
-        "GitHub PR state is unavailable; check the publisher's repository access and retry inspect.",
+      return pullRequestState(
+        inspection.details,
+        pullRequest,
+        originalTarget,
+        explicit?.result.author.accountId,
       );
     }
-    return pullRequestState(
-      JSON.parse(result.stdout.toString("utf8")),
-      pullRequest,
-      binding,
-      inspection?.result.author.accountId,
-    );
+    const value = await nativeReader.readJson(endpoint);
+    inspection = nativeReader.inspection;
+    return pullRequestState(value, pullRequest, binding, inspection?.result.author.accountId);
   };
   const present = (
     state: ReturnType<typeof pullRequestState>,
@@ -253,7 +251,14 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     assertCurrent();
     options.respond(true, result);
   };
-  let before = await read();
+  let before = explicit
+    ? pullRequestState(
+        explicit.details,
+        pullRequest,
+        originalTarget,
+        explicit.result.author.accountId,
+      )
+    : await read();
   if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
@@ -266,6 +271,15 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   assertHead(before);
   const prepareImportedEffect = async () => {
+    if (explicitPullRequestUrl) {
+      // Metadata and lifecycle actions do not require permission to push source or an unprotected head branch.
+      const current = await read();
+      assertHead(current);
+      if (current.state === "closed" || current.state === "merged") {
+        throw new Error("The PR is closed; no action was performed.");
+      }
+      return current;
+    }
     if (inspection) {
       const current = await assertExistingPullRequestWriteAccess({
         pullRequest: inspection.result,
@@ -273,10 +287,8 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         assertCurrent,
         requirePublicRepositories: inspection.requirePublicRepositories,
       });
-      assertCurrent();
       return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);
     }
-    assertCurrent();
     return null;
   };
   if (evidenceUpload) {
@@ -385,7 +397,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
           excludeAccountId: identity.account.accountId,
         })
       : undefined;
-  assertCurrent();
   if (binding && attribution) {
     const current = await read();
     assertHead(current);

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import {
   readPersistedAuthProfileStateRaw,
   writePersistedAuthProfileStateRaw,
@@ -21,10 +22,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
-} from "./archive-compression.js";
+import { encodeSessionArchiveContent } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
 import {
   appendTranscriptEvent,
@@ -132,7 +130,7 @@ function appendTrajectory(storePath: string, sessionId: string, type: string) {
 }
 
 function readArchive(file: string) {
-  return readSessionArchiveContentSync(file)
+  return readSessionArchiveText(file)
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));

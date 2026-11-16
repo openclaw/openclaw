@@ -1,7 +1,7 @@
 import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import type { SessionsDeleteParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../../config/sessions/lifecycle.js";
+import { isSessionLifecycleChangedGatewayError } from "../../../config/sessions/lifecycle.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -26,20 +26,6 @@ type CallGateway = (options: {
   assertDispatchCurrent?: () => void;
 }) => Promise<unknown>;
 type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
-
-function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return false;
-  }
-  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
-  const details = requestError.details;
-  return (
-    requestError.gatewayCode === "INVALID_REQUEST" &&
-    typeof details === "object" &&
-    details !== null &&
-    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
-  );
-}
 
 export async function deleteSubagentSessionForCleanup(params: {
   callGateway: CallGateway;

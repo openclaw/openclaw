@@ -17,9 +17,9 @@ import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-hel
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -58,7 +58,6 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
-import { estimateProjectedRequestTokenPressure } from "./preemptive-compaction.js";
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
@@ -331,7 +330,7 @@ export function installEmbeddedAttemptStreamGuards(
   installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
 
   if (
@@ -466,9 +465,14 @@ export function installEmbeddedAttemptStreamGuards(
   return {
     normalizeToolCallIds,
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (
+      ...args: [
+        ...Parameters<typeof cacheObserver.onModelRequest>,
+        fixedTokenPressure?: FixedRequestTokenPressure,
+      ]
+    ) => {
       const previous = cacheObserver.getContextUsage();
-      const request = await cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(args[0], args[1], args[2]);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&
@@ -477,17 +481,18 @@ export function installEmbeddedAttemptStreamGuards(
         )
           ? previous
           : undefined;
-      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
-      }
+      const pressure = await contextGuards.checkMidTurnPrecheck({
+        context: args[1],
+        fixedTokenPressure: args[3],
+        previousRequest,
+        measuredContextTokens:
+          previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+      });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(
           args[0],
           args[1],
-          previousRequest && previousRequest.contextTokens > 0
-            ? estimateProjectedRequestTokenPressure({ context: args[1], previousRequest })
-                .estimatedPromptTokens
-            : undefined,
+          previousRequest && previousRequest.contextTokens > 0 ? pressure : undefined,
         );
       }
       return previousRequest;

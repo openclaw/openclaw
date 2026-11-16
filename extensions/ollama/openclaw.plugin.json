@@ -210,7 +210,7 @@
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 196608,
-            "maxTokens": 204800,
+            "maxTokens": 131072,
             "compat": {
               "supportsTools": true,
               "supportsUsageInStreaming": true
@@ -221,7 +221,7 @@
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 524288,
-            "maxTokens": 524288,
+            "maxTokens": 131072,
             "compat": {
               "supportsTools": true,
               "supportsUsageInStreaming": true

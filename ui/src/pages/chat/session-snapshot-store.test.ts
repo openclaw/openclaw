@@ -11,12 +11,14 @@ import {
 } from "../../lib/chat/control-ui-database.runtime.ts";
 import { chatThumbnailWeight } from "../../lib/chat/row-display-facts.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { SIDEBAR_SNAPSHOT_PROJECTION_VERSION } from "./session-sidebar-snapshot.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
@@ -29,7 +31,6 @@ import {
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import {
   cacheSnapshot,
@@ -56,7 +57,11 @@ function boardSnapshot(cacheKey: string, message: string, receivedAtMs = 100) {
   };
 }
 
-function historyState(content: unknown, commands = true): ChatSessionSnapshot["historyState"] {
+function historyState(
+  content: unknown,
+  commands = true,
+  skillReferenceable?: boolean,
+): ChatSessionSnapshot["historyState"] {
   const message = { role: "user", content };
   return {
     stateRevision: {
@@ -67,7 +72,14 @@ function historyState(content: unknown, commands = true): ChatSessionSnapshot["h
     ...(commands
       ? {
           commands: [
-            { name: "x", description: "", source: "skill", scope: "text", acceptsArgs: true },
+            {
+              name: "x",
+              description: "",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+              ...(skillReferenceable !== undefined ? { skillReferenceable } : {}),
+            },
           ],
         }
       : {}),
@@ -297,6 +309,18 @@ describe("persistent chat session snapshots", () => {
   );
 
   it.each<Partial<ChatSessionSnapshot>>([
+    { sessionState: { unarchiveAllowed: false } },
+    {
+      sessionState: {
+        unarchiveAllowed: false,
+        contextUsage: { used: 1_800, limit: 96_000, approximate: false, fromLastPrompt: true },
+        chrome: {
+          workspace: { root: "/workspace/observatory", label: "observatory" },
+          color: "blue",
+          hasVersions: true,
+        },
+      },
+    },
     {
       composer: {
         id: "model",
@@ -361,7 +385,7 @@ describe("persistent chat session snapshots", () => {
     expect((await new SessionSnapshotStore().read(sessionKey))?.board).toBeNull();
   });
 
-  it.each(["plain", "pairing", "legacy"])(
+  it.each(["plain", "pairing", "legacy", "referenceable", "slash-only"])(
     "persists raw metadata with its receipts unless privacy projection changes it (%s)",
     async (mode) => {
       const value: ChatSessionSnapshot = {
@@ -372,6 +396,7 @@ describe("persistent chat session snapshots", () => {
             ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
             : "Follow up.",
           mode !== "legacy",
+          mode === "referenceable" ? true : mode === "slash-only" ? false : undefined,
         ),
       };
       await seed(value);
@@ -391,7 +416,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 3,
+        projectionVersion: SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },
@@ -576,28 +601,33 @@ describe("persistent chat session snapshots", () => {
         },
       },
     ],
-  ])("resets corrupt %s without hydrating unrelated transcripts", async (corruption, value) => {
-    const valid = key("agent:main:valid");
-    const corrupt = key("agent:main:corrupt");
-    await persist(writer, valid, snapshot("valid"));
-    await putRawRecord(
-      { ...envelope(corrupt, snapshot()), snapshot: value },
-      corruption === "metadata"
-        ? { sessionKey: corrupt, savedAt: "invalid", weight: 0 }
-        : undefined,
-    );
-    const reader = new SessionSnapshotStore();
-    await reader.loadSavedAtIndex();
-    if (corruption !== "metadata") {
-      expect(reader.readSavedAt(valid)).not.toBeNull();
-      expect(reader.readSavedAt(corrupt)).not.toBeNull();
-      expect(await reader.read(corrupt)).toBeNull();
-    } else {
-      expect(reader.readSavedAt(corrupt)).toBeNull();
-    }
-    expect(await readStoredChatSnapshotRecord(corrupt)).toBeUndefined();
-    expect(await reader.read(valid)).toBeNull();
-  });
+  ])(
+    "rejects corrupt %s while retaining unrelated transcripts for record-local corruption",
+    async (corruption, value) => {
+      const valid = key("agent:main:valid");
+      const corrupt = key("agent:main:corrupt");
+      await persist(writer, valid, snapshot("valid"));
+      await putRawRecord(
+        { ...envelope(corrupt, snapshot()), snapshot: value },
+        corruption === "metadata"
+          ? { sessionKey: corrupt, savedAt: "invalid", weight: 0 }
+          : undefined,
+      );
+      const reader = new SessionSnapshotStore();
+      await reader.loadSavedAtIndex();
+      if (corruption !== "metadata") {
+        expect(reader.readSavedAt(valid)).not.toBeNull();
+        expect(reader.readSavedAt(corrupt)).not.toBeNull();
+        expect(await reader.read(corrupt)).toBeNull();
+      } else {
+        expect(reader.readSavedAt(corrupt)).toBeNull();
+      }
+      expect(await readStoredChatSnapshotRecord(corrupt)).toBeUndefined();
+      expect(await reader.read(valid)).toEqual(
+        corruption === "metadata" ? null : snapshot("valid"),
+      );
+    },
+  );
 
   it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
     "settles an in-flight transcript through %s invalidation",

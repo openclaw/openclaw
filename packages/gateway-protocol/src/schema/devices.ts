@@ -214,12 +214,43 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
+/**
+ * Reads the browser request named by a code shown in that browser. Adding
+ * `requestId` and `decision` settles exactly that inspected request, so a decision
+ * cannot land on a request the operator never saw. Approval pairs the browser as an
+ * operator device with the Control UI's admin scopes under the caller's own scopes,
+ * so this method requires operator.admin (enforced by the core method descriptor).
+ */
+export const DevicePairCodeParamsSchema = closedObject({
+  code: Type.String({ minLength: 8, maxLength: 16 }),
+  requestId: Type.Optional(NonEmptyString),
+  decision: Type.Optional(stringLiteralUnion(["approve", "reject"])),
+});
+
+/**
+ * What an operator needs to recognize the requesting browser. `remoteIp` is the
+ * Gateway's view of the peer; `userAgent` and `origin` are reported by the browser.
+ */
+export const DevicePairCodeResultSchema = closedObject({
+  status: stringLiteralUnion(["pending", "approved", "rejected"]),
+  requestId: NonEmptyString,
+  code: NonEmptyString,
+  deviceId: NonEmptyString,
+  remoteIp: Type.Optional(NonEmptyString),
+  userAgent: Type.Optional(NonEmptyString),
+  origin: Type.Optional(NonEmptyString),
+  createdAtMs: Type.Integer({ minimum: 0 }),
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
 export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
+export type DevicePairCodeParams = Static<typeof DevicePairCodeParamsSchema>;
+export type DevicePairCodeResult = Static<typeof DevicePairCodeResultSchema>;
 export type DevicePairSetupCodeParams = Static<typeof DevicePairSetupCodeParamsSchema>;
 export type DevicePairSetupCodeResult = Static<typeof DevicePairSetupCodeResultSchema>;
 export type DevicePairSetupCompletedEvent = Static<typeof DevicePairSetupCompletedEventSchema>;

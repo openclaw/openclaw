@@ -145,6 +145,31 @@ it("decodes declared charsets while deduping and limiting bare URLs", async () =
   expect(ctx.LinkUnderstanding).toEqual(["日本語", "/escaped", "/bare-two"]);
 });
 
+it.each(["[1]", "[{base}/label][1]", "![{base}/label][1]"])(
+  "preserves the pasted-link budget after reference syntax %s",
+  async (label) => {
+    const requests: string[] = [];
+    const base = await serve((req, res) => {
+      requests.push(req.url ?? "");
+      res.end(req.url);
+    });
+    const ctx: MsgContext = {
+      Body: `${label.replace("{base}", base)}\n\n[1]: ${base}/citation\n\nRead ${base}/pasted`,
+    };
+    await applyLinkUnderstanding({
+      ctx,
+      cfg: {
+        tools: {
+          links: { maxLinks: 1, models: [{ command: process.execPath, args: echoStdin }] },
+        },
+      },
+    });
+    expect(requests).toEqual(["/pasted"]);
+    expect(ctx.LinkUnderstanding).toEqual(["/pasted"]);
+    expect(ctx.BodyForAgent).toContain("\n\n/pasted");
+  },
+);
+
 it("stops processor descendants after caller cancellation", async (t) => {
   const receipts = await openFixtureReceiptChannel();
   onTestFinished(() => receipts.close());

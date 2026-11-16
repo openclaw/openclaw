@@ -4,11 +4,22 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
-import { normalizeInputProvenance } from "../sessions/input-provenance.js";
-import { isAssistantTextContentBlockType as isAssistantTextContentType } from "../shared/chat-message-content.js";
+import {
+  isCompletionReportInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
+import {
+  extractAssistantPhaseText,
+  isAssistantTextContentBlockType as isAssistantTextContentType,
+} from "../shared/chat-message-content.js";
+import {
+  readSubagentCompletions,
+  subagentCompletionMessage,
+} from "../shared/subagent-completion.js";
 
 export { isAssistantTextContentType };
 
@@ -18,6 +29,41 @@ export type RoleContentMessage = {
 };
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+export function projectReplyMediaFailureText(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  if (message.role !== "assistant") {
+    return message;
+  }
+  const failures: ReplyMediaFailure[] = [];
+  for (const value of Array.isArray(message.content) ? message.content : []) {
+    const block = readRecord(value);
+    const attachment =
+      block?.type === "attachment_error" ? readRecord(block.attachment) : undefined;
+    const kind = attachment?.kind;
+    if (
+      attachment?.code === "file-too-large" &&
+      (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
+    ) {
+      failures.push({
+        code: "file-too-large",
+        kind,
+        label: `${kind === "document" ? "file" : kind} attachment`,
+      });
+    }
+  }
+  if (failures.length === 0) {
+    return message;
+  }
+  // Older text clients ignore new attachment codes. Rich clients prefer content;
+  // retain their card and put the warning first so text bounds keep recovery guidance.
+  const caption = extractAssistantPhaseText({ content: message.content, phase: message.phase });
+  return {
+    ...message,
+    text: [appendReplyMediaFailures(undefined, failures), caption].filter(Boolean).join("\n"),
+  };
+}
 
 /** Removes private yield inputs from a display copy without changing the source argument objects. */
 export function stripPrivateToolCallContextForDisplay(entry: Record<string, unknown>): boolean {
@@ -114,7 +160,7 @@ export function truncateChatHistoryText(
   }
   const prefix = truncateUtf16Safe(text, limit);
   return {
-    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
+    text: preserveExactPrefix || !prefix.trim() ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }
@@ -279,4 +325,39 @@ function hasForwardedMessageProvenance(message: Record<string, unknown>): boolea
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
     isCronRunMessage(message)
   );
+}
+
+/**
+ * Called after original user-input classification; only display facts leave private inputs.
+ * The receipt replaces its wake, so it carries the wake's turn boundary.
+ */
+export function projectCompletionReportInput(
+  message: Record<string, unknown>,
+  boundary: boolean | string,
+) {
+  const completions = isCompletionReportInputProvenance(message.provenance)
+    ? readSubagentCompletions(readRecord(message["__openclaw"])?.subagentCompletions)
+    : [];
+  if (!completions.length) {
+    return message;
+  }
+  const receipt = subagentCompletionMessage(message, completions);
+  return boundary ? attachProjectedTurnBoundary(receipt, boundary) : receipt;
+}
+
+export function attachProjectedTurnBoundary(
+  message: Record<string, unknown>,
+  boundary: true | string,
+): Record<string, unknown> {
+  const metadata = readRecord(message["__openclaw"]);
+  return {
+    ...message,
+    __openclaw: {
+      ...metadata,
+      // Exec and restart rows kept `turnBoundary` for clients that read only it;
+      // the continuation fact tells the Control UI the turn goes on.
+      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
+      ...(boundary === true ? {} : { continuation: { source: boundary } }),
+    },
+  };
 }

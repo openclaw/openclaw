@@ -15,6 +15,7 @@ import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.med
 import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,
+  getUpdateDoctorConfigCapture,
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -102,7 +103,7 @@ export async function runDoctorHealthFlow(
       }
       const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
       return withPluginLoadDiagnostics((diagnostics) => {
-        const runDoctor = (capture?: DoctorConfigCapture) =>
+        const runDoctor = (capture = getUpdateDoctorConfigCapture()) =>
           runDoctorHealthFlowWithResult(
             (selectedRuntime, code) => {
               requestedExit = () => startup.exitDoctorHealthFlow(selectedRuntime, code);
@@ -111,7 +112,7 @@ export async function runDoctorHealthFlow(
             options,
             preparedPreflight,
             diagnostics,
-            resultPath && capture ? { resultPath, capture } : undefined,
+            capture ? { resultPath, capture } : undefined,
             writeAuthority,
             resumeCapture,
             preCaptureRehearsalRoot,
@@ -141,7 +142,7 @@ async function runDoctorHealthFlowWithResult(
   options: DoctorOptions,
   databasePreflight: DoctorDatabasePreflight | undefined,
   diagnostics: readonly PluginDiagnostic[],
-  updateResult?: { resultPath: string; capture: DoctorConfigCapture },
+  updateResult?: { resultPath?: string; capture: DoctorConfigCapture },
   writeAuthority?: UpdateDoctorWriteAuthority,
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
@@ -234,6 +235,7 @@ async function runDoctorHealthFlowWithResult(
         assertCurrent: writeAuthority?.assertCurrent,
         lendPolicyCustody: writeAuthority?.lendPolicyCustody,
         databaseGenerations: writeAuthority?.databaseGenerations,
+        databaseWriteCapture: writeAuthority?.databaseWriteCapture,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
         serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
         beforeStateMutation: createDoctorOriginalCaptureHook({
@@ -591,7 +593,7 @@ async function runDoctorHealthFlowWithResult(
           }
         : {}),
     };
-    if (updateResult && doctorResult.status === "advisory") {
+    if (updateResult?.resultPath && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
     }
@@ -603,15 +605,20 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
   } catch (error) {
+    const { DoctorHeartbeatMigrationDeferredError } =
+      await import("../commands/doctor-heartbeat-run-recovery.js");
     if (
-      !maintenance &&
+      (!maintenance || error instanceof DoctorHeartbeatMigrationDeferredError) &&
       error instanceof DoctorMaintenanceRefusalError &&
       error.refusal.kind === "deferred" &&
-      doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options))
+      (doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options)) ||
+        (error instanceof DoctorHeartbeatMigrationDeferredError &&
+          updatePhase.isUpdateDoctorLintPass(process.env)))
     ) {
       showDoctorHealthSummary(healthContext ?? startupFindings);
       writeAuthority?.assertCurrent();
-      // Admission restored its service before refusing; no migration work has started.
+      // Admission restored its service, or heartbeat conversion rolled back
+      // before its config writer committed. Pending source data remains intact.
       const { recordDeferredUpdateDoctorWarning, recordUpdateDoctorRefusal } =
         await import("../commands/doctor-update-refusal.js");
       recordUpdateDoctorRefusal(error.message);
@@ -708,5 +715,5 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  startup.showDoctorOutro("Doctor complete.");
+  startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
 }

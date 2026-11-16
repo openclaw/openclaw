@@ -207,11 +207,11 @@ function runAndroidApproval({
   fs.writeFileSync(
     path.join(tempRoot, "gh"),
     `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const file = name => path.join(process.env.RUNNER_TEMP, name);
-const {publication, parent, nativeRun, identityEndpoint, tooling, attestationExitCode} = require(file("fixture.json"));
+const {publication, parent, nativeRun, identityEndpoint, tooling, attestationExitCode} = JSON.parse(fs.readFileSync(file("fixture.json"), "utf8"));
 const publishing = fs.existsSync(file("publishing"));
 function replace(file, base, phase) {
   if (publication[phase]) fs.writeFileSync(file, JSON.stringify({ ...base, ...publication[phase] }));
@@ -249,7 +249,7 @@ process.stdout.write(JSON.stringify(tooling));
   fs.writeFileSync(
     path.join(tempRoot, "git"),
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const target = JSON.parse(fs.readFileSync(${JSON.stringify(targetPath)}, "utf8"));
 if (JSON.stringify(args) === JSON.stringify(["rev-parse", "v2026.8.1^{commit}"])) {
@@ -311,6 +311,7 @@ function approvalRun(overrides: Record<string, unknown> = {}) {
     status: "in_progress",
     url: "https://github.com/openclaw/openclaw/actions/runs/123",
     workflowName: "OpenClaw Release Publish",
+    path: ".github/workflows/openclaw-release-publish.yml",
     ...overrides,
   };
 }
@@ -355,6 +356,23 @@ function runClawHubApproval(
 }
 
 describe("scripts/validate-release-publish-approval.mjs", () => {
+  it.each([
+    "OpenClaw Release Publish [v2026.11.5-beta.2]",
+    "ClawHub registry update [v2026.11.5-beta.2]",
+  ])("accepts the trusted workflow with dynamic run name %s", (workflowName) => {
+    const result = runApprovalScript(approvalRun({ workflowName }));
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["", ".github/workflows/plugin-npm-release.yml"])(
+    "rejects a matching run name with untrusted workflow path %j",
+    (workflowPath) => {
+      const result = runApprovalScript(approvalRun({ path: workflowPath }));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("untrusted workflow path");
+    },
+  );
+
   it.each<[Fields, Partial<typeof approvalEnv>, number]>([
     [{ headBranch: "main" }, {}, 1],
     [{ conclusion: "success", status: "completed" }, {}, 1],

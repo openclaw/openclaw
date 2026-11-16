@@ -27,12 +27,10 @@ export type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-  BashExecutionMessage,
   CompactionPreparation,
   CompactionResult,
   CompactionSummaryPrompt,
   SessionTreeEntry,
   StreamFn,
   ThinkingLevel,
-  ToolExecutionMode,
 } from "../../plugin-sdk/agent-core.js";

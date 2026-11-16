@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
+import { getPluginSharedStateResourceHost } from "../plugins/plugin-shared-state-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { getOpenClawStateDatabaseTerminalFailureAsync } from "./openclaw-state-db-cache.js";
@@ -26,7 +27,10 @@ export function retainOpenClawStateWorkerLease(
     retainOperation(store: Store, onNativeLost?: () => void): () => void | Promise<void>;
   },
   finalize?: (scope: DomainScope) => Promise<void>,
+  onNativeLost?: () => void,
 ): OpenClawStateWorkerLease {
+  const host = getPluginSharedStateResourceHost();
+  host?.assertSharedStateAdmission();
   const maintenance = context.maintenanceScope;
   context.admission.assertCurrent();
   maintenance?.assertAdmission();
@@ -186,6 +190,8 @@ export function retainOpenClawStateWorkerLease(
     );
     return completion.promise;
   };
+  const runWithAdmission = async <T>(operation: (scope: DomainScope) => Promise<T>): Promise<T> =>
+    host ? host.trackSharedStateWork(() => runOperation(operation)) : runOperation(operation);
   const release = () => {
     if (invalidated) {
       return retireNative();
@@ -228,8 +234,8 @@ export function retainOpenClawStateWorkerLease(
   const lease: OpenClawStateWorkerLease = {
     ready: ready.promise,
     execute: (command, options) =>
-      runOperation((operationScope) => operationScope.execute(command, options)),
-    runOperation,
+      runWithAdmission((operationScope) => operationScope.execute(command, options)),
+    runOperation: runWithAdmission,
     release,
     retire,
   };
@@ -252,6 +258,7 @@ export function retainOpenClawStateWorkerLease(
       releaseOperation = owner.retainOperation(store, () => {
         // An idle logical lease must release its hold even when it has no command to reject.
         void retire();
+        onNativeLost?.();
       });
       // The client scope retains native custody as a resource, never as pending
       // maintenance work that must finish before the resource phase can begin.
@@ -290,7 +297,8 @@ export function retainOpenClawStateWorkerLease(
       throw failure;
     }
   };
-  const acquisition = runWithCapturedWorkerContext(context, acquire);
+  const acquireInContext = () => runWithCapturedWorkerContext(context, acquire);
+  const acquisition = host ? host.trackSharedStateWork(acquireInContext) : acquireInContext();
   void acquisition.then(() => {
     acquisitionReady = true;
     ready.resolve();

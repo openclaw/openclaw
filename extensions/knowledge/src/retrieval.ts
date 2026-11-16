@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -245,79 +246,196 @@ export function keywordExpression(input: SearchInput): string {
   if (!tokens.length || tokens.length > 64) {
     throw new Error("Keyword search requires 1–64 word tokens. Use exact lookup for a name or ID.");
   }
-  return input.mode === "phrase"
-    ? `"${tokens.join(" ")}"`
-    : tokens.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  const build = (words: readonly string[]) =>
+    input.mode === "phrase"
+      ? `"${words.join(" ")}"`
+      : words.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  // FTS5's unicode61 tokenizer does no canonical normalization, so composed (NFC)
+  // and decomposed (NFD) spellings of a word index as distinct terms. The index and
+  // snippet offsets keep stored text verbatim, so in all/any modes each word matches
+  // its original spelling plus both canonical spellings — a partially normalized
+  // token (e.g. Hangul 가나,
+  // U+AC00 U+1102 U+1161) is neither fully NFC nor fully NFD, and only its literal
+  // form is indexed. Spellings that coincide (ASCII, CJK, unaccented) collapse to
+  // one literal: an unaccented query still cannot reach a composed accented note,
+  // so no accent folding is added. Phrase mode keeps whole-phrase alternatives (each
+  // spells the whole phrase one way), since matching a mixed-spelling phrase would
+  // need the cross product of per-word spellings; a uniformly spelled phrase query
+  // can miss a record that mixes NFC and NFD across its words — a rare accepted gap.
+  const spellingsOf = (t: string) => [...new Set([t, t.normalize("NFC"), t.normalize("NFD")])];
+  if (input.mode === "phrase") {
+    const alternatives = [
+      ...new Set(
+        [tokens, tokens.map((t) => t.normalize("NFC")), tokens.map((t) => t.normalize("NFD"))].map(
+          build,
+        ),
+      ),
+    ];
+    return alternatives.length === 1 ? alternatives[0]! : `(${alternatives.join(") OR (")})`;
+  }
+  return tokens
+    .map((t) => {
+      const forms = spellingsOf(t);
+      return forms.length === 1 ? `"${forms[0]!}"` : `(${forms.map((f) => `"${f}"`).join(" OR ")})`;
+    })
+    .join(input.mode === "any" ? " OR " : " AND ");
 }
 
-/** Bring the scope's FTS table to exactly `records`. Rows are tracked by record
- * ID and content hash, so a change re-indexes only the records that changed;
- * the indexed set is always exactly the eligible records passed in. */
+const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
+
+/** The scope's keyword corpora: eligible current records, and the eligible
+ * superseded records whose `superseded_by` chain reaches one of them, each mapped to
+ * that current record. Chains step only through eligible superseded records; one
+ * that ends in a missing, withdrawn, ineligible or expired record has no target, so
+ * its wording can never surface a result or shape ranking. */
+function keywordCorpora(data: Snapshot, withdrawn: Set<string>) {
+  const active = eligible(data, withdrawn, false),
+    historical = eligible(data, withdrawn, true);
+  const byId = new Map(historical.map((r) => [r.id, r])),
+    now = new Map(active.map((r) => [r.id, r])),
+    targets = new Map<string, LoadedRecord>();
+  for (const r of historical) {
+    // Chains are short; the visited set only stops a cycle.
+    const visited = new Set<string>();
+    let next = r.lifecycle === "superseded" ? r.metadata.superseded_by : undefined;
+    while (next !== undefined && !visited.has(next)) {
+      visited.add(next);
+      const target = now.get(next);
+      if (target) {
+        targets.set(r.id, target);
+        break;
+      }
+      const step = byId.get(next);
+      next = step?.lifecycle === "superseded" ? step.metadata.superseded_by : undefined;
+    }
+  }
+  return { active, historical, targets, history: historical.filter((r) => targets.has(r.id)) };
+}
+
+/** Bring one tracked FTS table to exactly `records`. Rows are tracked by record ID
+ * and content hash, so a change re-indexes only the records that changed. */
+function syncFts(db: DatabaseSync, table: string, rows: string, records: LoadedRecord[]) {
+  const wanted = new Map(records.map((r) => [r.id, r]));
+  const remove = db.prepare(`DELETE FROM ${table} WHERE rowid=?`),
+    untrack = db.prepare(`DELETE FROM ${rows} WHERE id=?`);
+  for (const row of db.prepare(`SELECT id,hash,fts_rowid FROM ${rows}`).all()) {
+    const r = wanted.get(String(row.id));
+    if (r && r.hash === row.hash) {
+      wanted.delete(r.id);
+      continue;
+    }
+    remove.run(row.fts_rowid!);
+    untrack.run(row.id!);
+  }
+  const insert = db.prepare(`INSERT INTO ${table}(id,title,aliases,body) VALUES (?,?,?,?)`),
+    track = db.prepare(`INSERT INTO ${rows} VALUES (?,?,?)`);
+  for (const r of wanted.values()) {
+    track.run(
+      r.id,
+      r.hash,
+      insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body).lastInsertRowid,
+    );
+  }
+}
+
+/** Bring the scope's FTS tables to exactly the eligible `records` and the
+ * `history` corpus (see keywordCorpora). One snapshot covers both tables, so an
+ * edit to a superseded record changes the token that pagination compares even when
+ * the current-record corpus is unchanged. */
 function reconcileKeywordIndex(
   db: DatabaseSync,
   data: Snapshot,
   records: LoadedRecord[],
+  history: LoadedRecord[],
   binding: string,
   generation: string,
 ) {
-  const suffix = digest(binding),
-    table = `keyword_fts_v1_${suffix}`,
-    rows = `keyword_rows_v1_${suffix}`;
+  const suffix = digest(binding);
+  const tables = [
+    { table: `keyword_fts_v1_${suffix}`, rows: `keyword_rows_v1_${suffix}`, records },
+    {
+      table: `keyword_history_fts_v1_${suffix}`,
+      rows: `keyword_history_rows_v1_${suffix}`,
+      records: history,
+    },
+  ] as const;
   const snapshot = digest(
     JSON.stringify([
       generation,
       data.ontology?.fingerprint,
       records.map((r) => [r.id, r.path, r.hash, r.revision]),
+      history.map((r) => [r.id, r.path, r.hash, r.revision]),
     ]),
   );
-  const tracked = tableExists(db, rows);
-  db.exec(
-    `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')`,
+  const untracked = tables.filter(
+    ({ table, rows }) => !tableExists(db, rows) || !tableExists(db, table),
   );
-  db.exec(
-    `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
-  );
-  // An index built before row tracking has unknown contents: start it over once,
-  // and forget its recorded snapshot so this call repopulates it.
-  if (!tracked) {
-    db.exec(`DELETE FROM ${table}`);
-    db.prepare("DELETE FROM keyword_state_v1 WHERE binding=?").run(binding);
-  }
   const state = db.prepare("SELECT * FROM keyword_state_v1 WHERE binding=?").get(binding);
-  let indexedAt = String(state?.indexed_at ?? new Date().toISOString());
-  if (state?.snapshot !== snapshot) {
-    const wanted = new Map(records.map((r) => [r.id, r]));
-    const remove = db.prepare(`DELETE FROM ${table} WHERE rowid=?`),
-      untrack = db.prepare(`DELETE FROM ${rows} WHERE id=?`);
-    for (const row of db.prepare(`SELECT id,hash,fts_rowid FROM ${rows}`).all()) {
-      const r = wanted.get(String(row.id));
-      if (r && r.hash === row.hash) {
-        wanted.delete(r.id);
-        continue;
-      }
-      remove.run(row.fts_rowid!);
-      untrack.run(row.id!);
-    }
-    const insert = db.prepare(`INSERT INTO ${table}(id,title,aliases,body) VALUES (?,?,?,?)`),
-      track = db.prepare(`INSERT INTO ${rows} VALUES (?,?,?)`);
-    for (const r of wanted.values()) {
-      track.run(
-        r.id,
-        r.hash,
-        insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body).lastInsertRowid,
-      );
-    }
-    indexedAt = new Date().toISOString();
-    const indexed = { snapshot, indexed_at: indexedAt };
-    executeSqliteQuerySync(
+  let indexedAt = String(state?.indexed_at ?? "");
+  if (untracked.length || state?.snapshot !== snapshot) {
+    // The storage worker owns this index. Acquire the writer before reading rows
+    // to update, rather than upgrading a read snapshot after an unrelated commit.
+    indexedAt = runSqliteImmediateTransactionSync(
       db,
-      getNodeSqliteKysely<StorageTables>(db)
-        .insertInto("keyword_state_v1")
-        .values({ binding, ...indexed })
-        .onConflict((oc) => oc.column("binding").doUpdateSet(indexed)),
+      () => {
+        for (const entry of tables) {
+          const { table, rows, records: wanted } = entry;
+          db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
+          db.exec(
+            `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
+          );
+          // Missing tracking or FTS means unknown contents; rebuild the pair.
+          if (untracked.includes(entry)) {
+            db.exec(`DELETE FROM ${table}`);
+            db.exec(`DELETE FROM ${rows}`);
+          }
+          syncFts(db, table, rows, wanted);
+        }
+        const updatedAt = new Date().toISOString();
+        const updated = { snapshot, indexed_at: updatedAt };
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<StorageTables>(db)
+            .insertInto("keyword_state_v1")
+            .values({ binding, ...updated })
+            .onConflict((oc) => oc.column("binding").doUpdateSet(updated)),
+        );
+        return updatedAt;
+      },
+      { operationLabel: "knowledge.keyword.reconcile" },
     );
   }
-  return { table, snapshot, indexedAt };
+  return { table: tables[0].table, historyTable: tables[1].table, snapshot, indexedAt };
+}
+
+/** Current records reached through superseded wording that matches `expression`,
+ * in `corpus`'s BM25 order (then ID). Each target appears once, after every ID in
+ * `direct`, credited to its best-ranked earlier record. */
+function followReplacements(
+  db: DatabaseSync,
+  corpus: string,
+  expression: string,
+  history: Map<string, LoadedRecord>,
+  targets: Map<string, LoadedRecord>,
+  direct: () => Set<string>,
+) {
+  const matched = db
+    .prepare(`SELECT id FROM ${corpus} WHERE ${corpus} MATCH ? ORDER BY bm25(${corpus},0,8,6,1),id`)
+    .all(expression)
+    .map((row) => String(row.id));
+  if (!matched.length) {
+    return [];
+  }
+  const seen = direct(),
+    out: { record: LoadedRecord; via: LoadedRecord }[] = [];
+  for (const id of matched) {
+    const record = targets.get(id)!;
+    if (!seen.has(record.id)) {
+      seen.add(record.id);
+      out.push({ record, via: history.get(id)! });
+    }
+  }
+  return out;
 }
 
 /** Verification reconciles the same index without running a synthetic ranked search. */
@@ -329,23 +447,26 @@ export function verifyKeywordIndex(
   withdrawn = new Set<string>(),
 ): Set<string> | null {
   try {
-    return runSqliteImmediateTransactionSync(db, () => {
-      const { table } = reconcileKeywordIndex(
-        db,
-        data,
-        eligible(data, withdrawn, false),
-        binding,
-        generation,
-      );
-      return new Set(
-        db
-          .prepare(`SELECT id FROM ${table}`)
-          .all()
-          .map((r) => String(r.id)),
-      );
-    });
+    const { active, history } = keywordCorpora(data, withdrawn);
+    const { table } = reconcileKeywordIndex(db, data, active, history, binding, generation);
+    return new Set(
+      db
+        .prepare(`SELECT id FROM ${table}`)
+        .all()
+        .map((r) => String(r.id)),
+    );
   } catch {
     return null;
+  }
+}
+
+/** A query-local FTS corpus holding just `records`, so BM25 statistics come only from them. */
+function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]) {
+  db.exec(`DROP TABLE IF EXISTS temp.${name}`);
+  db.exec(`CREATE VIRTUAL TABLE temp.${name} USING fts5(${FTS_COLUMNS})`);
+  const insert = db.prepare(`INSERT INTO temp.${name}(id,title,aliases,body) VALUES (?,?,?,?)`);
+  for (const r of records) {
+    insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body);
   }
 }
 
@@ -368,109 +489,147 @@ export function keywordSearch(
     freshness: queryFreshness(data.checkedAt),
     coverage: coverage(data),
   };
-  const records = eligible(
-      data,
-      withdrawn,
-      input.lifecycle !== undefined && input.lifecycle !== "active",
-    ),
+  const current = (input.lifecycle ?? "active") === "active",
+    { active, historical, targets, history } = keywordCorpora(data, withdrawn),
+    records = current ? active : historical,
     selected = filtered(data, records, input);
+  // Like the direct corpus, superseded wording ranks only among histories whose
+  // current record passes this query's filters.
+  const selectedIds = new Set(selected.map((r) => r.id)),
+    ranked = current ? history.filter((r) => selectedIds.has(targets.get(r.id)!.id)) : [];
   try {
-    return runSqliteImmediateTransactionSync(db, (): SearchOutput => {
-      const { table, snapshot, indexedAt } = reconcileKeywordIndex(
-        db,
-        data,
-        records,
-        binding,
-        generation,
-      );
-      // BM25 statistics must come only from the searched corpus. The scope table
-      // holds exactly the eligible records, so an unfiltered search queries it
-      // directly; a filtered search ranks within a copy of just its subset.
-      const corpus = selected.length === records.length ? table : "keyword_query_v1";
-      if (corpus !== table) {
-        db.exec("DROP TABLE IF EXISTS temp.keyword_query_v1");
-        db.exec(
-          "CREATE VIRTUAL TABLE temp.keyword_query_v1 USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')",
-        );
-        const insertQuery = db.prepare(
-          `INSERT INTO temp.keyword_query_v1 SELECT id,title,aliases,body FROM ${table} WHERE id=?`,
-        );
-        for (const r of selected) {
-          insertQuery.run(r.id);
+    // Finish persistent-index writes before building query-local corpora.
+    const { table, historyTable, snapshot, indexedAt } = reconcileKeywordIndex(
+      db,
+      data,
+      records,
+      history,
+      binding,
+      generation,
+    );
+    return runSqliteDeferredTransactionSync(
+      db,
+      (): SearchOutput => {
+        // BM25 statistics must come only from the searched corpus. The scope table
+        // holds exactly the eligible records, so an unfiltered search queries it
+        // directly; a filtered search ranks within just its validated subset.
+        const corpus = selected.length === records.length ? table : "keyword_query_v1",
+          historyCorpus =
+            !current || ranked.length === history.length
+              ? historyTable
+              : "keyword_history_query_v1";
+        if (corpus !== table) {
+          temporaryCorpus(db, corpus, selected);
         }
-      }
-      // Unpredictable delimiters checked against the corpus prevent authored marker injection.
-      let marker: string;
-      do {
-        marker = randomUUID();
-      } while (
-        selected.some((r) =>
-          [r.title, r.body, ...(r.metadata.aliases ?? [])].some((v) => v.includes(marker)),
-        )
-      );
-      const total = Number(
-        db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`).get(expression)!
-          .n,
-      );
-      const rows = db
-        .prepare(`SELECT id,bm25(${corpus},0,8,6,1) AS score,
+        if (historyCorpus !== historyTable) {
+          temporaryCorpus(db, historyCorpus, ranked);
+        }
+        // Unpredictable delimiters checked against the corpus prevent authored marker injection.
+        let marker: string;
+        do {
+          marker = randomUUID();
+        } while (
+          selected.some((r) =>
+            [r.title, r.body, ...(r.metadata.aliases ?? [])].some((v) => v.includes(marker)),
+          )
+        );
+        const total = Number(
+          db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`).get(expression)!
+            .n,
+        );
+        const rows = db
+          .prepare(`SELECT id,bm25(${corpus},0,8,6,1) AS score,
       CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},1,?,'') END AS title,
       CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},2,?,'') END AS aliases,
       CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},3,?,'') END AS body
       FROM ${corpus} WHERE ${corpus} MATCH ? ORDER BY score,id LIMIT ? OFFSET ?`)
-        .all(marker, marker, marker, expression, limit, offset);
-      const byId = new Map(selected.map((r) => [r.id, r]));
-      // FTS5 highlight/snippet enumeration becomes quadratic with many repeated
-      // instances. Full-record matching and BM25 stay authoritative; large bodies
-      // use an explicitly labelled opening excerpt, not an approximate token match.
-      const fieldExpression = keywordExpression({
-        ...input,
-        mode: input.mode === "phrase" ? "phrase" : "any",
-      });
-      const columnMatch = db.prepare(
-        `SELECT 1 FROM ${corpus} WHERE id=? AND ${corpus} MATCH ? LIMIT 1`,
-      );
-      const hits = rows.map((row) => {
-        if (row.body === null) {
+          .all(marker, marker, marker, expression, limit, offset);
+        const byId = new Map(selected.map((r) => [r.id, r]));
+        // FTS5 highlight/snippet enumeration becomes quadratic with many repeated
+        // instances. Full-record matching and BM25 stay authoritative; large bodies
+        // use an explicitly labelled opening excerpt, not an approximate token match.
+        const fieldExpression = keywordExpression({
+          ...input,
+          mode: input.mode === "phrase" ? "phrase" : "any",
+        });
+        const columnMatch = db.prepare(
+          `SELECT 1 FROM ${corpus} WHERE id=? AND ${corpus} MATCH ? LIMIT 1`,
+        );
+        const hits = rows.map((row) => {
+          if (row.body === null) {
+            const fields = (["title", "aliases", "body"] as const).filter((field) =>
+              columnMatch.get(row.id!, `${field} : (${fieldExpression})`),
+            );
+            const field = fields.includes("body") ? "body" : (fields[0] ?? "title");
+            const result = hit(byId.get(String(row.id))!, field, 0, fields, -Number(row.score));
+            result.snippet.matchLocated = false;
+            return result;
+          }
           const fields = (["title", "aliases", "body"] as const).filter((field) =>
-            columnMatch.get(row.id!, `${field} : (${fieldExpression})`),
+            String(row[field]).includes(marker),
           );
           const field = fields.includes("body") ? "body" : (fields[0] ?? "title");
-          const result = hit(byId.get(String(row.id))!, field, 0, fields, -Number(row.score));
+          return hit(
+            byId.get(String(row.id))!,
+            field,
+            Math.max(0, String(row[field]).indexOf(marker)),
+            fields,
+            -Number(row.score),
+          );
+        });
+        // A current-record search also reaches current records through the wording
+        // of superseded versions it hides, listed after every direct match. The hit
+        // cites the current record; `via` pins the earlier revision that matched.
+        const followed = ranked.length
+          ? followReplacements(
+              db,
+              historyCorpus,
+              expression,
+              new Map(ranked.map((r) => [r.id, r])),
+              targets,
+              () => {
+                const ids = db.prepare(`SELECT id FROM ${corpus} WHERE ${corpus} MATCH ?`);
+                return new Set(ids.all(expression).map((r) => String(r.id)));
+              },
+            )
+          : [];
+        const from = Math.max(0, offset - total);
+        for (const { record, via } of followed.slice(from, from + limit - hits.length)) {
+          const result = hit(record, "body", 0, ["superseded"], null);
           result.snippet.matchLocated = false;
-          return result;
+          result.via = {
+            id: via.id,
+            title: via.title,
+            path: via.path,
+            revision: via.revision,
+            hash: via.hash,
+          };
+          hits.push(result);
         }
-        const fields = (["title", "aliases", "body"] as const).filter((field) =>
-          String(row[field]).includes(marker),
-        );
-        const field = fields.includes("body") ? "body" : (fields[0] ?? "title");
-        return hit(
-          byId.get(String(row.id))!,
-          field,
-          Math.max(0, String(row[field]).indexOf(marker)),
-          fields,
-          -Number(row.score),
-        );
-      });
-      if (corpus !== table) {
-        db.exec("DROP TABLE temp.keyword_query_v1");
-      }
-      return {
-        ...base,
-        freshness: queryFreshness(data.checkedAt, indexedAt),
-        hits,
-        resultCount: hits.length,
-        total,
-        nextOffset: offset + limit < total ? offset + limit : null,
-        index: {
-          state: "ready",
-          lag: false,
-          snapshot,
-          message:
-            "Indexed from the current reconciled scope. Higher BM25 scores rank first; compare scores only within this query and snapshot.",
-        },
-      };
-    });
+        for (const temporary of [corpus, historyCorpus]) {
+          if (temporary !== table && temporary !== historyTable) {
+            db.exec(`DROP TABLE temp.${temporary}`);
+          }
+        }
+        const combined = total + followed.length;
+        return {
+          ...base,
+          freshness: queryFreshness(data.checkedAt, indexedAt),
+          hits,
+          resultCount: hits.length,
+          total: combined,
+          nextOffset: offset + limit < combined ? offset + limit : null,
+          index: {
+            state: "ready",
+            lag: false,
+            snapshot,
+            message:
+              "Indexed from the current reconciled scope. Higher BM25 scores rank first; compare scores only within this query and snapshot.",
+          },
+        };
+      },
+      { operationLabel: "knowledge.keyword.search" },
+    );
   } catch {
     return {
       ...base,

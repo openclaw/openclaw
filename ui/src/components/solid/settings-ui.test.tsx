@@ -21,7 +21,7 @@ it.each([
     const view = render(() => (
       <Toggle
         title="Notifications"
-        ariaLabel="Enabled"
+        ariaLabel={updated() ? "Current label" : "Old label"}
         checked={false}
         onAct={updated() ? record("current") : record("old")}
         onChange={(checked) => {
@@ -32,7 +32,7 @@ it.each([
     ));
     setUpdated(true);
     flush();
-    const input = view.getByRole("switch") as HTMLInputElement;
+    const input = view.getByRole("switch", { name: "Current label" }) as HTMLInputElement;
     for (const activate of [
       () =>
         Toggle === SettingsToggleRow
@@ -50,6 +50,26 @@ it.each([
     }
   },
 );
+
+it("preserves native toggle activation while its label refreshes", () => {
+  const [label, setLabel] = createSignal("Initial label");
+  const onChange = vi.fn();
+  const view = render(() => (
+    <SettingsToggle ariaLabel={label()} checked={false} onChange={onChange} />
+  ));
+  const input = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  input.addEventListener(
+    "click",
+    () => {
+      setLabel("Refreshed label");
+      flush();
+    },
+    { capture: true, once: true },
+  );
+  input.click();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(true);
+  expect(input.checked).toBe(true);
+});
 
 it("isolates radio groups, skips disabled options and rolls back rejected keyboard choice", () => {
   const onChange = vi.fn(() => false);

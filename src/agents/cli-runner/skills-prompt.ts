@@ -18,7 +18,7 @@ export async function resolveCliSkillsPrompt(params: {
   params.assertCurrent();
   const agentWorkspaceDir = resolveAgentWorkspaceDir(params.config ?? {}, params.agentId);
   const executionWorkspace = resolveSessionSkillExecutionWorkspace(
-    params.run.sessionEntry?.worktree?.canonicalWorkspaceDir,
+    params.run.sessionEntry,
     params.executionWorkspaceDir,
   );
   const skillsSnapshot =

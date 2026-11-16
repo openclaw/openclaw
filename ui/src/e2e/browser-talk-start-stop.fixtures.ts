@@ -516,7 +516,7 @@ export async function captureWebRtcSdpAlertProof(
 ) {
   const artifactDir = path.join(owner.artifactDir, "webrtc-sdp");
   await page
-    .locator('.agent-chat__talk-status[role="alert"]')
+    .locator('.agent-chat__composer-alert[role="alert"]')
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 

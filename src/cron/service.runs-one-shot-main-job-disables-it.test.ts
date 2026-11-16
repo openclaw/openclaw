@@ -146,30 +146,44 @@ it.each([
   },
 );
 
-it("records a refused main-session event as one failure without enqueuing a replay", async () => {
-  await using f = await fixture({
-    runSessionEvent: async () => ({
-      status: "error",
-      error: "session admission refused",
-      executionStarted: false,
-    }),
-  });
-  const job = await f.cron.add(
-    mainJob({ schedule: { kind: "at", at: new Date(1).toISOString() } }),
-  );
-  await f.cron.run(job.id, "force");
-  expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-  expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("auto-disabled"),
-    expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
-  );
-  expect(f.cron.getJob(job.id)?.state).toMatchObject({
-    lastRunStatus: "error",
-    lastError: "session admission refused",
-    autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 },
-  });
-  expect(f.history(job.id)).toMatchObject([{ status: "error", completionStatus: "failed" }]);
-});
+it.each([
+  ["legacy session", { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" }],
+  ["owner session", { owner: { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" } }],
+] as const)(
+  "notifies the %s after refusing a main-session event without enqueuing a replay",
+  async (_name, origin) => {
+    await using f = await fixture({
+      runSessionEvent: async () => ({
+        status: "error",
+        error: "session admission refused",
+        executionStarted: false,
+      }),
+    });
+    const job = await f.cron.add(
+      mainJob({
+        ...origin,
+        failureAlert: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+      }),
+    );
+    await f.cron.run(job.id, "force");
+    expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("auto-disabled"),
+      expect.objectContaining({
+        contextKey: `cron:${job.id}:auto-disabled`,
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:123:thread:123:456",
+      }),
+    );
+    expect(f.cron.getJob(job.id)?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: "session admission refused",
+      autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 },
+    });
+    expect(f.history(job.id)).toMatchObject([{ status: "error", completionStatus: "failed" }]);
+  },
+);
 
 it("consumes a scratch-empty one-shot without replaying it after restart", async () => {
   let now = atMs;
@@ -208,7 +222,8 @@ it.each([false, true])(
       status: "error" as const,
       summary: "last output",
       executionStarted,
-      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      errorClassification: { kind: "session-conflict" as const },
+      error: "Synthetic admission conflict",
     }));
     await using f = await fixture({ runIsolatedAgentJob: run });
     const { job, event } = await f.run(isolatedJob());
@@ -222,7 +237,7 @@ it.each([false, true])(
       });
       expect(stored?.state.nextRunAtMs).toBeUndefined();
       expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('Automation "one-shot" failed 1 times'),
+        expect.stringContaining('Automation "one-shot" was auto-disabled'),
         expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
       );
     } else {

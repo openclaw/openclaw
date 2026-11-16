@@ -198,8 +198,11 @@ describe("DeepSeek search execution", () => {
   });
 
   it("uses count defaults, configuration, and explicit overrides", async () => {
-    await searchTool().execute({ query: "count defaults" });
-    await searchTool({}, { maxResults: 2 }).execute({ query: "count configured" });
+    const defaults = searchTool();
+    const configured = searchTool({}, { maxResults: 2 });
+    expect(defaults.parameters).toBe(configured.parameters);
+    await defaults.execute({ query: "count defaults" });
+    await configured.execute({ query: "count configured" });
     await searchTool({}, { maxResults: 2 }).execute({ query: "count override", count: 10 });
     await expect(searchTool().execute({ query: "invalid count", count: 11 })).rejects.toThrow(
       "count must be an integer",

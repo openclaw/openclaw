@@ -517,6 +517,7 @@ describe("board authenticated GitHub Actions", () => {
   it("returns expired Actions while one background refresh settles", async ({ signal }) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const { read } = await reader();
     await expectResult(read());
     clock.mockReturnValue(now + 30_001);

@@ -92,6 +92,14 @@ export class SessionRowFactsPending extends Error {
   }
 }
 
+/** Only failed row materialization can request a catalog rebind, never its consumer. */
+export class SessionRowCatalogPending extends Error {
+  constructor() {
+    // RPC formatters include causes; keep model-facing plugin errors out of the response.
+    super("Session model catalog is unavailable; refresh and try again.");
+  }
+}
+
 export type SessionRowReadView = {
   readChildVisibility: ReturnType<typeof createSessionRowChildVisibility>["read"];
   readChildActivity(
@@ -113,11 +121,11 @@ export type SessionRowReadView = {
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
   readonly physicalPaths: (locator: string, agentId?: string) => readonly string[];
-  readonly state: {
+  readonly state: Readonly<{
     cfg: OpenClawConfig;
     policyConfig: OpenClawConfig;
     rowContext: SessionListRowContext;
-  };
+  }>;
 };
 
 export type PreparedPrivateSessionRepository = {
@@ -265,7 +273,11 @@ export function readPreparedSessionRows<T>(
     },
     get state() {
       assertActive();
-      return { ...state, policyConfig: owner.getPolicyConfig() };
+      const policyConfig = owner.getPolicyConfig();
+      if (state.policyConfig !== policyConfig) {
+        state = { ...state, policyConfig };
+      }
+      return state;
     },
   };
   try {

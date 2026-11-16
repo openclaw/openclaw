@@ -115,9 +115,6 @@ export const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
   });
 };
 
-// Failure assertions must not render the triage target's inherited environment.
-export const getTriageFailures = () =>
-  vi.mocked(update.runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
 export const expectNoSideEffects = (...effects: unknown[]) => {
   for (const effect of effects) {
     expect(effect).not.toHaveBeenCalled();

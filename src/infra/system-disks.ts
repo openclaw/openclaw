@@ -4,6 +4,7 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { z } from "zod";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 type SystemDisk = { path: string; totalBytes: number; availableBytes: number };
 type MountedDisk = { path: string; identity: string };
@@ -260,7 +261,7 @@ async function collectDiskSnapshot(): Promise<SystemDisk[] | undefined> {
 }
 
 export function readSystemDisks(): Promise<SystemDisk[] | undefined> {
-  const now = Date.now();
+  const now = monotonicNow();
   if (!snapshot || now >= snapshot.expiresAt) {
     const next = {
       expiresAt: Infinity,
@@ -268,7 +269,7 @@ export function readSystemDisks(): Promise<SystemDisk[] | undefined> {
         .then((disks) => disks?.toSorted((left, right) => left.path.localeCompare(right.path)))
         .catch(() => undefined)
         .finally(() => {
-          next.expiresAt = Date.now() + 30_000;
+          next.expiresAt = monotonicNow() + 30_000;
         }),
     };
     snapshot = next;

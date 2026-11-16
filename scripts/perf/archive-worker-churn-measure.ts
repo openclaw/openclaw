@@ -31,6 +31,8 @@ import { parseArgs } from "node:util";
 import type { SessionLifecycleArchivedTranscript } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -95,9 +97,6 @@ const coldState: typeof import("../../src/config/sessions/session-cold-storage-s
   await load("src/config/sessions/session-cold-storage-state.ts");
 const codec: typeof import("../../src/config/sessions/session-cold-storage-codec.js") = await load(
   "src/config/sessions/session-cold-storage-codec.ts",
-);
-const compression: typeof import("../../src/config/sessions/archive-compression.js") = await load(
-  "src/config/sessions/archive-compression.ts",
 );
 const workers: typeof import("../../src/infra/worker-cpu.js") =
   await load("src/infra/worker-cpu.ts");
@@ -234,12 +233,7 @@ let sampledMainBytes: number | null = null;
 let measurementEnd: ReturnType<typeof process.memoryUsage> | undefined;
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   loop.enable();
   for (let iteration = 0; iteration < iterations; iteration++) {
@@ -299,7 +293,7 @@ try {
         result.archivedTranscripts[0];
       assert(published);
       assert.equal(
-        compression.readSessionArchiveContentSync(published.archivedPath).trim(),
+        readSessionArchiveText(published.archivedPath).trim(),
         JSON.stringify({ type: "session", id: sessionId, version: 3 }),
       );
       assert.equal(

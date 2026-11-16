@@ -130,11 +130,11 @@ it("formatTimeAgo returns fallback for invalid elapsed input", () => {
 });
 
 it.each([
-  [0, undefined, "just now"],
-  [29000, undefined, "just now"],
+  [29500, undefined, "just now"],
+  [89500, undefined, "1m ago"],
   [30000, undefined, "1m ago"],
-  [47 * 3600000, undefined, "47h ago"],
-  [48 * 3600000, undefined, "2d ago"],
+  [5_369_500, undefined, "1h ago"],
+  [2.49 * 86400000, undefined, "2d ago"],
   [0, { suffix: false }, "0s"],
   [7200000, { suffix: false }, "2h"],
 ] as const)("formats relative age for %j (%j)", (input, options, expected) => {

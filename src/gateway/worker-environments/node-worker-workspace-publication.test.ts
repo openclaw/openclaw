@@ -196,9 +196,13 @@ it.each([
       if (!failPublication) {
         expect(payload.publicationStagingRoot).toBeDefined();
       }
-      expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
-        "checkpoint edit\n",
-      );
+      if (payload.baseManifestRef === base.manifestRef) {
+        expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
+          "checkpoint edit\n",
+        );
+      } else {
+        expect(await fs.readdir(payload.stagingRoot)).toEqual([]);
+      }
       const prepared = await stageSessionRepositoryCheckpoint({
         ...payload,
         store,
@@ -215,21 +219,23 @@ it.each([
       }
       return prepared;
     };
-    const reconcile = () =>
+    const reconcile = async () =>
       actions.reconcileWorkspace({
         remoteWorkspaceDir: workspaceDir,
         baseManifestRef: base.manifestRef,
         source: {
           kind: "repository",
           referenceManifestRef: base.manifestRef,
+          acceptedManifestRef: (await store.get(repository.workspaceId))?.manifestHash ?? undefined,
           prepareCheckpoint: checkpoint,
         },
       });
     let first: ReturnType<typeof reconcile> | undefined;
     const accept = async (pending: ReturnType<typeof reconcile>) => {
+      const before = await store.get(repository.workspaceId);
       const result = await pending;
       try {
-        expect(result.changed).toBe(true);
+        expect(result.changed).toBe(before?.manifestHash !== result.manifestRef);
         await result.verifyLocalStable();
         await result.publishStagedResult?.();
         expect((await store.get(repository.workspaceId))?.manifestHash).toBe(result.manifestRef);

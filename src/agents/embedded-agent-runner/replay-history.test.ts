@@ -3,16 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
+import { suppressOpenAIResponsesCompaction } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
-import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -27,6 +27,8 @@ import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-
 // Preface of carriers persisted before the stable system prompt explained the markers.
 const LEGACY_HEADER =
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
 const INBOUND_METADATA = [
   markInboundContextLabel("Conversation info:"),
@@ -136,6 +138,28 @@ function transcriptArtifact(model: "delivery-mirror" | "gateway-injected"): Agen
 }
 
 describe("normalizeAssistantReplayContent", () => {
+  it.each(["error", "silent"] as const)(
+    "preserves the recovery receipt of a discarded %s row",
+    (kind) => {
+      const model = makeProviderModelFixture({
+        id: "test-model",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      const content = kind === "silent" ? [textBlock("NO_REPLY")] : [];
+      const source = makeAssistantMessageFixture({
+        content,
+        stopReason: kind === "silent" ? "stop" : "error",
+      });
+      suppressOpenAIResponsesCompaction(source, model, undefined, undefined, "repair-anchor");
+      const normalized = normalize([source]);
+      expect(normalized).toHaveLength(1);
+      expect(normalized[0]).toMatchObject({ content: [], providerReplay: source.providerReplay });
+      expect(source.content).toEqual(content);
+    },
+  );
+
   it("reconstructs hidden tool calls, results, and internal answers in the provider request", () => {
     const model = completionsModel();
     const toolCall = call("call_hidden");

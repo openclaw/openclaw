@@ -24,6 +24,7 @@ export function createAnchoredOverlay(
   } = {},
 ) {
   let binding: OverlayAnchorBinding | undefined;
+  let connected = false;
   const bindTrigger = (anchor: HTMLElement) => {
     overlay.bindTrigger(anchor);
     overlay.setParent(options.parent ?? findOverlayParent(anchor));
@@ -32,7 +33,7 @@ export function createAnchoredOverlay(
   const update = (anchor: HTMLElement, placement?: Placement) =>
     binding?.update(anchor, typeof placement === "function" ? placement() : placement);
   createEffect(target, ({ anchor, positionAnchor, placement }) => {
-    if (binding && !options.paused?.()) {
+    if (connected && !options.paused?.()) {
       // Conditional trigger refs are assigned after the tracked input is prepared.
       const current = anchor ?? trigger();
       bindTrigger(current);
@@ -70,7 +71,9 @@ export function createAnchoredOverlay(
           bind(initialPositionAnchor ?? current, initialPlacement);
         }
       }
+      connected = true;
       return () => {
+        connected = false;
         stopShow?.();
         binding?.dispose();
         binding = undefined;

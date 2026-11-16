@@ -21,7 +21,11 @@ const suite = createControlUiE2eSuite({
   name: "chat side-panel shell clearance",
   startServerBeforeBrowser: true,
 });
-const withPage = setupPages(suite, () => ({ locale: "en-US", serviceWorkers: "block" }));
+const withPage = setupPages(suite, () => ({
+  locale: "en-US",
+  reducedMotion: "reduce",
+  serviceWorkers: "block",
+}));
 
 const sessionKey = "agent:main:side-panel-clearance";
 const limitedScopes = ["operator.read", "operator.write"];

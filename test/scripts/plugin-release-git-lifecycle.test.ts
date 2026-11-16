@@ -75,6 +75,7 @@ const modes = {
     SOURCE_REF: sha,
     TRUSTED_PUBLISHER_PREFLIGHT: "false",
     WORKFLOW_REF: "refs/heads/main",
+    WORKFLOW_REF_NAME: "main",
     WORKFLOW_SHA: workflowSha,
   }),
   "npm-preflight-read": modeConfig(

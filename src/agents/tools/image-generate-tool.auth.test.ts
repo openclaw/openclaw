@@ -1,6 +1,6 @@
 import { assert, describe, expect, it, vi } from "vitest";
 import { createProviderConfigFixture } from "../../config/runtime-snapshot.test-fixtures.js";
-import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import type { ImageGenerationProvider } from "../../image-generation/provider-types.js";
 import * as mediaGenerationRegistry from "../../media-generation/registry.js";
 import { withEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";

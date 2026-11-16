@@ -16,6 +16,7 @@ export const NODE_BROWSER_PROXY_COMMANDS = [
   NODE_BROWSER_PROXY_UPLOAD_COMMAND,
 ] as const;
 export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
+export const NODE_MCP_ELICITATION_CAPABILITY = "node-mcp-elicitation-v1";
 export const NODE_AGENT_CLI_CLAUDE_RUN_COMMAND = "agent.cli.claude.run.v1";
 export const NODE_CLAUDE_NATIVE_AUTH_CAPABILITY = "claude-cli-native-auth-v1";
 export const NODE_DEVICE_APPS_COMMAND = "device.apps";

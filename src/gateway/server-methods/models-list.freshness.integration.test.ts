@@ -98,8 +98,15 @@ it.for([
     );
     const token = "catalog-freshness-gateway-token";
     const cfg = {
-      // A UI-only write must not also perform the fixture's first model-policy migration.
-      meta: { migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true } },
+      // A UI-only write must not also perform the fixture's first config migrations.
+      meta: {
+        migrations: {
+          modelPolicyAllowlist: true,
+          utilityModelSeparation: true,
+          skillWorkshopPlugin: true,
+          skillLibraryToolSplit: true,
+        },
+      },
       agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },
@@ -142,6 +149,7 @@ it.for([
       }
       if (withSibling && !initiallyEmpty) {
         using projection = vi.spyOn(modelsListResult, "prepareModelsListResult");
+        const initialRows = initial.models.filter((row) => row.provider === provider);
         for (let index = 0; index < 6; index++) {
           const ack = await client.request<{ ok: boolean; config?: unknown }>("config.patch", {
             raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: index % 2 === 0 } } }),
@@ -150,9 +158,7 @@ it.for([
           expect(ack.ok).toBe(true);
           expect(ack).not.toHaveProperty("config");
           const after = await list();
-          expect(after.models.filter((row) => row.provider === provider)).toEqual(
-            initial.models.filter((row) => row.provider === provider),
-          );
+          expect(after.models.filter((row) => row.provider === provider)).toEqual(initialRows);
           expect(requests).toBe(initialRequests);
         }
         expect(projection.mock.calls.length).toBe(0);

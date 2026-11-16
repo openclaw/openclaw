@@ -71,16 +71,23 @@ async function seal() {
     workflowSha,
   };
   validateReleaseChildRunProvenance(run, expected);
+  // Partial reruns can stay queued while the exact publisher job below is running.
   if (
     run.run_attempt !== runAttempt ||
     run.head_repository?.full_name !== repository ||
-    run.status !== "in_progress" ||
+    !["queued", "in_progress"].includes(run.status) ||
     run.conclusion !== null
   ) {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");
   }
-  if (workflowSha !== targetSha) {
-    throw new Error("Child evidence workflow SHA does not match the target SHA");
+  const targetInput =
+    role === "npmTelegram"
+      ? "harness_ref"
+      : role.startsWith("releaseChecks")
+        ? "ref"
+        : "target_ref";
+  if (inputs[targetInput] !== targetSha) {
+    throw new Error("Child evidence target differs from the exact dispatched product source");
   }
   const attempts = [];
   let publisher;

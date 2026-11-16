@@ -88,13 +88,47 @@ and requires an enabled theme control. All three require the matching settled
 route as well as their visible ready state. These are first visits in the
 existing browser context, not cold direct navigations.
 
-For reconnect, the proxy destroys existing connections and rejects new ones for
-five seconds. The runner confirms the app enters its reconnecting phase.
+For reconnect, the runner first closes any retained Dashboard through its UI
+control and verifies that the conversation fills the sidebar region. It records
+both widths so the compared samples have the same layout. The proxy then destroys
+existing connections and rejects new ones for five seconds. The runner confirms
+the app enters its reconnecting phase.
 `outageMs` records the actual outage; readiness timing starts at link restoration
 and excludes that interval. Readiness requires the connected phase, a fresh
 canonical session roster, and the visible transcript and enabled composer.
 The wire census must also show a new successful WebSocket upgrade, connect
 response, and roster response before readiness, so cached UI alone cannot pass.
+
+`--reconnect-trigger silent|online|visible` selects the recovery stimulus and is
+recorded on the report and reconnect sample. The default `silent` keeps the
+existing proxy-only drop and restoration; it does not emit an online or visibility
+event. `online` also takes the browser context offline, then returns it online
+after restoring the proxy, exercising the browser's real offline/online events.
+`visible` disables focus emulation, minimizes the headless browser window during
+the outage, verifies that the document is hidden, then restores it after the
+proxy and verifies that it becomes visible. An unavailable native visibility
+transition fails the sample rather than substituting a synthetic event. These
+are separate workloads; never present online/visible recovery as a silent-retry
+improvement or combine modes in one comparison.
+
+Before the outage, the runner subscribes to the existing application-context
+Gateway snapshot. Reconnect `retrySchedule.events` records changes in phase,
+`reconnectAt`, and error code, plus browser offline/online/visibility events and
+outage-start, before-restore, and link-restored markers. Each entry includes
+browser `performance.now()` relative to readiness zero, `Date.now()` as
+`epochMs`, the actual jittered epoch deadline `reconnectAt`, and its signed
+`reconnectInMs` at observation. `onConnecting` clears that deadline; the preceding
+scheduled entry identifies the timer that just elapsed. Error text, connection
+credentials, and payloads are omitted. The 128-entry bound reports
+`droppedEvents`; a nonzero value means the schedule is incomplete.
+
+The proxy also records `outageStartedEpochMs` and `restoredEpochMs` immediately
+before changing the link. Use the before/after browser markers to bracket that
+change and the retained deadline to calculate the remaining retry delay at
+restoration. Browser events retain `isTrusted`, current `online`, and actual
+document `visibility`. The subscription continues through the settled capture
+and is disposed afterward. These observations identify the selected deadline
+and its firing lag; close-to-create gaps alone do not reveal the jitter draw.
 
 The report retains HTTP resource types, encoded transfer sizes, cache status,
 response headers, service-worker delivery, and timings. HTTP byte and wire-request
@@ -117,8 +151,29 @@ device and selected synthetic auth mode. The remote and mobile profiles add trus
 attribution so the Gateway negotiates its normal remote compression policy;
 the local profile uses direct-local transport.
 
+The proxy disables Nagle buffering on both loopback sockets so delayed ACKs do
+not add an unconfigured latency term. `--proxy-nagle` restores that buffering for
+diagnosing older captures; record it when comparing results. Every frame includes
+the covering packet intervals: ingress, serialization start, scheduled delivery,
+and actual `socket.write()` time. A write means bytes were enqueued to the local
+socket, not acknowledged by the peer. Gateway RPC and subscription-stage channels
+record admission, queue and handler durations. They do not carry request IDs;
+correlate by method and reconstructed start time, and report overlapping calls as
+ambiguous rather than assigning them arbitrarily. History summaries contain field
+sizes, array counts and synthetic request shape, never message text.
+
+Use `--timeline` for a separate diagnostic run. It writes bounded Chrome traces
+for session switch and reconnect and records initial-history JSON parse intervals.
+Keep those traced runs out of untraced latency comparisons.
+
 Each sample includes `websocketUpgrades` with upgrade request/response timestamps
-and status. HTTP `browserStartedAtMs`, `browserResponseAtMs`, and
+and status. Reconnect also includes `websocketLifecycle`: socket creation,
+handshake requests/responses, errors, and closes from the preceding outage through
+the settled capture. Negative times precede link restoration. Records contain
+only event names, opaque request IDs, timestamps, and HTTP status; URLs, headers,
+error text, and close reasons are omitted. CDP socket creation has no browser
+timestamp, so those records use only the observer's `atMs` clock. HTTP
+`browserStartedAtMs`, `browserResponseAtMs`, and
 `browserFinishedAtMs`, upgrade browser timestamps, and frame `decodedAtMs` share
 the action's browser clock, starting at zero. Pair WebSocket requests and responses
 by `connection` plus `requestId`; `type` distinguishes requests, responses, and
@@ -127,8 +182,10 @@ round trips; `beforeTranscriptVisible` marks delivery before the first visible
 transcript row, and `criticalBeforeReady` marks delivery before both authoritative
 history and composer are ready,
 not proof that every such frame is a dependency. No request bodies or authentication
-headers are retained. Frame `atMs` records proxy ingress observation, which can
-follow server transmission when the shared link applies backpressure.
+headers are retained. Frame `atMs` records when the complete RFC6455 frame is
+available to the proxy parser. Joined packet `receivedAtMs` values locate first
+ingress, which can follow server transmission when the shared link applies
+backpressure.
 
 Interpret these as synthetic transport and rendering measurements. The proxy
 does not simulate TLS, TCP handshake latency, packet loss, or Internet routing.

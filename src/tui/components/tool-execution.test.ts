@@ -25,6 +25,35 @@ function renderToolOutput(text: string, width: number) {
 
 describe("ToolExecutionComponent", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each(["ask_user", "tool_call"])("keeps question options visible in %s cards", (name) => {
+    const args = {
+      questions: [
+        {
+          header: "Lunch",
+          question: "What should we eat?",
+          options: [{ label: "Noodles" }, { label: "Rice", description: "With vegetables" }],
+        },
+        { header: "Drink", question: "What should we drink?", options: [{ label: "Water" }] },
+      ],
+    };
+    const component = new ToolExecutionComponent(
+      name,
+      name === "tool_call" ? { id: "openclaw:core:ask_user", args } : args,
+    );
+    for (const completed of [false, true]) {
+      if (completed) {
+        component.setResult(content("Answered"));
+      }
+      expectText(render(component), [
+        "What should we eat?",
+        "1. Noodles",
+        "2. Rice",
+        "What should we drink?",
+        "1. Water",
+      ]);
+    }
+  });
+
   it("preserves literal Code Mode output through activity updates", () => {
     const value = 'START_COMPLETED **stars** "quoted" \\path';
     const literal = "```\n# literal heading\n```";
@@ -74,9 +103,11 @@ describe("ToolExecutionComponent", () => {
     expect(render(component)).toContain("raw result");
   });
 
-  it("preserves indented quoted source in tool output", () => {
+  it("preserves indented quoted source and literal JSON in tool output", () => {
     const { lines } = renderToolOutput("    > quoted source\n    next line", 80);
     expectText(plain(lines), ["```", "> quoted source"]);
+    const json = JSON.stringify({ value: "**stars** _under_ `tick`", path: "a\\b" });
+    expectText(render(renderToolOutput(json, 1_024).component, 1_024), [json]);
   });
 
   it("keeps whitespace-only final output empty across activity transitions", () => {

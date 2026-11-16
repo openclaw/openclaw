@@ -4,7 +4,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
@@ -106,7 +106,7 @@ export function resolveLegacyHeartbeatSessionKey(
   return selectSession(resolveCandidate(trimmed) || mainSessionKey);
 }
 
-export function resolveLegacyHeartbeatSession(
+export async function resolveLegacyHeartbeatSession(
   cfg: OpenClawConfig,
   agentId: string,
   heartbeat?: HeartbeatConfig,
@@ -116,7 +116,7 @@ export function resolveLegacyHeartbeatSession(
   const resolved = resolveLegacyHeartbeatSessionKey(cfg, agentId, heartbeat, forcedSessionKey, env);
   return {
     ...resolved,
-    entry: loadSessionEntryReadOnly({
+    entry: await readSessionEntryReadOnlyInWorker({
       agentId,
       storePath: resolved.storePath,
       sessionKey: resolved.sessionKey,

@@ -184,9 +184,20 @@ export async function readBoardGitHubActions(
         }),
       );
     });
-    await identity.start(() =>
-      publish(true, structuredClone({ ...result.value, ...(result.stale ? { stale: true } : {}) })),
-    );
+    await identity.start(() => {
+      // The cache holds credential-scoped upstream data. Each delivery applies
+      // this widget's field restrictions under its current query grant.
+      const fields = authority.query && new Set<string>(authority.query.fields);
+      const value = fields
+        ? {
+            ...(fields.has("total_count") ? { total_count: result.value.total_count } : {}),
+            workflow_runs: result.value.workflow_runs.map((run) =>
+              Object.fromEntries(Object.entries(run).filter(([field]) => fields.has(field))),
+            ),
+          }
+        : result.value;
+      publish(true, structuredClone({ ...value, ...(result.stale ? { stale: true } : {}) }));
+    });
   } catch (error) {
     throw actionsFailure(error);
   } finally {

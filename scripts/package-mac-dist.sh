@@ -10,6 +10,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-pnpm.sh"
 source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 source "$ROOT_DIR/scripts/lib/mac-signing-identity.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
@@ -72,34 +73,11 @@ IFS=' ' read -r -a DSYM_ARCHS <<< "$DSYM_ARCHS_VALUE"
 # The .debug suffix in package-mac-app.sh blanks SUFeedURL intentionally for dev builds.
 export BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac}"
 
-DIST_PNPM_CMD=()
 SPARKLE_BUILD_DEPS_RETRIED=0
-
-resolve_dist_pnpm_cmd() {
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    DIST_PNPM_CMD=(corepack pnpm)
-    return 0
-  fi
-
-  if command -v pnpm >/dev/null 2>&1; then
-    DIST_PNPM_CMD=(pnpm)
-    return 0
-  fi
-
-  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
-  exit 1
-}
-
-run_dist_pnpm() {
-  if [[ "${#DIST_PNPM_CMD[@]}" -eq 0 ]]; then
-    resolve_dist_pnpm_cmd
-  fi
-  (cd "$ROOT_DIR" && "${DIST_PNPM_CMD[@]}" "$@")
-}
 
 ensure_sparkle_build_deps() {
   echo "📦 Ensuring deps for Sparkle build metadata" >&2
-  run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2
 }
 
 run_sparkle_build_node() {

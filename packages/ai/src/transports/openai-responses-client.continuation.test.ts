@@ -3,10 +3,23 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "../../../../src/agents/agent-tool-definition-adapter.js";
+import { wrapStreamFnWithProviderPromptState } from "../../../../src/agents/embedded-agent-runner/provider-prompt-state.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import { SessionManager } from "../../../../src/agents/sessions/session-manager.js";
 import { wrapToolDefinition } from "../../../../src/agents/sessions/tools/tool-definition-wrapper.js";
 import { createSessionsYieldTool } from "../../../../src/agents/tools/sessions-yield-tool.js";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { createDiagnosticTraceContext } from "../../../../src/infra/diagnostic-trace-context.js";
+import {
+  createCodexNativeWebSearchWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAITextVerbosityWrapper,
+} from "../../../../src/llm/providers/stream-wrappers/openai.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../agent-core/src/agent.js";
@@ -61,6 +74,7 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
 const initialHost = getAiTransportHost();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
@@ -204,6 +218,77 @@ describe("native OpenAI Responses SSE continuation", () => {
       await vi.runAllTimersAsync();
     }
     vi.useRealTimers();
+  });
+
+  it("retains prefix ownership through provider policies and observers while isolating mutating hooks", async () => {
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      wrapStreamFnWithProviderPromptState({
+        streamFn: createCodexNativeWebSearchWrapper(
+          createOpenAITextVerbosityWrapper(
+            createOpenAIFastModeWrapper(
+              createOpenAIResponsesContextManagementWrapper(
+                createOpenAIResponsesTransportStreamFn(),
+                { responsesServerCompaction: false },
+              ),
+            ),
+            "low",
+          ),
+          { codeModeToolSurfaceEnabled: true, nativeWebSearchAllowedByToolPolicy: false },
+        ),
+        state: {},
+        effectiveContextTokenBudget: 200_000,
+      }),
+      {
+        runId: "prefix-owner",
+        provider: astra.provider,
+        model: astra.id,
+        api: astra.api,
+        trace: createDiagnosticTraceContext({}),
+        nextCallId: () => "prefix-call",
+        suppressPluginHooks: true,
+      },
+    );
+    const text = "retained history must not be encoded again";
+    const messages: Context["messages"] = [freezeJsonSnapshot(userMessage(text, 1))];
+    const request = async (onPayload?: (payload: unknown) => void) => {
+      sseState.outcomes.push(sdkUncitedCompletion(`resp_${sseState.requests.length}`, "answer"));
+      const options = {
+        apiKey: "synthetic-key",
+        reasoningEffort: "low",
+        onPayload,
+      } satisfies OpenAIResponsesOptions;
+      const stream = await wrapped(
+        astra,
+        { messages, tools: [functionTool("exec"), functionTool("wait")] },
+        options,
+      );
+      for await (const event of stream) {
+        void event;
+      }
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(result).toHaveProperty("openclawResponsesInputReplay.reasoning.prefixHash");
+      return result;
+    };
+    messages.push(freezeJsonSnapshot(await request()), freezeJsonSnapshot(userMessage("next", 2)));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      await request();
+      expect(stringify.mock.calls.filter(([value]) => value === text)).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(sseState.requests[1]?.input).toHaveProperty("0.content.0.text", text);
+    await request((payload) => {
+      const changed = payload as { input: [{ content: [{ text: string }] }] };
+      changed.input[0].content[0].text = "hook edit";
+    });
+    expect(sseState.requests[2]?.input).toHaveProperty("0.content.0.text", "hook edit");
+    expect(sseState.requests[0]?.input).toHaveProperty("0.content.0.text", text);
   });
 
   it.each(["short"] as const)(
@@ -782,11 +867,37 @@ describe("native OpenAI Responses SSE continuation", () => {
       { onPayload: stateful },
     );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(JSON.stringify(sseState.requests[1]?.input)).toContain('"compaction"');
+    expect(sseState.requests).toHaveLength(4);
+    expect(sseState.requests[1]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+    });
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[2]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+      ],
+    });
     expect(JSON.stringify(sseState.requests[2]?.input)).not.toContain('"compaction"');
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+    // The unstored recovery cannot advance the stored prefix past the first response.
+    expect(sseState.requests[3]).toMatchObject({
+      store: true,
+      previous_response_id: "resp_1",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "second answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "third question" }] },
+      ],
+    });
   });
 
   it.each([

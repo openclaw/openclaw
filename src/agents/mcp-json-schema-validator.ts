@@ -17,6 +17,7 @@ import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
 import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
+import { logDebug } from "../logger.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
 import {
   createJsonSchemaValidatorProvider,
@@ -26,10 +27,6 @@ import {
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 const annotationFormats = new Map<string, JsonSchemaRefinement>();
 type McpFormats = Readonly<InstanceType<typeof Ajv>["formats"]>;
-
-function isDraft202012Schema(schema: JsonSchemaType): boolean {
-  return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
-}
 
 function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: string }>): string {
   return (
@@ -51,6 +48,8 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
     validateSchema: false,
     allErrors: true,
     uriResolver: fastUri,
+    // Unknown vendor formats are annotations, so their notices belong at debug level.
+    logger: { log: console.log, warn: logDebug, error: console.error },
   });
   addFormats(ajv);
   if (getRuntimeExecutionProfile() === "embedded-aot") {
@@ -60,7 +59,7 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
 
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
-      if (!isDraft202012Schema(schema)) {
+      if (schema.$schema !== DRAFT_2020_12_SCHEMA) {
         return defaultValidator.getValidator<T>(schema);
       }
       let validator: ReturnType<typeof Compile>;

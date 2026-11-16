@@ -226,7 +226,9 @@ export const preservedModuleBuildSources = [
   "src/cli/update-finalization-output.test-support.ts",
   "src/cli/program/register.maintenance.ts",
   "src/cli/one-shot-exit.ts",
+  "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
+  "src/cli/run-main-service-installation.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
   "src/infra/worker-native-lifecycle.ts",
@@ -263,6 +265,7 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-discord.json",
@@ -283,14 +286,13 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
+  "scripts/plugin-npm-release-admission.py",
   "scripts/lib/vitest-worker-bootstrap.mts",
   "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
-  // Standalone skill discovery loads this sibling only when prepared contributions are absent.
-  "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
   "plugins/test-helpers/installed-plugin-index":
     "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":
@@ -417,6 +419,14 @@ export const vitestWorkerBuildEntries = {
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",
   // Real provider preparation uses packaged JavaScript, avoiding per-child source transforms.
   "extensions/anthropic/index": "extensions/anthropic/index.ts",
+  // CLI preflight must share its native host graph with the real Teams Doctor/setup contracts.
+  "extensions/msteams/index": "extensions/msteams/index.ts",
+  "extensions/msteams/config-doctor-api": "extensions/msteams/config-doctor-api.ts",
+  "extensions/msteams/doctor-contract-api": "extensions/msteams/doctor-contract-api.ts",
+  "extensions/msteams/setup-entry": "extensions/msteams/setup-entry.ts",
+  "extensions/msteams/setup-plugin-api": "extensions/msteams/setup-plugin-api.ts",
+  "extensions/msteams/secret-contract-api": "extensions/msteams/secret-contract-api.ts",
+  "extensions/msteams/configured-state": "extensions/msteams/configured-state.ts",
   "test-support/anthropic-preparation": "test/scripts/anthropic-preparation-probe.ts",
   "test-support/provider-hook-scope": "test/scripts/provider-hook-scope.test-support.ts",
   // Exercise native writes through the existing plugin facade in the private graph.

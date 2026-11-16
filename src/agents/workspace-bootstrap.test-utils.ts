@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import { readLocalWorkspaceFileWithGuards } from "./workspace-file-read.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_MEMORY_FILENAME,
@@ -17,12 +18,24 @@ async function agentsWorkspace(content: string) {
   return dir;
 }
 
+const eagain = (syscall: string) =>
+  Object.assign(new Error(`Unknown system error -11: ${syscall}`), { code: "EAGAIN", errno: -11 });
+
 async function expectAgents(dir: string, content: string, exact = false) {
   const files = await loadWorkspaceBootstrapFiles(dir);
   expect(files.find((file) => file.name === DEFAULT_AGENTS_FILENAME)).toMatchObject({
     missing: false,
     content: exact ? content : expect.stringContaining(content),
   });
+}
+
+async function expectLocalAgents(dir: string, content: string) {
+  await expect(
+    readLocalWorkspaceFileWithGuards({
+      filePath: path.join(dir, DEFAULT_AGENTS_FILENAME),
+      workspaceDir: dir,
+    }),
+  ).resolves.toMatchObject({ ok: true, content: expect.stringContaining(content) });
 }
 
 export function registerWorkspaceBootstrapTests() {
@@ -41,7 +54,6 @@ export function registerWorkspaceBootstrapTests() {
         expect(entries).toMatchObject(
           name === "MEMORY.md" ? [{ missing: false, content: "memory" }] : [],
         );
-        expect(entries).toHaveLength(name === "MEMORY.md" ? 1 : 0);
       },
     );
 
@@ -86,18 +98,13 @@ export function registerWorkspaceBootstrapTests() {
         if (!threwTransient) {
           threwTransient = true;
           const callback = args.at(-1) as (error: Error) => void;
-          callback(
-            Object.assign(new Error("Unknown system error -11: read"), {
-              code: "EAGAIN",
-              errno: -11,
-            }),
-          );
+          callback(eagain("read"));
           return;
         }
         (originalRead as (...forwarded: unknown[]) => void)(...args);
       }) as typeof syncFs.read);
 
-      await expectAgents(tempDir, "keep me");
+      await expectLocalAgents(tempDir, "keep me");
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
@@ -109,15 +116,19 @@ export function registerWorkspaceBootstrapTests() {
 
       vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
         const callback = args.at(-1) as (error: Error) => void;
-        callback(
-          Object.assign(new Error("Unknown system error -11: read"), {
-            code: "EAGAIN",
-            errno: -11,
-          }),
-        );
+        callback(eagain("read"));
       }) as typeof syncFs.read);
 
-      await expectAgents(tempDir, "[UNREADABLE: Unknown system error -11: read]", true);
+      await expect(
+        readLocalWorkspaceFileWithGuards({
+          filePath: path.join(tempDir, DEFAULT_AGENTS_FILENAME),
+          workspaceDir: tempDir,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: "io",
+        error: expect.objectContaining({ code: "EAGAIN" }),
+      });
     });
 
     it("retries a transient boundary-resolution failure before dropping a bootstrap file", async () => {
@@ -128,15 +139,12 @@ export function registerWorkspaceBootstrapTests() {
       let agentsLstatAttempts = 0;
       vi.spyOn(syncFs, "lstatSync").mockImplementation(((target: unknown, options?: unknown) => {
         if (String(target) === agentsPath && ++agentsLstatAttempts === 1) {
-          throw Object.assign(new Error("Unknown system error -11: lstat"), {
-            code: "EAGAIN",
-            errno: -11,
-          });
+          throw eagain("lstat");
         }
         return originalLstat(target as never, options as never);
       }) as typeof syncFs.lstatSync);
 
-      await expectAgents(tempDir, "boundary retry");
+      await expectLocalAgents(tempDir, "boundary retry");
       expect(agentsLstatAttempts).toBeGreaterThanOrEqual(2);
     });
 
@@ -152,15 +160,12 @@ export function registerWorkspaceBootstrapTests() {
       ) => {
         if (!threwTransientOpen) {
           threwTransientOpen = true;
-          throw Object.assign(new Error("Unknown system error -11: open"), {
-            code: "EAGAIN",
-            errno: -11,
-          });
+          throw eagain("open");
         }
         return originalOpenSync(...args);
       }) as typeof syncFs.openSync);
 
-      await expectAgents(tempDir, "open retry");
+      await expectLocalAgents(tempDir, "open retry");
       expect(threwTransientOpen).toBe(true);
     });
   });

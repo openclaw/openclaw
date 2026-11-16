@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import JSZip from "jszip";
 import { onTestFinished, afterEach, beforeEach, assert, expect, it, vi } from "vitest";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
@@ -103,6 +104,42 @@ function attachmentError(code: string, label: string, kind = "document", mimeTyp
     attachment: { code, kind, label, ...(mimeType ? { mimeType } : {}) },
   };
 }
+
+it("keeps a small ZIP while identifying the unchanged oversized original", async () => {
+  const { cfg, workspaceDir } = createMediaTestContext();
+  cfg.agents!.defaults = { mediaMaxMb: 512 / (1024 * 1024) };
+  const smallZip = new JSZip().file("orders.csv", "order_id,amount\n1,12.50\n");
+  const largeZip = new JSZip().file("orders.csv", "order_id,amount\n" + "1,12.50\n".repeat(128));
+  const small = await smallZip.generateAsync({ type: "nodebuffer", compression: "STORE" });
+  const large = await largeZip.generateAsync({ type: "nodebuffer", compression: "STORE" });
+  const smallPath = await writeMedia(path.join(workspaceDir, "orders-sample.zip"), small);
+  const largePath = await writeMedia(path.join(workspaceDir, "orders-large.zip"), large);
+  const payload = expectDefined(
+    await normalizeReplyMedia(cfg, [
+      {
+        text: "Saved the import pack.",
+        mediaUrls: [largePath, smallPath],
+      },
+    ]),
+    "normalized reply",
+  );
+  expect(payload.mediaUrls).toHaveLength(1);
+  expect(await fs.readFile(expectDefined(payload.mediaUrls?.[0], "small attachment"))).toEqual(
+    small,
+  );
+  expect(await fs.readFile(largePath)).toEqual(large);
+  const { assistantContent, persistedAssistantContent } = await buildContent({
+    payloads: [payload],
+    managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+  });
+  expect(assistantContent).toContainEqual(
+    attachmentError("file-too-large", "orders-large.zip", "document", "application/zip"),
+  );
+  expect(assistantContent?.filter((block) => block.type === "text")).toEqual([
+    { type: "text", text: "Saved the import pack." },
+  ]);
+  expect(persistedAssistantContent).toEqual(assistantContent);
+});
 
 it("reports a rejected final MEDIA directive without exposing its URL", async () => {
   const source = "https://user:synthetic-password@example.com/movie.mp4";

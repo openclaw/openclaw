@@ -71,6 +71,8 @@ describe("runPrCiSweeper", () => {
   it.each([
     ["ci-attached", {}],
     ["draft", { draft: true }],
+    ["recently-updated", { updated_at: new Date(NOW - 5 * MINUTES).toISOString() }],
+    ["merge-conflict", { mergeable: false }],
     ["auto-merge-enabled", { auto_merge: { merge_method: "squash" } }],
   ] as const)("logs %s without mutating the PR", async (reason, overrides) => {
     const attached = listedPr(21, "5".repeat(40), overrides);
@@ -85,9 +87,12 @@ describe("runPrCiSweeper", () => {
       `pr-ci-sweeper: skip #21 (${reason}${reason === "ci-attached" ? ": 100:completed/cancelled" : ""})`,
     );
     expectNoMutation(calls);
-    if (reason === "draft") {
+    if (reason !== "ci-attached") {
       expect(calls.filter((call) => call.method === "actions.listWorkflowRuns")).toEqual([]);
     }
+    expect(
+      calls.filter((call) => ["pulls.get", "issues.listEvents"].includes(call.method)),
+    ).toEqual([]);
   });
 
   it("does not re-fire startup-failed CI when the final PR read becomes draft", async () => {

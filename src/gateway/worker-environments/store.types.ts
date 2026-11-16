@@ -1,3 +1,11 @@
+import type {
+  WorkerProfile,
+  WorkerResourceReceipt,
+} from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerRetentionOperation,
+  WorkerRetentionObservation,
+} from "../../plugins/worker-retention.types.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -36,6 +44,31 @@ export type WorkerEnvironmentCommitAdmission = Array<{
 /** Native mutation signatures own the host callbacks and the worker's serializable contract. */
 export type WorkerEnvironmentMutationMethods = {
   createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord;
+  recordResourceReceipt(input: {
+    environmentId: string;
+    provisionOperationId: string;
+    receipt: WorkerResourceReceipt;
+    assertCurrent: () => void;
+  }): WorkerEnvironmentRecord;
+  beginRetentionOperation(input: {
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    operation: WorkerRetentionOperation;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
+  recordRetentionObservation(input: {
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    observation: WorkerRetentionObservation;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
+  setRetentionRuntimeAdmission(input: {
+    ready: boolean;
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    expectedClaimRevision: string;
+    assertCurrent: () => void;
+  }): WorkerEnvironmentRecord;
   ensureNodeEnrollment(environmentId: string): WorkerEnvironmentRecord;
   revokeEnvironmentCredential(input: CredentialRevocationInput): void;
   reconcileSharedHost(input: {
@@ -86,6 +119,15 @@ export type WorkerEnvironmentMutationMethods = {
     maxTotal: number;
     assertCurrent: () => void;
   }): WorkerEnvironmentRecord | undefined;
+  refreshPreparedProject(input: {
+    environmentId: string;
+    ownerEpoch: number;
+    preparationKey: string;
+    sessionId: string;
+    expectedGeneration: number;
+    profileSnapshot: WorkerProfile;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
   requestPreparedDestroy(input: {
     environmentId: string;
     ownerEpoch: number;

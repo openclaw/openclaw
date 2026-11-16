@@ -9,6 +9,7 @@ import { projectSessionTranscriptFacts } from "./session-transcript-projection-f
 export function initializeSessionActorContextStats(
   database: OpenClawAgentDatabase,
   state: SessionActorStoredState,
+  previous?: SessionActorStoredState,
 ): void {
   if (
     state.transcript.contextStats ||
@@ -17,6 +18,19 @@ export function initializeSessionActorContextStats(
     state.transcript.projection?.needsRebuild ||
     state.transcript.projection?.hasUnclassifiedEvents
   ) {
+    return;
+  }
+  const version = state.hot.transcript.version;
+  const prior = previous?.hot.transcript.version;
+  if (
+    previous?.transcript.contextStats &&
+    previous.hot.entry?.sessionId === state.hot.entry.sessionId &&
+    prior?.generation === version.generation &&
+    prior.rawSeq === version.rawSeq &&
+    prior.updatedAt === version.updatedAt
+  ) {
+    // Entry-only invalidation does not change totals for this freshly admitted transcript.
+    state.transcript.contextStats = previous.transcript.contextStats;
     return;
   }
   if (state.hot.transcript.version.rawSeq === null) {
@@ -41,8 +55,7 @@ export function initializeSessionActorContextStats(
         sessionKey: state.hot.target.sessionKey,
         sessionId: state.hot.entry.sessionId,
       },
-      // A metadata-only rewrite can change retained-prefix bytes without rotating generation.
-      (projection) => readVisibleTranscriptStats(projection, true),
+      (projection) => readVisibleTranscriptStats(projection),
       state.transcript.complete ? projectSessionTranscriptFacts(state) : undefined,
     );
     if (result.kind === "value") {

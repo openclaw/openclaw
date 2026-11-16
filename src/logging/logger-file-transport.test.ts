@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
+import * as fileLogWorker from "./logger-file-worker.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -22,18 +22,16 @@ function entry(file: string, payload: string, maxFileBytes = 1024 * 1024) {
   return { file, hostname: "transport-test-host", maxFileBytes, payload };
 }
 function records(file: string): { message?: string; dropped?: number; index?: number }[] {
-  return read(file)
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  const lines = read(file).trim().split("\n");
+  return lines.map((line) => JSON.parse(line));
 }
 function logTo(file: string, message: string) {
   setLoggerOverride({ level: "info", file });
   getLogger().info(message);
 }
-function failAppends(shouldFail: (file: Parameters<typeof fsPromises.open>[0]) => boolean) {
-  const open = fsPromises.open.bind(fsPromises);
-  vi.spyOn(fsPromises, "open").mockImplementation(async (file, ...args) => {
+function failAppends(shouldFail: (file: Parameters<typeof fs.openSync>[0]) => boolean) {
+  const open = fs.openSync.bind(fs);
+  vi.spyOn(fs, "openSync").mockImplementation((file, ...args) => {
     if (shouldFail(file)) {
       throw new Error("injected append failure");
     }
@@ -84,8 +82,7 @@ beforeEach(() => {
 });
 
 it("writes queued records in order and byte-identically to the synchronous drain", async () => {
-  const syncPath = logPathTracker.nextPath();
-  const asyncPath = logPathTracker.nextPath();
+  const [syncPath, asyncPath] = [logPathTracker.nextPath(), logPathTracker.nextPath()];
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
   vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
@@ -93,14 +90,13 @@ it("writes queued records in order and byte-identically to the synchronous drain
 
   writeStableRecords();
   fileLogTransport.drainSync();
-  const syncBytes = fs.readFileSync(syncPath);
 
   resetLogger();
   setLoggerOverride({ level: "info", file: asyncPath });
   writeStableRecords();
   await fileLogTransport.flush();
 
-  expect(fs.readFileSync(asyncPath)).toEqual(syncBytes);
+  expect(fs.readFileSync(asyncPath)).toEqual(fs.readFileSync(syncPath));
   const messages = records(syncPath).map((record) => record.message);
   expect(messages).toEqual(["first queued record", "second queued record"]);
 });
@@ -124,8 +120,7 @@ it("drops the oldest records on overflow and writes one count marker", async () 
 it.each(["async", "sync"])(
   "preserves rotation and target boundaries in %s batches",
   async (mode) => {
-    const firstPath = logPathTracker.nextPath();
-    const secondPath = logPathTracker.nextPath();
+    const [firstPath, secondPath] = [logPathTracker.nextPath(), logPathTracker.nextPath()];
     const payloads = [1, 2, 3, 4, 5, "x".repeat(128), 7].map(
       (value) => `${JSON.stringify(value)}\n`,
     );
@@ -155,21 +150,15 @@ it.each(["async", "sync"])(
 it("rescues the unissued tail without replaying an in-flight batch", async () => {
   const [issued, release] = [createDeferred(), createDeferred()] as const;
   let issuedRecords = 0;
-  const openFile = fsPromises.open.bind(fsPromises);
-  vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-    const handle = await openFile(...args);
-    if (args[0] === logPath) {
-      const append = handle.appendFile.bind(handle);
-      vi.spyOn(handle, "appendFile").mockImplementation(async (...appendArgs) => {
-        await append(...appendArgs);
-        const content = appendArgs[0];
-        assert(typeof content === "string", "Expected a serialized log batch");
-        issuedRecords = content.trim().split("\n").length;
-        issued.resolve();
-        await release.promise;
-      });
+  const write = fileLogWorker.runFileLogIOInWorker;
+  vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request) => {
+    const result = await write(request);
+    if (request.type === "append" && request.file === logPath) {
+      issuedRecords = request.payload.trim().split("\n").length;
+      issued.resolve();
+      await release.promise;
     }
-    return handle;
+    return result;
   });
   const entries = Array.from({ length: 4 }, (_, index) =>
     entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
@@ -213,11 +202,7 @@ for (const kind of ["symlink", "hardlink"]) {
     async () => {
       const target = logPathTracker.nextPath();
       fs.writeFileSync(target, "untouched");
-      if (kind === "symlink") {
-        fs.symlinkSync(target, logPath);
-      } else {
-        fs.linkSync(target, logPath);
-      }
+      (kind === "symlink" ? fs.symlinkSync : fs.linkSync)(target, logPath);
       failedLogPaths.add(logPath);
       const stderr = captureStderr();
       setLoggerOverride({ level: "info", file: logPath });
@@ -225,9 +210,7 @@ for (const kind of ["symlink", "hardlink"]) {
       await fileLogTransport.flush();
 
       expect(read(target)).toBe("untouched");
-      expect(
-        warningLines(stderr).filter((line) => line.includes("log file append failed")),
-      ).toHaveLength(1);
+      expect(warningLines(stderr)).toEqual([expect.stringContaining("log file append failed")]);
     },
   );
 }
@@ -285,9 +268,9 @@ it("keeps failure streaks independent by file", async () => {
 // A deleted directory reached through its open descriptor mirrors a stale mounted
 // /tmp: children fail with ENOENT while the parent path still resolves, the shape
 // on which Node's recursive mkdirSync never returns.
-it.skipIf(process.platform !== "linux")(
-  "drops records with a warning when the log directory parent is deleted but still resolvable",
-  async () => {
+it.skipIf(process.platform !== "linux").each(["explicit", "default"])(
+  "drops %s records with a warning when the log directory parent is deleted but still resolvable",
+  async (target) => {
     const deletedDir = logPathTracker.nextPath();
     fs.mkdirSync(deletedDir);
     const fd = fs.openSync(deletedDir, "r");
@@ -295,7 +278,17 @@ it.skipIf(process.platform !== "linux")(
       fs.rmdirSync(deletedDir);
       logPath = `/proc/self/fd/${fd}/openclaw/openclaw.log`;
       const stderrSpy = captureStderr();
-      logTo(logPath, "only-record-after-deletion");
+      if (target === "explicit") {
+        logTo(logPath, "only-record-after-deletion");
+      } else {
+        logPath = "openclaw-deleted-state.log";
+        fileLogTransport.enqueue({
+          ...entry(logPath, "only-record-after-deletion\n"),
+          targetPreparation: fileLogTransport.prepareTarget(logPath, true, {
+            options: { stateDir: `/proc/self/fd/${fd}/state` },
+          }),
+        });
+      }
       await fileLogTransport.flush();
 
       const warnings = warningLines(stderrSpy);
@@ -306,12 +299,22 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it("writes a piped append warning before process exit", () => {
+it("shares exit cleanup while flushing queued warnings and later logs", () => {
   fs.mkdirSync(logPath);
+  const exitLogPath = logPathTracker.nextPath();
   const loaderPath = fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url));
   const loggerUrl = new URL("./logger.ts", import.meta.url).href;
+  const cleanupUrl = new URL("../infra/process-exit-cleanup.ts", import.meta.url).href;
   const script = `
+      import assert from "node:assert/strict";
       import { getLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl)};
+      import { registerProcessExitCleanup } from ${JSON.stringify(cleanupUrl)};
+      const exitListeners = process.listenerCount("exit");
+      registerProcessExitCleanup(() => {
+        setLoggerOverride({ level: "info", file: ${JSON.stringify(exitLogPath)} });
+        getLogger().info("exit-owner-record");
+      });
+      assert.equal(process.listenerCount("exit"), exitListeners, "adjacent exit cleanup must share logger listener");
       const writeStderr = process.stderr.write.bind(process.stderr);
       process.stderr.write = (chunk, ...args) => {
         setImmediate(() => writeStderr(chunk, ...args));
@@ -329,8 +332,9 @@ it("writes a piped append warning before process exit", () => {
   });
 
   expect(result.error).toBeUndefined();
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toContain("log file append failed; records dropped");
+  expect(records(exitLogPath).map((record) => record.message)).toEqual(["exit-owner-record"]);
 });
 
 it("retries the warning after stderr rejects it", async () => {

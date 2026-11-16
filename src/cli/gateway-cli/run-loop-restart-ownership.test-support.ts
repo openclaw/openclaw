@@ -8,6 +8,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
   createCloseMock,
+  createSignaledStart,
   createUpdateRespawnChild,
   advanceWithoutCalls,
   setPlatform,
@@ -76,23 +77,15 @@ export function registerGatewayRestartOwnershipTests({
       await import("../../infra/gateway-state-owner-heartbeat.js");
     const lockPath = path.join(tempDirs.make("openclaw-run-loop-owner-loss-"), "owner.lock");
     fs.writeFileSync(lockPath, "owner");
-    let lastBeat: BigInt64Array | undefined;
     const createWorker = workerCpu.createCpuTrackedWorker;
     const observe = vi
       .spyOn(workerCpu, "createCpuTrackedWorker")
-      .mockImplementation((_url, opts) => {
+      .mockImplementation((url, opts) => {
         const data: unknown = opts?.workerData;
-        if (!isRecord(data) || !(data.lastBeat instanceof SharedArrayBuffer)) {
+        if (!isRecord(data)) {
           throw new Error("Expected heartbeat observation");
         }
-        lastBeat = new BigInt64Array(data.lastBeat);
-        // This regression exercises parent fencing and restart settlement; worker renewal has its own suite.
-        return createWorker(
-          new URL(
-            'data:text/javascript,import { parentPort } from "node:worker_threads"; parentPort.on("message", () => parentPort.close());',
-          ),
-          opts,
-        );
+        return createWorker(url, { ...opts, workerData: { ...data, intervalMs: 10 } });
       });
     try {
       await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
@@ -104,24 +97,20 @@ export function registerGatewayRestartOwnershipTests({
           onLost,
         );
         try {
-          fs.renameSync(lockPath, `${lockPath}.retired`);
-          fs.writeFileSync(lockPath, "successor");
-          Atomics.store(lastBeat!, 0, BigInt(Date.now() - 65_000));
           consumeIntent.mockRejectedValueOnce(
             new Error("owner lock was removed or replaced; restart the Gateway"),
           );
-          vi.useFakeTimers();
-          heartbeat.inspect();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(onLost).toHaveBeenCalledOnce();
-          expectCallCount(2, start, acquireLock);
-          expect(close).toHaveBeenCalledOnce();
+          fs.renameSync(lockPath, `${lockPath}.retired`);
+          fs.writeFileSync(lockPath, "successor");
+          await vi.waitFor(() => {
+            expect(onLost).toHaveBeenCalledOnce();
+            expectCallCount(2, start, acquireLock);
+            expect(close).toHaveBeenCalledOnce();
+          });
         } finally {
           await heartbeat.stop();
           captureSignal("SIGINT")();
-          await vi.advanceTimersByTimeAsync(0);
           await expect(exited).resolves.toBe(0);
-          vi.useRealTimers();
         }
       });
     } finally {
@@ -146,6 +135,8 @@ export function registerGatewayRestartOwnershipTests({
         const cleanup = createDeferredCore();
         const close = createCloseMock().mockImplementationOnce(() => cleanup.promise);
         const { start, runtime, exited } = await startLoop({ close });
+        const replacement = createSignaledStart(close);
+        start.mockImplementationOnce(replacement.start);
         const stop = captureSignal("SIGINT");
         vi.useFakeTimers();
         try {
@@ -156,6 +147,7 @@ export function registerGatewayRestartOwnershipTests({
           if (cleanupCompletes) {
             cleanup.resolve();
             await vi.advanceTimersByTimeAsync(0);
+            await replacement.started;
             expect(start).toHaveBeenCalledTimes(2);
           } else {
             await advanceWithoutCalls(74_000, runtime.exit);

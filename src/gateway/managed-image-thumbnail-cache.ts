@@ -13,6 +13,7 @@ import {
   DEFAULT_CHAT_IMAGE_RENDITION_WIDTH,
   type ChatImageRenditionWidth,
 } from "../shared/chat-image-renditions.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 export async function encodeImageThumbnail(
   source: Uint8Array,
@@ -63,23 +64,20 @@ export async function resolveManagedImageThumbnail(
   if (cached) {
     return cached;
   }
-  const active = managedImageThumbnailJobs.get(cacheKey);
-  if (active) {
-    return await active;
-  }
-  if (limitManagedImageThumbnails.pendingCount >= MANAGED_IMAGE_THUMBNAIL_MAX_PENDING) {
-    throw new Error("managed image thumbnail queue is full");
-  }
-  const pending = limitManagedImageThumbnails(create)
-    .then((thumbnail) => {
-      managedImageThumbnailCache.set(cacheKey, thumbnail);
-      return thumbnail;
-    })
-    .finally(() => {
-      managedImageThumbnailJobs.delete(cacheKey);
-    });
-  managedImageThumbnailJobs.set(cacheKey, pending);
-  return await pending;
+  return await getOrCreatePromise(
+    managedImageThumbnailJobs,
+    cacheKey,
+    () => {
+      if (limitManagedImageThumbnails.pendingCount >= MANAGED_IMAGE_THUMBNAIL_MAX_PENDING) {
+        throw new Error("managed image thumbnail queue is full");
+      }
+      return limitManagedImageThumbnails(create).then((thumbnail) => {
+        managedImageThumbnailCache.set(cacheKey, thumbnail);
+        return thumbnail;
+      });
+    },
+    { evictOnSettled: true },
+  );
 }
 
 export async function readImageThumbnailFromFile(

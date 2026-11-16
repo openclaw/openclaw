@@ -4,7 +4,7 @@ import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
+import { isRuntimeAdmissibleForFloor } from "../infra/semver.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
@@ -36,7 +36,7 @@ import {
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
 import {
   type AuthorizedDreamingSidecar,
-  detailPluginStartupTrace,
+  recordPluginStartupDiagnostics,
   preparePluginLoadRecord,
   prepareRuntimePluginConfig,
   type PreparedPluginConfig,
@@ -252,7 +252,7 @@ export function* loadRuntimePluginCandidate(params: {
     minimumCompatibleVersion &&
     manifestRecord.packageName === runtimePackage.npmSpec &&
     packageVersion &&
-    (compareOpenClawReleaseVersions(packageVersion, minimumCompatibleVersion) ?? 0) < 0
+    isRuntimeAdmissibleForFloor(packageVersion, hostVersion, minimumCompatibleVersion) === false
   ) {
     // A broad pluginApi range cannot prove lazy SDK imports from an older runtime still work.
     yield;
@@ -705,23 +705,15 @@ export function* loadRuntimePluginCandidate(params: {
     });
     failed = true;
   } finally {
-    const elapsed = performance.now() - beforeModuleLoad;
-    const registerMs =
-      beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
-    detailPluginStartupTrace(params.options.startupTrace, record.id, [
-      ["configValidationMs", configValidationMs],
-      ["artifactPreparationMs", artifactPreparationMs],
-      ["loadMs", moduleLoadMs || elapsed],
-      ["modulePreparationMs", modulePreparationMs],
-      ["loadFailedCount", failed && beforeRegister === undefined ? 1 : 0],
-      ...(registerMs === undefined
-        ? []
-        : ([
-            ["registerMs", registerMs],
-            ["loadAndRegisterMs", elapsed],
-            ["registerFailedCount", failed ? 1 : 0],
-          ] as const)),
-    ]);
+    recordPluginStartupDiagnostics(params, record, {
+      beforeModuleLoad,
+      beforeRegister,
+      configValidationMs,
+      artifactPreparationMs,
+      moduleLoadMs,
+      modulePreparationMs,
+      failed,
+    });
   }
 }
 

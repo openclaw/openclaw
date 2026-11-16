@@ -17,11 +17,8 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
-import {
-  githubPublicationApiArgs,
-  runPublicationCommand,
-} from "./github-publication-git-transport.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
+import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
 import { matchesGitHubPublicationIdentityRow } from "./github-publication-receipt.js";
 import {
   captureGitHubPublicationActionAuthority,
@@ -142,6 +139,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   assertCurrent: () => void;
 }): Promise<{
   result: Inspection;
+  details: Awaited<ReturnType<typeof readOwnGitHubPullRequest>>["details"];
   assertCurrent: () => void;
   ownPublication: boolean;
   publishedHeadCommit?: string;
@@ -187,6 +185,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   });
   return {
     result: inspected.result,
+    details: inspected.details,
     assertCurrent: inspected.assertCurrent,
     ownPublication: inspected.ownPublication,
     requirePublicRepositories: inspected.requirePublicRepositories,
@@ -221,42 +220,35 @@ export async function readOwnGitHubPullRequest(params: {
   const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
   const hasReadEndpoint =
     host === "github.com" || Boolean(config.gateway?.github?.apiBaseUrl?.trim());
+  let checkedConfig = config;
   const assertIdentityCurrent = () => {
     params.reader.assertCurrent();
+    // Retained readers outlive config/secrets reloads; only an API base change revokes them.
+    const currentConfig = currentGitHubPublicationConfig();
     if (
       (identity.host ?? "github.com") !== host ||
-      resolveConfiguredGitHubApiBaseUrl(currentGitHubPublicationConfig()) !== apiBaseUrl ||
+      (currentConfig !== checkedConfig &&
+        resolveConfiguredGitHubApiBaseUrl(currentConfig) !== apiBaseUrl) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
       (publicContinuation &&
         (!publication || !matchesGitHubPublicationIdentityRow(publication.publisher, identity)))
     ) {
       throw new Error("The GitHub publisher changed; retry inspection.");
     }
+    checkedConfig = currentConfig;
   };
   const assertCurrent = () => {
-    assertRequester();
+    params.assertCurrent();
     assertIdentityCurrent();
   };
   assertCurrent();
-  const read = async (endpoint: string): Promise<unknown> => {
-    assertCurrent();
-    const response = await runPublicationCommand(githubPublicationApiArgs(endpoint, "GET", host), {
-      env: identity.env,
-      beforeRun: assertCurrent,
-    }).catch(() => {
-      assertCurrent();
-      throw unavailable();
-    });
-    assertCurrent();
-    if (response.code !== 0) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(response.stdout.toString("utf8"));
-    } catch {
-      throw unavailable();
-    }
-  };
+  const read = createGitHubPublicationJsonReader({
+    host,
+    env: identity.env,
+    assertCurrent,
+    unavailable,
+    requireSuccess: false,
+  });
   const hasAccess = async (repository: string, accountId: number, login: string) => {
     const permission = await read(
       `repos/${repository}/collaborators/${encodeURIComponent(login)}/permission`,

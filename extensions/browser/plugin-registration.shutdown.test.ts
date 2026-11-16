@@ -2,12 +2,17 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { startLazyPluginServiceModule } from "openclaw/plugin-sdk/plugin-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectCollected } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
+import { readSystemProfileImportState } from "./src/browser/system-profile-import-state.js";
 
 const runtime = vi.hoisted(() => ({
   upgradeExtension: vi.fn(async () => true),
@@ -42,9 +47,61 @@ vi.mock("./src/browser/session-tab-store.js", () => ({
   initializeBrowserSessionTabStore: vi.fn(),
   drainBrowserSessionTabStore: vi.fn(async () => undefined),
 }));
-vi.mock("./src/browser/system-profile-import-state.js", () => ({
-  configureSystemProfileImportStateStore: vi.fn(),
-}));
+
+it("releases retired import-state stores without clearing a replacement", async () => {
+  const references: WeakRef<object>[] = [];
+  class ImportStateOwner {
+    constructor() {
+      references.push(new WeakRef(this));
+    }
+    assertCurrent() {}
+  }
+  let reads = 0;
+  const register = () => {
+    const disposals: Array<() => void | Promise<void>> = [];
+    const api = createTestPluginApi({
+      runtime: createPluginRuntimeMock({
+        state: {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const owner = new ImportStateOwner();
+            const store = createPluginStateKeyedStoreForTests<T>(
+              "browser",
+              options,
+              owner.assertCurrent.bind(owner),
+            );
+            store.lookup = async () => {
+              reads++;
+              return undefined;
+            };
+            return store;
+          },
+        },
+      }),
+    });
+    api.lifecycle.onDispose = (dispose) => {
+      disposals.push(dispose);
+      return () => {};
+    };
+    registerBrowserPlugin(api);
+    return async () => {
+      for (const dispose of disposals.splice(0)) {
+        await dispose();
+      }
+    };
+  };
+  let dispose = register();
+  for (let generation = 0; generation < 20; generation++) {
+    const replacement = register();
+    await dispose();
+    dispose = replacement;
+    await readSystemProfileImportState();
+    expect(reads).toBe(generation + 1);
+  }
+  await dispose();
+  await expectCollected(...references);
+  expect(await readSystemProfileImportState()).toBeUndefined();
+  expect(reads).toBe(20);
+});
 
 function registerLifecycle(eager = false, path = "/browser/screencast") {
   if (eager) {
@@ -58,7 +115,12 @@ function registerLifecycle(eager = false, path = "/browser/screencast") {
   registerBrowserPlugin(api);
   const route = vi.mocked(api.registerHttpRoute).mock.calls.findLast(([r]) => r.path === path)?.[0];
   const service = vi.mocked(api.registerService).mock.calls.at(-1)?.[0];
-  if (!route?.handleUpgrade || !service?.stop) {
+  if (
+    !route?.handleUpgrade ||
+    !service?.stop ||
+    service.apiVersion === 2 ||
+    service.apiVersion === 3
+  ) {
     throw new Error("expected browser relay route and service lifecycle");
   }
   const scheduler = createTestPluginServiceScheduler();

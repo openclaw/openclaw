@@ -71,8 +71,9 @@ it.each([
     expect(output.repairHint).toContain("openclaw doctor --fix");
     expect(output.issues).toContainEqual(
       expect.objectContaining({
-        path: "skills.workshop",
-        message: expect.stringContaining("approvalPolicy"),
+        // The whole core key is retired; its settings moved to the skill-workshop plugin.
+        path: "skills",
+        message: expect.stringContaining("workshop"),
       }),
     );
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);

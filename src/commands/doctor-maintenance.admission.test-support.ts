@@ -1,6 +1,5 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { isSqliteSnapshotStagingMode } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -57,7 +57,6 @@ export function setupDoctorAdmissionFixture() {
       directories.cleanup();
     } finally {
       vi.restoreAllMocks();
-      syncBuiltinESMExports();
       vi.unstubAllEnvs();
     }
   });
@@ -76,7 +75,6 @@ export function setupDoctorAdmissionFixture() {
       import fs from 'node:fs';
       import path from 'node:path';
       import sqlite from 'node:sqlite';
-      import { syncBuiltinESMExports } from 'node:module';
       import { fileURLToPath } from 'node:url';
       if (process.versions.bun) {
         const { ensureSqliteLibrarySelected } = await import(${JSON.stringify(new URL("../infra/bun-sqlite-library.js", import.meta.url).href)});
@@ -99,7 +97,6 @@ export function setupDoctorAdmissionFixture() {
           return Reflect.construct(target, args, newTarget);
         }
       });
-      syncBuiltinESMExports();
       // A wrong but disposable path must be refused before SQLite creates it.
       assert.throws(() => new sqlite.DatabaseSync(${JSON.stringify(refused)}),
         /Handoff must use the task-private database/);
@@ -109,6 +106,12 @@ export function setupDoctorAdmissionFixture() {
       native.close();
       fs.writeFileSync(path.join(root, 'sqlite-open-guard-' + process.pid + '.json'),
         JSON.stringify({ pid: process.pid, entry: process.argv[1], databasePath: expected }));
+      process.on('message', (message) => {
+        if (message && typeof message === 'object' && Array.isArray(message.args)) {
+          fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
+            JSON.stringify(message.args) + '\\n');
+        }
+      });
     `,
     );
     const childEnv = withRuntimePreload(
@@ -120,13 +123,12 @@ export function setupDoctorAdmissionFixture() {
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
     expect(binding.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(binding.databasePath);
     // Compiled runtime modules use native builtin exports, outside Vitest's facade.
-    // Observe the actual functions and synchronize ESM bindings; calls stay real.
+    // Observe the shared builtin object; calls stay real.
     const spawns = [
       vi.spyOn(childProcess, "spawnSync"),
       vi.spyOn(childProcess, "spawn"),
       vi.spyOn(childProcess, "execFile"),
     ];
-    syncBuiltinESMExports();
     const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" };
     const run = createUpdateRun({ trigger: "cli" }, { env });
     finishUpdateRun(run.runId, { status: "succeeded" }, { env });
@@ -189,7 +191,23 @@ export function setupDoctorAdmissionFixture() {
             fs.readFileSync(path.join(root, `sqlite-open-guard-${pid}.json`), "utf8"),
           );
           expect(guarded).toEqual({ pid, entry, databasePath: binding.databasePath });
-          expect([database, resolveClientCredentialStorePath(env)]).toContain(args[marker + 2]);
+          const requests: string[][] =
+            args[marker + 1] === "session"
+              ? fs
+                  .readFileSync(path.join(root, `sqlite-readonly-requests-${pid}.jsonl`), "utf8")
+                  .trim()
+                  .split("\n")
+                  .map((line) => JSON.parse(line))
+              : [args.slice(marker + 1)];
+          expect(requests.length).toBeGreaterThan(0);
+          for (const [mode, sourcePath] of requests) {
+            // Allocation/retirement requests name private directories; actual reads still
+            // prove their source, including those delivered over the persistent child's IPC.
+            if (isSqliteSnapshotStagingMode(mode) || mode === "reclaim") {
+              continue;
+            }
+            expect([database, resolveClientCredentialStorePath(env)]).toContain(sourcePath);
+          }
           // An actual resolver consumer must have its own witness. Explicit-path
           // workers need no fabricated consumer; their native opener is fenced.
           if (records.some((record) => record.phase === "consumer")) {

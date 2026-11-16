@@ -250,6 +250,30 @@ it("selects later pages and reports partial extraction to both models", async ()
   expect(result.details).toMatchObject({ native: false, model: OPENAI });
 });
 
+it("keeps partial-document notices in PDF order", async () => {
+  const { pdf, extract } = await extraction();
+  extract
+    .mockResolvedValueOnce({
+      text: "First document",
+      images: [],
+      metadata: { textTruncated: true, imagesTruncated: false },
+    })
+    .mockResolvedValueOnce({
+      text: "Second document",
+      images: [],
+      metadata: { textTruncated: false, imagesTruncated: true },
+    });
+  const result = await pdf.execute("pdf", { pdfs: ["/tmp/first.pdf", "/tmp/second.pdf"] });
+  expect(contextText()).toContain("[PDF 1 text]\n[Partial document: text truncated.]");
+  expect(contextText()).toContain("[PDF 2 text]\n[Partial document: image rendering truncated.]");
+  expect(result.content).toEqual(
+    textContent(
+      "PDF 1: [Partial document: text truncated.]\n" +
+        "PDF 2: [Partial document: image rendering truncated.]\nfallback summary",
+    ),
+  );
+});
+
 it.each([
   { stopReason: "stop", errorMessage: "  bad request  ", expected: ": bad request" },
   { stopReason: "error", errorMessage: undefined, expected: "" },

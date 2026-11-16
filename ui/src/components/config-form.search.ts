@@ -4,12 +4,14 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
+  hintForPath,
   localizedHintForPath,
   humanize,
   schemaType,
   type JsonSchema,
 } from "../lib/config-form-utils.ts";
 import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
+import { sentenceCaseConfigLabel } from "./config-form.labels.ts";
 
 export type ConfigSearchCriteria = ReturnType<typeof parseConfigSearchQuery>;
 
@@ -47,7 +49,10 @@ export function resolveConfigFieldMeta(
 ) {
   const hint = localizedHintForPath(path, hints);
   const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
-  const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
+  const sourceLabel = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
+  // A translated hint already follows its own language's capitalization.
+  const translated = hint?.label !== undefined && hint.label !== hintForPath(path, hints)?.label;
+  const label = translated ? sourceLabel : sentenceCaseConfigLabel(sourceLabel);
   const help = hint?.help ?? schema.description;
   const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
   const hintTags = normalizeTags(hint?.tags);
@@ -59,15 +64,21 @@ export function resolveConfigFieldMeta(
 }
 
 function defaultTextMatcher(value: string, query: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value).includes(normalizeLowercaseStringOrEmpty(query));
+  return normalizeLowercaseStringOrEmpty(value)
+    .normalize("NFC")
+    .includes(normalizeLowercaseStringOrEmpty(query).normalize("NFC"));
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
   if (filterTags.length === 0) {
     return true;
   }
-  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
-  return filterTags.every((tag) => normalized.has(tag));
+  const normalized = new Set(
+    fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag).normalize("NFC")),
+  );
+  return filterTags.every((tag) =>
+    normalized.has(normalizeLowercaseStringOrEmpty(tag).normalize("NFC")),
+  );
 }
 
 export function matchesNodeSelf(params: {

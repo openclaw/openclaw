@@ -46,7 +46,6 @@ import {
 } from "../../../talk/client-voice-session-source.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import {
-  appendClientVoiceTranscript,
   closeClientVoiceSession,
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -74,6 +73,7 @@ import {
   sendTalkClientGatewayControlSpeech,
 } from "../client-gateway-control.js";
 import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
+import { appendTalkClientTranscript } from "../client-transcript.js";
 import { createTalkRunCancel } from "../realtime-run-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
@@ -207,6 +207,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             },
             assertPreparationCurrent,
             request.signal,
+            (change) =>
+              request.sessionMutationAuthorization?.followRegistration?.(
+                { agentId, sessionKey: target.canonicalKey },
+                change,
+              ),
           );
           if (preparedRequester.opaqueCommitGuard) {
             requester.assertCurrent();
@@ -577,17 +582,20 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         sessionMutationAuthorization?.talkSessionTarget ??
         (await prepareTalkSessionTarget(config, params.sessionKey));
       sessionMutationAuthorization?.assertCurrent();
-      await appendClientVoiceTranscript({
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
-        voiceSessionId: params.voiceSessionId,
-        entryId: params.entryId,
-        role: params.role,
-        text: params.text,
-        ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
-        config,
-      });
+      await appendTalkClientTranscript(
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
+          voiceSessionId: params.voiceSessionId,
+          entryId: params.entryId,
+          role: params.role,
+          text: params.text,
+          ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
+          config,
+        },
+        context,
+      );
       respond(true, { ok: true }, undefined);
     },
     clientMutationError,

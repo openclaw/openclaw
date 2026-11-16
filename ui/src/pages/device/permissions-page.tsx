@@ -12,6 +12,7 @@ import {
   SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -111,7 +112,15 @@ export function DevicePermissionsPage() {
           <SettingsSection title={t("configPage.deviceSettings.location")}>
             <SettingsRow
               title={t("configPage.deviceSettings.locationAccess")}
-              description={t("configPage.deviceSettings.locationHint")}
+              description={
+                <>
+                  {t("configPage.deviceSettings.locationHint")}
+                  <Show when={props.snapshot.device.platform === "macos"}>
+                    {" "}
+                    {t("configPage.deviceSettings.locationAlwaysHint")}
+                  </Show>
+                </>
+              }
               stackedOnNarrow
               control={
                 <SettingsSegmented
@@ -202,7 +211,11 @@ export function DevicePermissionsPage() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}

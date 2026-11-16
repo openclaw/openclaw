@@ -1,4 +1,8 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "../../state/openclaw-agent-db-lease.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -6,8 +10,59 @@ import type { SessionColdRecord } from "./session-cold-storage-codec.js";
 import { createSessionTranscriptFtsInserter } from "./session-transcript-fts.js";
 import {
   createTranscriptEventInserter,
+  prepareColdTranscriptPayload,
   TRANSCRIPT_INSERT_BATCH_SIZE,
+  type TranscriptPayloadRecord,
 } from "./transcript-payload.js";
+
+/** Cold archives already own the bodies; insert only their native navigation and inline exceptions. */
+function createNavigationInserter(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  sessionId: string,
+) {
+  type Row = TranscriptPayloadRecord & { session_id: string; seq: number; created_at: number };
+  const inserts = new Map<number, ReturnType<typeof prepareInsert>>();
+  const prepareInsert = (count: number) =>
+    prepareSqliteQuerySync<readonly Row[]>(database.db, (parameter) =>
+      getNodeSqliteKysely<DB>(database.db)
+        .insertInto("transcript_events")
+        .values(
+          Array.from({ length: count }, (_, index) => ({
+            session_id: sessionId,
+            seq: parameter((rows) => rows[index]!.seq),
+            created_at: parameter((rows) => rows[index]!.created_at),
+            event_json: parameter((rows) => rows[index]!.event_json),
+            event_zstd: null,
+            event_utf8_bytes: parameter((rows) => rows[index]!.event_utf8_bytes),
+            navigation_json: parameter((rows) => rows[index]!.navigation_json),
+            navigation_type: parameter((rows) => rows[index]!.navigation_type),
+            navigation_custom_type: parameter((rows) => rows[index]!.navigation_custom_type),
+            navigation_display: parameter((rows) => rows[index]!.navigation_display),
+            message_role: parameter((rows) => rows[index]!.message_role),
+            navigation_last_type: parameter((rows) => rows[index]!.navigation_last_type),
+            navigation_last_custom_type: parameter(
+              (rows) => rows[index]!.navigation_last_custom_type,
+            ),
+            navigation_valid: parameter((rows) => rows[index]!.navigation_valid),
+          })),
+        ),
+    );
+  return (rows: readonly { seq: number; createdAt: number; eventJson: string }[]) => {
+    let insert = inserts.get(rows.length);
+    if (!insert) {
+      insert = prepareInsert(rows.length);
+      inserts.set(rows.length, insert);
+    }
+    insert(
+      rows.map((row) => ({
+        session_id: sessionId,
+        seq: row.seq,
+        created_at: row.createdAt,
+        ...prepareColdTranscriptPayload(database.db, row.eventJson),
+      })),
+    );
+  };
+}
 
 /** Restore canonical archive records or publish their derived navigation under the same owner. */
 export function writeSessionColdRecordsInTransaction(
@@ -17,14 +72,17 @@ export function writeSessionColdRecordsInTransaction(
   mode: "restore" | "navigation",
 ): void {
   const db = getNodeSqliteKysely<DB>(database.db);
-  const insertEvents = createTranscriptEventInserter(database.db, session_id);
-  const eventRows: Parameters<typeof insertEvents.batch>[0][number][] = [];
+  const insertEvents =
+    mode === "navigation"
+      ? createNavigationInserter(database, session_id)
+      : createTranscriptEventInserter(database.db, session_id).batch;
+  const eventRows: Parameters<typeof insertEvents>[0][number][] = [];
   const identityRows: DB["transcript_event_identities"][] = [];
   const activeRows: DB["session_transcript_active_events"][] = [];
   let eventCharacters = 0;
   const flushRows = () => {
     if (eventRows.length) {
-      insertEvents.batch(eventRows);
+      insertEvents(eventRows);
       eventRows.length = 0;
       eventCharacters = 0;
     }

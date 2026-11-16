@@ -22,6 +22,7 @@ import {
   recordMcpOAuthAuthorizationRequired,
   startMcpOAuthAuthorization,
 } from "../agents/mcp-oauth.js";
+import { withMcpOAuthTestLease } from "../agents/mcp-oauth.test-support.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -40,6 +41,7 @@ import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import * as providerBrowserAuth from "./provider-browser-auth.js";
 import { mcpAuthLoginHandlers } from "./server-methods/mcp-auth-login.js";
+import { mcpAuthLogoutHandlers } from "./server-methods/mcp-auth-logout.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
@@ -77,6 +79,8 @@ describe("registered mcp.authLogin", () => {
   let beforeLogin: ((request: GatewayRequestHandlerOptions) => Promise<void>) | undefined;
   let admissionSettled = createDeferredCore();
   let discoveryEntered = createDeferredCore();
+  let logoutRequest: GatewayRequestHandlerOptions | undefined;
+  let logoutEntered: Deferred | undefined;
   let releaseDiscovery: Deferred | undefined;
   const requests: string[] = [];
   const endpoint = createServer((request, response) => {
@@ -186,6 +190,17 @@ describe("registered mcp.authLogin", () => {
       } finally {
         admissionSettled.resolve();
       }
+    });
+    const logout = expectDefined(
+      mcpAuthLogoutHandlers["mcp.authLogout"],
+      "registered logout handler",
+    );
+    vi.spyOn(mcpAuthLogoutHandlers, "mcp.authLogout").mockImplementation(async (request) => {
+      logoutRequest = request;
+      // The handler has passed its synchronous checks before the test observes entry.
+      const running = logout(request);
+      logoutEntered?.resolve();
+      await running;
     });
     endpoint.listen(0, "127.0.0.1");
     await once(endpoint, "listening");
@@ -573,6 +588,99 @@ describe("registered mcp.authLogin", () => {
       }
     },
   );
+
+  it("signs a bundle-declared connector out without changing other connections", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const previousMetadata = getCurrentPluginMetadataSnapshotState();
+    const rootDir = path.join(resolveStateDir(), "docs-logout-bundle");
+    const manifestPath = path.join(rootDir, ".codex-plugin", "plugin.json");
+    await mkdir(path.dirname(manifestPath), { recursive: true });
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ name: "docs-bundle", mcpServers: { docs: config } }),
+    );
+    const bundleConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      plugins: { enabled: true, entries: { "docs-bundle": { enabled: true } } },
+    };
+    const unrelated = operatorMcpOAuthIdentity("other", resourceUrl);
+    try {
+      setGatewayPluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "docs-bundle",
+              origin: "global",
+              format: "bundle",
+              bundleFormat: "codex",
+              rootDir,
+              manifestPath,
+            },
+          ],
+        }),
+        { config: bundleConfig },
+      );
+      await writeConfigFile(bundleConfig);
+      const started = await begin();
+      expect((await callback(started.state)).status).toBe(200);
+      expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
+      expect((await store()).tokens?.access_token).toBe("fixture-access");
+      const unrelatedAttempt = await startMcpOAuthAuthorization(unrelated, resolvedTransport(), {});
+      if (unrelatedAttempt.status === "redirect") {
+        await cancelMcpOAuthAuthorization(unrelated, unrelatedAttempt.state);
+      }
+      const unrelatedBefore = await readMcpOAuthStore(unrelated.storeKey);
+      expect(unrelatedBefore.clientInformation).toBeDefined();
+
+      expect((await rpcReq(readOnly, "mcp.authLogout", { serverName: "docs" })).ok).toBe(false);
+      expect(
+        (await rpcReq(owner, "mcp.authLogout", { serverName: "missing" })).error,
+      ).toMatchObject({ message: expect.stringContaining("no operator sign-in to clear") });
+      expect((await store()).tokens?.access_token).toBe("fixture-access");
+
+      // An administrator who loses the scope while logout waits for the credential lease
+      // must not clear the shared sign-in.
+      const revoked = await connect(["operator.admin"]);
+      const holding = createDeferredCore();
+      const release = createDeferredCore();
+      const holder = withMcpOAuthTestLease(identity().storeKey, async () => {
+        holding.resolve();
+        await release.promise;
+      });
+      try {
+        await holding.promise;
+        logoutEntered = createDeferredCore();
+        const pendingLogout = rpcReq(revoked, "mcp.authLogout", { serverName: "docs" });
+        await logoutEntered.promise;
+        expectDefined(logoutRequest?.client, "logout client").connect.scopes = ["operator.read"];
+        release.resolve();
+        await holder;
+        expect((await pendingLogout).ok).toBe(false);
+      } finally {
+        release.resolve();
+        await holder.catch(() => {});
+        logoutEntered = undefined;
+        revoked.close();
+      }
+      expect((await store()).tokens?.access_token).toBe("fixture-access");
+
+      expect(await rpcReq(owner, "mcp.authLogout", { serverName: "docs" })).toMatchObject({
+        ok: true,
+        payload: { serverName: "docs" },
+      });
+      const stored = await store();
+      expect([stored.tokens, stored.clientInformation]).toEqual([undefined, undefined]);
+      expect(await readMcpOAuthStore(unrelated.storeKey)).toEqual(unrelatedBefore);
+    } finally {
+      await clearMcpOAuthCredentials(unrelated);
+      if (previousMetadata.owner === "gateway") {
+        setGatewayPluginMetadataSnapshot(previousMetadata.snapshot);
+      } else {
+        setCurrentPluginMetadataSnapshot(previousMetadata.snapshot);
+      }
+      await configure();
+    }
+  });
 
   it("does not cancel a newer CLI attempt when its browser sign-in is denied", async () => {
     await clearMcpOAuthCredentials(identity());

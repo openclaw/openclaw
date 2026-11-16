@@ -1,13 +1,15 @@
-import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { resolveNodeRuntimeExecutableAsync } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
+import { BrokerChild } from "./spawn-broker/child.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
+import { spawnProcess } from "./spawn-utils.js";
 import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
@@ -19,22 +21,33 @@ export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
   initiateSpawn?: SpawnInitiation,
+  prepareCurrent?: () => Promise<void>,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveNodeRuntimeExecutable();
+  const node = await resolveNodeRuntimeExecutableAsync();
   if (!node) {
     throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
+  const broker = getSpawnBroker();
   const child = runWithMainThreadTask(
     "process:spawn",
     () =>
-      spawn(node, resolveRuntimeWorkerArgv(worker, node), {
+      spawnProcess(node, resolveRuntimeWorkerArgv(worker, node), {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         serialization: "json",
         env: process.env,
       }),
     "pty-helper",
   );
+  const brokerChild = child instanceof BrokerChild ? child : undefined;
+  if (brokerChild) {
+    try {
+      await brokerChild.ready();
+    } catch (error) {
+      await brokerChild.waitForClose();
+      throw error;
+    }
+  }
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
   if (!stdout || !stderrPipe) {
@@ -54,6 +67,7 @@ export async function spawnNodeTerminalPty(
   let helperExit: typeof exited;
   let outputEnded = false;
   let ipcClosed = false;
+  let preparation: Promise<void> | undefined;
 
   const fail = (error: Error) => {
     if (exited) {
@@ -75,22 +89,45 @@ export async function spawnNodeTerminalPty(
       }, CLEANUP_TIMEOUT_MS);
     }
   };
-  const send = (message: TerminalPtyControl) => {
+  const send = (message: TerminalPtyControl, initiate?: SpawnInitiation) => {
     if (!child.connected) {
       return;
     }
-    child.send(message, (error) => {
+    const done = (error: Error | null) => {
       if (error) {
         fail(error);
       }
-    });
+    };
+    if (brokerChild) {
+      brokerChild.send(message, undefined, undefined, done, initiate);
+    } else {
+      const launch = () => child.send(message, done);
+      if (initiate) {
+        initiate(launch);
+      } else {
+        launch();
+      }
+    }
+  };
+  // The broker queues IPC. Check authority when the final launch frame is written.
+  const authorizeLaunch: SpawnInitiation = (launch) => {
+    beforeSpawn?.();
+    return initiateSpawn
+      ? initiateSpawn(
+          launch,
+          ready.promise.then(
+            () => {},
+            () => broker?.waitForCleanup(),
+          ),
+        )
+      : launch();
   };
   const timeout = setTimeout(
     () => fail(new Error("Terminal Node worker startup timed out")),
     STARTUP_TIMEOUT_MS,
   );
   const finish = () => {
-    if (exited || !helperExit || !outputEnded || !ipcClosed) {
+    if (exited || preparation || !helperExit || !outputEnded || !ipcClosed) {
       return;
     }
     ready.reject(
@@ -126,25 +163,53 @@ export async function spawnNodeTerminalPty(
     ipcClosed = true;
     finish();
   });
+  if (brokerChild && broker) {
+    brokerChild.once("close", () => {
+      if (helperExit) {
+        return;
+      }
+      // Broker loss closes the transport without an exit receipt; its owner retains the tree cleanup.
+      void broker
+        .waitForCleanup()
+        .catch((error: unknown) => {
+          startupError = toErrorObject(error, "Terminal Node worker cleanup failed");
+        })
+        .then(() => {
+          clearTimeout(timeout);
+          clearTimeout(cleanupTimer);
+          helperExit = { exitCode: 1 };
+          finish();
+        });
+    });
+  }
   // The version-matched PTY helper is the sole writer on this private IPC channel.
   child.on("message", (message: TerminalPtyEvent) => {
     if (message.type === "boot" || message.type === "prepared") {
       try {
-        beforeSpawn?.();
         if (message.type === "boot") {
-          send({ type: initiateSpawn ? "prepare" : "start", params });
+          if (initiateSpawn || prepareCurrent) {
+            beforeSpawn?.();
+            send({ type: "prepare", params });
+          } else {
+            send({ type: "start", params }, authorizeLaunch);
+          }
         } else {
-          if (!initiateSpawn) {
+          if (!initiateSpawn && !prepareCurrent) {
             throw new Error("Terminal launch authority is unavailable");
           }
-          // Rejection already joins helper exit, IPC close, and output EOF in finish().
-          initiateSpawn(
-            () => send({ type: "launch" }),
-            ready.promise.then(
-              () => {},
-              () => {},
-            ),
-          );
+          // Accepted preparation retains caller resources even if the helper closes first.
+          const launch = async () => {
+            await prepareCurrent?.();
+            if (!startupError) {
+              send({ type: "launch" }, authorizeLaunch);
+            }
+          };
+          preparation = launch()
+            .catch((error: unknown) => fail(toErrorObject(error, "PTY launch denied")))
+            .finally(() => {
+              preparation = undefined;
+              finish();
+            });
         }
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));

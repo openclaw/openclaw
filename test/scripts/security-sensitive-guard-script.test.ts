@@ -115,6 +115,8 @@ function runGuard(options: Options = {}) {
     "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": {
       role_name: options.approverRole ?? "maintain",
     },
+    "GET /orgs/openclaw/teams/openclaw-secops/memberships/contributor": { httpError: 404 },
+    "GET /orgs/openclaw/teams/openclaw-secops/memberships/maintainer": { httpError: 404 },
     ...options.routes,
   };
   writeFileSync(
@@ -157,6 +159,7 @@ function runGuard(options: Options = {}) {
       env: {
         PATH: process.env.PATH,
         GITHUB_TOKEN: "fixture-token",
+        GH_APP_TOKEN: "fixture-members-token",
         GITHUB_EVENT_PATH: eventPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "123",
@@ -199,7 +202,7 @@ function expectGuard(options: Options, statuses: string[], exitCode = 0) {
 
 describe("security-sensitive guard entry point", () => {
   it.each(["maintain", "admin"])("allows a %s author without extra approval", (authorRole) => {
-    const result = expectGuard({ authorRole }, ["failure", "success"]);
+    const result = expectGuard({ authorRole }, ["pending", "success"]);
     expect(result.comment).toContain("informational");
   });
 
@@ -267,7 +270,7 @@ describe("security-sensitive guard entry point", () => {
       }),
     ],
   ])("requires a fresh command for %s", (_name, options) => {
-    const result = expectGuard(options, ["failure", "failure"]);
+    const result = expectGuard(options, ["pending", "pending"]);
     expect(result.comment).toContain("/allow-security-sensitive-change");
     expect(
       result.requests.some((request) => request.body?.labels?.includes("security-review-required")),
@@ -279,7 +282,7 @@ describe("security-sensitive guard entry point", () => {
     (approverRole) => {
       const result = expectGuard(
         { comments: [notice, approval], approverRole, event: commentEvent },
-        ["failure", "success"],
+        ["pending", "success"],
       );
       expect(result.comment).toContain("- Maintainer: @maintainer");
       expect(result.comment).toContain(`- Approval comment: ${approval.html_url}`);
@@ -295,7 +298,7 @@ describe("security-sensitive guard entry point", () => {
     "uses the %s comment event only as a PR locator and rereads live command authority",
     (action) => {
       const result = runGuard({ event: { ...commentEvent, action } });
-      expect(result.statuses).toEqual(["failure", "failure"]);
+      expect(result.statuses).toEqual(["pending", "pending"]);
     },
   );
 
@@ -305,16 +308,16 @@ describe("security-sensitive guard entry point", () => {
   ])("rejects a delayed or replayed command after the $name changes", ({ oldRecord }) => {
     const oldNotice = requestNotice({ ...oldRecord, requestedAt });
     const result = runGuard({ comments: [oldNotice, approval], event: commentEvent });
-    expect(result.statuses).toEqual(["failure", "failure"]);
+    expect(result.statuses).toEqual(["pending", "pending"]);
     expect(result.comment).toContain(JSON.stringify({ head: headSha, base: "main" }));
     expect(result.comment).not.toContain('"requestedAt"');
   });
 
   it("keeps an approval through notice updates and revokes it when the command disappears", () => {
     const first = runGuard({ comments: [] });
-    expect(first.statuses.at(-1)).toBe("failure");
+    expect(first.statuses.at(-1)).toBe("pending");
     const waiting = runGuard({ comments: [{ ...notice, body: first.comment }] });
-    expect(waiting.statuses.at(-1)).toBe("failure");
+    expect(waiting.statuses.at(-1)).toBe("pending");
     const updatedNotice = { ...notice, body: waiting.comment, updated_at: "2026-01-01T00:02:00Z" };
     const allowed = runGuard({ comments: [updatedNotice, approval] });
     expect(allowed.status, allowed.stderr).toBe(0);
@@ -333,7 +336,7 @@ describe("security-sensitive guard entry point", () => {
       event: { ...commentEvent, action: "deleted" },
     });
     expect(revoked.status, revoked.stderr).toBe(0);
-    expect(revoked.statuses).toEqual(["failure", "failure"]);
+    expect(revoked.statuses).toEqual(["pending", "pending"]);
   });
 
   it.each([{ ...commentEvent, issue: { number: 7 } }, { inputs: { pr_number: "7" } }])(
@@ -385,9 +388,27 @@ describe("security-sensitive guard entry point", () => {
   );
 
   it("refuses incomplete changed-file lists", () => {
-    const result = expectGuard({ changedFiles: 3001 }, ["failure"], 1);
+    const result = expectGuard({ changedFiles: 3001 }, ["pending", "failure"], 1);
     expect(result.stderr).toContain("complete changed-file list");
   });
+
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s publishes failure when initialization times out after pending",
+    (script) => {
+      const result = runGuard({
+        script,
+        files: guardFiles(script),
+        routes: {
+          [`GET ${pullPath}/files`]: { requestTimeout: true },
+        },
+      });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.statuses).toEqual(["pending", "failure"]);
+      expect(result.stderr).toContain(
+        `GitHub API GET ${pullPath}/files?per_page=100&page=1 exceeded timeout 30000ms`,
+      );
+    },
+  );
 
   it.each(["security-sensitive-guard", "dependency-guard"] as const)(
     "%s skips a superseded head after approval is read",
@@ -406,7 +427,7 @@ describe("security-sensitive guard entry point", () => {
       });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("Superseded");
-      expect(result.statuses).toEqual(["failure"]);
+      expect(result.statuses).toEqual(["pending"]);
       expect(result.comment).toBeUndefined();
     },
   );
@@ -417,7 +438,7 @@ describe("security-sensitive guard entry point", () => {
       files: [{ filename: "SECURITY.md" }, { filename: "src/utils.ts" }],
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.statuses).toEqual(["failure", "success"]);
+    expect(result.statuses).toEqual(["pending", "success"]);
     expect(result.comment).toBeUndefined();
   });
 
@@ -446,7 +467,7 @@ describe("security-sensitive guard entry point", () => {
           });
           expect(result.status, result.stderr).toBe(0);
           if (enforced) {
-            expect(result.statuses.at(-1)).toBe("failure");
+            expect(result.statuses.at(-1)).toBe("pending");
             expect(result.comment).toContain("/allow-");
           } else {
             expect(result.stdout).toContain("grandfathered");
@@ -492,7 +513,7 @@ dependencies:
       "$script reads changed classification from YAML beside its checkout",
       ({ script, filename }) => {
         const result = runGuard({ script, policy, files: [{ filename }] });
-        expect(result.statuses).toEqual(["failure", "failure"]);
+        expect(result.statuses).toEqual(["pending", "pending"]);
         expect(result.comment).toContain("custom/");
       },
     );

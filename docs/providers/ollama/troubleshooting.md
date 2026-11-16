@@ -132,20 +132,24 @@ sidebarTitle: "Troubleshooting"
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
 
+    If tool calls still arrive as text, try [llmman](/providers/llmman#advanced-configuration)
+    with its explicit native Ollama configuration and a model that supports tool calling.
+
   </Accordion>
 
-  <Accordion title="Repeated tool errors stop the turn">
+  <Accordion title="Repeated tool calls stop the turn">
     With `tools.toolSearch` unset, embedded runs using native local Ollama expose
     policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
     directly. Other optional tools remain deferred. Explicit Tool Search settings
     keep their configured behavior. Direct exposure does not enable a denied
     tool, enable memory, or configure a web-search provider.
 
-    After three consecutive identical failures for the same tool and arguments,
-    OpenClaw blocks that exact action and gives the model one chance to replan.
-    An unchanged retry ends the turn without executing the call again. Unknown
-    tool IDs also count. This protection is always active; enabling
-    `tools.loopDetection` is not required.
+    When the model repeats the same tool call with the same arguments, OpenClaw
+    adds a redirect note to the third result and ends the turn at the twentieth
+    call (`tool_repeat_limit`). Results do not matter: repeated failures and
+    repeated successes count the same way. Calls to an unavailable tool count by
+    name. The guard is on by default; `tools.loopDetection.enabled: false`
+    turns it off.
 
     Ollama 0.40's generic parser can mistake a chat-template marker for an
     advertised tool name. Tool Search uses the collision-free `dispatch_action`
@@ -177,7 +181,8 @@ sidebarTitle: "Troubleshooting"
     Try a stronger model, request less output, or split the task into smaller
     turns. Native Ollama requests also send the resolved model output cap as
     `num_predict`; lower the model's `maxTokens` if generation runs too long.
-    Discovered local models default to 8,192 output tokens. Ollama Cloud models
+    Discovered local models default to 16,384 output tokens, half of the
+    32,768-token local context cap (less for smaller windows). Ollama Cloud models
     use their documented output limits, or their context window when a separate
     output limit is unavailable. Authored `maxTokens` and `params.num_predict`
     override those defaults. Set `params: { num_predict: -1 }` on a model entry

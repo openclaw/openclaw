@@ -1,6 +1,8 @@
-import { rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createProviderHttpError } from "../agents/provider-http-errors.js";
 import {
   buildTtsSystemPromptHint,
   createMockSpeechProvider,
@@ -8,23 +10,27 @@ import {
   expectTtsPayloadResult,
   installSpeechProviders,
   listSpeechVoices,
-  nativeVoiceNoteChannels,
   prepareTtsRequest,
-  requireFirstCallParam,
+  prefsPathFor,
+  requireAttempt,
   requireFirstSynthesisRequest,
   requireRecord,
   resetTtsRuntime,
   setRuntimeConfigSnapshot,
   synthesizeMock,
   synthesizeSpeech,
-  testApi,
   textToSpeech,
   textToSpeechCore,
+  textToSpeechStream,
+  textToSpeechTelephony,
   transcodeAudioBufferMock,
   type OpenClawConfig,
   type SpeechListVoicesRequest,
   type TtsConfig,
 } from "./tts-runtime.test-support.js";
+import * as ttsSettings from "./tts-settings.js";
+
+const { resolveExplicitTtsOverridesAsync } = await import("./tts-request.js");
 
 const mockConfig = (providerConfig: Record<string, unknown>): OpenClawConfig => ({
   tts: { enabled: true, provider: "mock", providers: { mock: providerConfig } },
@@ -85,25 +91,101 @@ describe("TTS runtime native voice-note routing", () => {
 
   afterEach(resetTtsRuntime);
 
-  it("resolves voice delivery support from channel capabilities", () => {
-    for (const channel of nativeVoiceNoteChannels) {
-      expect(testApi.supportsNativeVoiceNoteTts(channel)).toBe(true);
-      expect(testApi.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
-    }
-    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
-    expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
-  });
+  it.each([
+    { mode: "buffered", status: 429, code: "quota_exceeded" },
+    { mode: "streaming", status: 503, code: "service_unavailable" },
+    { mode: "telephony", status: 401, code: "invalid_api_key" },
+  ])(
+    "preserves HTTP failure classification in $mode TTS results",
+    async ({ mode, status, code }) => {
+      const error = await createProviderHttpError(
+        new Response(JSON.stringify({ error: { code, message: "Synthetic speech failure" } }), {
+          status,
+          headers: { "Retry-After": "2", "x-request-id": "synthetic-request-id" },
+        }),
+        "Synthetic speech API",
+      );
+      const fail = vi.fn(async () => {
+        throw error;
+      });
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          synthesize: fail,
+          streamSynthesize: fail,
+          synthesizeTelephony: fail,
+        }),
+      ]);
+      const params = {
+        text: "Synthetic speech.",
+        cfg: createTtsConfig("structured-failure-" + mode),
+        prefsPath: prefsPathFor("structured-failure-" + mode),
+      };
+      const result = await (mode === "streaming"
+        ? textToSpeechStream(params)
+        : mode === "telephony"
+          ? textToSpeechTelephony(params)
+          : synthesizeSpeech(params));
+      expect(result.success).toBe(false);
+      const attempt = requireAttempt(result.attempts, 0);
+      expect(attempt).toMatchObject({
+        provider: "mock",
+        outcome: "failed",
+        reasonCode: "provider_error",
+        status,
+        errorCode: code,
+        retryAfterMs: 2000,
+      });
+      for (const field of ["errorBody", "headers", "requestId", "cause", "stack"]) {
+        expect(attempt).not.toHaveProperty(field);
+      }
+      expect(fail).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
-    const hint = buildTtsSystemPromptHint(createTtsConfig("openclaw-speech-core-tts-hint-test"));
+  it.each([false, true])(
+    "keeps the original TTS failure with invalid metadata (getter: %s)",
+    async (getter) => {
+      const error = Object.assign(new Error("Synthetic original failure"), {
+        errorCode: "not a machine code",
+        status: "503",
+        closeCode: 999,
+        retryAfterMs: Infinity,
+      });
+      if (getter) {
+        Object.defineProperty(error, "errorCode", {
+          get() {
+            throw new Error("Synthetic getter failure");
+          },
+        });
+      }
+      synthesizeMock.mockRejectedValueOnce(error);
+      const result = await synthesizeSpeech({
+        text: "Synthetic speech.",
+        cfg: createTtsConfig("invalid-failure-metadata"),
+        disableFallback: true,
+      });
+      expect(result.success).toBe(false);
+      const attempt = requireAttempt(result.attempts, 0);
+      expect(attempt).toMatchObject({
+        error: "mock: Synthetic original failure",
+        reasonCode: "provider_error",
+      });
+      for (const field of ["errorCode", "status", "closeCode", "retryAfterMs"]) {
+        expect(attempt).not.toHaveProperty(field);
+      }
+    },
+  );
 
-    expect(hint).toContain("Voice (TTS) is enabled.");
-    expect(hint).toContain(
+  it("offers [[tts]] directive guidance only when model overrides are enabled", () => {
+    const hint = (enabled: boolean) =>
+      buildTtsSystemPromptHint(
+        createTtsConfig("tts-hint", { auto: "inbound", modelOverrides: { enabled } }),
+      )!.split("\n");
+    expect(hint(true).filter((l) => l.includes("[[tts:"))).toEqual([
       "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
-    );
-    expect(hint).toContain(
       "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
-    );
+    ]);
+    expect(hint(false)).toEqual(hint(true).filter((l) => !l.includes("[[tts:")));
   });
 
   it("prepares deep-merged surface config and directive inputs", async () => {
@@ -159,6 +241,76 @@ describe("TTS runtime native voice-note routing", () => {
     expect(prepared.directives).toMatchObject({ cleanedText: "", ttsText: "Speak this instead" });
   });
 
+  it("skips preference preparation for explicit providers and empty overrides", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        aliases: ["mock-alias"],
+        resolveTalkOverrides: ({ params }) => ({ voice: params.voiceId }),
+      }),
+    ]);
+    const cfg = { tts: { provider: "mock", prefsPath: prefsPathFor("unused-explicit-overrides") } };
+    const preparePreferences = vi.spyOn(ttsSettings, "resolveTtsPrefsPathAsync");
+    try {
+      await expect(
+        resolveExplicitTtsOverridesAsync({ cfg, modelId: " ", voiceId: " " }),
+      ).resolves.toEqual({});
+      await expect(
+        resolveExplicitTtsOverridesAsync({
+          cfg,
+          provider: "  MOCK-ALIAS  ",
+          voiceId: " voice-id ",
+        }),
+      ).resolves.toEqual({
+        provider: "mock",
+        providerOverrides: { mock: { voice: "voice-id" } },
+      });
+      await expect(
+        resolveExplicitTtsOverridesAsync({ cfg, provider: " UNKNOWN " }),
+      ).resolves.toEqual({
+        provider: "unknown",
+      });
+      await expect(
+        resolveExplicitTtsOverridesAsync({ cfg, provider: "unknown", voiceId: "voice-id" }),
+      ).rejects.toThrow("speech provider unknown is not registered");
+      expect(preparePreferences).not.toHaveBeenCalled();
+    } finally {
+      preparePreferences.mockRestore();
+    }
+  });
+
+  it("prepares fallback preferences once and reads their current provider after preparation", async () => {
+    const dir = mkdtempSync(path.join(realpathSync(os.tmpdir()), "openclaw-explicit-overrides-"));
+    const prefsPath = path.join(dir, "tts.json");
+    const cfg = { tts: { provider: "previous", prefsPath } };
+    installSpeechProviders([
+      createMockSpeechProvider("previous"),
+      createMockSpeechProvider("mock", {
+        resolveTalkOverrides: ({ params }) => ({ voice: params.voiceId }),
+      }),
+    ]);
+    writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "previous" } }));
+    const resolvePrefsPath = ttsSettings.resolveTtsPrefsPathAsync;
+    const preparePreferences = vi
+      .spyOn(ttsSettings, "resolveTtsPrefsPathAsync")
+      .mockImplementation(async (...args) => {
+        const preparedPath = await resolvePrefsPath(...args);
+        writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "mock" } }));
+        return preparedPath;
+      });
+    try {
+      await expect(resolveExplicitTtsOverridesAsync({ cfg, voiceId: "voice-id" })).resolves.toEqual(
+        {
+          provider: "mock",
+          providerOverrides: { mock: { voice: "voice-id" } },
+        },
+      );
+      expect(preparePreferences).toHaveBeenCalledOnce();
+    } finally {
+      preparePreferences.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("pre-transcodes synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {
     transcodeAudioBufferMock.mockResolvedValueOnce({
       ok: true,
@@ -166,11 +318,9 @@ describe("TTS runtime native voice-note routing", () => {
     });
     await expectVoiceMemo("caf");
     expect(transcodeAudioBufferMock).toHaveBeenCalledOnce();
-    const transcodeRequest = requireRecord(
-      requireFirstCallParam(transcodeAudioBufferMock.mock.calls as unknown[][], "transcode"),
-      "transcode request",
+    expect(transcodeAudioBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceExtension: "mp3", targetExtension: "caf" }),
     );
-    expect(transcodeRequest).toMatchObject({ sourceExtension: "mp3", targetExtension: "caf" });
   });
 
   it("falls back to the original mp3 buffer when the host transcoder fails", async () => {

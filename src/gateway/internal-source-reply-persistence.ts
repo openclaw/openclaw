@@ -63,11 +63,12 @@ async function completePersistedInternalSourceReply(params: {
     expectedSessionId: params.expectedSessionId,
     ...getOwnedSessionTranscriptWriterFence({ sessionKey: scope.sessionKey }),
   };
-  const found = await findTranscriptEvent(scope, {
-    kind: "idempotency",
-    key: params.idempotencyKey,
-    deliveryMirror: true,
-  });
+  const found = await findTranscriptEvent(
+    scope,
+    { kind: "idempotency", key: params.idempotencyKey, deliveryMirror: true },
+    undefined,
+    "internal-source-reply",
+  );
   if (!found) {
     return false;
   }

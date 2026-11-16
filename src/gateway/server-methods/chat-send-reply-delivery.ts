@@ -25,7 +25,8 @@ export function resolveChatReplyTranscriptStart(
     (prepared.agentId !== scope.agentId ||
       prepared.sessionId !== scope.sessionId ||
       prepared.sessionKey !== scope.sessionKey ||
-      !isSameOpenClawAgentDatabasePath(prepared.storePath, scope.storePath))
+      (prepared.storePath !== scope.storePath &&
+        !isSameOpenClawAgentDatabasePath(prepared.storePath, scope.storePath)))
   ) {
     return undefined;
   }

@@ -2,8 +2,10 @@ import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import type { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerPairingCli } from "./pairing-cli.js";
+import { expectNoCalls } from "./program/program.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   runWithLocalStateOwner: vi.fn<typeof runWithLocalStateOwner>(),
@@ -147,12 +149,15 @@ it("defaults list to the sole available channel", async () => {
   );
 });
 
-it("redirects to openclaw devices when no pairing channels are configured", async () => {
+it("renders the no-channel devices redirect without dispatch", async () => {
   listPairingChannels.mockReturnValueOnce([]);
-
-  const listing = runPairing("list");
-  await expect(listing).rejects.toThrow("openclaw devices");
-  await expect(listing).rejects.not.toThrow(/expected one of: \)|\(\)/);
+  const error = await runPairing("list").catch((caught: unknown) => caught);
+  const title = "The CLI command failed.";
+  const argv = ["node", "openclaw", "pairing", "list"];
+  const output = formatCliFailureLines({ title, error, argv, env: {} }).join("\n");
+  expect(output).toContain("No chat DM pairing channels are configured.");
+  expect(output).toContain("openclaw devices approve");
+  expect(output).not.toMatch(/The CLI command failed\.|expected one of: \)|\(\)/u);
   expect(listChannelPairingRequests).not.toHaveBeenCalled();
 });
 
@@ -205,9 +210,7 @@ it("rejects a whitespace-only --account for approve", async () => {
     runPairing("approve", "--channel", "telegram", "--account", "   ", "ABCDEFGH"),
   ).rejects.toThrow("--account must not be blank");
 
-  expect(approveChannelPairingCode).not.toHaveBeenCalled();
-  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-  expect(replaceConfigFile).not.toHaveBeenCalled();
+  expectNoCalls(approveChannelPairingCode, readConfigFileSnapshotForWrite, replaceConfigFile);
 });
 
 it("keeps approve usage error when multiple channels exist and channel is omitted", async () => {
@@ -220,7 +223,5 @@ it("does not bootstrap, notify, or approve locally after OUTCOME_UNKNOWN", async
 
   await expect(runPairing("approve", "telegram", "ABCDEFGH", "--notify")).rejects.toThrow(reason);
 
-  expect(approveChannelPairingCode).not.toHaveBeenCalled();
-  expect(replaceConfigFile).not.toHaveBeenCalled();
-  expect(notifyPairingApproved).not.toHaveBeenCalled();
+  expectNoCalls(approveChannelPairingCode, replaceConfigFile, notifyPairingApproved);
 });

@@ -25,6 +25,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.
 import { generateUUID } from "../lib/uuid.ts";
 import "../styles/onboarding-memory-import.css";
 import "./modal-dialog.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
 
 registerEnglishCatalog(registerMemoryImportEnglish);
 
@@ -368,8 +369,7 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
         data-provider-id={providerProps.provider.providerId}
       >
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={selection()[providerProps.provider.providerId] ?? false}
             disabled={applying() !== null || isDone()}
             onChange={(event) => {

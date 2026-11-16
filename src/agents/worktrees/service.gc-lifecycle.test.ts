@@ -425,11 +425,11 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
   await service.gc();
   expectMaintenance();
 
-  // Registry preparation and native leases finish before the cadence-only clock scope.
   const records = await registryReads.readRegistryWorktrees(env);
   await closeOpenClawStateDatabaseAsync();
   const inventory = vi.spyOn(registryReads, "readRegistryWorktrees").mockResolvedValue(records);
-  let now = Date.now();
+  // Keep the cadence clock behind the lease worker's real clock throughout the test.
+  let now = Date.now() - WORKTREE_GC_INTERVAL_MS;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
   try {
     const maintain = createWorktreeGitMaintenance(env);

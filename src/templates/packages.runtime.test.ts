@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_PLUGIN_RELOAD_TARGETS } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -11,7 +11,7 @@ import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
-import * as index from "../plugins/installed-plugin-index-records.js";
+import * as installedRecords from "../plugins/installed-plugin-index-records.js";
 import type { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import type { PluginManifestSetupProvider } from "../plugins/manifest-types.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
@@ -22,7 +22,6 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { stageTemplateAddHostRequirementsStateless } from "./add-stateless.js";
 import { createStatelessTemplatePackageReceipt } from "./package-stateless-receipt.js";
 import {
   installTemplatePackages as installTemplatePackagesCore,
@@ -32,7 +31,11 @@ import {
   testPluginPackage,
   withStagedInspection,
 } from "./packages.boundary.test-support.js";
-import { preflightTemplatePackage } from "./packages.js";
+import {
+  installTemplatePackages as installTemplatePackagesOwner,
+  preflightTemplatePackage,
+  rollbackStatelessTemplatePackages,
+} from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { runTemplatePluginBatch } from "./plugin-runtime.js";
 
@@ -92,7 +95,9 @@ function packageDeps(
 ) {
   return {
     preflightPlugin: async (params) => {
-      using _ = vi.spyOn(index, "loadInstalledPluginIndexInstallRecords").mockImplementation(load);
+      using _ = vi
+        .spyOn(installedRecords, "loadInstalledPluginIndexInstallRecords")
+        .mockImplementation(load);
       return await realPreflightPluginInstall(params);
     },
     probePlugin: async (request) => {
@@ -132,6 +137,39 @@ async function withRuntime(run: (root: string, env: NodeJS.ProcessEnv) => Promis
 }
 
 describe("Template committed plugin requirement handoff", () => {
+  it("publishes installed plugin facts before the next install without recommendation limits", async () => {
+    await withRuntime(async (root, env) => {
+      const outcomes: unknown[] = [];
+      let installed = 0;
+      const refs = await installTemplatePackagesCore(
+        packageInstallPlan(["one", "two", "three", "four"].map((id) => pluginPackage(id))),
+        packageOptions(root, env, {
+          runtime: quietRuntime,
+          onSetupOutcome: async (outcome) => {
+            outcomes.push(outcome);
+          },
+          deps: {
+            installPlugin: async () => {
+              expect(outcomes).toHaveLength(installed);
+              installed++;
+            },
+          },
+        }),
+      );
+      expect(refs.every((ref) => ref.status === "complete")).toBe(true);
+      expect(outcomes).toHaveLength(4);
+      expect(outcomes[0]).toEqual({
+        kind: "plugin-install",
+        plugin: {
+          type: "template_plugin_install",
+          pluginId: "one",
+          packageName: "@owner/one",
+          displayName: "Fixture plugin",
+          status: "installed",
+        },
+      });
+    });
+  });
   it.each(["unchanged", "reinstalled", "claimed"] as const)(
     "compensates an unpublished %s plugin after runtime batch preparation fails",
     async (ownership) => {
@@ -157,12 +195,11 @@ describe("Template committed plugin requirement handoff", () => {
         };
         const plan = demoPlan();
         await withPackageBoundaries(async () => {
-          const stage = await stageTemplateAddHostRequirementsStateless(plan, {
-            consentPlanIntegrity: plan.planIntegrity,
+          const packages = await installTemplatePackagesOwner(plan, {
+            env,
             runtimeBatch: batch,
             pluginConsent,
           });
-          assert(stage.kind === "ready");
           if (ownership === "reinstalled") {
             installedAt = "2026-10-14T01:00:01.000Z";
           } else if (ownership === "claimed") {
@@ -181,12 +218,7 @@ describe("Template committed plugin requirement handoff", () => {
             await expect(batch.prepare(lease)).rejects.toThrow("no longer installed");
           });
           batch.close();
-          const result = await stage.failBeforeContinue(
-            new Error("batch preparation failed"),
-            "package_runtime_failed",
-          );
-
-          expect(result.error).toMatchObject({ code: "package_runtime_failed" });
+          expect(await rollbackStatelessTemplatePackages(packages, { env })).toEqual([]);
           if (ownership === "unchanged") {
             expect(uninstallPlugin).toHaveBeenCalledWith(
               expect.objectContaining({ pluginId: "demo", templateManaged: true }),
@@ -195,9 +227,7 @@ describe("Template committed plugin requirement handoff", () => {
           } else {
             expect(uninstallPlugin).not.toHaveBeenCalled();
           }
-          expect(result.packages[0]?.status).toBe(
-            ownership === "unchanged" ? "rolled_back" : "complete",
-          );
+          expect(packages[0]?.status).toBe(ownership === "unchanged" ? "rolled_back" : "complete");
         }, deps);
       });
     },
@@ -210,7 +240,7 @@ describe("Template committed plugin requirement handoff", () => {
     await expect(
       runTemplatePluginBatch(
         { runtimeBatch: batch },
-        MAX_PLUGIN_RELOAD_TARGETS + 1,
+        Array.from({ length: MAX_PLUGIN_RELOAD_TARGETS + 1 }, (_, index) => `fixture-${index}`),
         run,
         () => new Error("unexpected runtime failure"),
       ),
@@ -254,12 +284,25 @@ describe("Template committed plugin requirement handoff", () => {
   it("preserves the install owner's failure instead of a nested CLI exit", async () => {
     installOwner.install.mockReset().mockRejectedValue(installOwner.failure);
     await withRuntime(async (root, env) => {
+      const onSetupOutcome = vi.fn();
       const result = await installTemplatePackagesCore(
         demoPlan(),
         packageOptions(root, env, {
           runtime: quietRuntime,
+          onSetupOutcome,
         }),
       ).catch((error: unknown) => error);
+      expect(onSetupOutcome).toHaveBeenCalledOnce();
+      expect(onSetupOutcome).toHaveBeenCalledWith({
+        kind: "plugin-install",
+        plugin: {
+          type: "template_plugin_install",
+          pluginId: "demo",
+          packageName: "@owner/demo",
+          displayName: "@owner/demo",
+          status: "error",
+        },
+      });
       expect(result).toMatchObject({
         code: "package_install_failed",
         message: installOwner.failure.message,
@@ -640,6 +683,7 @@ describe("Template package setup and consent", () => {
     it("accepts only the reviewed skill warning at the installer trust check", async () => {
       const planned = skillPlan("Review this skill.");
       const skillConsent = { assertApproved: vi.fn() };
+      const onSetupOutcome = vi.fn();
       const installSkill = vi.fn(
         async (params: {
           beforePersistentApply?: () => void;
@@ -658,7 +702,7 @@ describe("Template package setup and consent", () => {
           preflightSkill: preflightSkill("Review this skill."),
           installSkill,
         },
-        { skillConsent },
+        { skillConsent, onSetupOutcome },
       );
       expect(installSkill).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -675,6 +719,7 @@ describe("Template package setup and consent", () => {
         relationship: "managed",
         origin: "template-introduced",
       });
+      expect(onSetupOutcome).not.toHaveBeenCalled();
       expect(skillConsent.assertApproved).toHaveBeenCalledWith({
         ref: "@owner/triage",
         version: "1.2.3",
@@ -685,6 +730,7 @@ describe("Template package setup and consent", () => {
 
     it("records a dependency ref without reinstalling an exact reused plugin", async () => {
       const installPlugin = vi.fn();
+      const onSetupOutcome = vi.fn();
 
       const result = await installTemplatePackages(
         plan([{ ...consentPackage, extension }], "reuse"),
@@ -693,9 +739,11 @@ describe("Template package setup and consent", () => {
           probePlugin: withStagedInspection(extensionProbe()),
           preflightPlugin: reusePlugin(),
         },
+        { onSetupOutcome },
       );
 
       expect(installPlugin).not.toHaveBeenCalled();
+      expect(onSetupOutcome).not.toHaveBeenCalled();
       expectReceipt(result, {
         integrity,
         extension,

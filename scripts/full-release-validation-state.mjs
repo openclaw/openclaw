@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -58,6 +58,7 @@ import {
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  ReleaseAggregateValidationError,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
@@ -65,7 +66,6 @@ import { verifyQualificationAdmission } from "./release-qualification-admission.
 
 export * from "./full-release-validation-policy.mjs";
 
-const execFileAsync = promisify(execFile);
 const RELEASE_SUMMARY_PATH =
   process.env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR ??
   fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url));
@@ -128,7 +128,7 @@ async function runGh(args, options = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const result = await execFileAsync("gh", args, {
+      const result = await promisify(childProcess.execFile)("gh", args, {
         encoding: "utf8",
         env: process.env,
         killSignal: "SIGKILL",
@@ -157,6 +157,20 @@ async function runGh(args, options = {}) {
     }
   }
   throw lastError;
+}
+
+// gh 2.97+ refuses raw job logs containing terminal escapes, even off a TTY;
+// older gh rejects the flag before issuing the request.
+async function readJobLog(id, signal) {
+  const args = ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`];
+  try {
+    return await runGh([...args, "--allow-escape-sequences"], { signal });
+  } catch (error) {
+    if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+      throw error;
+    }
+    return runGh(args, { signal });
+  }
 }
 
 async function githubJson(path, signal) {
@@ -322,22 +336,25 @@ export async function readChild(child, previous, signal, options = {}) {
       const policy = evaluateReleaseChildPolicy({
         child: snapshot,
         targetVersion: options.targetVersion,
+        targetSha: options.targetSha,
       });
       const jobs = evidence.jobs.map((job) =>
         attempts
           .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
           .jobs.find((raw) => raw.name === job.name),
       );
-      await validateReleaseWaiverAggregates({
-        policy,
-        jobs,
-        getJobLog:
-          options.readJobLog ??
-          ((id) =>
-            runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`], {
-              signal,
-            })),
-      });
+      try {
+        await validateReleaseWaiverAggregates({
+          policy,
+          jobs,
+          getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
+        });
+      } catch (error) {
+        if (!(error instanceof ReleaseAggregateValidationError)) {
+          throw error;
+        }
+        snapshot.errors.push(issue("aggregate_validation", child, error.message));
+      }
     }
     return snapshot;
   } catch (error) {
@@ -560,7 +577,7 @@ async function validateReuse(executionPlan, signal) {
         }),
       );
     }
-    const result = await execFileAsync(process.execPath, args, {
+    const result = await promisify(childProcess.execFile)(process.execPath, args, {
       encoding: "utf8",
       env: process.env,
       killSignal: "SIGKILL",
@@ -1040,7 +1057,26 @@ async function publicationMode(mode) {
       throw new Error("invalid publication upload action digest");
     }
     uploaded.digest = `sha256:${uploaded.digest}`;
-    const metadata = createReleaseEvidenceClient(source.repository).getArtifact(uploaded.id);
+    const client = createReleaseEvidenceClient(source.repository);
+    let metadata;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        metadata = client.getArtifact(uploaded.id);
+        break;
+      } catch (error) {
+        // A successful upload can precede metadata visibility. Retry only its exact ID;
+        // authentication errors and invalid metadata remain fatal, without a name fallback.
+        if (attempt >= 4 || !(error instanceof Error) || !/HTTP 404\b/u.test(error.message)) {
+          throw error;
+        }
+        const delay = 1000 * 2 ** attempt;
+        console.warn(
+          `Publication artifact ${uploaded.id} is not visible yet; retrying in ${delay}ms`,
+        );
+        await abortableSleep(delay);
+      }
+    }
+
     const descriptor = validatePublicationObservationArtifactIdentity(metadata, source, uploaded);
     admission = createPublicationAdmission(
       source,
@@ -1429,6 +1465,7 @@ async function collectMode(mode) {
       ],
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1489,17 +1526,20 @@ async function collectMode(mode) {
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         }),
       ),
     );
     transport = updateReleaseTransportEpisode(transport, snapshots);
     const transportReadErrors = transport.error ? [transport.error] : [];
+    const extraErrors = [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
+      extraErrors,
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1528,15 +1568,26 @@ async function collectMode(mode) {
           ],
           localFailures: gateFailures,
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         });
       }
     }
+    // The displayed errors are capped; drain admission uses every fatal input.
+    const hasNonAggregateError =
+      extraErrors.some((error) => error.kind !== "aggregate_validation") ||
+      snapshots.some(
+        (child) =>
+          child.selected &&
+          child.errors.some(
+            (error) => !["dispatch_missing", "aggregate_validation"].includes(error.kind),
+          ),
+      );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          (decision.state === "orchestration_error" ||
+          ((decision.state === "orchestration_error" && hasNonAggregateError) ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });

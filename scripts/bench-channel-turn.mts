@@ -7,7 +7,6 @@ import {
   mkdtempSync,
   readFileSync,
   writeFileSync,
-  writeSync,
   renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -481,7 +480,7 @@ async function measureToolInvocations() {
     { createToolTerminalObserver },
     { setToolTerminalPresentation },
     { startGatewayBenchDiagnostics },
-    { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace },
+    { writeGatewayGcTraceMarker, readGatewayGcTrace },
   ] = await Promise.all([
     import("node:inspector/promises"),
     import("typebox"),
@@ -638,12 +637,6 @@ async function measureToolInvocations() {
   };
   const inspector = new Session();
   inspector.connect();
-  const markGc = (samplePhase: string, profilePath?: string) => {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase: samplePhase, pid: process.pid, profilePath })}\n`,
-    );
-  };
   const originalClone = globalThis.structuredClone;
   let clones = 0;
   let argumentClones = 0;
@@ -689,7 +682,7 @@ async function measureToolInvocations() {
       return originalClone(value, options);
     };
     const stopDiagnostics = startGatewayBenchDiagnostics();
-    markGc("heap-start", profilePath);
+    writeGatewayGcTraceMarker("heap-start", profilePath);
     const windowStart = performance.now();
     let diagnostics: ReturnType<typeof stopDiagnostics>;
     try {
@@ -716,7 +709,7 @@ async function measureToolInvocations() {
       await immediate();
     } finally {
       diagnostics = stopDiagnostics();
-      markGc("heap-stop", profilePath);
+      writeGatewayGcTraceMarker("heap-stop", profilePath);
       globalThis.structuredClone = originalClone;
     }
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -763,9 +756,9 @@ async function measureToolInvocations() {
   };
   try {
     // Identify the main isolate once; this forced collection is outside every capture.
-    markGc("identify-start");
+    writeGatewayGcTraceMarker("identify-start");
     globalThis.gc();
-    markGc("identify-stop");
+    writeGatewayGcTraceMarker("identify-stop");
     const cold = await sample("cold", 1, 0);
     for (let index = 0; index < 3; index++) {
       await invoke();

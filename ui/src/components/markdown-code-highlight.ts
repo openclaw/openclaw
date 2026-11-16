@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { listen } from "../lib/reactive/listener.ts";
 import { observeIntersection } from "../lib/reactive/observers.ts";
+import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import type { CodeHighlightReply, CodeHighlightRequest } from "./markdown-code-highlight-chunks.ts";
 
 let worker: Worker | undefined;
@@ -8,6 +9,18 @@ let workerUsers = 0;
 let sequence = 0;
 const pending = new Map<number, (reply: CodeHighlightReply) => void>();
 let sanitizer: ReturnType<typeof DOMPurify> | undefined;
+
+type HighlightResult = {
+  readonly chunks: readonly { readonly html: string; readonly to: number }[] | null;
+  readonly previewEnd: number;
+  readonly highlighted: boolean;
+};
+
+// Windowed rows release their DOM; keep only bounded syntax strings for a return visit.
+const HIGHLIGHT_CACHE_LIMIT = 32;
+const HIGHLIGHT_CACHE_CHARS = 2_000_000;
+const highlightCache = new Map<string, { result: HighlightResult; chars: number }>();
+let highlightCacheChars = 0;
 
 function retainWorker() {
   workerUsers += 1;
@@ -28,8 +41,25 @@ function retainWorker() {
 function requestHighlight(
   source: string,
   language: string,
-  receive: (reply: CodeHighlightReply) => void,
+  receive: (reply: HighlightResult) => void,
 ) {
+  if (highlightCache.size) {
+    const key = `${language.length}:${language}${source}`;
+    const cached = highlightCache.get(key);
+    if (cached) {
+      highlightCache.delete(key);
+      highlightCache.set(key, cached);
+      let active = true;
+      queueMicrotask(() => {
+        if (active) {
+          receive(cached.result);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
+  }
   const id = ++sequence;
   if (!worker) {
     worker = new Worker(new URL("./markdown-code-highlight.worker.ts", import.meta.url), {
@@ -60,11 +90,13 @@ type Block = {
   viewport: HTMLElement;
   code: HTMLElement;
   language: string;
+  source: string;
   tail: Text;
   visible: boolean;
   applied: number;
   next: number;
-  reply?: CodeHighlightReply;
+  reply?: HighlightResult;
+  result?: HighlightResult;
   complete: boolean;
   frame?: number;
   cancel?: () => void;
@@ -87,6 +119,7 @@ export class MarkdownCodeHighlights {
     const current = this.blocks.get(wrapper);
     // The reconciler replaces this opaque code node whenever its source changes.
     if (current?.code === code) {
+      this.observe(current);
       this.schedule(current);
       return;
     }
@@ -105,6 +138,7 @@ export class MarkdownCodeHighlights {
       viewport,
       code,
       language: code.getAttribute("data-code-highlight") ?? "",
+      source: tail.data,
       tail,
       visible: false,
       applied: 0,
@@ -120,6 +154,8 @@ export class MarkdownCodeHighlights {
       if (!this.root.contains(block.code)) {
         this.retire(block);
         this.blocks.delete(block.wrapper);
+      } else if (isMarkdownBlockParked(block.wrapper)) {
+        this.retire(block);
       }
     }
   }
@@ -159,6 +195,28 @@ export class MarkdownCodeHighlights {
     block.stopObserving = undefined;
     block.visible = false;
     this.cancel(block);
+    const result = block.result;
+    if (!result?.chunks) {
+      return;
+    }
+    // Publish only when leaving a row; first paint does not build or budget cache entries.
+    const key = `${block.language.length}:${block.language}${block.source}`;
+    const chars = key.length + result.chunks.reduce((total, chunk) => total + chunk.html.length, 0);
+    if (chars > HIGHLIGHT_CACHE_CHARS) {
+      return;
+    }
+    highlightCacheChars -= highlightCache.get(key)?.chars ?? 0;
+    highlightCache.delete(key);
+    highlightCache.set(key, { result, chars });
+    highlightCacheChars += chars;
+    while (
+      highlightCache.size > HIGHLIGHT_CACHE_LIMIT ||
+      highlightCacheChars > HIGHLIGHT_CACHE_CHARS
+    ) {
+      const [oldest, entry] = highlightCache.entries().next().value!;
+      highlightCache.delete(oldest);
+      highlightCacheChars -= entry.chars;
+    }
   }
 
   private cancel(block: Block): void {
@@ -175,44 +233,47 @@ export class MarkdownCodeHighlights {
   }
 
   private observe(block: Block): void {
-    if (!this.active || block.stopObserving || block.complete) {
+    if (
+      !this.active ||
+      block.stopObserving ||
+      block.complete ||
+      isMarkdownBlockParked(block.wrapper)
+    ) {
       return;
     }
     block.stopObserving = observeIntersection(
       [block.viewport],
       (entries) => {
         block.visible = entries.at(-1)?.isIntersecting === true;
-        if (!block.visible) {
+        if (!block.visible || isMarkdownBlockParked(block.wrapper)) {
           this.cancel(block);
         } else if (block.reply) {
           this.schedule(block);
         } else if (!block.cancel) {
           block.releaseWorker ??= retainWorker();
           try {
-            block.cancel = requestHighlight(
-              block.code.textContent ?? "",
-              block.language,
-              (reply) => {
-                block.cancel = undefined;
-                block.releaseWorker?.();
-                block.releaseWorker = undefined;
-                if (!this.current(block)) {
-                  return;
-                }
-                if (!reply.highlighted || !reply.chunks?.length) {
-                  this.finish(block);
-                  return;
-                }
-                block.reply = reply;
-                while ((reply.chunks[block.next]?.to ?? Infinity) <= block.applied) {
-                  block.next += 1;
-                }
-                if (reply.highlighted) {
-                  block.code.classList.add("hljs");
-                }
-                this.schedule(block);
-              },
-            );
+            block.cancel = requestHighlight(block.source, block.language, (reply) => {
+              block.cancel = undefined;
+              block.releaseWorker?.();
+              block.releaseWorker = undefined;
+              if (!this.current(block)) {
+                return;
+              }
+              // Keep completed data after its application cursor is exhausted; failures retry.
+              block.result = reply.chunks === null ? undefined : reply;
+              if (!reply.highlighted || !reply.chunks?.length) {
+                this.finish(block);
+                return;
+              }
+              block.reply = reply;
+              while ((reply.chunks[block.next]?.to ?? Infinity) <= block.applied) {
+                block.next += 1;
+              }
+              if (reply.highlighted) {
+                block.code.classList.add("hljs");
+              }
+              this.schedule(block);
+            });
           } catch {
             this.finish(block);
           }
@@ -226,6 +287,7 @@ export class MarkdownCodeHighlights {
     return (
       this.active &&
       block.visible &&
+      !isMarkdownBlockParked(block.wrapper) &&
       this.blocks.get(block.wrapper) === block &&
       this.root.contains(block.code)
     );
@@ -285,7 +347,6 @@ export class MarkdownCodeHighlights {
         );
         block.tail.before(fragment);
         block.tail.deleteData(0, chunk.to - block.applied);
-        chunk.html = "";
         block.applied = chunk.to;
         block.next += 1;
         if (block.next === reply.chunks!.length) {

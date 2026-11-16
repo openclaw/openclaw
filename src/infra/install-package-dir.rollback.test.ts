@@ -9,6 +9,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -20,6 +21,8 @@ import {
   normalizeComparablePath,
   updateOptions,
 } from "./install-package-dir.test-support.js";
+import * as packageFilesystem from "./package-update-filesystem.js";
+import * as retry from "./retry.js";
 
 async function expectText(directory: string, expected: string, name = "marker.txt") {
   await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(expected);
@@ -168,8 +171,8 @@ describe("installPackageDir rollback", () => {
         failure === "retry" ? "EBUSY" : "EPERM",
       );
       if (failure === "I/O failure") {
-        const copy = fsSync.cpSync.bind(fsSync);
-        vi.spyOn(fsSync, "cpSync").mockImplementation((source, destination, options) => {
+        const copy = fs.cp.bind(fs);
+        vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
           if (recovering) {
             throw ioError("recovery disk full", "ENOSPC");
           }
@@ -210,6 +213,50 @@ describe("installPackageDir rollback", () => {
         await expectText(backup, "old");
         await expectText(backup, "keep config", "openclaw.plugin.json");
         await expectMissing(path.join(targetDir, "openclaw.plugin.json"));
+      }
+    },
+  );
+
+  it.each(["transient", "persistent", "rejected hardlinks"] as const)(
+    "retries a Windows plugin backup rename held by a scanner: %s",
+    async (scenario) => {
+      const [move, runRetry] = [packageFilesystem.movePackageRoot, retry.retryAsync];
+      vi.spyOn(packageFilesystem, "movePackageRoot").mockImplementation((from, to, options) =>
+        move(from, to, { ...options, platform: "win32" }),
+      );
+      vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
+        runRetry(fn, { ...(typeof options === "object" ? options : {}), sleep: async () => {} }),
+      );
+      const { sourceDir, targetDir } = await createFixture("windows-held");
+      const rename = fs.rename.bind(fs);
+      let denied = 0;
+      vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (samePath(from, targetDir) && (scenario === "persistent" || denied < 2)) {
+          denied++;
+          throw ioError("EPERM: plugin file is in use", "EPERM");
+        }
+        return rename(from, to);
+      });
+      const warn = vi.fn();
+      const result = await installPackageDir({
+        ...updateOptions(sourceDir, targetDir),
+        logger: { warn },
+        // Rejected hardlinks always publish fs-safe's fresh copy instead of renaming.
+        sourceHardlinks: scenario === "rejected hardlinks" ? undefined : "package-manager",
+      });
+      const backups = await fs.readdir(
+        path.join(path.dirname(targetDir), ".openclaw-install-backups"),
+      );
+      expect(backups).toEqual([]);
+      if (scenario !== "persistent") {
+        expect(result).toEqual({ ok: true });
+        await expectText(targetDir, "new");
+        expect([warn.mock.calls.length, denied]).toEqual(
+          scenario === "transient" ? [2, 2] : [0, 0],
+        );
+      } else {
+        expectFailure(result, "plugin backup rename failed after 16 attempts", "stop the Gateway");
+        await expectText(targetDir, "old");
       }
     },
   );
@@ -498,6 +545,16 @@ describe("installPackageDir rollback", () => {
       expect(await listMatchingDirs(installBaseDir, ".openclaw-install-rollback-")).toEqual([]);
     },
   );
+
+  it("rolls back a published install without synchronous metadata mutations", async () => {
+    const { targetDir, retain } = await createFixture("rollback-async-metadata");
+    const { transaction } = await retain();
+    using observation = observeMainThreadFs();
+    await transaction.rollback();
+    expect(observation.calls().renameSync ?? 0).toBe(0);
+    expect(observation.calls().cpSync ?? 0).toBe(0);
+    await expectText(targetDir, "old");
+  });
 
   it.each([false, true])(
     "keeps a one-shot backup retirement refusal (retained=%s)",

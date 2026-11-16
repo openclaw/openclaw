@@ -82,10 +82,8 @@ const cronRunLogEntrySchema = z.looseObject({
   runAtMs: optionalCronTimestampSchema,
   durationMs: optionalCronNonnegativeIntegerSchema,
   nextRunAtMs: optionalCronTimestampSchema,
-  triggerFired: z
-    .unknown()
-    .optional()
-    .transform((value) => (value === true ? true : undefined)),
+  // A failed condition check records `false`: no task ran for that entry.
+  triggerFired: z.boolean().optional().catch(undefined),
   model: optionalNonBlankCronStringSchema,
   provider: optionalNonBlankCronStringSchema,
   usage: cronUsageSchema,

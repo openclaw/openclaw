@@ -440,13 +440,20 @@ it.concurrent.for([
       "scripts/ci-static-step.sh": "workflow static-step script\n",
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
       "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
+      ...readFiles([
+        "scripts/lib/process-memory.mts",
+        "packages/normalization-core/src/mountinfo-path.ts",
+      ]),
     };
     const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
       "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = readFiles(["scripts/ci-build-manifest.mjs"]);
+    const preflightScripts = readFiles([
+      "scripts/ci-build-manifest.mjs",
+      "scripts/lib/ci-blacksmith-capacity.mjs",
+    ]);
     const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
     const releasePolicy = readFiles([
       "scripts/lib/release-context.mjs",
@@ -1049,6 +1056,8 @@ it("does not revive a terminated fixture instance when its PID is reused", () =>
       String.raw`
 import contextlib, json, os, pathlib, runpy, subprocess, sys, tempfile
 
+fixture_lifetime_fds = ((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+    item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
 with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
     root = pathlib.Path(directory).resolve()
     workspace = root / "workspace"
@@ -1086,7 +1095,7 @@ cp.spawnSync = (command, args, options) => {
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
         lease_owner = cleanup.enter_context(subprocess.Popen([
             sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=fixture_lifetime_fds))
         def close_lease_owner():
             lease_owner.communicate(timeout=4)
             assert lease_owner.returncode == 0, "lease owner failed during retirement"
@@ -1103,7 +1112,7 @@ try {
   console.log("ready");
   await new Promise(resolve => { process.stdin.once("end", resolve); process.stdin.resume(); });
 } finally { await owner.close(); }
-""", sys.argv[4], str(root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+""", sys.argv[4], str(root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=fixture_lifetime_fds))
             # EOF retires the broker and sampler before the Python namespace owner leaves.
             cleanup.callback(lambda: broker.communicate(timeout=4))
             assert broker.stdout.readline().strip() == "ready", "census owner failed to initialize"
@@ -1123,7 +1132,7 @@ try {
 
         def observe():
             subprocess.run([sys.argv[1], "--require", str(guard), sys.argv[2], "git", str(root), "early-leader-exit",
-                            "-C", str(workspace), "checkout"], cwd=workspace, check=True)
+                            "-C", str(workspace), "checkout"], cwd=workspace, check=True, pass_fds=fixture_lifetime_fds)
             observed = json.loads((root / "events.jsonl").read_text().splitlines()[-1])
             assert observed["sentinelAlive"], "unrelated live sentinel was lost"
             return observed["alive"]
@@ -1167,9 +1176,11 @@ it.skipIf(process.platform === "win32")(
         String.raw`
 import ast, contextlib, errno, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 
+fixture_lifetime_fds = ((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+    item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
 # Load only the actual boundary functions; never execute checkout or real Git.
 functions = [node for node in ast.parse(sys.stdin.read()).body
-             if isinstance(node, ast.FunctionDef) and node.name in ("group_alive", "group_signal", "group_states", "drain")]
+             if isinstance(node, ast.FunctionDef) and node.name in ("lifetime_fds", "group_alive", "group_signal", "group_states", "drain")]
 exec(compile(ast.Module(body=functions, type_ignores=[]), "checkout-owner.py", "exec"))
 cleanup_seconds = 10
 
@@ -1193,7 +1204,7 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
         (root / "lease").write_text("owned")
         lease_owner = cleanup.enter_context(subprocess.Popen([
             sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=fixture_lifetime_fds))
         def close_lease_owner():
             lease_owner.communicate(timeout=4)
             assert lease_owner.returncode == 0, "lease owner failed during retirement"
@@ -1202,7 +1213,7 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
         for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
             (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt, instance=str(pid))))
         subprocess.run([sys.argv[1], sys.argv[2], "git", str(root), "early-leader-exit",
-                        "-C", str(root / "workspace"), "checkout"], cwd=root / "workspace", check=True)
+                        "-C", str(root / "workspace"), "checkout"], cwd=root / "workspace", check=True, pass_fds=fixture_lifetime_fds)
         observed = json.loads((root / "events.jsonl").read_text())
         assert observed["alive"] == [], "fixture counted a terminated zombie as a live writer"
         assert observed["sentinelAlive"]

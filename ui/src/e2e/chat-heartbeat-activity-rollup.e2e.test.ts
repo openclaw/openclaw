@@ -58,7 +58,7 @@ suite.define(() => {
       await rollup.waitFor();
       await expect
         .poll(async () => rollup.locator(".chat-activity-group__label").textContent())
-        .toBe(`${wakeCount} other operations`);
+        .toContain("Heartbeat Respond");
       expect(await rollup.count()).toBe(1);
       expect(await page.locator(".chat-tool-row").count()).toBe(0);
 

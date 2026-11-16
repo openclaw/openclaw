@@ -7,21 +7,19 @@ import {
 } from "@zag-js/menu";
 import { isPointInPolygon } from "@zag-js/rect-utils";
 import { VanillaMachine, normalizeProps } from "@zag-js/vanilla";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { revealInScrollRegion } from "../scroll-state.ts";
-import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
 
 // Focus events use bubbling DOM names; all other listener names stay canonical.
 const normalize = (props: object) => {
-  const out: Record<string, unknown> = Object.fromEntries(Object.entries(props));
-  for (const [from, to] of [
-    ["onFocus", "onFocusIn"],
-    ["onBlur", "onFocusOut"],
-  ] as const) {
+  const out: Record<string, unknown> = { ...props };
+  for (const from of ["onFocus", "onBlur"] as const) {
     if (from in out) {
-      out[to] = out[from];
+      out[from === "onFocus" ? "onFocusIn" : "onFocusOut"] = out[from];
       delete out[from];
     }
   }
@@ -122,16 +120,15 @@ export function createMenuRuntime(
       revealInScrollRegion(overlay.surface, node);
     }
     const active = service.scope.getActiveElement();
-    if (
-      active instanceof HTMLElement &&
-      active.matches("input, textarea, select") &&
-      !focusFromKeyboard
-    ) {
+    if (!focusFromKeyboard && active?.matches("input, textarea, select")) {
       return;
     }
     if (options.focus !== "retain") {
       for (const item of rows) {
-        item.tabIndex = item === node ? 0 : -1;
+        const tabIndex = item === node ? 0 : -1;
+        if (item.tabIndex !== tabIndex) {
+          item.tabIndex = tabIndex;
+        }
       }
     }
     if (
@@ -140,8 +137,7 @@ export function createMenuRuntime(
       focusFromKeyboard &&
       ![...overlay.children].some((child) => child.open && containsComposed(child.surface, active))
     ) {
-      node.focus({ preventScroll: true });
-      node.scrollIntoView({ block: "nearest", inline: "nearest" });
+      focusMenuRow(node);
     }
   };
   const virtualItems = () =>
@@ -609,8 +605,8 @@ export function createMenuRuntime(
             return;
           }
           focusFromKeyboard = event.detail === 0 || options.pointerFocus?.() !== "trigger";
-          if (!focusFromKeyboard) {
-            overlay.trigger?.focus({ preventScroll: true });
+          if (!focusFromKeyboard && overlay.trigger) {
+            focusProgrammatically(overlay.trigger, { preventScroll: true });
           }
           if (parentBinding && !event.defaultPrevented) {
             // Zag ignores TRIGGER_CLICK while its submenu hover delay is pending.

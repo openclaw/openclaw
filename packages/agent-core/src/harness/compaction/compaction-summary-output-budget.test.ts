@@ -58,30 +58,14 @@ describe("generateSummary output budget", () => {
     return observed;
   }
 
-  it("keeps raised-reserve authorization caller-owned", async () => {
-    const observed = await captureMaxTokens(80_000);
-
-    expect(observed).toEqual([64_000]);
-  });
-
-  it("leaves the agent runtime's default reserve path unchanged", async () => {
-    // The agent layer floors the reserve at 20_000, so this is the value ordinary
-    // compaction actually runs with. Its authorization must not move.
-    const observed = await captureMaxTokens(20_000);
-
-    expect(observed).toEqual([16_000]);
-  });
-
-  it("leaves the harness default reserve path unchanged", async () => {
-    // The harness default sits below the floor and must be equally untouched.
-    const observed = await captureMaxTokens(16_384);
-
-    expect(observed).toEqual([13_107]);
-  });
-
-  it("keeps split-turn authorization caller-owned", async () => {
-    const raised = await captureMaxTokens(80_000, true);
-
-    expect(raised).toEqual([64_000, 40_000]);
+  it.each([
+    ["keeps raised-reserve authorization caller-owned", 80_000, false, [64_000]],
+    // The agent layer floors the ordinary reserve at 20_000; authorization must not move.
+    ["leaves the agent runtime's default reserve path unchanged", 20_000, false, [16_000]],
+    // The harness default sits below that floor and must be equally untouched.
+    ["leaves the harness default reserve path unchanged", 16_384, false, [13_107]],
+    ["keeps split-turn authorization caller-owned", 80_000, true, [64_000, 40_000]],
+  ] as const)("%s", async (_name, reserveTokens, splitTurn, expected) => {
+    expect(await captureMaxTokens(reserveTokens, splitTurn)).toEqual(expected);
   });
 });
