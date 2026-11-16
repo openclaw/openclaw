@@ -61,6 +61,10 @@ describe("minimax image-generation provider", () => {
       { base_resp: { status_code: 1000, status_msg: "rpc timeout: timeout=1m0s" } },
       "MiniMax image generation API error (1000): rpc timeout: timeout=1m0s",
     ],
+    [
+      { data: [{ error: { code: "1027", message: "output image failed content safety check" } }] },
+      "MiniMax image generation returned no images: 1027: output image failed content safety check",
+    ],
   ] as const)("rejects invalid image response %j", async (payload, message) => {
     await expect(generateImage({}, payload)).rejects.toThrow(message);
   });

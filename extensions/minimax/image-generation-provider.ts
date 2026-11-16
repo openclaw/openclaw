@@ -146,7 +146,9 @@ export function buildMinimaxImageGenerationProvider(
           : "/v1/images/generations"
         : "/v1/image_generation";
       const data = await postJsonResponse<{
-        data?: { image_base64?: string[] } | Array<{ b64_json?: string; error?: unknown }>;
+        data?:
+          | { image_base64?: string[] }
+          | Array<{ b64_json?: string; error?: { code?: string; message?: string } }>;
         metadata?: {
           success_count?: number;
           failed_count?: number;
@@ -201,10 +203,13 @@ export function buildMinimaxImageGenerationProvider(
       });
 
       if (images.length === 0) {
-        const failedCount =
-          data.metadata?.failed_count ?? entries.filter((entry) => entry.error).length;
+        const errors = entries.flatMap(({ error }) =>
+          error ? [`${error.code}: ${error.message}`] : [],
+        );
+        const failedCount = data.metadata?.failed_count ?? 0;
         const reason =
-          failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
+          errors.join("; ") ||
+          (failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned");
         throw new Error(`MiniMax image generation returned no images: ${reason}`);
       }
 
