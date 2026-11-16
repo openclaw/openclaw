@@ -3466,6 +3466,7 @@ class NodeRuntime internal constructor(
    * Reconnect a live node only when Android authority changed since its last connect.
    */
   fun refreshNodePermissionSurface() {
+    refreshVoiceWakePermission()
     val permissions = connectionManager.buildPermissions()
     if (permissions == lastNodeConnectOptions?.permissions) return
     refreshAcceptedGatewayConnection(refreshOperator = false)

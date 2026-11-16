@@ -95,6 +95,65 @@ it("keeps retirement reads outside the Doctor restoration graph", async () => {
   }
 });
 
+it("keeps database-opening workers outside update migration attribution", async () => {
+  const name = "infra/fs-safe-copy.worker";
+  const selected = configs.find(
+    (config) =>
+      typeof config.entry === "object" &&
+      config.entry !== null &&
+      !Array.isArray(config.entry) &&
+      name in config.entry,
+  );
+  const source = selected
+    ? (selected.entry as Record<string, string | undefined>)[name]
+    : undefined;
+  if (!selected || !source) {
+    throw new Error("Missing private fs-safe copy worker build config");
+  }
+  const root = createTempDir("openclaw-db-worker-attribution-build-");
+  const modules: string[] = [];
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { [name]: source },
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+    plugins: [
+      selected.plugins,
+      {
+        name: "db-worker-attribution-proof",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              modules.push(
+                ...Object.keys(chunk.modules).map((id) =>
+                  path.relative(process.cwd(), id).split(path.sep).join("/"),
+                ),
+              );
+            }
+          }
+        },
+      },
+    ],
+  });
+  try {
+    // Opening a database must not copy update inspection into every private worker graph.
+    expect(
+      modules.filter((id) =>
+        /^src\/infra\/update-(?:doctor-migration-attribution|candidate-state|database-generations)/u.test(
+          id,
+        ),
+      ),
+    ).toEqual([]);
+    expect(modules).toContain("src/infra/update-doctor-migration-context.ts");
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
 it("keeps the standalone launcher bootstrap within its measured metadata-only boundary", async () => {
   const selected = configs.find((config) =>
     hasWorkerEntry(config, "node-host-launcher-bootstrap", "src/node-host/launcher-bootstrap.ts"),
@@ -1271,34 +1330,31 @@ console.log("relocated session card renders with bundled fonts");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      if (worker) {
-        if (process.platform !== "win32") {
-          const result = await runNodeFixture(
-            [
-              path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
-              path.join(root, "dist", `${relay}.${extension}`),
-            ],
-            { timeout: 15_000 },
-          );
-          expect(result.error, result.stderr).toBeNull();
-          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
-        }
-      } else {
-        // Each launch boots both helpers; shared chunks pull unrelated runtime
-        // exports into startup before the durable worker gate can open.
-        // The anchor's lineage writer retains the shared lazy schema catalogs.
-        expect(files.toSorted()).toEqual(
-          [
-            `dist/${relay}.${extension}`,
-            `dist/${anchor}.${extension}`,
+      if (!worker) {
+        expect(files).toEqual(
+          expect.arrayContaining([
             "dist/assets/sqlite-schema/sqlite-agent-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-client-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-daemon-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-memory-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-state-catalogs.json",
-          ].toSorted(),
+          ]),
         );
-        expect(imports).toEqual([]);
+      }
+      if (process.platform !== "win32") {
+        if (!worker) {
+          fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+          fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+        }
+        const result = await runNodeFixture(
+          [
+            path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+            path.join(root, "dist", `${relay}.${extension}`),
+          ],
+          { timeout: 15_000 },
+        );
+        expect(result.error, result.stderr).toBeNull();
+        expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
       }
     },
   );

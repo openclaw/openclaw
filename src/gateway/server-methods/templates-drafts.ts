@@ -65,7 +65,7 @@ async function personalPublisher(options: ClawHubFetchOptions) {
     ...connection,
     path: "/api/v1/whoami",
   });
-  const publisher = result.user?.handle;
+  const publisher = result.user?.handle?.trim().toLowerCase();
   if (!publisher || !/^[a-z0-9][a-z0-9._-]*$/.test(publisher)) {
     throw new TemplateProjectError(
       "clawhub_identity_required",
@@ -336,7 +336,7 @@ function draftAuthority(
     ) {
       throw new TemplateProjectError(
         "human_required",
-        "Create, review, and publish Templates from an active administrator Control UI connection.",
+        "Create, review, and publish Templates from the OpenClaw app while connected as an administrator.",
       );
     }
     options.sessionMutationCommitGuard?.();

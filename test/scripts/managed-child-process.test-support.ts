@@ -10,6 +10,8 @@ export function createSyntheticChild(
   const child = new ChildProcess();
   let exitCode = initialExit;
   Object.defineProperties(child, {
+    stdin: { value: null },
+    connected: { value: false },
     pid: { value: 12345 },
     exitCode: { get: () => exitCode },
     stdout: { value: output === "none" ? null : new PassThrough(), writable: true },

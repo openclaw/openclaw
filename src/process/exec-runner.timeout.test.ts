@@ -1,4 +1,4 @@
-import { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -24,13 +24,13 @@ vi.mock("./exec-spawn.js", () => ({
   }),
 }));
 
-class CommandChild extends ChildProcess {
-  override stdout = new PassThrough();
-  override stderr = new PassThrough();
-  // The fixture delivers the native state changes behind Node's read-only public fields.
-  override exitCode: number | null = null;
-  override signalCode: NodeJS.Signals | null = null;
-  override killed = false;
+class CommandChild extends EventEmitter {
+  stdin = null;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  killed = false;
 }
 
 function createCommand(install = true) {

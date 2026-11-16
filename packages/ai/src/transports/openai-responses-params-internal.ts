@@ -100,6 +100,7 @@ export function buildOpenAIResponsesParams(
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
   retainUserProvenance = false,
+  onItemRecovery?: () => void,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
@@ -117,6 +118,7 @@ export function buildOpenAIResponsesParams(
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,
+    onItemRecovery,
   };
   const messages =
     takeResponsesContextUsageInput(model, context, conversion) ??

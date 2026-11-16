@@ -36,8 +36,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("./update-command-service.js").maybeStopManagedServiceBeforeMutableUpdate
     >(),
-  validateCanary:
-    vi.fn<typeof import("../../infra/update-candidate-canary.js").validateUpdateCandidateCanary>(),
+  checkCandidate:
+    vi.fn<typeof import("../../infra/update-candidate-check.js").checkUpdateCandidate>(),
 }));
 
 vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
@@ -46,8 +46,9 @@ vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => 
   inspectServiceProcessMembershipSync: (pid: number) =>
     pid === mocks.servicePid ? "outside" : "unknown",
 }));
-vi.mock("../../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: mocks.validateCanary,
+// mock-isolation: the candidate check spawns a staged package worker these fixtures do not build.
+vi.mock("../../infra/update-candidate-check.js", () => ({
+  checkUpdateCandidate: mocks.checkCandidate,
 }));
 vi.mock("./schema-preflight.js", async (original) => ({
   ...(await original<typeof import("./schema-preflight.js")>()),
@@ -111,23 +112,19 @@ it("settles a failed candidate without inference repair and preserves its proces
   });
   const failure = (candidateRoot: string) => ({
     status: "error" as const,
-    reason: "runtime-verification-failed" as const,
-    phase: "snapshot" as const,
     steps: [
       {
-        name: "candidate-state-snapshot",
-        command: "candidate validation",
+        name: "candidate-recovery",
+        command: "--check",
         cwd: candidateRoot,
         durationMs: 1,
         exitCode: 1,
         stderrTail: "ENOSPC: no space left on device",
       },
     ],
-    durationMs: 1,
-    logTail: ["ENOSPC: no space left on device"],
   });
-  mocks.validateCanary.mockImplementation(async ({ root: candidateRoot }) => {
-    events.push("fresh snapshot fails");
+  mocks.checkCandidate.mockImplementation(async ({ root: candidateRoot }) => {
+    events.push("candidate check fails");
     return failure(candidateRoot);
   });
   const repair = vi
@@ -176,7 +173,7 @@ it("settles a failed candidate without inference repair and preserves its proces
   if (!execution) {
     throw new Error("Missing execution result");
   }
-  expect(events, JSON.stringify(execution.result)).toEqual(["fresh snapshot fails"]);
+  expect(events, JSON.stringify(execution.result)).toEqual(["candidate check fails"]);
   expect(repair).not.toHaveBeenCalled();
   expect(execution.result).toMatchObject({
     status: "error",

@@ -543,12 +543,12 @@ describe("cleanup path removals", () => {
       const workspaceDir = path.join(tempDirs.make("openclaw-cleanup-workspace-"), "workspace");
       await fs.mkdir(workspaceDir);
       const siblingMarker = `${workspaceDir}.attested`;
-      if (operation === "preview") {
-        await fs.writeFile(
-          siblingMarker,
-          "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-        );
-      } else if (operation === "failure") {
+      const markers = [siblingMarker, `${siblingMarker}.doctor-importing`];
+      const markerContents = "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n";
+      for (const marker of markers) {
+        await fs.writeFile(marker, markerContents);
+      }
+      if (operation === "failure") {
         vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
       }
       await removeWorkspaceDirs([workspaceDir], runtime, {
@@ -556,13 +556,18 @@ describe("cleanup path removals", () => {
         removeStateRows: true,
       });
       if (operation === "remove") {
-        await expect(fs.stat(workspaceDir)).rejects.toThrow();
+        for (const removed of [workspaceDir, ...markers]) {
+          await expect(fs.lstat(removed)).rejects.toMatchObject({ code: "ENOENT" });
+        }
         expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
       } else {
         expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
-        if (operation === "preview") {
-          expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
-          await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
+        await expect(fs.stat(workspaceDir)).resolves.toBeDefined();
+        for (const marker of markers) {
+          await expect(fs.readFile(marker, "utf8")).resolves.toBe(markerContents);
+          if (operation === "preview") {
+            expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${marker}`);
+          }
         }
       }
     },

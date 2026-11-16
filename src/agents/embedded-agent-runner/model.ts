@@ -6,6 +6,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { assertModelSupportsChat } from "../failover/error.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
@@ -182,13 +183,9 @@ export async function resolveModelAsync(
       readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
         (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
       );
-    if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
-      return {
-        error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
-        authStorage,
-        modelRegistry,
-      };
-    }
+    // Typed-only veto (#184996). Accepted edge: a main/nightly catalog saved under #198288 can refuse a
+    // listed model until the first restart after upgrading; releases never saved that value.
+    assertModelSupportsChat(captured?.inference?.chat ?? declared?.inference?.chat, normalizedRef);
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
     let staticCatalogModel: ProviderRuntimeModel | undefined;

@@ -88,7 +88,9 @@ class DocsSource {
     }
     const origins = [];
     let end = 0;
+    let matched = false;
     this.text = this.text.replace(pattern, (...args) => {
+      matched = true;
       const offset = args.at(-2);
       const value = typeof replacement === "function" ? replacement(...args) : replacement;
       for (let i = end; i < offset; i++) {
@@ -102,6 +104,9 @@ class DocsSource {
       end = offset + args[0].length;
       return value;
     });
+    if (!matched) {
+      return this;
+    }
     for (let i = end; i < this.origins.length; i++) {
       origins.push(this.origins[i]);
     }

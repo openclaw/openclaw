@@ -41,7 +41,6 @@ import {
   parseCronStringOption,
   warnIfCronSchedulerDisabled,
   requireCronJobId,
-  callCronReadFromCli,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.js";
@@ -64,7 +63,7 @@ type CronEditOptions = GatewayRpcOpts &
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callCronReadFromCli("cron.get", opts, { id })) as CronJobForEdit;
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;
@@ -99,6 +98,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-session-key", "Unset session key", false)
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--clear-active-hours", "Remove the entire execution window", false)
+      .option("--clear-access", "Remove the per-job Access selection", false)
       .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
       .option(

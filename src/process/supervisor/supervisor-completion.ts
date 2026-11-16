@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../../shared/deferred.js";
+import { ROOT_EXIT_OUTPUT_GRACE_MS } from "./cancellation-policy.js";
 import type { SpawnInput, SpawnProcessAdapter } from "./types.js";
 
 /** Bound inherited output after root exit; descendant cleanup retains its own wait. */
@@ -22,7 +23,7 @@ export async function waitForExecRootCompletion(
       if (!isCancelled()) {
         rootExit.resolve({ code, signal });
       }
-    }, 250);
+    }, ROOT_EXIT_OUTPUT_GRACE_MS);
     timer.unref();
   });
   try {

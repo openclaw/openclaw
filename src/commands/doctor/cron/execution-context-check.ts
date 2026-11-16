@@ -19,7 +19,7 @@ import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import {
   assembleScheduledAdmissionFacts,
   parentRowFactsFromEntry,
-  scheduledParentLinkOf,
+  scheduledParentKeyOf,
 } from "../../../cron/execution-context-admission.js";
 import {
   buildScheduledExecutionContext,
@@ -205,7 +205,7 @@ async function reviewJob(
   const profile =
     actor?.type === "human" && actor.id ? await readCreatorProfile(env, actor.id) : undefined;
   // Read the parent row and requester only for a job linked to an exact incarnation.
-  const parentKey = scheduledParentLinkOf(job)?.sessionKey;
+  const parentKey = scheduledParentKeyOf(job);
   let entry: SessionEntry | undefined;
   let parentRow;
   let owner: OwnerResult = { owner: undefined, check: "not-needed" };

@@ -19,7 +19,7 @@ import type {
 } from "../shared/control-ui-link-reader.js";
 
 export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
-  "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
+  "The configured web app GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
 
 export interface ControlUiGitHubError extends Error {
   readonly statusCode: number;

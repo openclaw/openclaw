@@ -21,7 +21,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-context.js";
 import { VERSION } from "../version.js";
 import {
   getStateRuntimeSchemaAdmission,

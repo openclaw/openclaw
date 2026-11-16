@@ -165,6 +165,14 @@ maximum is 200. Each candidate excerpt is exactly the approved summary; record
 bodies and ingested text never enter it. An ungranted conversation audience
 receives no candidates.
 
+Project recall has a one-second preparation budget. If it expires, the turn
+continues without project candidates and emits a `diagnostic.phase.completed`
+event named `project-memory.recall`, with `outcome: skipped`,
+`reason: budget_exceeded`, and the elapsed time. Diagnostics trace exporters
+record this non-outcome alongside the warning log. Cold vault scans and work
+already queued for the store can still exceed the budget; explicit Knowledge
+tools keep their own operation lifetime.
+
 ## Recall gate
 
 The recall gate asks the owning agent's [Decision model](/concepts/decision-models),

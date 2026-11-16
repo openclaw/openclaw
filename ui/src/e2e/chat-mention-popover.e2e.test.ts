@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import * as e2e from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "chat mention popover" });
@@ -62,6 +62,9 @@ suite.define(() => {
           await e2e.pollValue(rawValue).toBe("@Casey Vale ");
           const mention = input.locator(".chat-composer-mention");
           expect(await mention.getAttribute("data-profile-id")).toBe(profileId);
+          expect(await tooltipTitleText(mention)).toBe(
+            "Guest invitations require the session creator or an admin.",
+          );
           const avatar = mention.locator(".markdown-person-reference__avatar");
           await expect
             .poll(() => avatar.evaluate((element) => getComputedStyle(element, "::after").content))

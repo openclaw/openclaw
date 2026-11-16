@@ -133,22 +133,6 @@ export type SessionDeliveryProjection = {
   lastThreadId?: string | number;
 };
 
-export function isCanonicalSessionDeliveryState(value: unknown): value is SessionDeliveryState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  if (candidate.kind === "none" || candidate.kind === "internal") {
-    return true;
-  }
-  return (
-    candidate.kind === "external" &&
-    Boolean(candidate.route && typeof candidate.route === "object") &&
-    Boolean(candidate.context && typeof candidate.context === "object") &&
-    Boolean(candidate.origin && typeof candidate.origin === "object")
-  );
-}
-
 /** Builds one canonical delivery state from current turn routing facts. */
 export function normalizeSessionDeliveryState(params?: {
   route?: ChannelRouteRef;

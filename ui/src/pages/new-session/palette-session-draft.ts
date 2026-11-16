@@ -51,15 +51,16 @@ export class PaletteSessionDraft {
     return gateway ? gatewayPresentationScope(gateway) : undefined;
   });
   private attachmentIntent = false;
+  private attachmentCount = 0;
   private readonly changed = () => {
     const draft = this.draft?.submission.attachmentDraft;
     const previous = this.attachmentIntent;
+    const count = draft?.reads.project(draft.attachments).length ?? 0;
+    const admitted = count > this.attachmentCount;
+    this.attachmentCount = count;
     // Pending reads establish intent before they have a ready payload.
-    this.attachmentIntent = Boolean(
-      draft?.reads.project(draft.attachments).length ||
-      (this.attachmentIntent && this.message.trim()),
-    );
-    if (previous !== this.attachmentIntent) {
+    this.attachmentIntent = Boolean(count || (this.attachmentIntent && this.message.trim()));
+    if (admitted || previous !== this.attachmentIntent) {
       this.callbacks.onAttachmentModeChange?.();
     }
     this.callbacks.changed();
@@ -150,6 +151,9 @@ export class PaletteSessionDraft {
       (submission?.submissionOutcomeUnknown ? submission.submitDisabledReason() : null) ??
       (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
+  }
+  get blockedSubmitNotice(): string | undefined {
+    return this.draft?.submission.blockedSubmitNotice({ includePageRendered: true });
   }
   get disabledReason(): string | undefined {
     return this.draft?.submission.submitDisabledReason();

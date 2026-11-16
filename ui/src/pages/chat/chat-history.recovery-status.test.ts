@@ -26,7 +26,7 @@ it.each([
           fallbackStepToModel: "example/fallback",
           fallbackStepFinalOutcome: "next_fallback",
         });
-  const expectedLabel = kind === "retrying" ? "Retrying…" : "Trying fallback model…";
+  const expectedLabel = kind === "retrying" ? "Retrying" : "Trying fallback model";
   const state = createState(history);
   const label = () =>
     chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
