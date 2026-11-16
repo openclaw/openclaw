@@ -38,8 +38,8 @@ export function podmanFixture(root: string, tools: string[] = []) {
   command("id", 'case "$1" in -un) printf "fixture\\n";; *) printf "1000\\n";; esac');
   command("stat", 'case "$2" in %u) echo 1000;; %Lp|%a) echo 700;; *) exit 97;; esac');
   command("uname", "echo Linux");
-  const run = (entrypoint: string, env: Record<string, string> = {}) =>
-    spawnSync("/bin/bash", [path.join(root, entrypoint)], {
+  const run = (entrypoint: string, env: Record<string, string> = {}, args: string[] = []) =>
+    spawnSync("/bin/bash", [path.join(root, entrypoint), ...args], {
       encoding: "utf8",
       env: {
         HOME: home,

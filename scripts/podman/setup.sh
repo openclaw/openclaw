@@ -8,7 +8,7 @@ fi
 # store, writes config under ~/.openclaw by default, and uses the repo-local
 # launch script at ./scripts/run-openclaw-podman.sh.
 #
-# Usage: ./scripts/podman/setup.sh [--quadlet|--container]
+# Usage: ./scripts/podman/setup.sh [--quadlet|--container] [--help]
 #   --quadlet   Install a Podman Quadlet as the current user's systemd service
 #   --container Only install image + config; you start the container manually (default)
 #   Or set OPENCLAW_PODMAN_QUADLET=1 (or 0) to choose without a flag.
@@ -19,6 +19,25 @@ fi
 # Or, if you used --quadlet:
 #   systemctl --user start openclaw.service
 set -euo pipefail
+
+usage() {
+  printf '%s\n' \
+    'Usage: ./scripts/podman/setup.sh [--quadlet|--container] [--help]' \
+    '  --quadlet   Install a systemd user Quadlet (Linux only)' \
+    '  --container Install image and config for manual startup (default)' \
+    '  -h, --help  Show this help without running setup' \
+    'OPENCLAW_PODMAN_QUADLET=1 or 0 overrides the selected mode.'
+}
+
+INSTALL_QUADLET=false
+for arg in "$@"; do
+  case "$arg" in
+    --quadlet) INSTALL_QUADLET=true ;;
+    --container) INSTALL_QUADLET=false ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'Unknown argument: %s\n' "$arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
 
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 source "$REPO_PATH/scripts/lib/build-metadata.sh"
@@ -102,13 +121,6 @@ seed_local_control_ui_origins() {
   mv -f "$tmp" "$file"
 }
 
-INSTALL_QUADLET=false
-for arg in "$@"; do
-  case "$arg" in
-    --quadlet) INSTALL_QUADLET=true ;;
-    --container) INSTALL_QUADLET=false ;;
-  esac
-done
 if [[ -n "${OPENCLAW_PODMAN_QUADLET:-}" ]]; then
   case "$OPENCLAW_PODMAN_QUADLET" in
     1|[yY][eE][sS]|[tT][rR][uU][eE]) INSTALL_QUADLET=true ;;
