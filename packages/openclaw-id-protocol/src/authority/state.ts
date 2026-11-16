@@ -2,7 +2,12 @@
 // Pure and in-memory: the Gateway owns persistence, transport and side effects; it can
 // use these rules directly or must pass the same acceptance tests.
 import { bytesToHex } from "../bytes.js";
-import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import {
+  rawPublicKey,
+  type Ed25519PublicKey,
+  type IrohEndpointKey,
+  type KeyFingerprint,
+} from "../keys.js";
 import type {
   OwnerCapability,
   InviteCapBody,
@@ -61,7 +66,8 @@ export type OwnerDeviceRecord = {
 export type MemberDeviceApprover =
   | { kind: "invite"; invite_id: string }
   | { kind: "owner"; by: "root" | KeyFingerprint }
-  | { kind: "member_device"; device_fp: KeyFingerprint };
+  | { kind: "member_device"; device_fp: KeyFingerprint }
+  | { kind: "member_recovery_kit"; device_fp: KeyFingerprint };
 
 /** A member's signing key and untrusted display label, attached to its peer key. */
 export type MemberDevice = {
@@ -73,6 +79,8 @@ export type MemberDevice = {
 /** A member and the browsers (peer keys) they use at this claw. */
 export type MemberRecord = {
   role: MemberRole;
+  /** One offline recovery-only signing device; never a browsing peer key. */
+  recovery_kit?: { device_pub: Ed25519PublicKey };
   devices?: Partial<Record<IrohEndpointKey, MemberDevice>>;
   peer_keys: IrohEndpointKey[];
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
@@ -277,6 +285,9 @@ export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDevic
 export function memberLookup(state: AuthorityState): MemberDeviceLookup {
   return (devicePub) => {
     for (const [account_id, member] of Object.entries(state.members)) {
+      if (member.recovery_kit?.device_pub === devicePub) {
+        return { account_id, recovery_only: true };
+      }
       const peer_key = member.peer_keys.find(
         (peer) => member.devices?.[peer]?.device_pub === devicePub,
       );
@@ -286,6 +297,18 @@ export function memberLookup(state: AuthorityState): MemberDeviceLookup {
     }
     return undefined;
   };
+}
+
+/** Whether raw key bytes are reserved for an offline member recovery device. */
+export function isMemberRecoveryKey(
+  state: AuthorityState,
+  key: Ed25519PublicKey | IrohEndpointKey,
+): boolean {
+  const raw = bytesToHex(rawPublicKey(key));
+  return Object.values(state.members).some(
+    (member) =>
+      member.recovery_kit && bytesToHex(rawPublicKey(member.recovery_kit.device_pub)) === raw,
+  );
 }
 
 /**
