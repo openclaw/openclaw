@@ -326,7 +326,8 @@
 /* List rows reuse the card's title, author and time treatment. */
 .dashboard-row__main {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr) 200px 150px;
+  /* The last track keeps the actions menu, which sits outside the link, clear of the time. */
+  grid-template-columns: 76px minmax(0, 1fr) 200px 150px 28px;
   gap: var(--space-4);
   align-items: center;
   height: 64px;
@@ -336,7 +337,7 @@
   color: inherit;
 }
 
-a.dashboard-row__main:hover {
+.dashboard-row:hover > a.dashboard-row__main {
   background: var(--bg-hover);
 }
 
@@ -641,6 +642,39 @@ a.dashboard-row__main:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* The actions menu sits outside the entry's link, over its end. */
+.dashboard-card,
+.dashboard-row {
+  position: relative;
+}
+
+.dashboard-card__actions,
+.dashboard-row__actions {
+  position: absolute;
+  z-index: 1;
+}
+
+.dashboard-card__actions {
+  top: calc(var(--space-2) + 6px);
+  inset-inline-end: calc(var(--space-2) + 6px);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.dashboard-card:hover .dashboard-card__actions,
+.dashboard-card__actions:focus-within {
+  opacity: 1;
+}
+
+.dashboard-row__actions {
+  top: 50%;
+  inset-inline-end: 0;
+  transform: translateY(-50%);
+}
+
 .dashboards-no-results {
   display: grid;
   justify-items: center;
@@ -697,10 +731,10 @@ a.dashboard-row__main:hover {
   }
   /* Title and meta sit close; rows breathe between each other. */
   .dashboard-row__main {
-    grid-template-columns: 64px minmax(0, 1fr) auto;
+    grid-template-columns: 64px minmax(0, 1fr) auto 28px;
     grid-template-areas:
-      "thumb title title"
-      "thumb author updated";
+      "thumb title title ."
+      "thumb author updated .";
     row-gap: 2px;
     column-gap: var(--space-3);
     height: auto;
@@ -734,5 +768,12 @@ a.dashboard-row__main:hover {
   .dashboard-preview .board-widget__chrome,
   .dashboard-preview .board-widget__grant-dot {
     display: none;
+  }
+}
+
+/* Without hover the card's actions stay visible. */
+@media (hover: none) {
+  .dashboard-card__actions {
+    opacity: 1;
   }
 }

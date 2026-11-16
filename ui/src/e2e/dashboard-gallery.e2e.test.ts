@@ -376,11 +376,20 @@ suite.define(() => {
           '[data-dashboard-session="agent:main:dashboard:volume-1"] a',
         );
         const third = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-2"] a');
+        const secondActions = gallery.locator(
+          '[data-dashboard-session="agent:main:dashboard:volume-1"] button[aria-label="Dashboard actions"]',
+        );
         await second.focus();
-        await page.keyboard.press("Tab");
-        expect(await third.evaluate((element) => element.matches(":focus"))).toBe(true);
-        await page.keyboard.press("Shift+Tab");
-        expect(await second.evaluate((element) => element.matches(":focus"))).toBe(true);
+        // Each entry's actions menu follows its link in the tab order.
+        for (const [key, target] of [
+          ["Tab", secondActions],
+          ["Tab", third],
+          ["Shift+Tab", secondActions],
+          ["Shift+Tab", second],
+        ] as const) {
+          await page.keyboard.press(key);
+          expect(await target.evaluate((element) => element.matches(":focus"))).toBe(true);
+        }
         await page.locator(".content").evaluate((element) => {
           element.scrollTop = element.scrollHeight / 2;
         });

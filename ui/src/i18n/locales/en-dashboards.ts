@@ -36,6 +36,9 @@ const enDashboards = {
     sortTitle: "Title A–Z",
     noResultsTitle: "No dashboards match your search.",
     noResultsDescription: "Try another search or author.",
+    actions: "Dashboard actions",
+    pinToSidebar: "Pin to the sidebar",
+    unpinFromSidebar: "Unpin from the sidebar",
   },
 } satisfies TranslationMap;
 
