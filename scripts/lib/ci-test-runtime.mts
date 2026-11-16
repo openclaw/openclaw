@@ -122,6 +122,7 @@ const nodeRequiredFiles = new Set([
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
+  "test/scripts/vitest-pair-benchmark.test.ts",
   // Portable catalog lifecycle plus a separate V8 planner-count proof.
   "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",
