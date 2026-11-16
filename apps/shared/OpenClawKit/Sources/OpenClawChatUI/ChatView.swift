@@ -36,6 +36,7 @@ public struct OpenClawChatView: View {
     #endif
     @State private var isKeyboardVisible = false
     @State private var hoveredMessageID: UUID?
+    @State private var expandedWorkTurns: Set<UUID> = []
     @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
@@ -628,7 +629,7 @@ extension OpenClawChatView {
         let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         return ChatAssistantRunGroup.build(
             transcript.rows,
-            tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
+            tools: self.collapsesCompletedWork && !self.isSearchPresented ? [] : self.viewModel.toolActivities,
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
@@ -663,7 +664,7 @@ extension OpenClawChatView {
         }
 
         #if os(iOS)
-        ForEach(ChatAssistantListCell.cells(shownGroups)) { cell in
+        ForEach(ChatAssistantListCell.cells(shownGroups, expandedWorkTurns: self.expandedWorkTurns)) { cell in
             Group {
                 if cell.group.runID != nil {
                     ChatAssistantRunFrame(
@@ -812,6 +813,7 @@ extension OpenClawChatView {
                     contextWindowTokens: contextWindowTokens,
                     showsActions: !isGrouped)
             }
+            .environment(\.openClawExpandedWorkTurns, self.$expandedWorkTurns)
         }
     }
 
@@ -1098,7 +1100,8 @@ extension OpenClawChatView {
         } else {
             base = messages
         }
-        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
+        var rows = ChatTranscriptRow.workRows(base, self.viewModel.toolActivities)(
+            self.collapsesCompletedWork && !self.isSearchPresented, self.displayOptions)
         let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
@@ -1119,9 +1122,8 @@ extension OpenClawChatView {
             case let .message(message):
                 return self.shouldDisplayMessage(message) ? row : nil
             case let .completedWork(work):
-                let visible = work.messages.filter(self.shouldDisplayMessage)
-                return visible.isEmpty ? nil : .completedWork(.init(
-                    anchorID: work.anchorID, messages: visible, durationMilliseconds: work.durationMilliseconds))
+                let filtered = work.filteringMessages(self.shouldDisplayMessage)
+                return filtered.map(ChatTranscriptRow.completedWork)
             default:
                 return row
             }

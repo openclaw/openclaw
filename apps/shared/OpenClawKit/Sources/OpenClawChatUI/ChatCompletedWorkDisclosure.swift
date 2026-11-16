@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 
 struct ChatCompletedWorkDisclosure<Content: View>: View {
@@ -6,24 +7,59 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
     @State private var isExpanded = false
 
+    @Environment(\.openClawExpandedWorkTurns) private var expandedTurns
+
     var body: some View {
-        DisclosureGroup(isExpanded: self.$isExpanded) {
+        if let turn = self.work.rollupID {
+            if let messages = self.work.rollupMessages {
+                self.disclosure(
+                    label: ChatCompletedWorkSummary.rollupLabel(
+                        messages: messages, expanded: self.expandedTurns.wrappedValue.contains(turn)),
+                    expanded: Binding(
+                        get: { self.expandedTurns.wrappedValue.contains(turn) },
+                        set: { expanded in
+                            if expanded { self.expandedTurns.wrappedValue.insert(turn) } else {
+                                self.expandedTurns.wrappedValue.remove(turn)
+                            }
+                        })) {
+                    self.segment
+                }
+            } else if self.expandedTurns.wrappedValue.contains(turn) {
+                self.segment
+            }
+        } else {
+            self.segment
+        }
+    }
+
+    private var segment: some View {
+        self.disclosure(label: self.label, icon: self.segmentIcon, expanded: self.$isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(self.work.messages, id: \.presentationID) { message in
                     self.messageContent(message)
                 }
             }
             .padding(.top, 8)
-        } label: {
-            Text(self.label)
-                .font(OpenClawChatTypography.caption)
-                .fixedSize(horizontal: false, vertical: true)
-                #if os(iOS)
-                .foregroundStyle(Color.secondary)
-                .frame(minHeight: 44)
-                #else
-                .foregroundStyle(.secondary)
-                #endif
+        }
+    }
+
+    private func disclosure(
+        label: String,
+        icon: String? = nil,
+        expanded: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> some View) -> some View
+    {
+        DisclosureGroup(isExpanded: expanded, content: content) {
+            HStack(spacing: 6) {
+                if let icon {
+                    Image(systemName: icon).accessibilityHidden(true)
+                }
+                Text(label)
+            }
+            .font(OpenClawChatTypography.caption)
+            .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
         }
         #if os(iOS)
         .disclosureGroupStyle(ChatCompletedWorkDisclosureStyle())
@@ -32,8 +68,22 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var segmentIcon: String {
+        guard self.work.isLive, let latest = ChatCompletedWorkSummary.latestItem(work: self.work) else {
+            return "list.bullet"
+        }
+        let call = ToolDisplayRegistry.displayCall(name: latest.name, args: latest.arguments)
+        let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
+        return ChatToolIcon.symbol(for: display.name, icon: display.icon)
+    }
+
     private var label: String {
-        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
+        guard self.work.isLive else {
+            let summary = ChatCompletedWorkSummary.label(work: self.work, expanded: false)
+            // Commentary-only segments have no category counts; keep the button named.
+            return summary.isEmpty ? String(localized: "Worked") : summary
+        }
+        return ChatCompletedWorkSummary.liveLabel(work: self.work)
     }
 }
 
@@ -56,6 +106,8 @@ private struct ChatCompletedWorkDisclosureStyle: DisclosureGroupStyle {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
             .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
             if configuration.isExpanded {
                 configuration.content
@@ -64,3 +116,7 @@ private struct ChatCompletedWorkDisclosureStyle: DisclosureGroupStyle {
     }
 }
 #endif
+
+extension EnvironmentValues {
+    @Entry var openClawExpandedWorkTurns: Binding<Set<UUID>> = .constant([])
+}

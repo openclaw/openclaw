@@ -5,6 +5,78 @@ import Testing
 
 @Suite("Completed transcript work")
 struct ChatCompletedWorkTests {
+    @Test func `proof commentary folds but untagged answer stays outside work`() throws {
+        let user = Self.message("user", "Inspect the files", at: 1000)
+        let commentary = Self.message("assistant", "Checking the files first.", at: 2000, phase: "commentary")
+        let result = Self.message("toolResult", "ready", at: 3000)
+        let answer = Self.message("assistant", "README and Package look fine; checking the changelog next.", at: 4000)
+        let final = Self.message("assistant", "The checks are complete.", at: 5000, phase: "final_answer")
+        let rows = Self.collapse([user, commentary, result, answer, final])
+        #expect(Self.visibleIDs(rows) == [user.id, answer.id, final.id])
+        let work = try #require(Self.work(in: rows).first)
+        #expect(work.messages.map(\.id) == [commentary.id, result.id])
+    }
+
+    @Test func `unpaired calls count as operations without unknown outcomes`() {
+        let call = Self.toolCall(at: 1)
+        let work = ChatTranscriptRow.CompletedWork(
+            anchorID: call.id,
+            messages: [call],
+            durationMilliseconds: nil)
+        #expect(ChatCompletedWorkSummary.label(work: work, expanded: false) == "1 read")
+    }
+
+    @Test func `display filtering drops hidden tools and empty work sections`() throws {
+        let call = Self.toolCall(at: 1)
+        let commentary = Self.message("assistant", "Checking", at: 2, phase: "commentary")
+        let work = ChatTranscriptRow.CompletedWork(
+            anchorID: call.id,
+            messages: [call, commentary],
+            durationMilliseconds: nil,
+            rollupID: call.id,
+            rollupMessages: [call, commentary])
+        // Tool activity hidden: only the commentary text survives.
+        let filtered = try #require(work.filteringMessages { !$0.content.contains(where: \.isToolCall) })
+        #expect(filtered.messages.map(\.id) == [commentary.id])
+        #expect(filtered.rollupMessages?.map(\.id) == [commentary.id])
+        #expect(work.filteringMessages { _ in false } == nil)
+    }
+
+    @Test func `summary counts paired calls once and excludes orphan results`() {
+        let calls = (0..<3).map { index in
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(
+                    type: "tool_use", id: "call-\(index)", name: index == 0 ? "exec" : "read")],
+                timestamp: Double(index),
+                transcriptRunID: "summary")
+        }
+        let results = (0..<3).map { index in
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: "ready")],
+                timestamp: Double(index + 3),
+                transcriptRunID: "summary",
+                toolCallId: "call-\(index)")
+        }
+        let orphan = OpenClawChatMessage(
+            role: "toolResult",
+            content: [.init(type: "text", text: "orphan")],
+            timestamp: 7,
+            transcriptRunID: "summary",
+            toolCallId: "missing")
+        let messages = calls + results + [orphan]
+        let items = ChatCompletedWorkSummary.items(messages)
+        #expect(items.count == 3)
+        #expect(items.allSatisfy { $0.displayState == .finished })
+        let work = ChatTranscriptRow.CompletedWork(
+            anchorID: calls[0].id,
+            messages: messages,
+            durationMilliseconds: nil)
+        let label = ChatCompletedWorkSummary.label(work: work, expanded: true)
+        #expect(label == "1 command · 2 reads")
+    }
+
     @Test func `spoken rendition stays visible when a consult answer is persisted later`() throws {
         let voice = try Self.decode(#"""
         {"role":"assistant","content":"The latest build is on your phone.","timestamp":1000,
@@ -29,13 +101,11 @@ struct ChatCompletedWorkTests {
         let rows = Self.collapse(source)
         let work = try #require(Self.work(in: rows).first)
 
-        #expect(work.messages.map(\.id) == [tool.id])
+        #expect(work.messages.map(\.id) == [progress.id, tool.id])
         #expect(work.durationMilliseconds == nil)
         #expect(Self.visibleIDs(rows) == [
             user.id,
-            progress.id,
             answer.id,
-            trailing.id,
             failed.id,
             unresolved.id,
             independent.id,
@@ -113,8 +183,9 @@ struct ChatCompletedWorkTests {
             timestamp: 4000)
         #expect(Self.work(in: Self.collapse([progress, unfinished])).isEmpty)
         let rows = Self.collapse([progress, final, failed, unfinished])
-        #expect(Self.work(in: rows).isEmpty)
-        #expect(Self.visibleIDs(rows) == [progress.id, final.id, failed.id, unfinished.id, unfinished.id])
+        // PLAN commentary rule: only explicit progress folds; failed and unfinished tails stay exposed.
+        #expect(Self.work(in: rows).map { $0.messages.map(\.id) } == [[progress.id]])
+        #expect(Self.visibleIDs(rows) == [final.id, failed.id, unfinished.id, unfinished.id])
     }
 
     @Test func `overlapping steers extend the same chronological chain until its last input is answered`() {
@@ -135,7 +206,9 @@ struct ChatCompletedWorkTests {
             Self.toolCall(at: 9000),
         ]
         #expect(Self.work(in: Self.collapse(source)).isEmpty)
-        #expect(Self.work(in: Self.collapse(source, working: true)).isEmpty)
+        // PLAN live items 1 and 5: each continuation retains its own folded segment.
+        #expect(Self.work(in: Self.collapse(source, working: true)).map { $0.messages.map(\.id) } ==
+            [[source[1].id], [source[3].id], [source[5].id], [source[8].id]])
         let final = Self.message("assistant", "All finished", at: 10000, phase: "final_answer")
         #expect(Self.work(in: Self.collapse(source + [final])).count == 4)
         #expect(Self.visibleIDs(Self.collapse(source + [final])) == [
@@ -148,7 +221,7 @@ struct ChatCompletedWorkTests {
         ])
     }
 
-    @Test func `live turns and search remain expanded while completed earlier turns fold`() {
+    @Test func `live turns fold into segments while search remains expanded`() {
         let first = [
             Self.message("user", "First", at: 0),
             Self.toolCall(at: 1),
@@ -159,13 +232,15 @@ struct ChatCompletedWorkTests {
             Self.toolCall(at: 4),
             Self.message("assistant", "Answer so far", at: 5),
         ]
-        #expect(Self.work(in: Self.collapse(first + second, working: true)).count == 1)
+        #expect(Self.work(in: Self.collapse(first + second, working: true)).count == 2)
         let raw = ChatTranscriptRow.build(from: first + second)
         #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false, searchActive: true) == raw)
         let active = Self.message("assistant", "Checking", at: 6, run: "active", phase: "commentary")
         #expect(ChatTranscriptRow.collapseCompletedWork(
             ChatTranscriptRow.build(from: [active] + first), runWorking: false, activeRunIDs: ["active"])
-            .first == .message(active))
+            .first.map { if case .completedWork = $0 { return true }
+                return false
+            } == true)
     }
 
     @Test func `forwarded projected and structural boundaries do not donate work to another answer`() {
@@ -198,7 +273,9 @@ struct ChatCompletedWorkTests {
         let continuedWork = Self.toolCall(at: 4000)
         let answer = Self.message("assistant", "Finished", at: 6000)
         let source = [original, work, steer, continuedWork, answer]
-        #expect(Self.work(in: Self.collapse(source, working: true)).isEmpty)
+        // PLAN live items 1 and 5: both sides of a steer retain folded work segments.
+        #expect(Self.work(in: Self.collapse(source, working: true)).map { $0.messages.map(\.id) } ==
+            [[work.id], [continuedWork.id]])
         let rows = Self.collapse(source)
         #expect(Self.visibleIDs(rows) == [original.id, steer.id, answer.id])
         let groups = Self.work(in: rows)
@@ -249,11 +326,14 @@ struct ChatCompletedWorkTests {
         let raw = try original.map { try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode($0)) }
         let decoded = await OpenClawChatViewModel.decodeMessages(raw)
         #expect(decoded.count == 4)
-        let refreshed = OpenClawChatViewModel.reconcileMessageIDs(
-            previous: decoded, incoming: await OpenClawChatViewModel.decodeMessages(raw))
+        let refreshed = await OpenClawChatViewModel.reconcileMessageIDs(
+            previous: decoded, incoming: OpenClawChatViewModel.decodeMessages(raw))
         #expect(refreshed.map(\.id) == decoded.map(\.id))
         #expect(Set(refreshed.map(\.id)).count == 4)
-        #expect(Self.work(in: Self.collapse(refreshed)).first?.messages.count == 2)
+        // PLAN commentary rule: keyed stream-fallback commentary folds with its tools.
+        let projected = Self.collapse(refreshed)
+        #expect(Self.work(in: projected).first?.messages.map(\.id) == Array(refreshed.prefix(3)).map(\.id))
+        #expect(Self.visibleIDs(projected) == [refreshed[3].id])
         let cached = OpenClawChatSQLiteTranscriptCache.cacheableMessages(decoded)
         #expect(OpenClawChatViewModel.dedupeMessages(cached).count == 4)
     }
@@ -311,7 +391,7 @@ struct ChatCompletedWorkTests {
             #expect(Self.work(in: Self.collapse([failed, roundTrip])).isEmpty)
         }
         let final = Self.message("assistant", "The first read failed; the next file is ready.", at: 5000)
-        #expect(Self.visibleIDs(Self.collapse(decoded + [final])) == [first.id, second.id, final.id])
+        #expect(Self.visibleIDs(Self.collapse(decoded + [final])) == [final.id])
 
         let unkeyed = try Self.decode(#"""
         {"role":"assistant","timestamp":5000,"openclawStreamFallback":{"source":"current","itemId":"  "},
@@ -375,5 +455,255 @@ struct ChatCompletedWorkTests {
                 nil
             }
         }
+    }
+}
+
+@Suite("Live tool segments")
+struct ChatLiveToolSegmentTests {
+    private func tool(_ name: String, at time: Double) -> OpenClawChatMessage {
+        OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "tool_use", id: name, name: name)],
+            timestamp: time,
+            transcriptRunID: "live")
+    }
+
+    @Test func `live single calls fold and visible answers freeze the previous segment`() {
+        let first = self.tool("read", at: 1)
+        let answer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Visible answer")],
+            timestamp: 2,
+            transcriptRunID: "live")
+        let second = self.tool("exec", at: 3)
+        let rows = ChatTranscriptRow.collapseCompletedWork(
+            [.message(first), .message(answer), .message(second)], runWorking: true)
+        #expect(rows.count == 3)
+        guard case let .completedWork(frozen) = rows[0],
+              case let .message(visible) = rows[1],
+              case let .completedWork(current) = rows[2]
+        else {
+            Issue.record("Expected segment, visible answer, segment")
+            return
+        }
+        #expect(!frozen.isLive)
+        #expect(current.isLive)
+        #expect(visible.id == answer.id)
+        #expect(current.messages.first?.id == second.id)
+        #expect(frozen.rollupID == nil)
+    }
+
+    @Test func `finish assigns one summary owner without reparenting visible answers`() {
+        let first = self.tool("read", at: 1)
+        let answer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "First answer")],
+            timestamp: 2,
+            transcriptRunID: "live")
+        let second = self.tool("exec", at: 3)
+        let final = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Final answer")],
+            timestamp: 4,
+            transcriptRunID: "live",
+            phase: "final_answer")
+        let rows = ChatTranscriptRow.collapseCompletedWork(
+            [.message(first), .message(answer), .message(second), .message(final)], runWorking: false)
+        #expect(rows.count == 4)
+        guard case let .completedWork(owner) = rows[0], case let .completedWork(segment) = rows[2] else {
+            Issue.record("Expected two chronological work slots")
+            return
+        }
+        #expect(owner.rollupMessages?.count == 2)
+        #expect(segment.rollupMessages == nil)
+        #expect(owner.rollupID == segment.rollupID)
+        #expect(rows[1].id == answer.id)
+        #expect(rows[3].id == final.id)
+    }
+
+    @Test func `live label follows latest call and segment identity survives append`() {
+        let first = self.tool("read", at: 1)
+        let second = self.tool("exec", at: 2)
+        let before = ChatTranscriptRow.collapseCompletedWork([.message(first)], runWorking: true)
+        let after = ChatTranscriptRow.collapseCompletedWork([.message(first), .message(second)], runWorking: true)
+        guard case let .completedWork(old) = before.first,
+              case let .completedWork(updated) = after.first
+        else {
+            Issue.record("Expected folded live segments")
+            return
+        }
+        #expect(old.id == updated.id)
+        #expect(ChatCompletedWorkSummary.liveLabel(work: old) == "Read")
+        #expect(ChatCompletedWorkSummary.liveLabel(work: old) != ChatCompletedWorkSummary.liveLabel(work: updated))
+        #expect(updated.messages.count == 2)
+    }
+
+    @Test func `provider shapes survive wire roundtrip and fold only tagged text`() throws {
+        for tagged in [true, false] {
+            let opening = OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(
+                    type: "text",
+                    text: "Checking the files first.",
+                    textSignature: tagged ?
+                        #"{"v":1,"id":"msg_proof","phase":"commentary"}"# :
+                        nil)],
+                timestamp: 0,
+                transcriptRunID: "live")
+            let middle = OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(type: "text", text: "The files are ready.")],
+                timestamp: 2,
+                transcriptRunID: "live")
+            let closing = OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(
+                    type: "text",
+                    text: "The checks are complete.",
+                    textSignature: tagged ?
+                        #"{"v":1,"id":"msg_final","phase":"final_answer"}"# :
+                        nil)],
+                timestamp: 4,
+                transcriptRunID: "live")
+            let wire = try JSONEncoder().encode([
+                opening,
+                self.tool("read", at: 1),
+                middle,
+                self.tool("exec", at: 3),
+                closing,
+            ])
+            let messages = try JSONDecoder().decode([OpenClawChatMessage].self, from: wire)
+            for live in [true, false] {
+                let rows = ChatTranscriptRow.collapseCompletedWork(
+                    ChatTranscriptRow.build(from: messages), runWorking: live)
+                let visible = rows.compactMap { row -> String? in
+                    if case let .message(m) = row { return m.rawText }
+                    return nil
+                }
+                #expect(visible == (tagged ? [middle.rawText, closing.rawText] :
+                        [opening.rawText, middle.rawText, closing.rawText]))
+                let folded = rows.flatMap { row -> [OpenClawChatMessage] in
+                    if case let .completedWork(w) = row { return w.messages }
+                    return []
+                }
+                #expect(folded.contains { $0.rawText == opening.rawText } == tagged)
+                #expect(!folded.contains { $0.rawText == middle.rawText || $0.rawText == closing.rawText })
+            }
+        }
+    }
+
+    @Test func `explicit commentary folds while unlabelled text stays visible`() {
+        let commentary = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Checking")],
+            timestamp: 1,
+            phase: "commentary")
+        let answer = OpenClawChatMessage(
+            role: "assistant", content: [.init(type: "text", text: "Answer")], timestamp: 2)
+        #expect(commentary.isCollapsibleWork)
+        #expect(!answer.isCollapsibleWork)
+    }
+
+    @Test func `rollup identity survives prepended older work`() {
+        let older = self.tool("grep", at: 0)
+        let first = self.tool("read", at: 1)
+        let second = self.tool("exec", at: 2)
+        let final = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Done")],
+            timestamp: 3,
+            transcriptRunID: "live",
+            phase: "final_answer")
+        let before = ChatTranscriptRow.collapseCompletedWork(
+            [.message(first), .message(second), .message(final)], runWorking: false)
+        let after = ChatTranscriptRow.collapseCompletedWork(
+            [.message(older), .message(first), .message(second), .message(final)], runWorking: false)
+        let beforeID = before.compactMap { row -> UUID? in
+            if case let .completedWork(work) = row { return work.rollupID }
+            return nil
+        }.first
+        let afterID = after.compactMap { row -> UUID? in
+            if case let .completedWork(work) = row { return work.rollupID }
+            return nil
+        }.first
+        #expect(beforeID != nil)
+        #expect(beforeID == afterID)
+    }
+
+    @Test func `commentary-only frozen segment has no category summary`() {
+        let commentary = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Checking")],
+            timestamp: 1,
+            transcriptRunID: "live",
+            phase: "commentary")
+        let answer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Answer")],
+            timestamp: 2,
+            transcriptRunID: "live")
+        let rows = ChatTranscriptRow.collapseCompletedWork(
+            [.message(commentary), .message(answer)], runWorking: true)
+        guard let firstRow = rows.first, case let .completedWork(frozen) = firstRow else {
+            Issue.record("Expected frozen commentary segment")
+            return
+        }
+        #expect(!frozen.isLive)
+        #expect(ChatCompletedWorkSummary.label(work: frozen, expanded: false).isEmpty)
+    }
+
+    @Test func `equal timestamps keep deterministic call order`() {
+        let answer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Done")],
+            timestamp: 2,
+            transcriptRunID: "live")
+        func pending(_ id: String) -> OpenClawChatPendingToolCall {
+            OpenClawChatPendingToolCall(
+                toolCallId: id,
+                name: "read",
+                args: nil,
+                startedAt: 1,
+                isError: nil,
+                diffStat: nil,
+                runID: "live")
+        }
+        // Active-first order flips when a call completes; projection must not.
+        let activeFirst = ChatTranscriptRow.projectingLiveTools(
+            in: [answer], tools: [pending("b"), pending("a")])
+        let completedFirst = ChatTranscriptRow.projectingLiveTools(
+            in: [answer], tools: [pending("a"), pending("b")])
+        #expect(activeFirst.map(\.id) == completedFirst.map(\.id))
+        #expect(activeFirst.count == 3)
+    }
+
+    @Test func `live segment identity survives recorded rows replacing pending calls`() {
+        let pending = OpenClawChatPendingToolCall(
+            toolCallId: "call-1",
+            name: "read",
+            args: nil,
+            startedAt: 1,
+            isError: nil,
+            diffStat: nil,
+            runID: "live")
+        let projected = ChatTranscriptRow.projectingLiveTools(in: [], tools: [pending])
+        let before = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: projected), runWorking: true)
+        // The recorded row carries a different stored ID but the same call key.
+        let recorded = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "tool_use", id: "call-1", name: "read")],
+            timestamp: 1,
+            transcriptRunID: "live")
+        let after = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: [recorded]), runWorking: true)
+        guard case let .completedWork(old) = before.first,
+              case let .completedWork(updated) = after.first
+        else {
+            Issue.record("Expected folded live segments")
+            return
+        }
+        #expect(old.id == updated.id)
+        #expect(old.anchorID == updated.anchorID)
     }
 }

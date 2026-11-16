@@ -52,4 +52,31 @@ struct ChatAssistantListCellTests {
         #expect(!cells[0].joinsAbove && cells[0].joinsBelow)
         #expect(cells[1].joinsAbove && !cells[1].joinsBelow)
     }
+
+    @Test func `collapsed rollup removes hidden segment cells and their chrome`() {
+        let turn = UUID()
+        let owner = ChatTranscriptRow.CompletedWork(
+            anchorID: UUID(),
+            messages: [],
+            durationMilliseconds: nil,
+            rollupID: turn,
+            rollupMessages: [])
+        let hidden = ChatTranscriptRow.CompletedWork(
+            anchorID: UUID(), messages: [], durationMilliseconds: nil, rollupID: turn)
+        let answer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Answer")],
+            timestamp: 2,
+            transcriptRunID: "run",
+            phase: "final_answer")
+        let group = ChatAssistantRunGroup(
+            id: .run("run", UUID(), 0),
+            runID: "run",
+            parts: [.row(.completedWork(owner)), .row(.completedWork(hidden)), .row(.message(answer))])
+        let collapsed = ChatAssistantListCell.cells([group][...])
+        #expect(collapsed.map(\.id) == [.row(owner.id), .row(answer.id)])
+        #expect(collapsed[0].joinsBelow && collapsed[1].joinsAbove)
+        let expanded = ChatAssistantListCell.cells([group][...], expandedWorkTurns: [turn])
+        #expect(expanded.map(\.id) == [.row(owner.id), .row(hidden.id), .row(answer.id)])
+    }
 }

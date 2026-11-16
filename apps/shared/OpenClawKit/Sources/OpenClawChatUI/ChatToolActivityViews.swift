@@ -27,7 +27,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let name: String?
     let arguments: AnyCodable?
     let details: AnyCodable?
-    let resultText: String?
+    var resultText: String?
     let state: State
     let liveDiffStat: ChatToolDiffStat?
     var activity: OpenClawAgentActivityItem?

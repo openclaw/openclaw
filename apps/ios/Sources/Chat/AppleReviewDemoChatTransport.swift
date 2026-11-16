@@ -31,7 +31,8 @@ enum ScreenshotFixtureMode {
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
     static var reactionsEnabled: Bool {
-        !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture")
+        !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture") &&
+            !ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-fold-fixture")
     }
 
     static var progressCardEnabled: Bool {
@@ -558,7 +559,8 @@ private actor LocalFixtureChatStore {
 
     init(fixture: LocalChatFixture) {
         self.fixture = fixture
-        self.messages = Self.seedMessages(fixture: fixture)
+        self.messages = ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-fold-fixture")
+            ? [] : Self.seedMessages(fixture: fixture)
         self.modelID = fixture.modelID
     }
 
@@ -615,14 +617,17 @@ private actor LocalFixtureChatStore {
                 activeRunIds: self.activeRunID.map { [$0] },
                 key: owner.map { "agent:\($0):\(normalizedSessionKey)" },
                 agentId: owner),
-            inFlightRun: startupSnapshot ?? self.duplicateReplaySessionKey.flatMap { _ in
-                self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
-            } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
-                ? self.activeRunID.map {
-                    OpenClawChatInFlightRun(
-                        runId: $0,
-                        text: String(repeating: "Streaming layout response. ", count: 12))
-                } : nil),
+            inFlightRun: startupSnapshot ??
+                (ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-fold-fixture")
+                    ? self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") } : nil) ?? self
+                .duplicateReplaySessionKey.flatMap { _ in
+                    self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
+                } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
+                    ? self.activeRunID.map {
+                        OpenClawChatInFlightRun(
+                            runId: $0,
+                            text: String(repeating: "Streaming layout response. ", count: 12))
+                    } : nil),
             activity: ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture")
                 ? JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
                 [{"messageId":"fixture-step-call","items":[
@@ -656,6 +661,11 @@ private actor LocalFixtureChatStore {
             self.activeRunID = runId
             self.duplicateReplaySessionKey = sessionKey
             self.duplicateReplayStarted = false
+            return OpenClawChatSendResponse(runId: runId, status: "pending")
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-fold-fixture") {
+            self.activeRunID = runId
+            Task { await self.replayLiveToolFold(sessionKey: sessionKey, runId: runId, now: now) }
             return OpenClawChatSendResponse(runId: runId, status: "pending")
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -923,7 +933,8 @@ private actor LocalFixtureChatStore {
     func reset() {
         self.duplicateReplaySessionKey = nil
         self.duplicateReplayStarted = false
-        self.messages = Self.seedMessages(fixture: self.fixture)
+        self.messages = ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-fold-fixture")
+            ? [] : Self.seedMessages(fixture: self.fixture)
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID
         self.thinkingLevel = nil
@@ -1445,5 +1456,88 @@ actor DrawerGroupFixtureStore {
         return try JSONSerialization.data(withJSONObject: [
             "ok": true, "groups": self.names.enumerated().map { ["name": $0.element, "position": $0.offset] },
         ])
+    }
+}
+
+/// Offline transport replay for real-app disclosure interaction and geometry proof.
+extension LocalFixtureChatStore {
+    private func replayLiveToolFold(sessionKey: String, runId: String, now: Double) async {
+        func call(_ name: String, _ id: String, _ offset: Double) -> [OpenClawChatMessage] {
+            [
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [.init(
+                        type: "toolCall",
+                        id: id,
+                        name: name,
+                        arguments: AnyCodable([
+                            "path": id == "fold-read-2" ? "Package.swift" :
+                                (id == "fold-read-3" ? "CHANGELOG.md" :
+                                    "README.md"),
+                            "command": "printf ready",
+                        ]))],
+                    timestamp: now + offset,
+                    transcriptRunID: runId),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: "ready")],
+                    timestamp: now + offset + 0.1,
+                    transcriptRunID: runId,
+                    toolCallId: id),
+            ]
+        }
+        func answer(_ text: String, _ offset: Double, final: Bool = false) -> OpenClawChatMessage {
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(type: "text", text: text)],
+                timestamp: now + offset,
+                transcriptRunID: runId,
+                phase: final && !ProcessInfo.processInfo.arguments
+                    .contains("--openclaw-live-tool-fold-unphased") ? "final_answer" : nil)
+        }
+        func changed() {
+            self.publish(.sessionsChanged(.init(
+                sessionKey: sessionKey,
+                reason: "message",
+                phase: "message",
+                runId: runId)))
+        }
+        // Let the send acknowledgment establish run ownership before publishing work.
+        try? await Task.sleep(for: .seconds(2))
+        guard self.activeRunID == runId else { return }
+        self.messages += [OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(
+                type: "text",
+                text: "Checking the files first.",
+                textSignature: ProcessInfo.processInfo.arguments
+                    .contains("--openclaw-live-tool-fold-unphased")
+                    ? nil :
+                    #"{"v":1,"id":"msg_proof","phase":"commentary"}"#)],
+            timestamp: now + 0.5,
+            transcriptRunID: runId,
+            phase: ProcessInfo.processInfo.arguments
+                .contains("--openclaw-live-tool-fold-unphased") ? nil : "commentary")] +
+            call("read", "fold-read-1", 1) + call("read", "fold-read-2", 2) +
+            call("exec", "fold-exec-1", 3)
+        changed()
+        try? await Task.sleep(for: .seconds(18))
+        guard self.activeRunID == runId else { return }
+        self.messages += [answer("README and Package look fine; checking the changelog next.", 4)] + call(
+            "exec",
+            "fold-exec-2",
+            5) +
+            call("read", "fold-read-3", 6)
+        changed()
+        try? await Task.sleep(for: .seconds(12))
+        guard self.activeRunID == runId else { return }
+        self.messages.append(answer("The checks are complete.", 7, final: true))
+        self.activeRunID = nil
+        self.publish(.chat(.init(
+            runId: runId,
+            sessionKey: sessionKey,
+            state: "final",
+            message: nil,
+            errorMessage: nil)))
     }
 }

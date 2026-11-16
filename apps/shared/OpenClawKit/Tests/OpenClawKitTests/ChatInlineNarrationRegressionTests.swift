@@ -3,9 +3,9 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatInlineNarrationRegressionTests {
-    @Test func `completed narration stays between work stretches`() {
-        let first = Self.message("Reading the file.", phase: "commentary")
-        let second = Self.message("Running the check.", phase: "commentary")
+    @Test func `unlabelled narration stays between work stretches`() {
+        let first = Self.message("Reading the file.", phase: "")
+        let second = Self.message("Running the check.", phase: "")
         let answer = Self.message("All checks passed.", phase: "final_answer")
         let source = [first, Self.work("read"), second, Self.work("exec"), answer]
         let rows = Self.project(source)

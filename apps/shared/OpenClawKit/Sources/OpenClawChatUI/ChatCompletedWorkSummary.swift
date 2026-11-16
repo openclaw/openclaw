@@ -2,17 +2,33 @@ import Foundation
 import OpenClawKit
 
 enum ChatCompletedWorkSummary {
+    static func latestItem(work: ChatTranscriptRow.CompletedWork) -> ChatToolActivityItem? {
+        work.messages.reversed().compactMap { message in
+            ChatToolActivity.items(message: message).last(where: \.isVisible)
+        }.first
+    }
+
+    static func liveLabel(work: ChatTranscriptRow.CompletedWork) -> String {
+        guard let latest = self.latestItem(work: work) else { return String(localized: "Working") }
+        let call = ToolDisplayRegistry.displayCall(name: latest.name, args: latest.arguments)
+        let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
+        return display.detailLine ?? latest.activity?.preparedTitle ?? display.title
+    }
+
+    static func rollupLabel(messages: [OpenClawChatMessage], expanded: Bool) -> String {
+        let label = String(localized: "Worked")
+        let count = self.items(messages).count
+        guard expanded, count > 0 else { return label }
+        let total = String(
+            format: count == 1 ?
+                String(localized: "%lld tool call") : String(localized: "%lld tool calls"),
+            count)
+        return "\(label) · \(total)"
+    }
+
     static func label(work: ChatTranscriptRow.CompletedWork, expanded: Bool) -> String {
-        var parts = [work.durationMilliseconds.map {
-            String(format: String(localized: "Worked for %@"), ChatWorkingDurationFormatter.compact(milliseconds: $0))
-        } ?? String(localized: "Worked")]
+        var parts: [String] = []
         let items = self.items(work.messages)
-        if expanded, !items.isEmpty {
-            parts.append(String(
-                format: items.count == 1 ?
-                    String(localized: "%lld tool call") : String(localized: "%lld tool calls"),
-                items.count))
-        }
         let counts = Dictionary(grouping: items, by: { self.category($0) })
         for category in Category.allCases {
             guard let count = counts[category]?.count, count > 0 else { continue }
@@ -24,7 +40,10 @@ enum ChatCompletedWorkSummary {
             (.skipped, String(localized: "%lld skipped")),
             (.unavailable, String(localized: "%lld unknown")),
         ] {
-            let count = items.filter { $0.displayState == state }.count
+            let count = items.filter {
+                // Like web unpairedCall, a call awaiting output has no unknown outcome.
+                $0.displayState == state && (state != .unavailable || $0.resultText != nil)
+            }.count
             if count > 0 {
                 parts.append(String(format: format, count))
             }
@@ -32,11 +51,24 @@ enum ChatCompletedWorkSummary {
         return parts.joined(separator: " · ")
     }
 
-    private static func items(_ messages: [OpenClawChatMessage]) -> [ChatToolActivityItem] {
+    static func items(_ messages: [OpenClawChatMessage]) -> [ChatToolActivityItem] {
         var items: [[String]: ChatToolActivityItem] = [:]
-        for message in messages {
+        for message in ChatTranscriptRow.mergeToolResults(in: messages) {
+            // Summaries count calls, not standalone or orphan result rows.
+            guard !message.isToolResult else { continue }
+            // Split envelopes keep the result recorded on the call fragment;
+            // pairing must see it even though the text renders elsewhere.
+            let pairedResults = message.content.filter(\.isToolResult) +
+                message.presentationRecordedToolResults
+            let pairedIDs = Set(pairedResults.compactMap(\.id))
+            let callIDs = Set(message.content.filter(\.isToolCall).enumerated().map {
+                $0.element.id ?? "call-\($0.offset)"
+            })
             let explicitIDs = Set(message.content.compactMap(\.id) + [message.toolCallId].compactMap(\.self))
-            for item in ChatToolActivity.items(message: message) {
+            for var item in ChatToolActivity.items(message: message) where callIDs.contains(item.id) {
+                if item.resultText == nil, pairedIDs.contains(item.id) {
+                    item.resultText = pairedResults.first { $0.id == item.id }?.text ?? ""
+                }
                 // Recorded IDs are run-scoped; generated fallback IDs belong
                 // only to the source fragment that assigned them.
                 let key = [

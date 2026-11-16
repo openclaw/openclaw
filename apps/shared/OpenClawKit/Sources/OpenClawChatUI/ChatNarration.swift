@@ -14,7 +14,8 @@ struct ChatNarration {
     private var segments: [Segment] = []
 
     mutating func receive(_ event: OpenClawAgentEventPayload, history: [OpenClawChatMessage]) {
-        let text = (event.data["progressText"]?.value as? String ?? "")
+        let textKey = event.stream == "assistant" ? "text" : "progressText"
+        let text = (event.data[textKey]?.value as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let phase = event.data["phase"]?.value as? String
         // Match the Gateway's completed-preamble contract: growing previews are
@@ -104,9 +105,9 @@ extension OpenClawChatViewModel {
     }
 
     func handleAgentNarration(_ event: OpenClawAgentEventPayload) {
-        guard event.stream == "item", event.data["kind"]?.value as? String == "preamble",
-              self.ownsLiveTelemetryRun(event.runId)
-        else { return }
+        let isPreamble = event.stream == "item" && event.data["kind"]?.stringValue == "preamble"
+        let isCommentary = event.stream == "assistant" && event.data["phase"]?.stringValue == "commentary"
+        guard isPreamble || isCommentary, self.ownsLiveTelemetryRun(event.runId) else { return }
         // Live commentary supersedes older idle snapshots; replay must not
         // invalidate the history response that owns its own adoption.
         if !self.isApplyingRunSnapshot { self.invalidateRunSnapshots() }
