@@ -33,8 +33,7 @@ suite.define(() => {
           "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
         },
       });
-      await page.goto(new URL("/cron", suite.server.baseUrl).toString());
-      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
       await page.locator('[data-test-id="cron-schedule-kind-event"]').getByRole("radio").click();
       await gateway.waitForRequest("config.get");
       await page
@@ -57,8 +56,7 @@ suite.define(() => {
           "mcp-events.status": { subscriptions: [] },
         },
       });
-      await page.goto(new URL("/cron", suite.server.baseUrl).toString());
-      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
       await page.locator('[data-test-id="cron-schedule-kind-event"]').getByRole("radio").click();
       await gateway.waitForRequest("config.get");
       const refresh = page.locator('[data-test-id="cron-events-refresh"]');

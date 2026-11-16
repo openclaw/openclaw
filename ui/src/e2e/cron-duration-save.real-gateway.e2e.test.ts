@@ -23,6 +23,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { collapseNav } from "./cron-fixtures.test-support.ts";
 
 async function startGateway(owner: OpenClawTestInstance, prepare?: () => Promise<unknown>) {
   try {
@@ -272,7 +273,7 @@ catalogSuite.define(() => {
         });
         await page.goto(url.toString());
         await waitForControlUiGatewayReady(page);
-        await page.locator('[data-test-id="cron-new-task"]').click();
+        await page.locator(".sidebar-automations__new").click();
         await page.locator("#cron-name").fill("Retain this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this draft");
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
@@ -461,6 +462,10 @@ async function withCronJobPage(
     }
     await waitForControlUiGatewayReady(page);
     expect(new URL(page.url()).hash.length).toBe(0);
+    // These cases return to the Automations list; a reload in an earlier case expands the nav.
+    if ((await page.locator(".shell--nav-collapsed").count()) === 0) {
+      await collapseNav(page);
+    }
     await run(evidence);
   } catch (error) {
     await captureControlUiE2eFailureDiagnostics(page, {
@@ -594,8 +599,9 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page } = evidence;
+        const row = page.locator('[data-test-id="cron-row-' + jobId + '"] .cron-table__name');
         await page.locator('[data-test-id="cron-back"]').click();
-        await page.locator('[data-test-id="cron-row-' + jobId + '"] .cron-table__name').click();
+        await row.click();
         const input = page.locator("#cron-payload-text");
         await input.waitFor();
         expect(await input.inputValue()).toBe(prompt);
@@ -610,8 +616,11 @@ suite.define(() => {
         await input.fill(edited);
         const saved = await submitCronForm(evidence, "cron.update");
         expect(saved.stored.payload).toMatchObject({ kind: "agentTurn", message: edited });
+        // Back left /cron, and the reload expands the sidebar again.
         await page.reload();
         await waitForControlUiGatewayReady(page);
+        await collapseNav(page);
+        await row.click();
         await input.waitFor();
         expect(await input.inputValue()).toBe(edited);
       });

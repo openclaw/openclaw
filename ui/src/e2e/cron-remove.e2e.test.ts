@@ -7,7 +7,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron removal mocked Gateway E2E",
@@ -37,6 +37,7 @@ suite.define(() => {
         },
       });
       const response = await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       expect(response?.status()).toBe(200);
       const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });

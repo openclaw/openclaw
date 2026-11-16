@@ -12,6 +12,7 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { collapseNav } from "../../e2e/cron-fixtures.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
@@ -54,6 +55,7 @@ async function installCron(page: Page, methodResponses: Record<string, unknown>)
     methodResponses: { ...cron, ...methodResponses },
   });
   await page.goto(`${suite.server.baseUrl}cron`);
+  await collapseNav(page);
   return gateway;
 }
 async function openRunHistory(page: Page) {
@@ -126,6 +128,7 @@ suite.define(() => {
       });
       await openRunHistory(page);
       await reload;
+      await collapseNav(page);
       const { button, region } = await openRunHistory(page);
       await exactText(region, "Recovered transcript output").waitFor();
       expect(failed.documentCount()).toBe(2);

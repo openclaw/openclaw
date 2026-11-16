@@ -8,7 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Cron loading mocked Gateway E2E",
@@ -176,6 +176,7 @@ suite.define(() => {
         "cron.runs": runsPage([oldRun], 51, 0, 50),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       await page.getByText(oldRun.summary, { exact: true }).waitFor();
       await gateway.deferNext("cron.runs");
