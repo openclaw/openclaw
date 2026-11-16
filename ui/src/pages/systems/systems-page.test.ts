@@ -637,7 +637,6 @@ describe("Systems workspace", () => {
     const names = (selector = ".systems-machine__name") =>
       [...sidebar.querySelectorAll(selector)].map((entry) => entry.textContent?.trim());
     const nodeNames = () => names(".systems-group:first-of-type .systems-machine__name");
-    const counts = () => names(".systems-group__count");
     const choose = async (value: string) => {
       const menu = sidebar.querySelector(".systems-filter-menu");
       const trigger = menu?.querySelector<HTMLButtonElement>(".oc-menu-trigger");
@@ -661,7 +660,6 @@ describe("Systems workspace", () => {
     };
 
     expect(nodeNames()).toEqual(["Be\u0301ta", "Zulu laptop", "Álpha", "Delta laptop"]);
-    expect(counts()).toEqual(["4", "3"]);
     const selected = [...sidebar.querySelectorAll<HTMLButtonElement>(".systems-machine")].find(
       (button) => button.querySelector(".systems-machine__name")?.textContent === "Zulu laptop",
     );
@@ -674,7 +672,6 @@ describe("Systems workspace", () => {
     expect(nodeNames()).toEqual(["Álpha", "Delta laptop", "Be\u0301ta", "Zulu laptop"]);
     await choose("status:offline");
     expect(names()).toEqual(["Álpha", "Delta laptop", "Retained worker"]);
-    expect(counts()).toEqual(["2", "1"]);
     expect(text(page, ".systems-heading h2")).toBe("Zulu laptop");
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(offline.id);
 

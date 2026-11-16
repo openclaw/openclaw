@@ -772,7 +772,7 @@ suite.define(() => {
         .toBe("Cloud worker");
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
-      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
+      expect(await inventory.locator(".systems-group .systems-machine").count()).toBe(1);
       // Leave through a page without a sidebar so the Sessions view and its inventory remain.
       await evaluateControlUiContext(page, (app) => app.navigate("usage"));
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
@@ -804,7 +804,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await inventory.getByRole("button", { name: "Refresh devices" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
-      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
+      expect(await inventory.locator(".systems-group").count()).toBe(0);
       await page.setViewportSize({ width: 640, height: 900 });
       expect(await picker.locator('option[value="worker-one"]').count()).toBe(0);
     } finally {

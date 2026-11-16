@@ -529,27 +529,18 @@ openclaw-systems-page {
   font-weight: 500;
   color: var(--muted);
 }
-.systems-group h3 > span:first-child {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.systems-group__count {
-  font-size: calc(10px * var(--control-ui-text-scale, 1));
-  font-variant-numeric: tabular-nums;
-  opacity: 0.7;
-}
-/* Rows mirror .sidebar-recent-session: one line, name in --text, meta in --muted,
+/* Rows read as two lines: the name in --text, the device fact under it in --muted,
    selection as a text-tinted fill rather than an accent border. */
 .systems-machine {
   --systems-row-bg: transparent;
 
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--sidebar-row-gap, 8px);
   width: 100%;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height, 30px);
-  padding: 4px 6px 4px var(--sidebar-inset, 8px);
+  padding: 6px 6px 6px var(--sidebar-inset, 8px);
   border: 0;
   border-radius: var(--radius-md);
   background: var(--systems-row-bg);
@@ -578,18 +569,27 @@ openclaw-systems-page {
   background: var(--muted);
   opacity: 0.45;
 }
-.systems-machine[data-status="available"] .systems-machine__dot {
+.systems-machine > .systems-machine__dot {
+  margin-top: calc((var(--sidebar-title-line-height, 18px) - 6px) / 2);
+}
+[data-status="available"] > .systems-machine__dot {
   background: var(--ok);
   opacity: 1;
 }
-.systems-machine[data-status="starting"] .systems-machine__dot,
-.systems-machine[data-status="stopping"] .systems-machine__dot {
+[data-status="starting"] > .systems-machine__dot,
+[data-status="stopping"] > .systems-machine__dot {
   background: var(--warn);
   opacity: 1;
 }
-.systems-machine[data-status="error"] .systems-machine__dot {
+[data-status="error"] > .systems-machine__dot {
   background: var(--danger);
   opacity: 1;
+}
+.systems-machine__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
 }
 .systems-machine__name {
   flex: 1 1 auto;
@@ -610,10 +610,15 @@ openclaw-systems-page {
   color: var(--muted);
 }
 .systems-machine__meta {
-  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 16px;
   font-size: calc(11px * var(--control-ui-text-scale, 1));
   color: var(--muted);
-  white-space: nowrap;
+}
+.systems-machine__meta:empty {
+  display: none;
 }
 .systems-machine[aria-pressed="true"] .systems-machine__meta {
   color: var(--text);
@@ -621,6 +626,7 @@ openclaw-systems-page {
 .systems-machine__desktop {
   display: inline-flex;
   flex: 0 0 auto;
+  margin-top: 2px;
   color: var(--muted);
 }
 .systems-machine__desktop svg {
