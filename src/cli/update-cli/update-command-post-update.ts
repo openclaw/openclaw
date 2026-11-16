@@ -11,7 +11,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { commitVerifiedUpdatePluginCohort } from "./update-command-cohort.js";
-import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { convergeUpdatePlugins, isSwitchedGitRelease } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
@@ -454,11 +454,13 @@ async function finishSettledUpdate(
           activationVerified,
         });
       // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval.
+      // A replaced core keeps convergence in its original stopped interval. A switched
+      // Git release converges only after it verified, so a failed trial never strands
+      // plugins that require the release it left.
       const deferPluginConvergence =
         shouldRestart &&
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-        params.coreAlreadyCurrent === true &&
+        (params.coreAlreadyCurrent === true || isSwitchedGitRelease(params.result)) &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       const runsPostActivationInspections =
         shouldRestart &&

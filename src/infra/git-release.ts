@@ -127,7 +127,8 @@ export async function collectGitReleases(params: {
 
 /**
  * The serving Gateway restarts itself once its maintenance tick (30 s) sees the link
- * move. Wait up to 90 s for a new Gateway owner before verifying the switched release.
+ * move. Wait for a new Gateway owner before verifying; after 35 s, ask it to restart
+ * (SIGUSR2), which also covers a plugin-only restart where the link did not move.
  */
 export async function waitForGitReleaseSuccessor(
   env: NodeJS.ProcessEnv,
@@ -142,6 +143,13 @@ export async function waitForGitReleaseSuccessor(
   };
   const servingPid = ownerPid();
   for (let waited = servingPid ? 0 : 90; waited < 90; waited++) {
+    if (waited === 35) {
+      try {
+        process.kill(servingPid!, "SIGUSR2");
+      } catch {
+        // A Gateway that already exited has a successor coming.
+      }
+    }
     await sleep(1_000, signal);
     if (ownerPid() !== servingPid) {
       return;

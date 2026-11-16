@@ -48,6 +48,11 @@ import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
+/** A Git update that switched the release link instead of rewriting a checkout. */
+export function isSwitchedGitRelease(result: UpdateRunResult): boolean {
+  return result.mode === "git" && readPackageReleaseSlotSync(result.root ?? "") !== null;
+}
+
 export async function convergeUpdatePlugins(params: {
   databaseBackup?: import("../../infra/update-database-backup.js").UpdateDatabaseBackup;
   coreAlreadyCurrent?: boolean;
@@ -84,8 +89,7 @@ export async function convergeUpdatePlugins(params: {
   const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
-  const gitRelease =
-    params.result.mode === "git" && readPackageReleaseSlotSync(postUpdateRoot) !== null;
+  const gitRelease = isSwitchedGitRelease(params.result);
   // Uncommitted target finalization cannot authorize a detached helper restart.
   const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
     ...result,
