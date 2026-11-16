@@ -19,8 +19,10 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import {
   isAnthropicOAuthApiKey,
+  isAnthropicWorkloadIdentityApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
+  withAnthropicOAuthApiBeta,
 } from "./anthropic-auth-headers.js";
 import {
   buildAnthropicClaudeCodeIdentity,
@@ -217,6 +219,19 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             model.headers,
             optionsHeaders,
           );
+          if (isAnthropicWorkloadIdentityApiKey(apiKey)) {
+            // Workload identity tokens are Developer Platform credentials that behave like API
+            // keys, but travel as OAuth bearer tokens.
+            configuredApiKey = null;
+            authToken = apiKey;
+            const betaHeaderName =
+              Object.keys(defaultHeaders).findLast(
+                (name) => name.toLowerCase() === "anthropic-beta",
+              ) ?? "anthropic-beta";
+            defaultHeaders[betaHeaderName] = withAnthropicOAuthApiBeta(
+              defaultHeaders[betaHeaderName],
+            );
+          }
           // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
           if (isDirectAnthropicModel(model)) {
             directApiKeyBetaHeader =

@@ -7,6 +7,7 @@ import {
   buildAnthropicClaudeCodeIdentity,
   buildAnthropicSystemBlocks,
   isAnthropicOAuthApiKey,
+  isAnthropicWorkloadIdentityApiKey,
 } from "@openclaw/ai/internal/anthropic";
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import "../../llm/ai-transport-host.js";
@@ -148,10 +149,13 @@ export async function anthropicAnalyzePdf(
     (request?.auth?.mode !== undefined && request.auth.mode !== "provider-default") ||
     ["authorization", "x-api-key", "api-key"].some((name) => headers.has(name));
   const usesOAuthApiKey = !hasExplicitAuthOverride && isAnthropicOAuthApiKey(apiKey);
+  const usesWorkloadIdentity =
+    !hasExplicitAuthOverride && isAnthropicWorkloadIdentityApiKey(apiKey);
+  const usesBearer = usesOAuthApiKey || usesWorkloadIdentity;
   if (!hasExplicitAuthOverride) {
     headers.set(
-      usesOAuthApiKey ? "authorization" : "x-api-key",
-      usesOAuthApiKey ? `Bearer ${apiKey}` : apiKey,
+      usesBearer ? "authorization" : "x-api-key",
+      usesBearer ? `Bearer ${apiKey}` : apiKey,
     );
   }
   headers.set("anthropic-version", "2023-06-01");
@@ -161,6 +165,7 @@ export async function anthropicAnalyzePdf(
       headers.get("anthropic-beta"),
       "pdfs-2024-09-25",
       ...(usesOAuthApiKey ? ["claude-code-20250219", "oauth-2025-04-20"] : []),
+      ...(usesWorkloadIdentity ? ["oauth-2025-04-20"] : []),
     ]
       .filter(Boolean)
       .join(","),
@@ -197,7 +202,7 @@ export async function anthropicAnalyzePdf(
       ],
     },
     request: request ? { ...request, headers: requestHeaders } : undefined,
-    defaultAuthHeader: usesOAuthApiKey ? "authorization" : "x-api-key",
+    defaultAuthHeader: usesBearer ? "authorization" : "x-api-key",
     signal: params.signal,
   });
 

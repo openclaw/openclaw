@@ -19,6 +19,10 @@ import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
+  ANTHROPIC_WORKLOAD_IDENTITY_SOURCE,
+  resolveAnthropicWorkloadIdentityToken,
+} from "./anthropic-workload-identity.js";
+import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -669,6 +673,21 @@ export async function resolveApiKeyForProviderCore(input: {
 
   if (deferredAuthProfileResult) {
     return deferredAuthProfileResult;
+  }
+
+  // Keyless fallback: only consulted when no stored or configured credential exists.
+  if (provider === "anthropic" && modeAllowed("token")) {
+    const workloadIdentityToken = await resolveAnthropicWorkloadIdentityToken();
+    params.signal?.throwIfAborted();
+    if (workloadIdentityToken) {
+      return {
+        apiKey: params.secretSentinels
+          ? mintSecretSentinel(workloadIdentityToken, { label: `model-auth:${provider}` })
+          : workloadIdentityToken,
+        source: ANTHROPIC_WORKLOAD_IDENTITY_SOURCE,
+        mode: "token",
+      };
+    }
   }
 
   const syntheticLocalAuth = await prepareSyntheticLocalProviderAuth({

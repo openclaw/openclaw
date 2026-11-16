@@ -42,8 +42,10 @@ export {
 export {
   applyAnthropicRefusal,
   isAnthropicOAuthApiKey,
+  isAnthropicWorkloadIdentityApiKey,
   resolveAnthropicServerCompactionPlan,
   resolveAnthropicThinkingEffort,
+  withAnthropicOAuthApiBeta,
 } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";

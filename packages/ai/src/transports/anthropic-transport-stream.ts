@@ -12,8 +12,10 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
   isAnthropicOAuthApiKey,
+  isAnthropicWorkloadIdentityApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
+  withAnthropicOAuthApiBeta,
 } from "../providers/anthropic-auth-headers.js";
 import {
   buildAnthropicClaudeCodeIdentity,
@@ -193,6 +195,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const copilot = model.provider === "github-copilot";
         const bearerAuth = copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model));
         const isOAuthToken = !bearerAuth && isAnthropicOAuthApiKey(apiKey);
+        const workloadIdentity = !bearerAuth && isAnthropicWorkloadIdentityApiKey(apiKey);
         let defaultHeaders: ModelRequestHeaders | undefined;
         let claudeCodeVersion: string | undefined;
         let directApiKeyBetaHeader: string | undefined;
@@ -252,6 +255,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               }),
             );
             // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
+            // Workload identity tokens are Developer Platform credentials and count as API keys here.
             directApiKeyBetaHeader = isDirectAnthropicModel(model)
               ? (new Headers(omitNullRequestHeaders(defaultHeaders)).get("anthropic-beta") ?? "")
               : undefined;
@@ -272,7 +276,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                   {
                     "content-type": "application/json",
                     "anthropic-version": "2023-06-01",
-                    ...(bearerAuth || isOAuthToken
+                    ...(bearerAuth || isOAuthToken || workloadIdentity
                       ? { authorization: `Bearer ${apiKey}` }
                       : { "x-api-key": apiKey }),
                   },
@@ -282,6 +286,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             );
             for (const [name, value] of Object.entries(requestHeaders ?? {})) {
               headers.set(name, value);
+            }
+            if (workloadIdentity) {
+              // Applied last so caller or wrapper beta lists cannot drop it.
+              headers.set(
+                "anthropic-beta",
+                withAnthropicOAuthApiBeta(headers.get("anthropic-beta")),
+              );
             }
             const response = await fetch(url, {
               method: "POST",

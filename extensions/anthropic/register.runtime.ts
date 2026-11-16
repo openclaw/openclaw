@@ -555,7 +555,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
-        const [{ projectAnthropicLiveModels }, { isAnthropicOAuthApiKey }] = await Promise.all([
+        const [
+          { projectAnthropicLiveModels },
+          { isAnthropicOAuthApiKey, isAnthropicWorkloadIdentityApiKey, withAnthropicOAuthApiBeta },
+        ] = await Promise.all([
           import("./live-model-projection.js"),
           import("openclaw/plugin-sdk/provider-stream-shared"),
         ]);
@@ -563,9 +566,14 @@ export function buildAnthropicProvider(): ProviderPlugin {
         const buildAuthHeaders = (key: string | undefined): Record<string, string> =>
           !key
             ? {}
-            : isAnthropicOAuthApiKey(key)
-              ? { authorization: `Bearer ${key}` }
-              : { "x-api-key": key };
+            : isAnthropicWorkloadIdentityApiKey(key)
+              ? {
+                  authorization: `Bearer ${key}`,
+                  "anthropic-beta": withAnthropicOAuthApiBeta(undefined),
+                }
+              : isAnthropicOAuthApiKey(key)
+                ? { authorization: `Bearer ${key}` }
+                : { "x-api-key": key };
         const result = restoreUnpublishedAnthropicModels(
           await buildOpenAICompatibleProviderCatalog({
             discoveryMode: "strict",
