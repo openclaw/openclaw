@@ -28,6 +28,105 @@ afterEach(() => {
 
 describe("gateway wizard cancellation lifecycle", () => {
   it(
+    "releases disconnected channel setup without an idle timeout, after writes and cleanup settle",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      let phase: "before start reply" | "at prompt" | "during write" | "replacement";
+      let entered = createDeferred();
+      let continueWork = createDeferred();
+      let cleanupStarted = createDeferred();
+      let releaseCleanup = createDeferred();
+      const fixtureStop = new AbortController();
+      let committed = false;
+      let submitted = false;
+      await using gateway = await startWizardGateway(
+        {
+          channelWizardRunner: async (opts, _runtime, prompter) => {
+            if (phase === "replacement") {
+              await prompter.text({ message: "Replacement token", signal: fixtureStop.signal });
+              return;
+            }
+            try {
+              if (phase === "during write") {
+                await opts.beforePersistentEffect?.();
+                prompter.progress("Installing channel plugin");
+              }
+              entered.resolve();
+              if (phase !== "at prompt") {
+                await continueWork.promise;
+              }
+              if (phase === "during write") {
+                opts.assertPersistentEffectCurrent?.();
+                committed = true;
+              }
+              await prompter.text({ message: "Discord bot token", signal: fixtureStop.signal });
+              submitted = true;
+            } finally {
+              cleanupStarted.resolve();
+              await releaseCleanup.promise;
+            }
+          },
+        },
+        () => {
+          fixtureStop.abort();
+          continueWork.resolve();
+          releaseCleanup.resolve();
+        },
+      );
+
+      for (const nextPhase of ["before start reply", "at prompt", "during write"] as const) {
+        phase = nextPhase;
+        entered = createDeferred();
+        continueWork = createDeferred();
+        cleanupStarted = createDeferred();
+        releaseCleanup = createDeferred();
+        committed = false;
+        const client = await gateway.connect("channel-setup-owner");
+        // Attach rejection handling before disconnecting the request whose reply is lost.
+        const start = client
+          .request<WizardStartResult>("wizard.start", { flow: "channels", channel: "discord" })
+          .catch(() => undefined);
+        await entered.promise;
+        if (phase !== "before start reply") {
+          expect(await start).toMatchObject({ done: false, status: "running" });
+        }
+        await disconnectGatewayClient(client);
+        await start;
+        const reconnected = await gateway.connect("channel-setup-reconnected");
+        const expectBusy = () =>
+          expect(
+            reconnected.request("wizard.start", { flow: "channels", channel: "discord" }),
+          ).rejects.toMatchObject({
+            code: "UNAVAILABLE",
+            details: { code: "SETUP_ADMISSION_BUSY" },
+          });
+        await expectBusy();
+        expect(committed).toBe(false);
+        continueWork.resolve();
+        await withTestTimeout(cleanupStarted.promise, 1_000, `abandoned ${phase} did not close`);
+        expect(committed).toBe(phase === "during write");
+        expect(submitted).toBe(false);
+        await expectBusy();
+        releaseCleanup.resolve();
+        expect((await waitForGatewayActiveWork(5_000)).drained).toBe(true);
+
+        phase = "replacement";
+        const replacement = await reconnected.request<WizardStartResult>("wizard.start", {
+          flow: "channels",
+          channel: "discord",
+        });
+        expect(replacement.step).toMatchObject({ type: "text", message: "Replacement token" });
+        await reconnected.request("wizard.cancel", {
+          sessionId: replacement.sessionId,
+          closeInput: true,
+        });
+        await expect(reconnected.request("health", {})).resolves.toBeDefined();
+        await disconnectGatewayClient(reconnected);
+      }
+    },
+  );
+
+  it(
     "keeps a cancelled wizard owner until settlement before allowing a replacement",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
