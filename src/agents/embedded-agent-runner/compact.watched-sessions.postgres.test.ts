@@ -15,6 +15,7 @@ const { compactEmbeddedAgentSessionDirect } = await loadCompactHooksHarness();
 const { mixedAgentConnection, mixedAgentPairs, useMixedAgentPair } =
   await import("../../infra/database-engine/mixed-agent.conformance.test-support.js");
 const databaseAdmission = await import("../../infra/database-engine/admission-scope.js");
+const assertEngineStoreExecutionAllowed = databaseAdmission.assertEngineStoreExecutionAllowed;
 const { prepareBundledDiscoveryMode } = await import("../../plugins/bundled-discovery-state.js");
 const acquirePreparedRuntime = acquireAgentRunPreparedModelRuntimeMock.getMockImplementation()!;
 const { captureRuntimeConfigAsyncReader } = await import("../../config/io.runtime.js");
@@ -62,6 +63,25 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
 
         const workspaceDir = join(fixture.root, "workspace");
         resetCompactHooksHarnessMocks(workspaceDir, sessionId);
+        // Compaction projects failures into a result; keep the denied caller visible.
+        const deniedDatabaseCalls: string[] = [];
+        const admissionGuard = vi
+          .spyOn(databaseAdmission, "assertEngineStoreExecutionAllowed")
+          .mockImplementation(() => {
+            const stackTraceLimit = Error.stackTraceLimit;
+            Error.stackTraceLimit = 40;
+            try {
+              assertEngineStoreExecutionAllowed();
+            } catch (error) {
+              deniedDatabaseCalls.push(
+                error instanceof Error ? (error.stack ?? error.message) : String(error),
+              );
+              throw error;
+            } finally {
+              Error.stackTraceLimit = stackTraceLimit;
+            }
+          });
+        onTestFinished(() => admissionGuard.mockRestore());
         // The synthetic lease skips metadata discovery. Restore its async preparation so
         // auth planning consumes the same machine-state fact as a real prepared runtime.
         acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (...args) => {
@@ -105,7 +125,7 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
             trigger: "manual",
             toolsAllow,
           });
-          expect(result, JSON.stringify(result)).toMatchObject({
+          expect(result, JSON.stringify({ result, deniedDatabaseCalls })).toMatchObject({
             compacted: true,
             compactionKind: "server-endpoint",
           });
