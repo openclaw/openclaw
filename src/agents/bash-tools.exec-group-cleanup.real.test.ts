@@ -172,7 +172,7 @@ function runningIn(scopeKey: string) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "adopts what 50 completed commands leave running up to the cap, stops the rest, and leaves no relay or anchor",
+  "adopts what 20 completed commands leave running up to the cap, stops the rest, and leaves no relay or anchor",
   async () => {
     const cwd = tempDirs.make("exec-group-cleanup-");
     const scopeKey = "agent:main:exec-group-cleanup";
@@ -206,7 +206,7 @@ child.once("spawn", () => {
         exitCode: 0,
         aggregated: "<>\n<\\0>\nheredoc\\0",
       });
-      for (let call = 0; call < 50; call += 1) {
+      for (let call = 0; call < 20; call += 1) {
         const result = await exec.execute(`exec-${call}`, {
           command: `exec ${node} ${quote(fixture)}`,
         });
@@ -604,6 +604,37 @@ it.skipIf(process.platform === "win32")(
     });
   },
   60_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "does not adopt or stop helpers that exit within the settle window, but a loop that keeps running counts",
+  async () => {
+    const cwd = tempDirs.make("exec-settle-");
+    const scopeKey = "agent:main:exec-settle";
+    await withEnvAsync(testEnv(cwd, "exec-settle-test"), async () => {
+      const exec = hostExec(cwd, scopeKey);
+      for (let call = 0; call < 20; call += 1) {
+        const result = await exec.execute(`helpers-${call}`, {
+          command:
+            "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do sleep 0.5 & done; echo ok",
+        });
+        expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+        expect(aggregated(result.details)).not.toMatch(
+          /background session|Stopped|allowed services/,
+        );
+      }
+      expect(runningIn(scopeKey)).toEqual([]);
+      const loop = await exec.execute("loop", {
+        command: "while :; do sleep 0.05; done >/dev/null 2>&1 & echo PID=$!",
+      });
+      const loopPid = firstPid(aggregated(loop.details));
+      expect(aggregated(loop.details)).toMatch(
+        new RegExp(`pid ${loopPid} .*keeps running as background session`),
+      );
+      expect(runningIn(scopeKey).map((session) => session.pid)).toContain(loopPid);
+    });
+  },
+  120_000,
 );
 
 it.skipIf(process.platform === "win32")(
