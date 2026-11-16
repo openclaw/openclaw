@@ -588,7 +588,7 @@ export async function captureGatewayOperatorContinuation(
   const inherited = input.client?.internal?.operatorRunAuthority;
   const context = input.context.resolveGatewayContext?.();
   const facts = inherited && captureQueuedOperatorRecoverySource(inherited);
-  if (!input.client || !context || !facts || facts.kind === "unavailable") {
+  if (!input.client || !inherited || !context || !facts || facts.kind === "unavailable") {
     // A source without saved facts keeps its live authority.
     return await captureGatewayOperatorRunAuthority(input);
   }
@@ -599,12 +599,17 @@ export async function captureGatewayOperatorContinuation(
   });
   try {
     const { client } = input;
+    // Work from one origin keeps one comparable source identity, as completion batches require.
+    const authority = createAdmittedRunOperatorAuthority({
+      ...restored.authority,
+      source: inherited.source,
+      get modelPolicy() {
+        return restored.authority.modelPolicy;
+      },
+    });
     return await captureGatewayOperatorRunAuthority({
       ...input,
-      client: {
-        ...client,
-        internal: { ...client.internal, operatorRunAuthority: restored.authority },
-      },
+      client: { ...client, internal: { ...client.internal, operatorRunAuthority: authority } },
     });
   } finally {
     restored.release();
