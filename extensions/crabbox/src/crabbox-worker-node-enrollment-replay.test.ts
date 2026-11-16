@@ -73,7 +73,9 @@ async function replay(
     getuid: () => 501,
     env: { ...setup.forwardedEnv, LC_ALL: "fr_FR.UTF-8" },
     umask: vi.fn(),
-    kill: vi.fn(),
+    kill: vi.fn(() => {
+      if (failure === "pid-reuse") throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    }),
     exitCode: 0,
   };
   const fs = {
@@ -130,8 +132,8 @@ async function replay(
       if (platform !== "linux") {
         throw new Error("macOS has no /proc filesystem");
       }
-      if (failure === "unavailable") {
-        throw new Error("Unreadable process identity");
+      if (failure === "unavailable" || (failure === "pid-reuse" && file === "/proc/123/environ")) {
+        throw Object.assign(new Error("Unreadable process identity"), { code: "EACCES" });
       }
       if (file === "/proc/123/cmdline") {
         return failure === "original-argv" ? `/usr/bin/node\0${cli}\0connect\0` : command + "\0";
@@ -319,16 +321,9 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
         "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_TIMING:openclaw-bootstrap-preparation:0\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
   });
-  it.each(["argv", "cwd", "state", "unavailable"])(
+  it.each(["argv", "cwd", "state", "unavailable", "pid-reuse"])(
     "refuses %s mismatch or missing identity",
-    async (failure) => {
-      expectRefusal(
-        await replay(platform, failure),
-        platform === "linux" && failure === "unavailable"
-          ? "Unreadable process identity"
-          : undefined,
-      );
-    },
+    async (failure) => expectRefusal(await replay(platform, failure)),
   );
 });
 
