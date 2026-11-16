@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { assert, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -256,13 +257,8 @@ describe("delivery-queue storage", () => {
 
   it("dead-letters only a deleted chat's unsent replies", async () => {
     const stateDir = tmpDir();
-    const generation = (sessionKey: string) => ({
-      agentId: "main",
-      storePath: "/store",
-      sessionKey,
-      sessionId: "transcript",
-      lifecycleRevision: null,
-    });
+    const generation = (sessionKey: string) =>
+      chatRef({ agentId: "main", storePath: "/store", sessionKey });
     const enqueueFor = (sessionKey: string) =>
       enqueueTextDelivery({
         payloads: [{ text: sessionKey }],
