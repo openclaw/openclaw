@@ -38,7 +38,7 @@
     },
     "inboundPolicy": {
       "label": "Inbound Policy",
-      "help": "disabled rejects inbound calls, allowlist accepts callers listed in the inbound allowlist, open accepts any caller. pairing currently behaves like allowlist: unknown callers are rejected and no pairing request is created."
+      "help": "disabled rejects inbound calls, allowlist accepts callers listed in the inbound allowlist, open accepts any caller. pairing currently applies the same caller check as allowlist, without callbacks: unknown callers are rejected and no pairing request is created."
     },
     "allowFrom": {
       "label": "Inbound Allowlist",
