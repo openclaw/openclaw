@@ -55,9 +55,16 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   const pluginLink = pages.getByRole("link", { name: "UI fixture", exact: true });
   await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
   const builtInLink = pages.getByRole("link", { name: "Customize", exact: true });
+  // Each choice closes the page menu, so reopen it before reading or choosing in it.
+  const openPages = async () => {
+    if ((await pagesButton.getAttribute("aria-expanded")) !== "true") {
+      await pagesButton.click();
+    }
+  };
   const selected = async (active: boolean, navigation: Promise<unknown>) => {
     await navigation;
     await (active ? revisionOne : plugins).waitFor();
+    await openPages();
     await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe(active ? "page" : null);
   };
   const measureWidth = (link: typeof pluginLink) =>
@@ -72,11 +79,8 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
     })
     .toBeLessThan(0.5);
   expect(await customize.count()).toBe(0);
-  // Each choice closes the page menu, so reopen it before the next one.
   const choose = async (link: typeof pluginLink) => {
-    if ((await pagesButton.getAttribute("aria-expanded")) !== "true") {
-      await pagesButton.click();
-    }
+    await openPages();
     await link.click();
   };
   await selected(false, choose(builtInLink));
