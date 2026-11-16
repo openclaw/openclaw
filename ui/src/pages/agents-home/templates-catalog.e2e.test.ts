@@ -51,11 +51,15 @@ const workflowOperator = {
   installs: 200,
   updatedAtMs: 1_790_000_000_000,
 } satisfies ClawHubTemplateCatalogEntry;
+const summaryFreeTemplate: ClawHubTemplateCatalogEntry = { ...workflowOperator };
+delete summaryFreeTemplate.summary;
 const researchTemplate = {
   ...workflowOperator,
   packageName: "@maker/release-scout",
   displayName: "Release Scout",
 };
+const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
+const publishedAtMs = 1_780_000_000_000;
 const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
 const skillExcerpt =
   "Research trips and compare destinations against the approved itinerary. ".repeat(24);
@@ -108,7 +112,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "templates.catalog.search",
         "templates.catalog.detail",
         "templates.catalog.preview",
-        "templates.add.plan",
         "templates.add.apply",
         "plugins.list",
         "plugins.catalog.get",
@@ -138,12 +141,16 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
             ...entry,
             ...detailPublisher,
             version: "1.2.0",
+            agentId: "workflow-operator",
             agentName: "Workflow Operator",
             workspaceFiles: 2,
             skills: 1,
             plugins: 1,
             mcpServers: 0,
             scheduledJobs: 0,
+            createdAtMs: publishedAtMs,
+            categories: ["research", "productivity"],
+            security: { verdict: "benign", auditUrl },
             contents: {
               instructions: [
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
@@ -187,18 +194,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           diagnostics: [],
           mutationAllowed: true,
         },
-        "templates.add.plan": {
-          schemaVersion: "openclaw.templatesGatewayPlan.v1",
-          operation: "add",
-          planIntegrity: "sha256:template-e2e",
-          target: { agentId: "workflow-operator", name: "Workflow Operator" },
-          actions: [],
-          capabilities: [],
-          pluginReviews: [],
-          skillReviews: [],
-          blockers: [],
-          riskAcknowledgementRequired: false,
-        },
         "templates.add.apply": {
           agentId: "workflow-operator",
           status: "complete",
@@ -215,43 +210,53 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     { name: "tall-desktop", width: 1440, height: 1200 },
     { name: "mobile", width: 390, height: 844 },
     { name: "tall-mobile", width: 390, height: 1200 },
-  ])("fills the visible catalog while loading at $name size", async (viewport) => {
-    const { page, gateway } = await fixture(viewport, undefined, undefined, true);
+    { name: "summary-free-mobile", width: 390, height: 844, entry: summaryFreeTemplate },
+  ])("loads the catalog into its placeholders at $name size", async (viewport) => {
+    const { page, gateway } = await fixture(viewport, viewport.entry, undefined, true);
     const loading = page.getByRole("status", { name: "Loading templates…" });
     await loading.waitFor();
     await capture(page, `loading-${viewport.name}`, loading);
-    const geometry = await loading.evaluate((grid) => {
-      const cards = Array.from(grid.children, (card) => card.getBoundingClientRect());
-      return {
-        bottom: cards.at(-1)!.bottom,
-        cardHeight: cards[0]!.height,
-        gap: Number.parseFloat(getComputedStyle(grid).rowGap),
-        hidden: Array.from(grid.children).every(
-          (card) => card.getAttribute("aria-hidden") === "true",
-        ),
-      };
-    });
-    expect(geometry.bottom).toBeGreaterThanOrEqual(viewport.height - geometry.gap);
-    expect(geometry.bottom).toBeLessThan(viewport.height + geometry.cardHeight + geometry.gap);
-    expect(geometry.cardHeight).toBeGreaterThanOrEqual(140);
-    expect(geometry.cardHeight).toBeLessThanOrEqual(200);
-    expect(geometry.hidden).toBe(true);
+    const rect = (element: Element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return [x, y, width, height].map((value) => Math.round(value * 2) / 2);
+    };
+    const placeholders = await loading.evaluate((status) => ({
+      bottom: status.getBoundingClientRect().bottom,
+      hidden: Array.from(status.children).every(
+        (section) => section.getAttribute("aria-hidden") === "true",
+      ),
+    }));
+    // Placeholders cover the visible catalog at every size without measuring it.
+    expect(placeholders.bottom).toBeGreaterThanOrEqual(viewport.height);
+    expect(placeholders.hidden).toBe(true);
     expect(await loading.count()).toBe(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
     if (viewport.name === "desktop") {
       await page.setViewportSize({ width: 820, height: 1024 });
-      await expect
-        .poll(() =>
-          loading.evaluate((grid) => grid.lastElementChild!.getBoundingClientRect().bottom),
-        )
-        .toBeGreaterThanOrEqual(1012);
+      expect(
+        await loading.evaluate((status) => status.getBoundingClientRect().bottom),
+      ).toBeGreaterThanOrEqual(1024);
       await capture(page, "loading-resized-tablet", loading);
     }
+    // The first shelf and card arrive exactly where their placeholders were.
+    const placeholderHeader = await loading
+      .locator(".plugin-catalog-section__header")
+      .first()
+      .evaluate(rect);
+    const placeholderCard = await loading
+      .locator("[data-templates-placeholder]")
+      .first()
+      .evaluate(rect);
     await gateway.resolveDeferred("templates.catalog.search");
-    await page.locator("[data-templates-entry]").first().waitFor();
+    const card = page.locator("[data-templates-entry]").first();
+    await card.waitFor();
     expect(await loading.count()).toBe(0);
+    expect(await card.evaluate(rect)).toEqual(placeholderCard);
+    expect(await page.locator(".plugin-catalog-section__header").first().evaluate(rect)).toEqual(
+      placeholderHeader,
+    );
   });
 
   async function openDetail(page: Page) {
@@ -354,6 +359,50 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
   });
 
   it.each([viewports[0], viewports[3]])(
+    "shows the release audit and facts in the plugin page's rail at $name width",
+    async (viewport) => {
+      const { page } = await fixture(viewport);
+      const detail = await openDetail(page);
+      const rail = detail.locator(".plugin-catalog-detail__sidebar");
+      await capture(page, `detail-rail-${viewport.name}`, rail, rail);
+      const audit = rail.locator(".plugin-catalog-detail__security");
+      expect(await audit.getAttribute("href")).toBe(auditUrl);
+      expect(await audit.locator("strong").textContent()).toBe("Clean");
+      expect(await audit.locator(".is-filled").count()).toBe(3);
+      const date = (value: number) =>
+        new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(value);
+      expect(
+        await rail
+          .locator(".plugin-metadata__facts > div")
+          .evaluateAll((rows) =>
+            rows.map((row) => [
+              row.querySelector("dt")!.textContent,
+              row.querySelector("dd")!.textContent,
+            ]),
+          ),
+      ).toEqual([
+        ["Version", "1.2.0"],
+        ["Updated", date(workflowOperator.updatedAtMs)],
+        ["Published", date(publishedAtMs)],
+        ["Downloads", "1.2k"],
+      ]);
+      expect(await rail.locator(".chip").allTextContents()).toEqual(["research", "productivity"]);
+      const railBox = (await rail.boundingBox())!;
+      const contents = (await detail.locator(".plugin-catalog-detail__panel").boundingBox())!;
+      // The rail sits beside the contents on a wide page and after them in one column.
+      if (viewport.name === "desktop") {
+        expect(railBox.x).toBeGreaterThanOrEqual(contents.x + contents.width);
+        expect(railBox.y).toBeLessThan(contents.y + contents.height);
+      } else {
+        expect(railBox.y).toBeGreaterThanOrEqual(contents.y + contents.height);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+    },
+  );
+
+  it.each([viewports[0], viewports[3]])(
     "shows bundled and referenced contents at $name width",
     async (viewport) => {
       const { page, gateway } = await fixture(viewport);
@@ -361,6 +410,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         detail: {
           ...workflowOperator,
           version: "1.2.0",
+          agentId: "workflow-operator",
           agentName: "Workflow Operator",
           contents: {
             instructions: [{ name: "AGENTS.md", source: "workspace/AGENTS.md" }],
@@ -408,6 +458,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
       expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
       expect(await detail.textContent()).not.toContain("undefined");
+      expect(await detail.locator(".templates-add-review").count()).toBe(0);
+      await capture(page, `template-detail-no-review-${viewport.name}`, detail);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
@@ -555,6 +607,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       detail: {
         ...workflowOperator,
         version: "1.2.0",
+        agentId: "workflow-operator",
         contents: {
           instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
           skills: [],
@@ -645,34 +698,60 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.getByText("No templates yet.", { exact: true }).waitFor();
   });
 
-  it("prepares the authoritative Add review while the Template detail opens", async () => {
+  it("offers Add from the Template detail without requesting a plan", async () => {
     const { page, gateway } = await fixture();
     const detail = await openDetail(page);
-    await expect.poll(() => gateway.getRequests("templates.add.plan")).toHaveLength(1);
     await expect
       .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
       .toBe(true);
+    expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 
-  it("retries a failed prepared review without applying the Template", async () => {
-    const { page, gateway } = await fixture();
-    await gateway.deferNext("templates.add.plan");
-    const detail = await openDetail(page);
-    await gateway.waitForRequest("templates.add.plan");
-    expect(await detail.locator("[data-templates-confirm] button").isDisabled()).toBe(true);
-    await gateway.rejectDeferred("templates.add.plan", {
-      code: "UNAVAILABLE",
-      message: "Review temporarily unavailable",
-    });
-    const alert = detail.getByRole("alert");
-    await alert.getByText("Review temporarily unavailable", { exact: true }).waitFor();
-    await alert.getByRole("button", { name: "Retry", exact: true }).click({ timeout: 1500 });
-    await expect
-      .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
-      .toBe(true);
-    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
-  });
+  it.each([400, 1280])(
+    "returns a rolled-back Add to the catalog with the error on its card at %i px",
+    async (width) => {
+      const { page, gateway } = await fixture({ width, height: 900 });
+      const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
+      const add = card.getByRole("button", { name: "Add", exact: false });
+      await card.waitFor();
+      await gateway.deferNext("templates.add.apply");
+      await add.click();
+      const apply = await gateway.waitForRequest("templates.add.apply");
+      await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
+      const pending = page.locator("openclaw-pending-session-create");
+      await pending.getByText("Creating new agent", { exact: true }).waitFor();
+      // The Gateway admitted the agent and chat, then could not fetch the Template.
+      await gateway.emitGatewayEvent("templates.add.progress", {
+        requestId: apply.id,
+        stage: "agent-admitted",
+        agentId: "workflow-operator",
+        sessionKey: "agent:workflow-operator:main",
+      });
+      await gateway.rejectDeferred("templates.add.apply", {
+        code: "UNAVAILABLE",
+        message: "ClawHub could not deliver this Template.",
+      });
+      await page.waitForURL(/\/templates(?:\?|$)/u);
+      const alert = card.getByRole("alert");
+      await alert.getByText("ClawHub could not deliver this Template.", { exact: true }).waitFor();
+      await capture(page, `template-add-${width}-rolled-back`, card);
+      // The chat cache retains its inert pane; no pending chat is presented.
+      expect(await pending.filter({ visible: true }).count()).toBe(0);
+      expect(await page.locator(".templates-add-consent").count()).toBe(0);
+      // The message stays inside its card and the page does not scroll sideways.
+      const [cardBox, alertBox] = await Promise.all([card.boundingBox(), alert.boundingBox()]);
+      expect(alertBox!.x).toBeGreaterThanOrEqual(cardBox!.x);
+      expect(alertBox!.x + alertBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+      expect(alertBox!.y + alertBox!.height).toBeLessThanOrEqual(cardBox!.y + cardBox!.height);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      await expect.poll(() => add.isEnabled()).toBe(true);
+      expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
+    },
+  );
 
   it.each([400, 820, 1280])(
     "adds a personal Template directly from its card with stable chat and retained input at %i px",
@@ -690,10 +769,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
       expect(await card.getByRole("button", { name: "Add", exact: false }).isEnabled()).toBe(true);
-      await gateway.setMethodResponse("agents.list", {
-        ...agentsList,
-        agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
-      });
       await gateway.deferNext("templates.add.apply");
       await page.evaluate(() => {
         const frames: Array<{
@@ -748,9 +823,15 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await capture(page, `template-add-${width}-catalog`, card);
       await card.getByRole("button", { name: "Add", exact: false }).click();
       const apply = await gateway.waitForRequest("templates.add.apply");
+      // The roster names the agent only once the Gateway has it; Add asked for an id
+      // the roster did not use.
+      await gateway.setMethodResponse("agents.list", {
+        ...agentsList,
+        agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
+      });
       await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
       const pending = page.locator("openclaw-pending-session-create");
-      await pending.getByText("Creating new agent…", { exact: true }).waitFor();
+      await pending.getByText("Creating new agent", { exact: true }).waitFor();
       expect(await pending.locator("textarea").isEnabled()).toBe(true);
       await pending.locator("textarea").fill("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -791,12 +872,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       });
       expect(await composer.inputValue()).toBe("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(apply.params).toMatchObject({
+      // One Add request, with no plan digest or acknowledgements, and no review first.
+      expect(apply.params).toEqual({
+        mode: "chat",
         source: { packageName: community.packageName, version: "1.2.0" },
-        planIntegrity: "sha256:template-e2e",
+        agentId: "workflow-operator",
       });
-      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(1);
-      expect(await gateway.getRequests("templates.catalog.detail")).toHaveLength(0);
+      expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
+      expect(await page.locator(".templates-add-consent").count()).toBe(0);
+      // A card names no agent, so its Add reads the release detail once.
+      expect(await gateway.getRequests("templates.catalog.detail")).toHaveLength(1);
       expect(await gateway.getRequests("templates.status")).toHaveLength(0);
       const frames = await page.evaluate(() => {
         Reflect.set(window, "templateAddRecording", false);

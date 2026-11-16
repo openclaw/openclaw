@@ -14,7 +14,6 @@ export type SessionControllerWatchdogAttempt = {
   isCurrent(): boolean;
   progress(kind: SessionWatchdogProgress, reason?: string): boolean;
   progressModel(reason?: string): boolean;
-  observeStagnation(params: { active: boolean; existingOnly?: boolean }): void;
   progressTool(toolCallId: string, allowedNames: readonly string[]): boolean;
   beginWait(wait: OwnedWait): SessionWatchdogWait;
   beginTool(tool: {

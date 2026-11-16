@@ -14,11 +14,6 @@ vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: async () => ({ ok: true as const }),
 }));
 
-// mock-isolation: Supply loop policy without initializing the real agent tool runtime.
-vi.mock("../agents/agent-tools.js", () => ({
-  resolveToolLoopDetectionConfig: () => ({ warnAt: 3 }),
-}));
-
 // mock-isolation: Bypass unrelated agent hooks while retaining the HTTP denylist boundary.
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: async ({ params }: { params: unknown }) => ({

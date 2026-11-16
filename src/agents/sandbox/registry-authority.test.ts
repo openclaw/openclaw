@@ -127,7 +127,7 @@ it.each([
   if (!owner) {
     throw new Error("Expected a resolved workspace owner");
   }
-  row.projection_path = localWorkspaceProjectionPath(owner);
+  row.projection_path = await localWorkspaceProjectionPath(owner);
   await fs.mkdir(row.projection_path, { recursive: true });
   await withLocalWorkspaceStore({ worktreeId: worktree.id }, (store) => store.create(row));
   let refusedEffect: Promise<void> | undefined;

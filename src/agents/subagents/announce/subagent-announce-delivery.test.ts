@@ -636,7 +636,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "none",
         reason: "completion_handoff_pending",
         terminal: true,
-        disposition: "intentional_non_delivery",
       },
       gatewayCalls: 0,
     }),

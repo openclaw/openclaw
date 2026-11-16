@@ -6,10 +6,8 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
 import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
-import { resolveToolLoopDetectionConfig as actualResolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -41,7 +39,6 @@ const hookMocks = vi.hoisted(() => ({
     content: [],
     details: {},
   })),
-  resolveToolLoopDetectionConfig: vi.fn<typeof actualResolveToolLoopDetectionConfig>(),
   runBeforeToolCallHook: vi.fn<typeof runBeforeToolCallHookType>(async (args) => ({
     blocked: false,
     params: args.params,
@@ -231,17 +228,9 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   };
 });
 
-vi.mock("../agents/agent-tools.js", () => ({
-  resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
-}));
-
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
-
-const { runBeforeToolCallHook: actualRunBeforeToolCallHook } = await vi.importActual<{
-  runBeforeToolCallHook: typeof runBeforeToolCallHookType;
-}>("../agents/agent-tools.before-tool-call.js");
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
@@ -267,7 +256,6 @@ beforeEach(() => {
   hookMocks.uploadToolExecute.mockClear();
   hookMocks.gatewayPolicyExecute.mockClear();
   sessionEntries.clear();
-  hookMocks.resolveToolLoopDetectionConfig.mockReset();
   hookMocks.runBeforeToolCallHook.mockReset();
   vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true });
 });
@@ -400,46 +388,6 @@ describe("POST /tools/invoke", () => {
     setMainAllowedTools,
     invokeToolAuthed,
     expectOkInvokeResponse,
-  });
-
-  it.each(["http", "rpc"])("isolates enabled history for main aliases: %s", async (via) => {
-    const loopDetection = { enabled: true };
-    const mainKey = `primary-${via}`;
-    cfg = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: {
-          main: { tools: { deny: ["agents_list"] } },
-          ops: { tools: { allow: ["agents_list"] } },
-        },
-      },
-      session: { mainKey },
-      tools: { loopDetection },
-    };
-    hookMocks.resolveToolLoopDetectionConfig.mockImplementation(
-      actualResolveToolLoopDetectionConfig,
-    );
-    hookMocks.runBeforeToolCallHook.mockImplementation(actualRunBeforeToolCallHook);
-    for (const alias of [undefined, "main"]) {
-      const target = alias ? { sessionKey: alias } : {};
-      if (via === "http") {
-        await expectOkInvokeResponse(await invokeTool({ tool: "agents_list", ...target }));
-      } else {
-        const call = await invokeToolsRpc({
-          name: "agents_list",
-          args: {},
-          ...target,
-          idempotencyKey: `history-${alias ?? "default"}`,
-        });
-        expect(call?.[0]).toBe(true);
-        expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list", source: "core" });
-        expect(call?.[1]?.output).toEqual({ ok: true, result: [] });
-        expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
-      }
-    }
-    const sessionKey = `agent:ops:${mainKey}`;
-    expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory ?? []).toHaveLength(0);
   });
 
   it("enforces action policy for administrator tool calls after hook rewrites", async () => {

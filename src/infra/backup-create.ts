@@ -83,6 +83,11 @@ export type BackupCreateOptions = {
   /** Files and anchors for reconnecting to current PostgreSQL rows, not disaster recovery. */
   localCompanion?: boolean;
   output?: string;
+  /**
+   * Without `output`, write to the home folder unless it lies inside a backed-up source,
+   * then fall back to the usual cwd default. For backups no one started from a shell.
+   */
+  preferHomeOutput?: boolean;
   dryRun?: boolean;
   includeWorkspace?: boolean;
   excludeWorktreeTemplates?: boolean;
@@ -139,16 +144,21 @@ async function resolveOutputPath(params: {
   nowMs: number;
   includedAssets: BackupAsset[];
   stateDir: string;
+  preferHomeOutput?: boolean;
 }): Promise<string> {
   const basename = buildBackupArchiveBasename(params.nowMs);
   const rawOutput = params.output;
   if (!rawOutput?.trim()) {
+    const insideSource = async (dir: string) => {
+      const canonical = await fs.realpath(dir).catch(() => dir);
+      return params.includedAssets.some((asset) => isPathInside(asset.sourcePath, canonical));
+    };
+    const home = resolveHomeDir();
+    if (params.preferHomeOutput && home && !(await insideSource(path.resolve(home)))) {
+      return path.resolve(home, basename);
+    }
     const cwd = path.resolve(process.cwd());
-    const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
-    const cwdInsideSource = params.includedAssets.some((asset) =>
-      isPathInside(asset.sourcePath, canonicalCwd),
-    );
-    const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
+    const defaultDir = (await insideSource(cwd)) ? (home ?? path.dirname(params.stateDir)) : cwd;
     return path.resolve(defaultDir, basename);
   }
 
@@ -355,6 +365,7 @@ async function createBackupArchiveInScope(
     nowMs,
     includedAssets: plan.included,
     stateDir: plan.stateDir,
+    preferHomeOutput: opts.preferHomeOutput,
   });
 
   if (plan.included.length === 0) {

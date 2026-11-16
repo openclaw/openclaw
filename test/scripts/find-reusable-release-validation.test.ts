@@ -643,7 +643,7 @@ function runResolver(args: {
         }),
         FAKE_QUALIFICATION_REUSE: args.qualificationAdmission
           ? JSON.stringify({
-              candidateSha: args.workflowSha ?? verifierSha,
+              candidateSha: args.targetSha,
               qualificationSha: args.workflowSha ?? verifierSha,
               workflowRef: args.workflowRef ?? "main",
               descriptor: args.qualificationAdmission,
@@ -684,33 +684,37 @@ function parseOutput(output: string): Record<string, string> {
   );
 }
 
-function admit(record: NormalizedEvidence, sha: string) {
+function admit(record: NormalizedEvidence, sha: string, qualificationSha = sha) {
   record.producerOnTrustedMainLineage = false;
   for (const parent of [record.current, record.root]) {
     parent.producerOnTrustedMainLineage = false;
     parent.workflowRefProof = "candidate-owned-admission-v1";
   }
   record.qualificationAdmission = {
-    request: { candidateSha: sha, qualificationSha: sha },
+    request: { candidateSha: sha, qualificationSha },
     coverage: { children: record.children.map(({ role }) => ({ key: role })) },
   };
 }
 
 describe("scripts/github/find-reusable-release-validation.sh", () => {
-  it.each(["main", `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`])(
-    "selects candidate-owned evidence through admitted P on %s",
-    (trustedWorkflowRef) => {
+  it.each([
+    { trustedWorkflowRef: "main", independent: true },
+    { trustedWorkflowRef: `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`, independent: false },
+  ])(
+    "selects candidate-owned evidence through admitted P on $trustedWorkflowRef (independent Q: $independent)",
+    ({ trustedWorkflowRef, independent }) => {
       const { priorSha } = getSharedRepo();
+      const qualificationSha = independent ? "d".repeat(40) : priorSha;
       const record = normalizedEvidence({
         targetSha: priorSha,
-        producerSha: priorSha,
-        workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
+        producerSha: qualificationSha,
+        workflowRef: `release-ci/${qualificationSha.slice(0, 12)}-122`,
         trustedWorkflowRef,
       });
-      admit(record, priorSha);
+      admit(record, priorSha, qualificationSha);
       const options = {
-        workflowSha: priorSha,
-        workflowRef: `release-ci/${priorSha.slice(0, 12)}-123`,
+        workflowSha: qualificationSha,
+        workflowRef: `release-ci/${qualificationSha.slice(0, 12)}-123`,
         trustedWorkflowRef,
         qualificationAdmission: { workflowSha: VERIFIER_SHA, artifactId: 789 },
         qualificationInputs: { ref: priorSha, expected_sha: priorSha },

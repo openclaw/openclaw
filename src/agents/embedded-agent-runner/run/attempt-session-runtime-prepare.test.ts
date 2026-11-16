@@ -650,13 +650,15 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     }
   });
 
-  it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
+  it("re-pins personal bootstrap when the session's selected profile changes between attempts", async () => {
     const fixture = createHistoryFixture();
     mocks.retainSessionPromptState.mockImplementation(() => ({
       state: { toolResults: { projected: true } },
       [Symbol.dispose]: () => {},
     }));
     for (const profile of ["alice", "bob", undefined]) {
+      // The series follows the session's selected human; the turn's sender class does not key it.
+      fixture.input.attempt.sessionUserProfileId = profile;
       fixture.input.attempt.bootstrapUserProfileId = profile;
       const runtime = await fixture.prepare();
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
@@ -682,6 +684,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       };
       const reader: SessionEntryCohortReader = {
         database: { agentId: target.agentId, path: target.storePath, env: target.env },
+        identity: { key: "file:1:1", canonicalPath: target.storePath },
         sessionKey: target.sessionKey,
         logicalAgentId: target.agentId,
         storePaths: [target.storePath],

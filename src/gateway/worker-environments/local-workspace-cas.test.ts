@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
-import { inflateRawSync } from "node:zlib";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -29,7 +29,6 @@ import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprint
 import {
   executeLocalWorkspaceManifestRead,
   readLocalWorkspaceManifestRows,
-  type LocalWorkspaceManifestAction,
 } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -42,6 +41,7 @@ import {
   readLocalWorkspaceProjectionInDatabase,
 } from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
+import type { LocalWorkspaceManifestAction } from "./local-workspace-store.types.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -212,7 +212,7 @@ it.each(["inline", "CAS"] as const)(
       mutateLocalWorkspaceProjection(
         database,
         row.worktree_id,
-        deserialize(inflateRawSync(prepared.update.mutation)),
+        deserialize(zstdDecompressSync(prepared.update.mutation)),
       );
       revision += 1;
       expect(readLocalWorkspaceProjectionInDatabase(database, row.worktree_id)).toMatchObject({

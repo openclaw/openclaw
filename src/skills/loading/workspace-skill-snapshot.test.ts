@@ -115,6 +115,34 @@ describe("buildSkillSnapshot", () => {
     expect(snapshot.prompt).toContain("<name>create-template</name>");
   });
 
+  it("discovers and reads the bundled Blobster skill for avatar and Template icon requests", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("blobster-creation");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { load: { watch: false } } },
+    });
+    expect(snapshot.prompt).toContain("<name>create-blobster</name>");
+    const installed = prepareInstalledSkillCatalog({ snapshot, workspaceDir });
+
+    for (const query of [
+      "Design a custom Blobster avatar for my agent",
+      "Create a Blobster mascot icon for this Template",
+    ]) {
+      const found = await searchInstalledSkills(installed, query, 3);
+      expect(
+        found.skills.map((skill) => skill.name),
+        query,
+      ).toContain("create-blobster");
+    }
+
+    const location = path.resolve("skills/create-blobster/SKILL.md");
+    expect(await readInstalledSkill(installed, "create-blobster")).toEqual({
+      name: "create-blobster",
+      location,
+      content: await fs.readFile(location, "utf8"),
+    });
+  });
+
   it("discovers and reads the bundled creative workflow for ordinary design requests", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("creative-project");
     const snapshot = await buildSnapshot(workspaceDir, {

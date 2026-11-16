@@ -56,7 +56,7 @@ export function defineGatewayModuleBoundaryTests(
                 : ".sidebar-shell__footer .gateway-status:visible",
             );
             await connectionStatus
-              .getByText("Reconnecting…", { exact: true })
+              .getByText("Reconnecting", { exact: true })
               .waitFor({ state: "visible" });
             expect(await connectionStatus.getByRole("button").count()).toBe(0);
             await gateway.setOnline(true);

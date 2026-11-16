@@ -231,7 +231,7 @@ export function readSessionTranscriptModelContextAsync<T>(
         getOwnedSessionTranscriptReader(captured);
       if (selected) {
         return readSessionTranscriptCohort(
-          selected.database,
+          { ...selected.database, expectedIdentity: selected.identity },
           captured,
           () =>
             readSessionTranscriptModelContextInWorker(

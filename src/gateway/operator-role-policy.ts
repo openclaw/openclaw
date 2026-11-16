@@ -2,7 +2,10 @@ import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/sche
 import type { ErrorShape, HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { SessionsDispatchParams } from "../../packages/gateway-protocol/src/schema/session-placement.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +16,7 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
   openclawIdTunnelRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
@@ -39,9 +43,15 @@ type GatewaySessionAgentAuthorization = {
   cfg: OpenClawConfig;
   agentId: string;
 } & (
-  | { actor: GatewayOperatorRoleActor; profileId?: never; client?: never }
-  | { actor?: never; profileId: string | undefined; client?: never }
-  | { actor?: never; profileId?: never; client: GatewayClient | null | undefined }
+  | { authority: AdmittedRunOperatorAuthority; actor?: never; profileId?: never; client?: never }
+  | { authority?: never; actor: GatewayOperatorRoleActor; profileId?: never; client?: never }
+  | { authority?: never; actor?: never; profileId: string | undefined; client?: never }
+  | {
+      authority?: never;
+      actor?: never;
+      profileId?: never;
+      client: GatewayClient | null | undefined;
+    }
 );
 
 /**
@@ -185,11 +195,23 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
+/** Resolve the membership sandbox requirement first; human attribution preserves named-role restrictions. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
-  creation: { actor?: SessionCreatedActor } | undefined,
+  creation:
+    | {
+        actor?: SessionCreatedActor;
+        openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+      }
+    | undefined,
 ): "required" | undefined {
+  const principal = creation?.openclawIdPrincipal;
+  if (principal?.kind === "member") {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new OpenClawIdPrincipalChangedError();
+    }
+    return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
+  }
   const actor = creation?.actor;
   return actor?.type === "human" &&
     actor.id &&
@@ -339,19 +361,25 @@ export function authorizeGatewaySessionCreation(
   params: GatewaySessionAgentAuthorization,
   prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
 ): ErrorShape | undefined {
+  if (params.authority) {
+    assertAdmittedRunOperatorAuthority(params.authority);
+    params.authority.assertCurrent();
+  }
   const actor =
     params.actor ??
     ("client" in params ? resolveGatewayOperatorRoleActor(params.client) : undefined);
-  if (actor?.kind === "system") {
+  if (!params.authority && actor?.kind === "system") {
     return undefined;
   }
-  const profileId = actor?.profileId ?? params.profileId;
-  // Keep the client's prepared identity and live run authority at this boundary.
-  const role = prepared
-    ? prepared.policy
-    : "client" in params
-      ? resolveOperatorRolePolicy(params.client ?? null, params.cfg)
-      : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+  const profileId = actor?.kind === "operator" ? actor.profileId : params.profileId;
+  // Retain membership restrictions independently of the linked profile's named role.
+  const role = params.authority
+    ? params.authority.rolePolicy
+    : prepared
+      ? prepared.policy
+      : "client" in params
+        ? resolveOperatorRolePolicy(params.client ?? null, params.cfg)
+        : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }

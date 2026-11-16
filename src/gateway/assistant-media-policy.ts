@@ -22,6 +22,10 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
@@ -83,7 +87,7 @@ export function assertAssistantMediaPolicyCurrent(
 
 type AssistantMediaReader = Pick<
   AuthorizedControlUiReadRequest,
-  "authMethod" | "operatorScopes"
+  "authMethod" | "operatorScopes" | "openclawIdPrincipal"
 > & {
   profileId?: string;
 };
@@ -94,10 +98,19 @@ function resolveAssistantMediaReaderAuth(
   messageRead: boolean,
 ): AuthorizedControlUiReadRequest | undefined {
   try {
+    if (
+      (reader.openclawIdPrincipal &&
+        !isOpenClawIdTunnelPrincipalCurrent(reader.openclawIdPrincipal)) ||
+      // Member session visibility and access policies require a durable person.
+      (reader.openclawIdPrincipal?.kind === "member" && !reader.profileId)
+    ) {
+      return undefined;
+    }
     const currentProfile = reader.profileId
       ? resolveHttpProfile(
           captureResidentUserProfileAccess(reader.profileId).assertCurrent().id,
           config,
+          reader.openclawIdPrincipal,
         )
       : undefined;
     const operatorScopes = applyHttpOperatorRoleScopeCeiling(reader.operatorScopes, currentProfile);
@@ -221,6 +234,8 @@ function resolvePreparedAssistantMediaPolicy(
       ? {
           authMethod: params.requestAuth.authMethod,
           operatorScopes: params.requestAuth.operatorScopes,
+          // Tickets retain the device's membership ceiling independently of its linked profile.
+          openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
           ...(params.requestAuth.authenticatedUserProfile
             ? { profileId: params.requestAuth.authenticatedUserProfile.profileId }
             : {}),
@@ -338,6 +353,13 @@ function resolvePreparedAssistantMediaPolicy(
 }
 
 export async function resolveAssistantMediaPolicy(params: AssistantMediaPolicyParams) {
+  if (params.reader?.openclawIdPrincipal) {
+    try {
+      await prepareOpenClawIdTunnelPrincipal(params.reader.openclawIdPrincipal);
+    } catch {
+      return undefined;
+    }
+  }
   const policy = await resolveAssistantMediaSessionPolicy(params);
   if (!policy) {
     return undefined;
