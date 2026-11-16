@@ -530,6 +530,7 @@ ui_panel() {
 
 show_install_plan() {
     local detected_checkout="$1"
+    local git_dir="$2"
 
     ui_section "Install plan"
     ui_kv "OS" "$OS"
@@ -539,7 +540,7 @@ show_install_plan() {
         ui_kv "Beta channel" "enabled"
     fi
     if [[ "$INSTALL_METHOD" == "git" ]]; then
-        ui_kv "Git directory" "$GIT_DIR"
+        ui_kv "Git directory" "$git_dir"
         ui_kv "Git update" "$GIT_UPDATE"
     fi
     if [[ -n "$detected_checkout" ]]; then
@@ -3858,7 +3859,11 @@ main() {
         exit 2
     fi
 
-    show_install_plan "$detected_checkout"
+    local final_git_dir="$GIT_DIR"
+    if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
+        final_git_dir="$detected_checkout"
+    fi
+    show_install_plan "$detected_checkout" "$final_git_dir"
 
     if [[ "$DRY_RUN" == "1" ]]; then
         ui_success "Dry run complete (no changes made)"
@@ -3882,12 +3887,7 @@ main() {
 
     ui_stage "Installing OpenClaw"
 
-    local final_git_dir=""
     if [[ "$INSTALL_METHOD" == "git" ]]; then
-        final_git_dir="$GIT_DIR"
-        if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
-            final_git_dir="$detected_checkout"
-        fi
         install_openclaw_from_git "$final_git_dir"
         if npm list -g openclaw &>/dev/null; then
             retire_npm_owner_after_git_install || return $?

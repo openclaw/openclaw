@@ -1357,12 +1357,18 @@ EOF
       name: "uses the detected checkout when no target is explicit",
     },
     {
+      args: "--install-method git --dry-run",
+      expected: "/detected-checkout",
+      dryRun: true,
+      name: "previews the detected checkout without starting installation",
+    },
+    {
       args: "--install-method git --git-dir ''",
       envGitDir: "/env-target",
       expected: "/detected-checkout",
       name: "treats an empty CLI target as non-explicit",
     },
-  ])("selects the git install target: $name", ({ args, envGitDir, expected }) => {
+  ])("selects the git install target: $name", ({ args, envGitDir, expected, dryRun = false }) => {
     const result = runInstallShell(
       `
         source "${SCRIPT_PATH}"
@@ -1372,7 +1378,7 @@ EOF
         print_gum_status() { :; }
         detect_os_or_die() { OS=linux; }
         detect_openclaw_checkout() { printf '/detected-checkout\\n'; }
-        show_install_plan() { :; }
+        GUM=""
         check_existing_openclaw() { return 1; }
         load_nvm_for_node_detection() { :; }
         check_node() { return 0; }
@@ -1392,8 +1398,15 @@ EOF
       },
     );
 
-    expect(result.status).toBe(23);
-    expect(result.stdout).toContain(`target=${expected}\n`);
+    expect(result.status, result.stdout + result.stderr).toBe(dryRun ? 0 : 23);
+    const output = stripVTControlCharacters(result.stdout);
+    expect(output).toContain(`Git directory: ${expected}\n`);
+    if (dryRun) {
+      expect(output).toContain("Dry run complete (no changes made)");
+      expect(output).not.toContain("target=");
+    } else {
+      expect(output).toContain(`target=${expected}\n`);
+    }
   });
 
   it.each([
