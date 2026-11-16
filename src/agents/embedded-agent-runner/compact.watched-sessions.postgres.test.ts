@@ -65,6 +65,8 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
         const admissionGuard = vi
           .spyOn(databaseAdmission, "assertEngineStoreExecutionAllowed")
           .mockImplementation(() => {
+            const stackTraceLimit = Error.stackTraceLimit;
+            Error.stackTraceLimit = 40;
             try {
               assertEngineStoreExecutionAllowed();
             } catch (error) {
@@ -72,6 +74,8 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
                 error instanceof Error ? (error.stack ?? error.message) : String(error),
               );
               throw error;
+            } finally {
+              Error.stackTraceLimit = stackTraceLimit;
             }
           });
         onTestFinished(() => admissionGuard.mockRestore());
