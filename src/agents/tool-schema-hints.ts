@@ -334,8 +334,8 @@ function compactObjectHint(
   );
   const hints = keys.map((key) => compactSchemaType(properties[key], depth, limits));
   let body = keys.map((_key, index) => prefixes[index] + hints[index]!.text).join("; ");
-  // The budget includes both braces and their inner spaces.
-  if (body.length + 4 <= limits.maxChars) {
+  // The budget includes both braces, their inner spaces and any trailing "; ...".
+  if (body.length + 4 + (omitted ? 5 : 0) <= limits.maxChars) {
     complete &&= hints.every((hint) => hint.complete);
   } else {
     // Name every required key before eliding anything: each keeps its full type
@@ -346,7 +346,9 @@ function compactObjectHint(
     const shallow = (index: number) => {
       const property = properties[keys[index]!];
       const type = isRecord(property) ? property.type : undefined;
-      return `${prefixes[index]}${type === "array" ? "Array<...>" : type === "object" ? "{ ... }" : "unknown"}`;
+      const full = prefixes[index] + hints[index]!.text;
+      const elided = `${prefixes[index]}${type === "array" ? "Array<...>" : type === "object" ? "{ ... }" : "unknown"}`;
+      return full.length <= elided.length ? full : elided;
     };
     // Braces, their inner spaces and the trailing "; ...".
     const budget = limits.maxChars - 9;

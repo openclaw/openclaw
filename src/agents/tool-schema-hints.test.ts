@@ -128,6 +128,27 @@ describe("tool schema hints", () => {
     const wide = closedObject(
       Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`group_${i}`, Type.Array(item)])),
     );
+    // Short required types cost no more than their elided form.
+    const manyRequired = closedObject({
+      ...Object.fromEntries(
+        Array.from({ length: 15 }, (_, i) => [
+          `field_${String(i).padStart(3, "0")}`,
+          Type.String(),
+        ]),
+      ),
+      optional_extra: Type.Optional(Type.String()),
+    });
+    expect(inputHint(manyRequired)).toMatch(
+      /^\{ field_000: string; .*; field_014: string; \.\.\. \}$/u,
+    );
+
+    // An open object's trailing ellipsis counts against the budget.
+    const open = Type.Object(
+      { a: Type.String(), z: Type.Literal("x".repeat(276)) },
+      { additionalProperties: true },
+    );
+    expect(inputHint(open)).toBe("{ a: string; z: string; ... }");
+
     expect(inputHint(wide)).toMatch(
       /^\{ group_0: Array<\{ kind: .*; group_7: Array<\.\.\.>; \.\.\. \}$/u,
     );
