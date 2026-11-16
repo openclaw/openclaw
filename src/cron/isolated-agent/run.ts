@@ -556,6 +556,7 @@ async function runCronIsolatedAgentTurnInTrace(
               terminalOutcome ??= resolveCronAgentTerminalOutcome({
                 phase: "error",
                 error: err,
+                data: isCommandLaneTaskTimeoutError(err) ? { stopReason: "timeout" } : undefined,
                 operation: ownReplyOperation,
                 signal: abortSignal,
               });

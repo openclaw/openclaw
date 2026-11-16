@@ -1,5 +1,7 @@
 /** Controller-to-cron regression: watchdog stop facts reach persisted run history. */
 import { describe, expect, it, vi } from "vitest";
+import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
@@ -26,6 +28,34 @@ function stopOwnOperation(
 
 describe("runCronIsolatedAgentTurn watchdog cause", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  it.each([false, true])(
+    "preserves a nested-lane timeout without caller abort (user stop=%s)",
+    async (userStop) => {
+      harness.mockRunCronFallbackPassthrough();
+      harness.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        if (userStop) {
+          getCurrentSessionControllerOwner()!.abortByUser();
+        }
+        throw new CommandLaneTaskTimeoutError(CommandLane.CronNested, {
+          cause: "owner-deadline",
+          elapsedMs: 1000,
+          taskBudgetMs: 1000,
+        });
+      });
+      const signal = new AbortController().signal;
+      const result = await runCron({ ...makeIsolatedAgentParamsFixture(), abortSignal: signal });
+      expect(signal.aborted).toBe(false);
+      expect(result).toMatchObject({
+        status: "error",
+        errorClassification: userStop ? { kind: "aborted" } : { kind: "reason", reason: "timeout" },
+      });
+      expect(
+        resolveTransientCronRetryDecision({ ...result, error: result.error, consecutiveErrors: 1 })
+          .retryable,
+      ).toBe(!userStop);
+    },
+  );
 
   it.each(["initialize", "recordScheduledMemoryParent"] as const)(
     "retries a continuation claim conflict during %s before model execution",
