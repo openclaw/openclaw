@@ -258,6 +258,7 @@ export async function addTemplateAgent(
       requestStarted = true;
       const result = await applyTemplateAdd(client, source, {
         agentId: requestAgentId,
+        ...(retry ? { resume: true as const } : {}),
         acknowledgeClawHubRisk,
         onSent: (id) => {
           requestId = id;
