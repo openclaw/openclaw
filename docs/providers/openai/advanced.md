@@ -340,7 +340,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     output is not automatically replayed, because tools may have done work; its
     repair is saved for the next request (`deferred`), including a new run or an
     internal session-effects fork of that history. Successful requests that apply
-    a saved repair also log `recovered`. Encrypted checkpoints remain bound to their
+    a saved repair also log `recovered`. Subagent completion deliveries with a
+    deferred repair retry automatically, up to three delivery attempts, without
+    waiting for another user message. Encrypted checkpoints remain bound to their
     original session.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses

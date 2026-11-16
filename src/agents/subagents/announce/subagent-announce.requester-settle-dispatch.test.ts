@@ -85,9 +85,14 @@ describe("requester settle dispatch deadline", () => {
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
-  it.each([false, true])(
-    "retries saved-state rejection after admission with a bounded budget (persistent=%s)",
-    async (persistent) => {
+  it.each([
+    { persistent: false, returned: false },
+    { persistent: true, returned: false },
+    { persistent: false, returned: true },
+    { persistent: true, returned: true },
+  ])(
+    "retries saved-state rejection after admission with a bounded budget ($persistent, returned=$returned)",
+    async ({ persistent, returned }) => {
       const context = createContext();
       const { child, completeBatch, params } = dispatchFixture();
       useDirectDelivery();
@@ -96,9 +101,20 @@ describe("requester settle dispatch deadline", () => {
         acceptTurn(turn);
         runIds.push(turn.preflight.request.idempotencyKey);
         if (persistent || runIds.length === 1) {
-          throw Object.assign(new Error("Saved conversation state rejected"), {
+          const error = {
+            kind: "incomplete_turn",
             code: "item_conflict",
-          });
+            message: "Saved conversation state rejected",
+          };
+          if (returned) {
+            turn.io.emitFinal([
+              true,
+              { status: "ok", result: { payloads: [], meta: { error } } },
+              undefined,
+            ]);
+            return;
+          }
+          throw Object.assign(new Error(error.message), error);
         }
         finishTurn(turn.io, "Recovered child result.");
       });

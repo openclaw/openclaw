@@ -20,6 +20,10 @@ import {
   isGatewayAgentRunPending,
   resolvePrivateCompletionDeliveryResult,
 } from "./subagent-announce-completion-delivery.js";
+import {
+  isAnnounceSavedStateConflict,
+  summarizeDeliveryError,
+} from "./subagent-announce-delivery-retry.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 
@@ -157,6 +161,19 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         path: "direct",
         error: directDeliveryFailure,
         ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
+      };
+    }
+    if (
+      !hasFinalMessagingToolDelivery &&
+      !automaticEvidence.mayHaveSent &&
+      isAnnounceSavedStateConflict(directAnnounceResult?.meta?.error)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "requester_state_conflict",
+        error: summarizeDeliveryError(directAnnounceResult?.meta?.error),
+        disposition: "retryable",
       };
     }
     if (
