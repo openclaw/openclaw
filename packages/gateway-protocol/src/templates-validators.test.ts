@@ -115,12 +115,13 @@ describe("Templates Gateway contract", () => {
     });
     // Chat-based Add names the agent it wants and carries no reviewed plan.
     const chat = { mode: "chat", source: coordinate, agentId: "demo" };
-    addApply.accepts(chat, { ...chat, acknowledgeClawHubRisk: true });
+    addApply.accepts(chat, { ...chat, acknowledgeClawHubRisk: true }, { ...chat, resume: true });
     addApply.rejects(
       { mode: "chat", source: coordinate },
       { ...chat, planIntegrity: "sha256:reviewed-plan" },
       { ...chat, acknowledgeCapabilities: [] },
       { ...chat, mode: "plan" },
+      { ...chat, resume: false },
     );
     searchResult.accepts({
       entries: [

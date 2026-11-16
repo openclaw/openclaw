@@ -497,6 +497,7 @@ src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
 src/agents/worktrees/run-lease.ts
 src/agents/worktrees/service-preparation.ts
+src/agents/worktrees/storage-root.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts

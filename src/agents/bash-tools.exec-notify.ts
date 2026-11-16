@@ -1,6 +1,12 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
+import {
+  followSessionEventTargetForHost,
+  type SessionEventTargetFollow,
+} from "../auto-reply/reply/session-event-target.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -218,6 +224,58 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
+/** A new conversation does not get the old command's wake; it gets a visible note instead. */
+async function withholdExecExitNotification(
+  session: ProcessSession,
+  target: NonNullable<ProcessSession["notifySessionTarget"]>,
+  followed: Exclude<SessionEventTargetFollow, { status: "current" }>,
+) {
+  const reason =
+    followed.status === "deleted"
+      ? "the conversation was deleted"
+      : "the conversation was reset, rewound or moved to a new session after the command started";
+  logWarn(`exec: completion ${session.id} withheld (${reason}); inspect the process result.`);
+  if (followed.status === "deleted") {
+    return;
+  }
+  const runId = `exec-withheld:${processSessionInstanceId(session)}`;
+  try {
+    // Transcript storage stays lazy: almost every completion is delivered.
+    const { appendSessionTranscriptReport } =
+      await import("../config/sessions/session-accessor.js");
+    const appended = await runWithoutOwnedSessionTranscriptWrites(() =>
+      appendSessionTranscriptReport(
+        {
+          agentId: target.agentId!,
+          sessionKey: target.sessionKey!,
+          storePath: target.storePath,
+          sessionId: followed.sessionId,
+          expectedLifecycleRevision: followed.lifecycleRevision,
+        },
+        {
+          kind: "custom",
+          customTypes: ["run-failed-before-reply"],
+          selectReport: (latest) =>
+            isRecord(latest?.details) && latest.details.runId === runId
+              ? undefined
+              : {
+                  customType: "run-failed-before-reply",
+                  display: true,
+                  excludeFromContext: true,
+                  content: `Background command result withheld (${session.id}, ${renderExecExitLabel(session)}): ${reason}. Its output stays in process log.`,
+                  details: { runId, processId: session.id },
+                },
+        },
+      ),
+    );
+    if (!appended.ok) {
+      throw new Error(`transcript refused the note: ${appended.error.code}`);
+    }
+  } catch (error) {
+    logWarn(`exec: completion ${session.id} withheld note failed (${formatErrorMessage(error)}).`);
+  }
+}
+
 async function notifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
@@ -248,10 +306,23 @@ async function notifyOnExit(
       );
       return;
     }
+    const target = session.notifySessionTarget;
+    try {
+      const followed = await followSessionEventTargetForHost(target);
+      if (followed.status !== "current") {
+        await withholdExecExitNotification(session, target, followed);
+        return;
+      }
+    } catch (error) {
+      // Admission still checks the captured generation and refuses a stale one.
+      logWarn(
+        `exec: completion ${session.id} could not read its session (${formatErrorMessage(error)}).`,
+      );
+    }
     try {
       const receipt = enqueueExecExitNotification(
         eventText,
-        session.notifySessionTarget,
+        target,
         processSessionInstanceId(session),
         {
           ...eventOptions,

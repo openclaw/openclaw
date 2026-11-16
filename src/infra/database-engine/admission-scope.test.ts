@@ -1,9 +1,10 @@
 import { fork } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import { getEnvironmentData, Worker } from "node:worker_threads";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import { assertEngineStoreExecutionAllowed, withEngineStoreAdmission } from "./admission-scope.js";
+import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 function receive(probe: EventEmitter, failure = () => "Probe exited before replying") {
   return new Promise<unknown>((resolve, reject) => {
@@ -29,6 +30,7 @@ async function probeChild(url: URL, input: object, check: (result: unknown) => v
     const pending = receive(child, () => "Probe exited before replying: " + stderr);
     child.send(input);
     const result = await pending;
+    expect(result, stderr).not.toHaveProperty("error");
     check(result);
     expect(await exited).toBe(0);
   } finally {
@@ -90,4 +92,43 @@ it("refuses main-thread construction and use after boot admission", async () => 
           : {}),
       }),
   );
+});
+
+describe.skipIf(!mixedAgentConnection)("PostgreSQL Gateway prompt admission", () => {
+  const fixture = useMixedAgentPair("postgres", "postgres");
+
+  it("prepares watched-session titles and removes watches without host PostgreSQL SQL", async () => {
+    await probeChild(
+      new URL("./watched-sessions-prompt.main.test-support.ts", import.meta.url),
+      { stateDir: fixture.root },
+      (result) =>
+        expect(result).toEqual({
+          threadId: 0,
+          role: "gateway",
+          statePostgres: true,
+          agentPostgres: true,
+          admittedStatements: 1,
+          hostStatements: 0,
+          prepared: {
+            sessions: [{ key: "agent:main:telegram:group:watched", title: "Watched room" }],
+            hiddenCount: 0,
+            readToolNames: ["sessions_history"],
+            listToolAvailable: false,
+          },
+          promptLines: [
+            "## Watched Sessions",
+            "Group/topic sessions this session ambiently watches. Readable now (read-only) via sessions_history.",
+            "- agent:main:telegram:group:watched — Watched room",
+            "",
+          ],
+          afterRemoval: null,
+          emptySnapshot: {
+            sessions: [],
+            hiddenCount: 0,
+            readToolNames: ["sessions_history"],
+            listToolAvailable: false,
+          },
+        }),
+    );
+  });
 });

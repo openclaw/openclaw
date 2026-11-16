@@ -204,6 +204,17 @@ metadata. Full task and result text remain in SQLite and are loaded for selected
 reads or later mutations. Pending delivery, suspended delivery, cancellation, and
 yielded work keep their payloads until those obligations settle.
 
+Restart recovery includes finished results whose requester has already settled,
+even when that requester has no interrupted-run marker. Retired process authority
+alone does not mean the requester or its store was replaced. Retryable delivery
+is not eligible for completed-run retention cleanup.
+
+Registry removal records a `child_delivery_removed` session-state event in the
+same transaction. It identifies the run, its delivered, suspended, or discarded
+outcome, and the removal reason without copying result text. These receipts use
+the existing session-state history retention (30 days, at most 50,000 events);
+removing the short-lived registry row does not erase the delivery evidence.
+
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first
 accepted reply; a correction with a newer end time can replace it.

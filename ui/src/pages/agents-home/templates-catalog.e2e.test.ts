@@ -51,6 +51,8 @@ const workflowOperator = {
   installs: 200,
   updatedAtMs: 1_790_000_000_000,
 } satisfies ClawHubTemplateCatalogEntry;
+const summaryFreeTemplate: ClawHubTemplateCatalogEntry = { ...workflowOperator };
+delete summaryFreeTemplate.summary;
 const researchTemplate = {
   ...workflowOperator,
   packageName: "@maker/release-scout",
@@ -208,43 +210,53 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     { name: "tall-desktop", width: 1440, height: 1200 },
     { name: "mobile", width: 390, height: 844 },
     { name: "tall-mobile", width: 390, height: 1200 },
-  ])("fills the visible catalog while loading at $name size", async (viewport) => {
-    const { page, gateway } = await fixture(viewport, undefined, undefined, true);
+    { name: "summary-free-mobile", width: 390, height: 844, entry: summaryFreeTemplate },
+  ])("loads the catalog into its placeholders at $name size", async (viewport) => {
+    const { page, gateway } = await fixture(viewport, viewport.entry, undefined, true);
     const loading = page.getByRole("status", { name: "Loading templates…" });
     await loading.waitFor();
     await capture(page, `loading-${viewport.name}`, loading);
-    const geometry = await loading.evaluate((grid) => {
-      const cards = Array.from(grid.children, (card) => card.getBoundingClientRect());
-      return {
-        bottom: cards.at(-1)!.bottom,
-        cardHeight: cards[0]!.height,
-        gap: Number.parseFloat(getComputedStyle(grid).rowGap),
-        hidden: Array.from(grid.children).every(
-          (card) => card.getAttribute("aria-hidden") === "true",
-        ),
-      };
-    });
-    expect(geometry.bottom).toBeGreaterThanOrEqual(viewport.height - geometry.gap);
-    expect(geometry.bottom).toBeLessThan(viewport.height + geometry.cardHeight + geometry.gap);
-    expect(geometry.cardHeight).toBeGreaterThanOrEqual(140);
-    expect(geometry.cardHeight).toBeLessThanOrEqual(200);
-    expect(geometry.hidden).toBe(true);
+    const rect = (element: Element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return [x, y, width, height].map((value) => Math.round(value * 2) / 2);
+    };
+    const placeholders = await loading.evaluate((status) => ({
+      bottom: status.getBoundingClientRect().bottom,
+      hidden: Array.from(status.children).every(
+        (section) => section.getAttribute("aria-hidden") === "true",
+      ),
+    }));
+    // Placeholders cover the visible catalog at every size without measuring it.
+    expect(placeholders.bottom).toBeGreaterThanOrEqual(viewport.height);
+    expect(placeholders.hidden).toBe(true);
     expect(await loading.count()).toBe(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
     if (viewport.name === "desktop") {
       await page.setViewportSize({ width: 820, height: 1024 });
-      await expect
-        .poll(() =>
-          loading.evaluate((grid) => grid.lastElementChild!.getBoundingClientRect().bottom),
-        )
-        .toBeGreaterThanOrEqual(1012);
+      expect(
+        await loading.evaluate((status) => status.getBoundingClientRect().bottom),
+      ).toBeGreaterThanOrEqual(1024);
       await capture(page, "loading-resized-tablet", loading);
     }
+    // The first shelf and card arrive exactly where their placeholders were.
+    const placeholderHeader = await loading
+      .locator(".plugin-catalog-section__header")
+      .first()
+      .evaluate(rect);
+    const placeholderCard = await loading
+      .locator("[data-templates-placeholder]")
+      .first()
+      .evaluate(rect);
     await gateway.resolveDeferred("templates.catalog.search");
-    await page.locator("[data-templates-entry]").first().waitFor();
+    const card = page.locator("[data-templates-entry]").first();
+    await card.waitFor();
     expect(await loading.count()).toBe(0);
+    expect(await card.evaluate(rect)).toEqual(placeholderCard);
+    expect(await page.locator(".plugin-catalog-section__header").first().evaluate(rect)).toEqual(
+      placeholderHeader,
+    );
   });
 
   async function openDetail(page: Page) {

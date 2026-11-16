@@ -54,7 +54,7 @@ const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) to control it. New output while it runs does not start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. This is not a saved, restartable automation.";
 /** One waiting recipe for every surface that tells the agent how to wait. */
 export const EXEC_WAIT_RECIPE =
-  "To wait for a condition or a time, run one command that loops until it holds, exits non-zero on failure states and prints the result.";
+  "To wait for a condition or a time, run one command that loops until it holds, exits non-zero on failure states and prints the result. To wait on a change you caused, pin the expected state: for example, wait for the exact commit you pushed and exit non-zero if it moved.";
 
 type ExitWakeFacts = {
   notifyOnExit?: boolean;

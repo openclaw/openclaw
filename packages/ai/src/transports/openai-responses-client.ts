@@ -282,6 +282,7 @@ function createResponsesTransportExecutor(config: {
               turnState?.metadata,
               replayMode,
               Boolean(v2Compaction),
+              itemRecovery.applied,
             ),
           );
         const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);
@@ -682,12 +683,20 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
       const { createAzureOpenAIClient } = await import("../providers/openai-provider-client.js");
       return createAzureOpenAIClient(...args);
     },
-    buildRequest: (model, context, options, metadata, replayMode) => {
+    buildRequest: (model, context, options, metadata, replayMode, retainUsers, onItemRecovery) => {
       const deploymentName = resolveAzureDeploymentNameFromMap({
         modelId: model.id,
         deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
       });
-      const params = buildOpenAIResponsesParams(model, context, options, metadata, replayMode);
+      const params = buildOpenAIResponsesParams(
+        model,
+        context,
+        options,
+        metadata,
+        replayMode,
+        retainUsers,
+        onItemRecovery,
+      );
       params.model = deploymentName;
       delete params.store;
       return params;

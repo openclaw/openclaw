@@ -1674,7 +1674,7 @@ var External = [
     /(^actionId$|^source$|^ref$|^reviewToken$|^acknowledgeRiskWarning$)/u,
     /(^actionId$|^source$|^path$|^digest$|^reviewToken$|^acknowledgeRiskWarning$)/u,
     /^sha256:[a-f0-9]{64}$/u,
-    /(^mode$|^source$|^agentId$|^acknowledgeClawHubRisk$)/u,
+    /(^mode$|^source$|^agentId$|^resume$|^acknowledgeClawHubRisk$)/u,
     /(^agentId$|^source$)/u,
     /(^agentId$|^source$|^planIntegrity$|^acknowledgeClawHubRisk$|^acknowledgeCapabilities$|^acknowledgeSkillWarnings$)/u,
     /(^agentId$|^planIntegrity$)/u,
@@ -20504,6 +20504,7 @@ var External = [
     check_397(value.mode) &&
     check_3053(value.source) &&
     check_6(value.agentId) &&
+    (value.resume === void 0 || !("resume" in value) || check_330(value.resume)) &&
     (value.acknowledgeClawHubRisk === void 0 ||
       !("acknowledgeClawHubRisk" in value) ||
       check_181(value.acknowledgeClawHubRisk)),

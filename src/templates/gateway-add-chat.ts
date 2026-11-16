@@ -4,8 +4,6 @@ import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
-import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -20,22 +18,22 @@ import {
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
-import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
-import type { TemplateSetupFailure, TemplateSetupReport } from "./conversation.js";
-import type { PersistedTemplateCronRef } from "./cron.js";
+import { withResolvedClawHubSource } from "./clawhub-source.js";
+import type { TemplateSetupReport } from "./conversation.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
 } from "./gateway-add-continuation.js";
+import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 import {
   buildGatewayTemplateAddPlan,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
 import type { GatewayTemplateAddApplyResult } from "./gateway-add-result.js";
-import { installTemplateMcpServersStateless } from "./mcp.js";
-import { installTemplatePackages } from "./packages.js";
 import { templateManifestWorkspaceConflictsWithPath } from "./schema.js";
-import type { TemplateAddPlan, TemplateAddPlanAction, TemplateReadResult } from "./types.js";
+import { continueTemplateSetup } from "./setup-continuation.js";
+import { measureTemplateAddStage } from "./timings.js";
+import type { TemplateAddPlan, TemplateReadResult } from "./types.js";
 
 type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
 type TemplateAgentConfig = TemplateAddPlan["agent"]["config"];
@@ -77,36 +75,6 @@ function withoutAgent(config: OpenClawConfig, agentId: string): OpenClawConfig {
   return { ...config, agents: { ...config.agents, entries } };
 }
 
-function dependencyFailure(
-  plan: TemplateAddPlan,
-  source: VerifiedTemplateSource,
-  action: TemplateAddPlanAction,
-  reason: string,
-): TemplateSetupFailure {
-  if (action.kind === "mcpServer") {
-    return { kind: "mcpServer", name: action.id, reason };
-  }
-  const details = action.details ?? {};
-  const collection = details.kind === "skill" ? "skills" : "plugins";
-  const index = source.manifest[collection].findIndex((entry) =>
-    "path" in entry ? entry.path === details.path : entry.ref === details.ref,
-  );
-  const declared = source.manifest[collection][index];
-  return {
-    kind: details.kind === "skill" ? "skill" : "plugin",
-    name:
-      declared && "ref" in declared
-        ? declared.ref
-        : typeof details.name === "string"
-          ? details.name
-          : (declared?.path ?? action.id),
-    // A blocked bundled action carries no reason; its blocker is filed under the declaration.
-    reason:
-      plan.blockers.find((blocker) => blocker.path === `$.${collection}[${index}]`)?.message ??
-      reason,
-  };
-}
-
 /** The installer settled with the agent kept; its own result already says why. */
 class KeptTemplateAgentError extends Error {
   constructor(readonly failure: { code: string; message: string }) {
@@ -114,28 +82,6 @@ class KeptTemplateAgentError extends Error {
     this.name = "KeptTemplateAgentError";
   }
 }
-
-export type ChatTemplateAddInput = ClawHubFetchOptions & {
-  source: ClawHubCoordinate;
-  acknowledgeClawHubRisk?: boolean;
-  getPlanningContext: () => Promise<GatewayTemplateAddPlanningContext>;
-  assertCurrent: () => void;
-  signal?: AbortSignal;
-  stateDir?: string;
-  reloadPlugins?: PluginInstallBatchReload;
-  configWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
-  waitForAgentRuntime?: StatelessTemplateAddOptions["waitForAgentRuntime"];
-  rollbackNewAgent?: (
-    agentId: string,
-    expectedAgentConfig: TemplateAgentConfig,
-    expectedCronJobs: PersistedTemplateCronRef[],
-  ) => Promise<void>;
-  /** Creation has finished; the agent's first turn starts here with its outcome. */
-  onAgentCreated?: (
-    agent: { agentId: string; sessionKey: string },
-    report: TemplateSetupReport,
-  ) => Promise<void>;
-};
 
 /**
  * The id chat-based Add admits. A taken preferred id yields the next unused one,
@@ -146,7 +92,7 @@ export async function selectChatTemplateAgentId(
   admissionContext: Promise<
     { ok: true; value: GatewayTemplateAddPlanningContext } | { ok: false; error: unknown }
   >,
-  input: Pick<ChatTemplateAddInput, "source" | "assertCurrent"> & { agentId?: string },
+  input: Pick<ChatTemplateAddInput, "source" | "assertCurrent" | "resume"> & { agentId?: string },
 ): Promise<string> {
   const context = await admissionContext;
   if (!context.ok) {
@@ -154,10 +100,18 @@ export async function selectChatTemplateAgentId(
   }
   const { config } = context.value;
   const preferredId = normalizeAgentId(input.agentId);
-  return config.agents?.entries?.[preferredId] &&
-    (await isRetainedTemplateInitialization(config, preferredId, input.source, input.assertCurrent))
-    ? preferredId
-    : selectNextTemplateAgentId(preferredId, listAgentIds(config));
+  const retained =
+    config.agents?.entries?.[preferredId] &&
+    (await isRetainedTemplateInitialization(
+      config,
+      preferredId,
+      input.source,
+      input.assertCurrent,
+    ));
+  if (input.resume && !retained) {
+    throw new Error("The Template creation checkpoint changed; Retry cannot create another agent.");
+  }
+  return retained ? preferredId : selectNextTemplateAgentId(preferredId, listAgentIds(config));
 }
 
 /**
@@ -286,11 +240,7 @@ export async function createTemplateAgentFromChat(
       },
       ...templateInitializationCheckpoints(admitted, input.source),
       ...(input.waitForAgentRuntime ? { waitForAgentRuntime: input.waitForAgentRuntime } : {}),
-      // The chat becomes ordinary here; its first turn still waits for the report.
-      onAgentReady: async () => {
-        await admitted.chat.complete?.();
-        initialized = true;
-      },
+      // Finalize only workspace preparation; dependency setup continues alongside the opening.
       ...(input.configWriteOptions ? { configWriteOptions: input.configWriteOptions } : {}),
       // No digest was reviewed in this path; the installer only requires its own plan's.
       consentPlanIntegrity: plan.planIntegrity,
@@ -304,70 +254,7 @@ export async function createTemplateAgentFromChat(
     return options;
   };
 
-  const installDependencies = async (
-    source: VerifiedTemplateSource,
-    options: StatelessTemplateAddOptions,
-  ): Promise<void> => {
-    const config = withoutAgent((await input.getPlanningContext()).config, agentId);
-    const dependencies = await buildGatewayTemplateAddPlan(
-      {
-        ...source,
-        manifest: {
-          ...source.manifest,
-          // A ClawHub plugin is never inspected, downloaded, installed or enabled here.
-          plugins: source.manifest.plugins.filter((plugin) => "path" in plugin),
-          automations: [],
-        },
-      },
-      { config, sourceMcpServers: {}, agentId, admittedWorkspace: admitted.workspace },
-    );
-    const installOptions = {
-      stateMode: options.stateMode,
-      assertCurrent: options.assertCurrent,
-      assertForwardCurrent: options.assertCurrent,
-      prepareEffect: options.prepareEffect,
-      leaseSet: options.leaseSet,
-      config,
-      ...(input.reloadPlugins ? { reloadPlugins: input.reloadPlugins } : {}),
-      // No review step exists: a bundled plugin installs with the capabilities it
-      // declares. One that carries a warning is reported below, never confirmed.
-      pluginConsent: {
-        onCapabilityConsent: async (review: { reviewToken: string }) => ({
-          reviewToken: review.reviewToken,
-        }),
-      },
-    };
-    for (const action of dependencies.actions) {
-      if (action.kind !== "package" && action.kind !== "mcpServer") {
-        continue;
-      }
-      const fail = (reason: string) =>
-        report.failures.push(dependencyFailure(dependencies, source, action, reason));
-      const warning = action.details?.riskWarning;
-      if (typeof warning === "string") {
-        fail(`Not installed without your review. ${warning}`);
-        continue;
-      }
-      if (action.blocked) {
-        fail(action.reason ?? "This dependency cannot be installed.");
-        continue;
-      }
-      try {
-        const single = { ...dependencies, actions: [action] };
-        if (action.kind === "package") {
-          await installTemplatePackages(single, installOptions);
-        } else {
-          await installTemplateMcpServersStateless(single, { ...installOptions, refs: [] });
-          report.mcpServers.push(action.id);
-        }
-      } catch (error) {
-        // Lost authority ends creation; any other failure is one item to report.
-        options.assertCurrent?.();
-        fail(coerceErrorMessage(error));
-      }
-    }
-  };
-
+  let preparedSource: VerifiedTemplateSource | undefined;
   let configured = false;
   let finished = false;
   try {
@@ -391,10 +278,26 @@ export async function createTemplateAgentFromChat(
           stateContext,
           async (lease) => {
             input.assertCurrent();
-            const source = await persistSource();
-            const options = await configure(source, lease);
+            const source = await measureTemplateAddStage(
+              "source.persist-receipt",
+              async () => await persistSource(),
+            );
+            await measureTemplateAddStage(
+              "workspace-config.prepare",
+              async () => await configure(source, lease),
+            );
+            preparedSource = source;
             configured = true;
-            await installDependencies(source, options);
+            await measureTemplateAddStage(
+              "session.finalize",
+              async () =>
+                await admitted.chat.complete?.({
+                  source: input.source,
+                  report,
+                  dependenciesPending: true,
+                }),
+            );
+            initialized = true;
             finished = true;
           },
         ),
@@ -451,10 +354,11 @@ export async function createTemplateAgentFromChat(
       throw error;
     }
   }
-  try {
-    await input.onAgentCreated?.({ agentId, sessionKey }, report);
-  } catch (error) {
-    return kept({ code: "template_opening_failed", message: coerceErrorMessage(error) });
-  }
-  return kept();
+  return (
+    (await continueTemplateSetup(input, agentId, stateContext, preparedSource)) ??
+    kept({
+      code: "template_opening_failed",
+      message: "Template setup continuation was not saved; the agent and conversation were kept.",
+    })
+  );
 }

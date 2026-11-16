@@ -226,6 +226,7 @@ export type ConvertResponsesMessagesOptions = {
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
   mutableInput?: boolean;
+  onItemRecovery?: () => void;
 };
 
 // Weak source keys release projections with history. Keep a bounded set of route/position
@@ -312,6 +313,9 @@ function convertResponsesMessagesWithStyle(
     authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
+  if (replayPlan.itemRecovery) {
+    options?.onItemRecovery?.();
+  }
   const transformMessages = (source: Context["messages"]) =>
     providerStyle
       ? transformProviderMessages(source, model, normalizeToolCallId)
