@@ -99,7 +99,7 @@ it("uses the saved description for row selection and detail instead of unsaved e
   });
   const saved = getElement(detail, '[data-test-id="cron-detail-description"]', HTMLDivElement);
   expect(saved.textContent?.replace(/\s+/g, " ").trim()).toBe(
-    "Description: Summarize overnight deployment activity",
+    "Summarize overnight deployment activity",
   );
   expect(saved.textContent).not.toContain("Unsaved description edit");
 });
