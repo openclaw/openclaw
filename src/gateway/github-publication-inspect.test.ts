@@ -86,6 +86,9 @@ async function fixture(
   const requests: string[][] = [];
   mocks.runCommand.mockImplementation(async (argv: string[]) => {
     requests.push(argv);
+    if (argv.includes("graphql")) {
+      return commandResult("", 1);
+    }
     if (argv[0] !== "gh" || !argv.includes("GET")) {
       throw new Error("Inspection attempted a non-read command");
     }
@@ -287,12 +290,125 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       f.pr.user = { id: 42, login: "publisher" };
       const before = session();
       await expect(f.invoke({}, raw)).rejects.toThrow(
-        "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr; continue it in the session that published it.",
+        "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR.",
       );
       expect(session()).toEqual(before);
       expect(f.externalWrites).toEqual([]);
     },
   );
+
+  it.each([
+    "author",
+    "coauthor",
+    "committer",
+    "later commit",
+    "later author",
+    "private",
+    "unlinked",
+    "other publisher",
+    "changed head",
+    "API error",
+    "private base denied",
+    "private head denied",
+  ])("checks publisher PR contribution by account identity (%s)", async (kind) => {
+    const f = await fixture();
+    f.pr.user = { id: kind === "other publisher" ? 99 : 42, login: "publisher" };
+    f.baseRepo.private = kind.startsWith("private");
+    f.fork.private = kind.startsWith("private");
+    const linked = { user: { databaseId: 101 } };
+    const other = { user: { databaseId: 999 } };
+    const lastPage = { hasNextPage: false, endCursor: null };
+    let queries = 0;
+    overrideCommands((argv, input) => {
+      const endpoint = argv.at(-1)!;
+      if (endpoint === "user/101") {
+        return commandResult(JSON.stringify({ id: 101, login: "contributor" }));
+      }
+      if (endpoint.endsWith("/collaborators/contributor/permission")) {
+        const denied =
+          kind === "private base denied" ||
+          (kind === "private head denied" && endpoint.startsWith("repos/contributor/"));
+        return commandResult(
+          JSON.stringify({ permission: denied ? "none" : "read", user: { id: 101 } }),
+        );
+      }
+      if (!argv.includes("graphql")) {
+        return undefined;
+      }
+      queries++;
+      if (kind === "later author" && queries === 2) {
+        expect(JSON.parse(String(input)).variables).toEqual({
+          id: "commit-node",
+          authorCursor: "next-author",
+        });
+        return commandResult(
+          JSON.stringify({ data: { node: { authors: { nodes: [linked], pageInfo: lastPage } } } }),
+        );
+      }
+      const delayed = (kind === "later commit" || kind === "later author") && queries === 1;
+      if (kind === "later commit" && queries === 2) {
+        expect(JSON.parse(String(input)).variables.after).toBe("next-commit");
+      }
+      return commandResult(
+        JSON.stringify({
+          ...(kind === "API error" ? { errors: [{ message: "unavailable" }] } : {}),
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: kind === "changed head" ? BASE : HEAD,
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        id: "commit-node",
+                        authors: {
+                          nodes:
+                            delayed || kind === "committer" || kind === "unlinked"
+                              ? [other, { user: null }, { user: { databaseId: null } }]
+                              : kind === "author"
+                                ? [linked]
+                                : [other, linked],
+                          pageInfo:
+                            kind === "later author" && delayed
+                              ? { hasNextPage: true, endCursor: "next-author" }
+                              : lastPage,
+                        },
+                        committer: kind === "committer" ? linked : other,
+                      },
+                    },
+                  ],
+                  pageInfo:
+                    kind === "later commit" && delayed
+                      ? { hasNextPage: true, endCursor: "next-commit" }
+                      : lastPage,
+                },
+              },
+            },
+          },
+        }),
+      );
+    });
+    if (
+      ["author", "coauthor", "committer", "later commit", "later author", "private"].includes(kind)
+    ) {
+      expect(await f.invoke()).toMatchObject({ author: { accountId: 42 } });
+    } else if (kind === "private base denied" || kind === "private head denied") {
+      await expect(f.invoke()).rejects.toThrow("current repository access");
+    } else {
+      await expect(f.invoke()).rejects.toThrow("no linked account was verified");
+    }
+    if (kind === "private base denied") {
+      expect(f.endpoints()).not.toContain("repos/example/repository/pulls/7");
+      expect(queries).toBe(0);
+    }
+    if (kind === "other publisher") {
+      expect(queries).toBe(0);
+    }
+    if (kind === "later commit" || kind === "later author") {
+      expect(queries).toBe(2);
+    }
+    expect(f.externalWrites).toEqual([]);
+  });
 
   it("rejects an unlinked requester before reading PR data", async () => {
     const f = await fixture({ linked: false });
