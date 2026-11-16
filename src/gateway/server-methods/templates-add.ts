@@ -107,7 +107,7 @@ export async function planTemplateAddForRequest(
       if (!listedMcp.ok) {
         throw new Error(listedMcp.error);
       }
-      return listedMcp.mcpServers;
+      return listedMcp.authoredConfig?.mcp?.servers ?? {};
     },
   });
   assertTemplatesLabsEnabled(context.getRuntimeConfig());
@@ -253,7 +253,7 @@ export async function applyTemplateAddForRequest(
           if (!listedMcp.ok) {
             throw new Error(listedMcp.error);
           }
-          return listedMcp.mcpServers;
+          return listedMcp.authoredConfig?.mcp?.servers ?? {};
         },
       };
     },

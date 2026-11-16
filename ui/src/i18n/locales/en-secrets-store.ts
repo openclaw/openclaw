@@ -32,16 +32,16 @@ const enSecretsStore = {
     unavailableOffline: "Reconnect to manage secrets.",
     unavailableAdmin: "Only admins can manage secrets. Ask an admin for access.",
     unavailableGateway: "Update the Gateway to manage secrets here.",
-    badName: "Use SERVICE_API_KEY.",
+    badName: "Use 1–128 characters: start with A–Z, then use A–Z, 0–9, or underscores.",
     tooLarge: "Max 64 KiB.",
     savedProtected:
       "Saved {name} as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it.",
     savedReadable:
       "Saved {name} as Agent-readable environment. It is available to Gateway-hosted agent commands from the next reply.",
     savedMany:
-      "Saved {count} entries ({protected} protected, {readable} agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
-    warnings: "{count} runtime warnings.",
-    partial: "Saved {saved} of {total} entries.",
+      "Entries saved: {count} ({protected} protected, {readable} agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
+    warnings: "Runtime warnings: {count}.",
+    partial: "Confirmed saves before the error: {saved} of {total}.",
     partialFailure: "Couldn’t finish the import. Reload the list to check what was saved.\n{error}",
     confirmDelete: "Delete {name}?",
     confirmDeleteMessage: "The stored value can’t be recovered.",
