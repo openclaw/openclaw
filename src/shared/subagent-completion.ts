@@ -9,7 +9,16 @@ export type SubagentCompletion = {
   runId: string;
   sessionKey: string;
   label?: string;
+  /** Absent for a finished child; a collected child that ended without finishing. */
+  outcome?: SubagentCompletionOutcome;
 };
+
+const SUBAGENT_COMPLETION_OUTCOMES = ["failed", "killed", "timeout"] as const;
+export type SubagentCompletionOutcome = (typeof SUBAGENT_COMPLETION_OUTCOMES)[number];
+
+function readOutcome(value: unknown): SubagentCompletionOutcome | undefined {
+  return SUBAGENT_COMPLETION_OUTCOMES.find((outcome) => outcome === value);
+}
 
 export function readSubagentCompletions(value: unknown): SubagentCompletion[] {
   if (!Array.isArray(value)) {
@@ -20,7 +29,10 @@ export function readSubagentCompletions(value: unknown): SubagentCompletion[] {
     const runId = normalizeOptionalString(record?.runId);
     const sessionKey = normalizeOptionalString(record?.sessionKey);
     const label = normalizeOptionalString(record?.label);
-    return runId && sessionKey ? [{ runId, sessionKey, ...(label ? { label } : {}) }] : [];
+    const outcome = readOutcome(record?.outcome);
+    return runId && sessionKey
+      ? [{ runId, sessionKey, ...(label ? { label } : {}), ...(outcome ? { outcome } : {}) }]
+      : [];
   });
 }
 
@@ -86,9 +98,14 @@ export function readCollectedSubagentCompletions(value: unknown): SubagentComple
       : text
         ? safeParseJsonRecord(text)
         : undefined;
+  // Every settled child gets a row: a failure must not disappear with its hidden wait.
   return readSubagentCompletions(
     Array.isArray(parsed?.completed)
-      ? parsed.completed.filter((entry) => asOptionalRecord(entry)?.status === "done")
+      ? parsed.completed.flatMap((entry) => {
+          const record = asOptionalRecord(entry);
+          const outcome = readOutcome(record?.status);
+          return record?.status === "done" ? [record] : outcome ? [{ ...record, outcome }] : [];
+        })
       : [],
   );
 }

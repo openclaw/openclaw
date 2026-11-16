@@ -35,7 +35,7 @@ import { resolveCappedMessageId } from "../chat-message-recovery.ts";
 import {
   ownSessionLaunchCalls,
   readSubagentCancellation,
-  subagentCompletionNames,
+  subagentCompletionText,
 } from "../chat-spawned-subagent.ts";
 import { projectSubagentCompletions } from "../chat-subagent-completions.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
@@ -90,7 +90,7 @@ function entries(messages: unknown[]): Entry[] {
         kind: "completion",
         key: item.key,
         timestamp: rawMessageTimestamp(item.message),
-        text: t("chat.toolCards.agentsFinished", { names: subagentCompletionNames(completions) }),
+        text: subagentCompletionText(completions),
       });
       continue;
     }

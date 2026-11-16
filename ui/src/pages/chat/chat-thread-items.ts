@@ -5,7 +5,6 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
-import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
@@ -28,7 +27,7 @@ import {
   resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
-import { subagentCompletionNames } from "./chat-spawned-subagent.ts";
+import { subagentCompletionText } from "./chat-spawned-subagent.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
@@ -94,9 +93,7 @@ export function createChatSearchMatcher(
     if (
       completions.length &&
       (sourceMatches(completions.map((entry) => entry.label ?? "").join("\n")) ||
-        sourceMatches(
-          t("chat.toolCards.agentsFinished", { names: subagentCompletionNames(completions) }),
-        ))
+        sourceMatches(subagentCompletionText(completions)))
     ) {
       return true;
     }

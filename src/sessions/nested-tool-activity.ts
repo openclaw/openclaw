@@ -25,6 +25,7 @@ const activityDetails = z
           runId: correlationId,
           sessionKey: correlationId,
           label: z.string().optional(),
+          outcome: z.enum(["failed", "killed", "timeout"]).optional(),
         }),
       )
       .optional(),

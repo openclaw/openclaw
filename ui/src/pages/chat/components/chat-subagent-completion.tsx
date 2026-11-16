@@ -3,12 +3,33 @@ import type { SubagentCompletion } from "../../../../../src/shared/subagent-comp
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { subagentCompletionNames } from "../chat-spawned-subagent.ts";
+import { groupSubagentCompletions, subagentCompletionNames } from "../chat-spawned-subagent.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 export function ChatSubagentCompletion(props: {
   completions: readonly SubagentCompletion[];
+  onOpenSession?: (key: string) => void;
+}) {
+  // A batch can settle with mixed outcomes; each outcome reads as its own sentence.
+  return (
+    <For each={groupSubagentCompletions(props.completions)} keyed={(group) => group.key}>
+      {(group) => (
+        <CompletionSentence
+          completions={group().entries}
+          sentenceKey={group().key}
+          failed={group().failed}
+          onOpenSession={props.onOpenSession}
+        />
+      )}
+    </For>
+  );
+}
+
+function CompletionSentence(props: {
+  completions: readonly SubagentCompletion[];
+  sentenceKey: string;
+  failed: boolean;
   onOpenSession?: (key: string) => void;
 }) {
   const names = createMemo(() => subagentCompletionNames(props.completions));
@@ -23,13 +44,13 @@ export function ChatSubagentCompletion(props: {
   });
   const sentence = createMemo(() => {
     const marker = "￼";
-    return t("chat.toolCards.agentsFinished", { names: marker }).split(marker);
+    return t(`chat.toolCards.${props.sentenceKey}`, { names: marker }).split(marker);
   });
   return (
     <div class="chat-tool-msg-collapse">
       <div
         class="chat-tool-msg-summary chat-tool-row chat-tool-row--subagent"
-        aria-label={t("chat.toolCards.agentsFinished", { names: names() })}
+        aria-label={t(`chat.toolCards.${props.sentenceKey}`, { names: names() })}
       >
         <span class="chat-tool-msg-summary__icon" aria-hidden="true">
           <Icon name="bot" />
@@ -70,7 +91,10 @@ export function ChatSubagentCompletion(props: {
               )}
             </For>
           </span>
-          <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
+          <span
+            class={["chat-tool-row__verb", { "chat-tool-failure": props.failed }]}
+            style={{ "white-space": "pre" }}
+          >
             {sentence()[1]}
           </span>
         </span>

@@ -375,6 +375,29 @@ export function subagentCompletionNames(entries: readonly SubagentCompletion[]):
   ]);
 }
 
+const COMPLETION_SENTENCE_KEYS = {
+  finished: "agentsFinished",
+  timeout: "agentsTimedOut",
+  failed: "agentsFailed",
+  killed: "agentsStopped",
+} as const;
+
+/** One sentence per settled outcome, finished first, each in receipt order. */
+export function groupSubagentCompletions(entries: readonly SubagentCompletion[]) {
+  return Object.entries(COMPLETION_SENTENCE_KEYS).flatMap(([outcome, key]) => {
+    const group = entries.filter((entry) => (entry.outcome ?? "finished") === outcome);
+    return group.length ? [{ key, failed: outcome !== "finished", entries: group }] : [];
+  });
+}
+
+export function subagentCompletionText(entries: readonly SubagentCompletion[]): string {
+  return groupSubagentCompletions(entries)
+    .map((group) =>
+      t(`chat.toolCards.${group.key}`, { names: subagentCompletionNames(group.entries) }),
+    )
+    .join("\n");
+}
+
 /** A historical name belongs to this exact parent invocation, not another use of its ID. */
 export function subagentStopIdentity(card: Pick<ToolCard, "runId" | "callId">) {
   return card.runId && card.callId ? JSON.stringify([card.runId, card.callId]) : undefined;

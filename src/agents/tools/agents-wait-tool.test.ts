@@ -386,7 +386,7 @@ describe("agents_wait", () => {
       timestamp: 2,
     });
     records.clear();
-    // Completion facts survive the display-limit omission; failed children are not completions.
+    // Settled facts survive the display-limit omission, including a child that failed.
     const facts = { runId: "finished-child", sessionKey: "agent:worker:subagent:w", label: "W" };
     const completed = [
       { ...facts, status: "done", result: "x".repeat(40_000) },
@@ -401,7 +401,10 @@ describe("agents_wait", () => {
     ]);
     const serialized = JSON.stringify(large);
     const reread = readNestedToolActivity(JSON.parse(serialized));
-    expect(reread?.details.subagentCompletions).toEqual([facts]);
+    expect(reread?.details.subagentCompletions).toEqual([
+      facts,
+      { ...facts, runId: "not-finished", outcome: "failed" },
+    ]);
     const persisted = JSON.stringify(activity);
     const history = projectAgentHistoryActivity([
       { messageId: "persisted-wait", message: JSON.parse(persisted) },

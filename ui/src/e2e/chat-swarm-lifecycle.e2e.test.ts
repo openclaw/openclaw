@@ -183,10 +183,9 @@ suite.define(() => {
         while (await closedGroups.count()) {
           await closedGroups.first().click();
         }
-        // Launches share one lifecycle row; a fully collected batch adds a completion row.
-        // A successful wait stays hidden as coordination, including a timed-out collection.
+        // Launches share one lifecycle row; the hidden wait becomes a row per outcome.
         const tools = pane.locator(".chat-tool-msg-summary");
-        await expect.poll(() => tools.count()).toBe(viewport.failure ? 1 : 2);
+        await expect.poll(() => tools.count()).toBe(2);
         await tools.first().click();
         if (viewport.count > 1) {
           // The shared row opens to one row per launch; each keeps its own receipt.
@@ -198,9 +197,9 @@ suite.define(() => {
         const launchResult = pane.locator(".chat-tool-msg-body").first();
         await expect.poll(() => launchResult.textContent()).toContain("accepted");
         expect(await launchResult.textContent()).toContain(children[0]!.key);
-        if (!viewport.failure) {
-          expect(await tools.last().textContent()).toContain(`${viewport.count} agents finished`);
-        }
+        expect(await tools.last().textContent()).toContain(
+          viewport.failure ? "An agent timed out" : `${viewport.count} agents finished`,
+        );
         expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
         expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         // The retained tool stays with the completed request, before the next user turn.
