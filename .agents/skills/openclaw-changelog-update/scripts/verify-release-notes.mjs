@@ -1,11 +1,14 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  statSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -102,6 +105,10 @@ Options:
   --manifest <path>     Read or write the complete contribution record ledger.
   --github-snapshot <path>
                         Override the exact-range GitHub GraphQL snapshot path.
+  --historical-issue-snapshot <path>
+                        Immutable historical issue evidence (not a live cache).
+  --historical-issue-snapshot-sha256 <digest>
+                        Required SHA-256 of the historical evidence bytes.
   --no-github-snapshot  Disable GitHub GraphQL snapshot reuse.
   --refresh-github-snapshot
                         Ignore an existing exact-range snapshot and rebuild it.
@@ -131,6 +138,8 @@ export function parseArgs(argv) {
     manifestPath: undefined,
     githubSnapshotPath: undefined,
     mainRef: undefined,
+    historicalIssueSnapshotPath: undefined,
+    historicalIssueSnapshotSha256: undefined,
     releaseBranch: /** @type {string | undefined} */ (undefined),
     noGithubSnapshot: false,
     regularStableVersion: undefined,
@@ -156,6 +165,8 @@ export function parseArgs(argv) {
     ["--shipped-ref", "shippedRefs"],
     ["--github-snapshot", "githubSnapshotPath"],
     ["--main-ref", "mainRef"],
+    ["--historical-issue-snapshot", "historicalIssueSnapshotPath"],
+    ["--historical-issue-snapshot-sha256", "historicalIssueSnapshotSha256"],
     ["--release-branch", "releaseBranch"],
     ["--manifest", "manifestPath"],
     ["--regular-stable-version", "regularStableVersion"],
@@ -206,6 +217,11 @@ export function parseArgs(argv) {
   }
   if (options.noGithubSnapshot && options.refreshGithubSnapshot) {
     fail("--no-github-snapshot cannot be combined with --refresh-github-snapshot");
+  }
+  if (
+    Boolean(options.historicalIssueSnapshotPath) !== Boolean(options.historicalIssueSnapshotSha256)
+  ) {
+    fail("historical issue snapshot requires both path and sha256");
   }
   const uniqueShippedRefs = new Set(options.shippedRefs);
   if (uniqueShippedRefs.size !== options.shippedRefs.length) {
@@ -301,7 +317,28 @@ function fetchGithubApi(args) {
     return JSON.parse(run("gh", ["api", ...args]).replace(ansiEscapePattern, ""));
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
-      return JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
+      const response = JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
+      // gh exits 1 for GraphQL NOT_FOUND as well as real command failures.
+      // Only a structured GraphQL error response may reach call-specific admission.
+      if (
+        error.status === 1 &&
+        !error.signal &&
+        Array.isArray(response.errors) &&
+        response.errors.length > 0 &&
+        (error.stderr ?? "")
+          .trim()
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .every((line) =>
+            response.errors.some(
+              (entry) =>
+                line === "error: GraphQL request failed" ||
+                (typeof entry.message === "string" && line === "gh: " + entry.message),
+            ),
+          )
+      ) {
+        return response;
+      }
     }
     throw error;
   }
@@ -1519,18 +1556,38 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   };
 }
 
-function graphql(query) {
+function graphql(query, notFoundNumbers = []) {
   let lastError;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const response = githubApi(["graphql", "-f", `query=${query}`]);
+      const errors = response?.errors ?? [];
+      const allowed = githubNotFoundReferences(response ?? {}, notFoundNumbers);
+      if (
+        !Array.isArray(errors) ||
+        errors.some(
+          (error) =>
+            error.type !== "NOT_FOUND" ||
+            !allowed.some(
+              (number) =>
+                error.path?.[0] === "n" + number &&
+                error.path?.[1] === "issueOrPullRequest" &&
+                error.path.length === 2 &&
+                response.data?.["n" + number]?.issueOrPullRequest === null,
+            ),
+        )
+      ) {
+        const failure = new Error("GitHub GraphQL errors: " + JSON.stringify(errors));
+        failure.cause = "graphql-errors";
+        throw failure;
+      }
       if (response?.data && typeof response.data === "object") {
         return response;
       }
-      const errors = Array.isArray(response?.errors)
+      const messages = Array.isArray(response?.errors)
         ? response.errors.map((error) => error?.message).filter(Boolean)
         : [];
-      const detail = [...errors, response?.message].filter(Boolean).join("\n");
+      const detail = [...messages, response?.message].filter(Boolean).join("\n");
       throw new Error(
         detail
           ? `GitHub GraphQL response did not include data:\n${detail}`
@@ -1541,6 +1598,7 @@ function graphql(query) {
       const message = [error?.message, error?.stdout, error?.stderr].filter(Boolean).join("\n");
       // Historical ranges batch hundreds of objects; only retry transient transport failures.
       if (
+        error.cause === "graphql-errors" ||
         !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|unexpected EOF|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
           message,
         )
@@ -1832,7 +1890,7 @@ function resolveReferences(numbers) {
         }`,
       )
       .join("\n");
-    const response = graphql(`query { ${fields} }`);
+    const response = graphql(`query { ${fields} }`, chunk);
     for (const number of githubNotFoundReferences(response, chunk)) {
       notFound.add(number);
     }
@@ -1844,6 +1902,204 @@ function resolveReferences(numbers) {
     }
   }
   return { nodes: resolveIssueRelationshipPages(nodes), notFound };
+}
+
+// Historical snapshots are evidence, never a cache for a different endpoint.
+export function loadHistoricalIssueSnapshot({
+  filePath,
+  sha256,
+  base,
+  target,
+  isAncestor = gitIsAncestor,
+}) {
+  const bytes = readFileSync(filePath);
+  if (
+    !/^[0-9a-f]{64}$/.test(sha256 ?? "") ||
+    createHash("sha256").update(bytes).digest("hex") !== sha256
+  ) {
+    fail("historical issue snapshot digest mismatch");
+  }
+  const snapshot = JSON.parse(bytes.toString("utf8"));
+  if (
+    snapshot.schemaVersion !== githubSnapshotSchemaVersion ||
+    snapshot.repository !== repo ||
+    snapshot.base !== base ||
+    !/^[0-9a-f]{40}$/.test(snapshot.target ?? "") ||
+    !snapshot.responses ||
+    typeof snapshot.responses !== "object" ||
+    Array.isArray(snapshot.responses) ||
+    !isAncestor(base, snapshot.target) ||
+    !isAncestor(snapshot.target, target)
+  ) {
+    fail("historical issue snapshot repository/range mismatch");
+  }
+  const nodes = new Map();
+  for (const [key, response] of Object.entries(snapshot.responses)) {
+    const args = JSON.parse(key);
+    if (!Array.isArray(args) || args[0] !== "graphql" || response.errors?.length) {
+      continue;
+    }
+    const query = args.find((arg) => typeof arg === "string" && arg.startsWith("query=")) ?? "";
+    // Only the collector's exact repository/number lookup establishes identity.
+    for (const match of query.matchAll(
+      /n([1-9]\d*): repository\(owner: "openclaw", name: "openclaw"\)\s*\{\s*issueOrPullRequest\(number: ([1-9]\d*)\)/g,
+    )) {
+      const number = Number(match[1]);
+      const node = response.data?.["n" + number]?.issueOrPullRequest;
+      if (
+        match[1] !== match[2] ||
+        !node ||
+        node.number !== number ||
+        !["Issue", "PullRequest"].includes(node.__typename)
+      ) {
+        fail("invalid historical reference identity #" + number);
+      }
+      if (nodes.has(number) && JSON.stringify(nodes.get(number)) !== JSON.stringify(node)) {
+        fail("conflicting historical reference #" + number);
+      }
+      nodes.set(number, node);
+    }
+  }
+  return { nodes, snapshot: { repository: repo, base, target: snapshot.target, sha256 } };
+}
+
+function completeRelationship(node, name) {
+  const connection = node?.[name];
+  return connection?.pageInfo?.hasNextPage === false &&
+    Array.isArray(connection.nodes) &&
+    connection.nodes.every((entry) => Number.isSafeInteger(entry.number) && entry.number > 0) &&
+    new Set(connection.nodes.map((entry) => entry.number)).size === connection.nodes.length
+    ? connection.nodes.map((entry) => entry.number)
+    : undefined;
+}
+
+export function recoverUnavailableIssues({
+  numbers,
+  nodes,
+  notFound,
+  evidence,
+  record,
+  recordTarget,
+  recordBase,
+  source,
+  isAncestor = gitIsAncestor,
+}) {
+  const recovered = [];
+  if (!evidence) {
+    return recovered;
+  }
+  for (const number of numbers) {
+    const historical = evidence.nodes.get(number);
+    if (historical?.__typename !== "Issue") {
+      continue;
+    }
+    const live = nodes.get(number);
+    if (live) {
+      if (
+        live.__typename !== "Issue" ||
+        live.number !== number ||
+        live.author?.__typename !== historical.author?.__typename ||
+        live.author?.login?.toLowerCase() !== historical.author?.login?.toLowerCase()
+      ) {
+        fail("conflicting live historical issue identity #" + number);
+      }
+      continue;
+    }
+    if (!notFound.has(number)) {
+      continue;
+    }
+    const closing = completeRelationship(historical, "closedByPullRequestsReferences");
+    const prNumber = closing?.length === 1 ? closing[0] : undefined;
+    const priorPr = evidence.nodes.get(prNumber);
+    const pr = nodes.get(prNumber);
+    const row = record.pullRequests.get(prNumber);
+    const merge = pr?.mergeCommit?.oid;
+    const priorIssues = completeRelationship(priorPr, "closingIssuesReferences");
+    const currentIssues = completeRelationship(pr, "closingIssuesReferences");
+    const coveredCommits = source.activeCommits.filter((commit) => {
+      if (!commit.pullRequests.includes(prNumber)) {
+        return false;
+      }
+      if (commit.hash === merge) {
+        return true;
+      }
+      const origins = [...commit.body.matchAll(/^Source commit: ([0-9a-f]{40})$/gm)];
+      const pullRequests = [...commit.body.matchAll(/^Source PR: (\S+)$/gm)];
+      return (
+        pullRequestTitleFromCommitSubject(commit.subject, prNumber) === priorPr?.title &&
+        origins.length === 1 &&
+        origins[0][1] === merge &&
+        pullRequests.length === 1 &&
+        pullRequests[0][1] === "https://github.com/" + repo + "/pull/" + prNumber
+      );
+    });
+    const coveredCommit = coveredCommits.length === 1 ? coveredCommits[0].hash : undefined;
+    const conflictingPr = [...evidence.nodes.values(), ...nodes.values()].some(
+      (node) =>
+        node.__typename === "PullRequest" &&
+        node.number !== prNumber &&
+        node.closingIssuesReferences?.nodes?.some((issue) => issue.number === number),
+    );
+    if (
+      conflictingPr ||
+      typeof historical.title !== "string" ||
+      !historical.title ||
+      historical.author?.__typename !== "User" ||
+      !isEligibleHandle(historical.author.login) ||
+      !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(historical.author.login) ||
+      priorPr?.__typename !== "PullRequest" ||
+      pr?.__typename !== "PullRequest" ||
+      pr.number !== prNumber ||
+      priorPr.number !== prNumber ||
+      priorPr.baseRefName !== "main" ||
+      pr.baseRefName !== "main" ||
+      !pr.mergedAt ||
+      pr.mergedAt !== priorPr.mergedAt ||
+      merge !== priorPr.mergeCommit?.oid ||
+      priorPr.author?.__typename !== "User" ||
+      pr.author?.__typename !== "User" ||
+      pr.author.login?.toLowerCase() !== priorPr.author?.login?.toLowerCase() ||
+      !priorIssues?.includes(number) ||
+      !currentIssues ||
+      !row?.references.includes(number) ||
+      !row.thanks.some(
+        (handle) => handle.toLowerCase() === historical.author.login.toLowerCase(),
+      ) ||
+      !source.pullRequests.has(prNumber) ||
+      !coveredCommit ||
+      !source.targetHistory.has(coveredCommit) ||
+      !mergedByTarget(pr.mergedAt, source.targetTimestamp) ||
+      !recordTarget ||
+      recordBase !== evidence.snapshot.base ||
+      !isAncestor(recordTarget, evidence.snapshot.target) ||
+      !isAncestor(recordTarget, source.target) ||
+      !isAncestor(coveredCommit, recordTarget) ||
+      !isAncestor(coveredCommit, evidence.snapshot.target) ||
+      isAncestor(coveredCommit, evidence.snapshot.base)
+    ) {
+      fail("insufficient historical issue provenance #" + number);
+    }
+    const provenance = {
+      number,
+      historicalIdentity: historical.author,
+      snapshot: evidence.snapshot,
+      recordTarget,
+      pullRequest: prNumber,
+      mergeCommit: merge,
+      coveredCommit,
+    };
+    // Preserve historical reporter credit, without presenting it as a live identity.
+    nodes.set(number, {
+      __typename: "Issue",
+      number,
+      title: historical.title,
+      recordedThanks: [historical.author.login],
+      closedByPullRequestsReferences: historical.closedByPullRequestsReferences,
+      historicalProvenance: provenance,
+    });
+    recovered.push(provenance);
+  }
+  return recovered;
 }
 
 // A vanished GitHub PR is recoverable only when a prior exact-SHA ledger
@@ -2242,7 +2498,13 @@ function editorialCreditsForLine(line, pullRequestsByNumber, directCommits, node
       addHandles(contributors, entry.thanks);
     } else if (node?.__typename === "Issue") {
       known = true;
-      addHandles(contributors, thanksFor(node, []));
+      if (
+        !node.historicalProvenance ||
+        !referencesIn(line).some((reference) => pullRequestsByNumber.has(reference)) ||
+        referencesIn(line).includes(node.historicalProvenance.pullRequest)
+      ) {
+        addHandles(contributors, thanksFor(node, []));
+      }
     }
   }
   return known ? contributors : undefined;
@@ -2293,6 +2555,7 @@ function issueEntries(numbers, nodes) {
       return {
         number,
         thanks,
+        historicalProvenance: node.historicalProvenance,
         title: node.title.replace(/\s+/g, " ").trim(),
       };
     })
@@ -2320,9 +2583,22 @@ function legacyIssuesByPullRequest(priorRecord, nodes) {
 function contributionRelationships(source, nodes, resolvedContributors) {
   const issuesByPullRequest = new Map();
   const directCommits = [];
+  for (const [number, node] of nodes) {
+    if (node.historicalProvenance) {
+      const pr = node.historicalProvenance.pullRequest;
+      issuesByPullRequest.set(pr, [
+        ...(issuesByPullRequest.get(pr) ?? []),
+        ...issueEntries([number], nodes),
+      ]);
+    }
+  }
   for (const commit of source.activeCommits) {
     const pullRequests = commit.pullRequests;
-    const issues = issueEntries(commit.closingReferences, nodes);
+    const issues = issueEntries(commit.closingReferences, nodes).filter(
+      (issue) =>
+        !issue.historicalProvenance ||
+        commit.pullRequests.includes(issue.historicalProvenance.pullRequest),
+    );
     if (pullRequests.length === 0) {
       const authorHandle = commit.authorHandle
         ? resolvedContributors.get(commit.authorHandle.toLowerCase())
@@ -2441,6 +2717,9 @@ export function ledgerFor(
       relationships.issuesByPullRequest.get(entry.number) ?? [],
       issueEntries(priorReferences, nodes),
       issueEntries(legacyIssues.get(entry.number) ?? [], nodes),
+    ).filter(
+      (issue) =>
+        !issue.historicalProvenance || issue.historicalProvenance.pullRequest === entry.number,
     );
     const thanks = [...entry.thanks];
     for (const issue of linkedIssues) {
@@ -2721,6 +3000,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     shippedBaselines: source.shippedBaselines,
     workflowRuns: source.workflowRuns,
     unavailableReferences: source.unavailableReferences,
+    recoveredIssues: source.recoveredIssues,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2864,6 +3144,43 @@ function main() {
       `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
     );
   }
+  if (options.historicalIssueSnapshotPath) {
+    const input = realpathSync(options.historicalIssueSnapshotPath);
+    const identity = statSync(input);
+    const base = git(["rev-parse", options.base + "^{commit}"]);
+    const target = git(["rev-parse", options.target + "^{commit}"]);
+    const outputs = [
+      options.manifestPath,
+      options.githubSnapshotPath ??
+        defaultGithubSnapshotPath(base, target, git(["rev-parse", "--git-common-dir"])),
+      ...(options.writeLedger
+        ? [
+            "CHANGELOG.md",
+            "CHANGELOG/" + options.version + ".md",
+            "CHANGELOG/records/" + options.version + ".md",
+          ]
+        : []),
+    ];
+    for (const output of outputs.filter(Boolean)) {
+      if (existsSync(output)) {
+        const destination = statSync(output);
+        if (
+          realpathSync(output) === input ||
+          (identity.dev === destination.dev && identity.ino === destination.ino)
+        ) {
+          fail("historical issue snapshot must not be an output path");
+        }
+      }
+    }
+  }
+  const historicalEvidence = options.historicalIssueSnapshotPath
+    ? loadHistoricalIssueSnapshot({
+        filePath: options.historicalIssueSnapshotPath,
+        sha256: options.historicalIssueSnapshotSha256,
+        base: git(["rev-parse", options.base + "^{commit}"]),
+        target: git(["rev-parse", options.target + "^{commit}"]),
+      })
+    : undefined;
   const releaseSource = loadOrInitializeReleaseChangelog(
     rootDir,
     options.version,
@@ -2898,6 +3215,10 @@ function main() {
   const committedRecordTarget = committedSection
     ? contributionRecordTarget(committedSection)
     : undefined;
+  const committedRecordBase = committedSection
+    ? parseContributionRecordProvenance(committedSection.source)?.base
+    : undefined;
+  const recordBase = committedRecordBase ? gitCommit(committedRecordBase) : undefined;
   const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
   source.shippedBaselines = shippedExclusions.baselines;
@@ -2963,22 +3284,49 @@ function main() {
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
-  let { nodes } = resolveReferences(references);
+  // Hidden issues also disappear from live PR edges. The committed row names
+  // the bounded historical candidates; it does not by itself establish recovery.
+  if (historicalEvidence) {
+    appendReferences(
+      references,
+      [...committedRecord.pullRequests].flatMap(([number, row]) =>
+        source.pullRequests.has(number)
+          ? row.references.filter(
+              (reference) => historicalEvidence.nodes.get(reference)?.__typename === "Issue",
+            )
+          : [],
+      ),
+    );
+  }
+  const resolveWithRecovery = (numbers) => {
+    const resolution = resolveReferences(numbers);
+    recoverUnavailablePullRequests({
+      numbers,
+      nodes: resolution.nodes,
+      record: committedRecord,
+      recordTarget: committedRecordTarget,
+      source,
+    });
+    source.recoveredIssues = recoverUnavailableIssues({
+      numbers,
+      ...resolution,
+      evidence: historicalEvidence,
+      record: committedRecord,
+      recordTarget: committedRecordTarget,
+      recordBase,
+      source,
+    });
+    return resolution;
+  };
+  let { nodes } = resolveWithRecovery(references);
   let highestResolved = Math.max(0, ...nodes.keys());
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
   appendReferences(references, legacyIssuePullRequests);
-  const resolution = resolveReferences(references);
+  const resolution = resolveWithRecovery(references);
   nodes = resolution.nodes;
   highestResolved = Math.max(highestResolved, ...nodes.keys());
-  const recoveredPullRequests = recoverUnavailablePullRequests({
-    numbers: references,
-    nodes,
-    record: committedRecord,
-    recordTarget: committedRecordTarget,
-    source,
-  });
   const workflowRuns = resolveSourceWorkflowRuns(source, nodes, [
     ...noteReferences,
     ...effectiveRenderedRecordReferences,
@@ -3034,11 +3382,11 @@ function main() {
   const resolvedReferences = [...references];
   appendReferences(resolvedReferences, titleReferenceNumbers);
   appendReferences(resolvedReferences, closingIssueNumbers);
-  ({ nodes } = resolveReferences(resolvedReferences));
-  for (const [number, node] of recoveredPullRequests) {
-    if (!nodes.has(number)) {
-      nodes.set(number, node);
-    }
+  ({ nodes } = resolveWithRecovery(resolvedReferences));
+  references = resolvedReferences;
+  const unresolvedFinal = references.filter((number) => !nodes.has(number));
+  if (unresolvedFinal.length > 0) {
+    fail("GitHub could not resolve final references: " + unresolvedFinal.join(", "));
   }
   const invalidRecordedPullRequests = [...priorRecord.pullRequests.keys()].filter((number) => {
     const node = nodes.get(number);
@@ -3051,14 +3399,6 @@ function main() {
   if (!options.writeLedger && invalidRecordedPullRequests.length > 0) {
     fail(
       `contribution record contains unresolved or unmerged PRs: ${invalidRecordedPullRequests
-        .map((number) => `#${number}`)
-        .join(", ")}`,
-    );
-  }
-  const unresolvedTitleReferences = titleReferenceNumbers.filter((number) => !nodes.has(number));
-  if (unresolvedTitleReferences.length > 0) {
-    fail(
-      `GitHub could not resolve PR-title references: ${unresolvedTitleReferences
         .map((number) => `#${number}`)
         .join(", ")}`,
     );
@@ -3163,6 +3503,7 @@ function main() {
 
   const result = {
     workflowRuns,
+    recoveredIssues: source.recoveredIssues,
     base: options.base,
     target: source.target,
     mergeBase: source.mergeBase,

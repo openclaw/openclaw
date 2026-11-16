@@ -120,6 +120,28 @@ of this skill; initial generation must never overwrite them.
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
    <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
+   Unavailable historical issues may be recovered only with explicit
+   `--historical-issue-snapshot <path>` and
+   `--historical-issue-snapshot-sha256 <sha256>` inputs. Supply the original,
+   immutable canonical snapshot and its independently retained digest, never a
+   retargeted snapshot. This evidence reader is separate from exact-range live
+   caching; output paths must not alias its input. The repository and base must
+   match, and the historical endpoint must be an ancestor of the current target.
+   Recovery requires exact issue-specific GitHub `NOT_FOUND`, a historical human
+   reporter with complete, unique reciprocal closing-PR evidence, and a committed
+   contribution row preserving that issue and reporter. The row's exact audited
+   range must cover the included PR's merge or one unambiguous release adaptation
+   with the exact merge-title suffix, `Source commit: <full-sha>` and same-repository
+   `Source PR: https://github.com/openclaw/openclaw/pull/<number>` markers.
+   The PR must still resolve with the same author, merge SHA, and merge time;
+   its live closing-issue edge may have disappeared with issue visibility.
+   Partial historical connections, conflicting identities/relationships,
+   unrelated missing references, and authentication/rate/transport errors fail
+   closed. Current matching issue data wins without historical replacement.
+   Recovered issues appear in the manifest and verification result as
+   `recoveredIssues` with historical identity, snapshot digest/range, ledger
+   target, canonical PR/merge, and covered release commit. Their retained reporter
+   credit stays bound to that PR, never presented as newly verified authorship.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
    fails and a live same-repository Actions lookup confirms the exact run ID.
