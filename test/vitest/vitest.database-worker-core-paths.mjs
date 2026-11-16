@@ -335,6 +335,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/lane-controller.lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/lane-controller.writer-claim.test.ts",
   "src/agents/embedded-agent-runner/run/run-settlement.test.ts",
+  "src/agents/embedded-agent-runner/run/settled-turn-finalization.borrowed.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.incomplete.test.ts",
   "src/system-agent/audit.test.ts",
   "src/system-agent/operations.test.ts",

@@ -80,7 +80,8 @@ it.each(["enabled", "readiness", "pending", "allowlist", "preference", "channel"
               expect(metrics.dependencyFiles).toBe(0);
               expect(metrics.originalBytes).toBe(0);
             } else {
-              expect(metrics.dependencyFiles).toBe(17);
+              // Worker capture and host reconstruction each count one dependency-file pass.
+              expect(metrics.dependencyFiles).toBe(17 * 2);
             }
           }),
         ),
