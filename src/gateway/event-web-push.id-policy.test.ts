@@ -17,8 +17,8 @@ import {
 const mocks = vi.hoisted(() => ({ subscriptions: vi.fn(), paired: vi.fn(), send: vi.fn() }));
 let authorityCompleted = createDeferred();
 
-// mock-isolation: Select synthetic paired subscriptions and capture provider delivery;
-// membership, profiles, role policy and session visibility use their real owners.
+// Membership, profiles, role policy and session visibility use their real owners.
+// mock-isolation: Select synthetic paired subscriptions and capture provider delivery.
 vi.mock("../infra/push-web.js", () => ({
   withBoundWebPushSubscriptions: (async (_stateDir, prepare) => {
     try {
