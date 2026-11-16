@@ -207,9 +207,8 @@ it("cancels an interrupted CLI read at least privilege instead of returning a la
     work.beginClose();
     return { ok: true };
   });
-  await expect(
-    work.run(() => callGatewayCli({ ...localConnection, method: "health" })),
-  ).rejects.toMatchObject({ name: "AbortError" });
+  const read = work.run(() => callGatewayCli({ ...localConnection, method: "health" }));
+  await expect(read).rejects.toMatchObject({ name: "AbortError" });
   expect(fixture.clientOptions?.scopes).toEqual(["operator.read"]);
   expect(fixture.clientOptions?.deviceIdentity).toBeNull();
   expect(fixture.request).toHaveBeenCalledExactlyOnceWith("health", undefined, expect.any(Object));
