@@ -56,6 +56,15 @@ approval, content, and readback checks. Known enclosing evidence is budgeted bef
 fanout, but later job/attempt growth can still exceed the unchanged final artifact
 limit and fail sealing; evidence is not truncated to fit.
 
+## Preserve qualification identity during recovery
+
+Preserve the originally admitted candidate (C) and qualification (Q) tuple,
+including when C and Q differ. The original publication selection, complete
+coverage, and frozen upgrade baselines remain authoritative. Recovery must not
+select new tests or resolve replacement baselines from the current registry.
+A qualification harness change requires a new admission and request; it must not
+rewrite the original evidence.
+
 ## ClawHub recovery custody
 
 Recovery records a validated successor attempt in its existing result artifact
