@@ -227,15 +227,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.channelRuntime?.inbound.buildContext ?? buildChannelInboundEventContext
     )({
       channel: "signal",
-      supplemental: {
-        quote: entry.replyToBody
-          ? {
-              body: entry.replyToBody,
-              sender: entry.replyToSender,
-              isQuote: entry.replyToIsQuote,
-            }
-          : undefined,
-      },
       messageId: entry.messageId,
       timestamp: entry.timestamp ?? undefined,
       from: entry.isGroup
@@ -286,6 +277,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
         ReplyThreading: replyThreading,
+        // Incoming quoted identity is independent of the current native reply target.
+        ReplyChain: entry.quote
+          ? [
+              {
+                messageId: entry.quote.id,
+                body: entry.quote.body,
+                sender: entry.quote.sender,
+                isQuote: true,
+              },
+            ]
+          : undefined,
       },
     });
 
@@ -796,14 +798,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const accessDecision = await resolveChannelIngress();
     const { senderAccess, commandAccess } = accessDecision;
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
-      });
+    const { contextVisibilityMode, quoteSenderAllowed, visibleQuote } = resolveSignalQuoteContext({
+      cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
+    });
+    const visibleQuoteText = visibleQuote?.body ?? "";
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
@@ -1185,9 +1187,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       commandAuthorized,
       canDetectMention,
       wasMentioned: effectiveWasMentioned,
-      replyToBody: visibleQuoteText || undefined,
-      replyToSender: visibleQuoteSender,
-      replyToIsQuote: visibleQuoteText ? true : undefined,
+      quote: visibleQuote,
       turnAdoptionLifecycle,
       resolveChannelIngress,
     };

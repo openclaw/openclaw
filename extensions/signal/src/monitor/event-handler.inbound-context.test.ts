@@ -441,6 +441,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             timestamp: 1700000000999,
             message: "edited hello",
             attachments: [],
+            quote: { id: 1700000000001, author: "+15550003333", text: "older task" },
           },
         },
       }),
@@ -450,6 +451,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.MessageSid).toBe("1700000000999");
     expect(context.ReplyToId).toBe("1700000000002");
     expect(context.Timestamp).toBe(1700000000999);
+    expect(context.ReplyChain).toEqual([
+      { messageId: "1700000000001", sender: "+15550003333", body: "older task", isQuote: true },
+    ]);
     await expect(
       resolveSignalReplyContextWithPersistence({
         accountId: "default",
@@ -459,60 +463,85 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).resolves.toEqual({ author: "+15550002222", body: "edited hello" });
   });
 
-  it("joins debounced message bodies with newlines and preserves the last for replies", async () => {
-    vi.useFakeTimers();
-    const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
-    dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
-      capture.ctx = params.ctx;
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      params.dispatcher.sendFinalReply({ text: "debounced reply" });
-      params.dispatcher.markComplete?.();
-      await params.dispatcher.waitForIdle?.();
-      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-    });
-    const handler = createTestHandler({
-      cfg: {
-        messages: { inbound: { debounceMs: 10 } },
-        channels: { signal: { replyToMode: "batched" } },
-      } as OpenClawConfig,
-      deliverReplies: deliverRepliesMock,
-    });
-
-    try {
-      await receiveMessage(
-        handler,
-        { message: "first debounced message", attachments: [] },
-        { timestamp: 1700000000001 },
-      );
-      await receiveMessage(
-        handler,
-        { message: "second debounced message", attachments: [] },
-        { timestamp: 1700000000002 },
-      );
-
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(10);
-
-      await vi.waitFor(() => {
-        expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  it.each([true, false])(
+    "keeps last-entry quote ownership when batching (last quote=%s)",
+    async (lastQuote) => {
+      vi.useFakeTimers();
+      const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
+      dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
+        capture.ctx = params.ctx;
+        await Promise.resolve(params.replyOptions?.onReplyStart?.());
+        params.dispatcher.sendFinalReply({ text: "debounced reply" });
+        params.dispatcher.markComplete?.();
+        await params.dispatcher.waitForIdle?.();
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
       });
-      const context = requireCapturedContext();
-      expect(context.BodyForAgent).toBe("first debounced message\nsecond debounced message");
-      expect(context.CommandBody).toBe("first debounced message\nsecond debounced message");
-      expect(context.ReplyToId).toBe("1700000000002");
-      expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
-      expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
-        replyContext: {
-          replyToId: "1700000000002",
-          author: "+15550001111",
-          body: "second debounced message",
-        },
+      const handler = createTestHandler({
+        cfg: {
+          messages: { inbound: { debounceMs: 10 } },
+          channels: { signal: { replyToMode: "batched" } },
+        } as OpenClawConfig,
+        deliverReplies: deliverRepliesMock,
       });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+
+      try {
+        await receiveMessage(
+          handler,
+          {
+            message: "first debounced message",
+            attachments: [],
+            quote: { id: 1699999999997, author: "+15550003333", text: "first quote" },
+          },
+          { timestamp: 1700000000001 },
+        );
+        await receiveMessage(
+          handler,
+          {
+            message: "second debounced message",
+            attachments: [],
+            ...(lastQuote
+              ? { quote: { id: 1699999999998, author: "+15550003333", text: "last quote" } }
+              : {}),
+          },
+          { timestamp: 1700000000002 },
+        );
+
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(10);
+
+        await vi.waitFor(() => {
+          expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+        });
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe("first debounced message\nsecond debounced message");
+        expect(context.CommandBody).toBe("first debounced message\nsecond debounced message");
+        expect(context.ReplyToId).toBe("1700000000002");
+        expect(context.ReplyChain).toEqual(
+          lastQuote
+            ? [
+                {
+                  messageId: "1699999999998",
+                  sender: "+15550003333",
+                  body: "last quote",
+                  isQuote: true,
+                },
+              ]
+            : undefined,
+        );
+        expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
+        expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
+          replyContext: {
+            replyToId: "1700000000002",
+            author: "+15550001111",
+            body: "second debounced message",
+          },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
     const handler = createTestHandler({
@@ -993,10 +1022,88 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     const context = requireCapturedContext();
     expect(context.BodyForAgent).toBe("");
-    expect(context.ReplyToBody).toBe("quoted context");
-    expect(context.ReplyToSender).toBe("+15550002222");
-    expect(context.ReplyToIsQuote).toBe(true);
+    expect(context.ReplyChain).toEqual([
+      { messageId: undefined, body: "quoted context", sender: "+15550002222", isQuote: true },
+    ]);
+    expect(context.ReplyToBody).toBeUndefined();
+    expect(context.ReplyToSender).toBeUndefined();
+    expect(context.ReplyToIsQuote).toBeUndefined();
   });
+
+  it.each([
+    { mode: "allowlist", allowed: true, visible: true },
+    { mode: "allowlist", allowed: false, visible: false },
+    { mode: "allowlist_quote", allowed: false, visible: true },
+  ] as const)(
+    "preserves UUID quote visibility ($mode, allowed=$allowed)",
+    async ({ mode, allowed, visible }) => {
+      const author = "b2345678-90ab-4cde-8f01-23456789abcd";
+      const allow = ["+15550001111", ...(allowed ? [`uuid:${author}`] : [])];
+      const handler = createTestHandler({
+        cfg: createGroupAllowlistConfig({
+          signal: { groupAllowFrom: allow, contextVisibility: mode },
+        }),
+        groupPolicy: "allowlist",
+        groupAllowFrom: allow,
+      });
+      await receiveGroupMessage(handler, "current request", {
+        quote: {
+          id: 1700000000007,
+          author,
+          authorNumber: null,
+          authorUuid: author,
+          text: "private quoted task",
+        },
+      });
+      const context = requireCapturedContext();
+      expect(context.ReplyChain).toEqual(
+        visible
+          ? [
+              {
+                messageId: "1700000000007",
+                sender: `uuid:${author}`,
+                body: "private quoted task",
+                isQuote: true,
+              },
+            ]
+          : undefined,
+      );
+      expect(context.ReplyToBody).toBeUndefined();
+      expect(context.ReplyToSender).toBeUndefined();
+      expect(context.ReplyToId).toBeDefined();
+    },
+  );
+
+  it.each([false, true])(
+    "matches quoted UUID policy for legacy UUID and phone aliases (phone=%s)",
+    async (phone) => {
+      const uuid = "b2345678-90ab-4cde-8f01-23456789abcd";
+      const allow = ["+15550001111", `uuid:${uuid}`];
+      const handler = createTestHandler({
+        cfg: createGroupAllowlistConfig({
+          signal: { groupAllowFrom: allow, contextVisibility: "allowlist" },
+        }),
+        groupPolicy: "allowlist",
+        groupAllowFrom: allow,
+      });
+      await receiveGroupMessage(handler, "current request", {
+        quote: {
+          id: 1700000000007,
+          author: phone ? "+15550003333" : uuid,
+          ...(phone ? { authorNumber: "+15550003333", authorUuid: uuid } : {}),
+          text: "quoted task",
+        },
+      });
+      expect(requireCapturedContext().ReplyChain).toEqual([
+        {
+          messageId: "1700000000007",
+          body: "quoted task",
+          sender: phone ? "+15550003333" : `uuid:${uuid}`,
+          isQuote: true,
+        },
+      ]);
+    },
+  );
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
