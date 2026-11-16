@@ -3102,7 +3102,7 @@ export async function validateReleaseRunEvidence(
   const childConclusions = Object.fromEntries(
     children.map((child) => [child.role, child.conclusion]),
   );
-  return sortReleaseJsonValueKeys({
+  const evidence = sortReleaseJsonValueKeys({
     children,
     conclusions: {
       allRequiredSucceeded: children.every((child) => child.policyPassed),
@@ -3148,6 +3148,25 @@ export async function validateReleaseRunEvidence(
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
     verifier,
   });
+  return { ...evidence, qualification: qualificationFacts(evidence) };
+}
+
+// Normalize only after the owner has authenticated the complete evidence graph.
+function qualificationFacts(evidence) {
+  const admission = evidence.qualificationAdmission ?? null;
+  const manifest = evidence.current.manifest;
+  /** @type {"direct" | "historical"} */
+  const kind = admission ? "direct" : "historical";
+  return {
+    kind,
+    candidateSha: evidence.current.targetSha,
+    qualificationSha: admission?.request.qualificationSha ?? evidence.current.workflowSha,
+    admission,
+    coverage: admission?.coverage ?? null,
+    coveragePolicy: admission
+      ? manifest.sourceAdmission.coverage.coverage_policy || undefined
+      : manifest.validationInputs?.coveragePolicy,
+  };
 }
 
 function parseReleaseCiSummaryArgs(argv) {

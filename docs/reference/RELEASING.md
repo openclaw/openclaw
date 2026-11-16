@@ -207,6 +207,14 @@ the coordinated tooling cut; never rewrite an existing authenticated receipt or
 reuse its digest for different bytes. This tooling change does not authorize a
 release dispatch or publication.
 
+### Shared qualification validation
+
+`release-ci-summary.mjs` authenticates qualification once for all consumers;
+`validate-full-release-validation-evidence.mjs` checks the release tag and
+publication selection, including plugin subsets, and rechecks live authority.
+Recovery preserves the original admission, candidate, artifacts, and coverage.
+Existing historical-evidence, profile, soak, and performance rules apply.
+
 ### Frozen qualification identity
 
 New candidate qualification records three separate identities:

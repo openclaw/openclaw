@@ -535,9 +535,7 @@ describe("minimal npm extended-stable workflow", () => {
       parsed.jobs?.publish_openclaw_npm,
       "Verify full release validation evidence",
     );
-    expect(fullValidation.env?.EXPECTED_WORKFLOW_BRANCH).toBe(
-      "${{ inputs.release_candidate_branch || github.ref_name }}",
-    );
+    expect(fullValidation.env?.TRUSTED_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
     expect(fullValidation.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );

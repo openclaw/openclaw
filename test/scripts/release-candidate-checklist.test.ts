@@ -32,6 +32,7 @@ import {
 } from "../../scripts/lib/release-candidate-changelog.mts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
+import { evaluateReleasePublishGates } from "../../scripts/lib/release-publish-gates.mts";
 import {
   buildReleasePublishDispatchCommand,
   formatReleasePublishPreflight,
@@ -65,7 +66,6 @@ import {
   requireRunIdFromDispatchOutput,
   run,
   validateCandidateCheckout,
-  validateFullManifest,
   validateNpmPreflightRunSource,
   validateParallelsRegistryPackageArtifact,
   validatePreflightManifest,
@@ -760,8 +760,12 @@ describe("release candidate checklist", () => {
         workflowName: "Full Release Validation",
         targetSha,
         releaseProfile: options.releaseProfile,
+        rerunGroup: "all",
+        runReleaseSoak: options.releaseProfile === "beta" ? "false" : "true",
+        controls: { performanceBlocking: options.releaseProfile !== "beta" },
       };
       const authenticatedEvidence = {
+        evidence: { current: { manifest: fullManifest } },
         source: "direct",
         publicationAdmission: registryAdmission
           ? {
@@ -968,7 +972,12 @@ describe("release candidate checklist", () => {
           validatePluginSdkApiReleaseEvidence,
           PluginSdkApiAcknowledgementError,
           stripLeadingPackageManagerSeparator,
-          validateFullManifest: () => stages.push("evidence-validated"),
+          evaluateReleasePublishGates: (
+            input: Parameters<typeof evaluateReleasePublishGates>[0],
+          ) => {
+            stages.push("evidence-validated");
+            return evaluateReleasePublishGates(input);
+          },
           preflightCorePackageTarballs,
           preflightDependencyTarballs,
           runParallelsIfNeeded: async () => ({ status: "skipped" }),
@@ -2586,57 +2595,6 @@ describe("release candidate checklist", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--tag", "v2026.5.14-beta.4"])).toThrow(
       "--tag was provided more than once",
     );
-  });
-
-  it("requires stable validation evidence to include soak", () => {
-    const stableManifest = {
-      workflowName: "Full Release Validation",
-      targetSha: "candidate-sha",
-      releaseProfile: "stable",
-      rerunGroup: "all",
-      runReleaseSoak: "true",
-      controls: { performanceBlocking: true },
-    };
-
-    expect(() =>
-      validateFullManifest(stableManifest, {
-        targetSha: "candidate-sha",
-        releaseProfile: "stable",
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      validateFullManifest(
-        {
-          ...stableManifest,
-          runReleaseSoak: "false",
-        },
-        {
-          targetSha: "candidate-sha",
-          releaseProfile: "stable",
-        },
-      ),
-    ).toThrow("runReleaseSoak=true");
-  });
-
-  it.each(["full"])("keeps product performance advisory for %s release candidates", (profile) => {
-    expect(() =>
-      validateFullManifest(
-        {
-          workflowName: "Full Release Validation",
-          targetSha: "candidate-sha",
-          releaseProfile: profile,
-          rerunGroup: "all",
-          runReleaseSoak: profile === "beta" ? "false" : "true",
-          controls: { performanceBlocking: false },
-          childRuns: { productPerformance: { conclusion: "failure" } },
-        },
-        {
-          targetSha: "candidate-sha",
-          releaseProfile: profile,
-        },
-      ),
-    ).not.toThrow();
   });
 
   it.each<{

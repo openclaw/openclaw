@@ -1962,7 +1962,7 @@ describe("release validation no-push transport", () => {
       'if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then',
     );
     expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
-    expect(validateEvidence.env?.EXPECTED_WORKFLOW_BRANCH).toBe("${{ github.ref_name }}");
+    expect(validateEvidence.env?.TRUSTED_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
     expect(validateReleaseBranch.run).toContain(
       'expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"',
     );
