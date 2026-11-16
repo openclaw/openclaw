@@ -2,13 +2,7 @@ import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git
 import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withIsolatedWorktreeGitTransport } from "./base-fetch.js";
-import {
-  requireGit,
-  requireGitBuffer,
-  requireGitPath,
-  runGit,
-  WORKTREE_CHECKOUT_TIMEOUT_MS,
-} from "./git.js";
+import { requireGit, requireGitBuffer, runGit, WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -67,9 +61,6 @@ export async function hydrateCommitObjects(
     if (!remote) {
       throw missingObjectsError(commit, missing.length);
     }
-    const refMutationDirectory =
-      options.refMutationDirectory ??
-      (await requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options));
     // Hydrate one batch without auto-maintenance or unused fetch-summary abbreviation scans.
     // Shared commits do not prove blob presence; noop still skips an already-satisfied batch.
     await withIsolatedWorktreeGitTransport(
@@ -92,7 +83,6 @@ export async function hydrateCommitObjects(
           ],
           {
             ...transport,
-            refMutationDirectory,
             env: appendGitConfig(transport.env ?? {}, [["fetch.negotiationAlgorithm", "noop"]]),
             input: Buffer.from(`${missing.join("\n")}\n`),
             timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,

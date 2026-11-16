@@ -72,6 +72,29 @@ the submission; **View submission** opens its ClawHub page. Once the registry
 confirms publication, the card shows **Published** and offers **Copy link**.
 Others can then discover the Template and Add it as an ordinary agent.
 
+## Add through the setup helper
+
+An agent can delegate a published ClawHub Template installation to the
+`openclaw` setup helper. The helper first uses `template_review` with an exact
+`source: { packageName, version }`, then proposes `template_install` using the returned
+`target.agentId` and `planIntegrity`. Required Template risk, plugin
+capability, and skill warning acknowledgements must match that review. Template
+contents are untrusted data, not instructions for the requesting agent. The host carries
+its result into later helper turns; users do not need to paste the review JSON.
+
+The host uses the requesting session's existing setup-change approval policy;
+an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
+installation retain the original administrator connection, cancellation, and
+revocation checks and use the same installer as **Pages → Templates**. Templates
+must already be enabled in **Settings → Labs**. The helper does not enable Labs,
+install local paths, publish Templates, or gain shell access.
+
+The result names the actual agent and workspace and reports complete or partial
+installation, readiness requirements, and dependency and automation receipts.
+An absent receipt is not confirmation; a created automation may still be paused.
+If an agent was retained after a partial installation, inspect that agent and
+continue its existing setup rather than adding another copy.
+
 ## Author locally
 
 `openclaw templates draft <workspace> --json` initializes an empty private
@@ -244,6 +267,9 @@ A package may declare `agent.heartbeat` in `CLAW.md` or include
 and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
+Because it becomes job scratch, `HEARTBEAT.md` must be valid UTF-8 and at most
+256 KiB; `validate`, `inspect`, `build` and Add report a larger or non-UTF-8
+file as a Template diagnostic.
 The Add review shows each converted job with its interval and owner delivery;
 existing cron schedules keep their meaning.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
@@ -352,7 +378,8 @@ When offline Add keeps an agent after a later step fails, the agent gets the def
 back because its setup did not finish.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` selects an unused ID. `--workspace` selects a new path for local
+`--agent-id` selects an unused ID, or names an agent that a failed Gateway Add
+kept so Add continues its setup. `--workspace` selects a new path for local
 preview or offline Add. Ordinary Add binds its review internally and does not
 require a separate plan token. Trust warnings and plugin capabilities still
 require their separate explicit acknowledgements.
@@ -376,7 +403,10 @@ assigns the declared automations. An existing agent or workspace is never
 overwritten. If Add fails before exposing the agent, newly created resources are
 cleaned up where safe; preexisting resources remain untouched. If the result says
 the agent was retained, continue in that agent and inspect the specific error
-instead of adding another copy.
+instead of adding another copy. When Gateway Add kept the agent before its setup
+finished, rerun `openclaw templates add <source> --agent-id <id>` once the error
+is resolved. The rerun continues in the same agent and conversation, and only
+for the Template version the first Add resolved.
 
 ## Remove the agent
 

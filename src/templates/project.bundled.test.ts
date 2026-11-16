@@ -62,6 +62,47 @@ describe("bundled Template project sources", () => {
       ]);
     },
   );
+  it("blocks two bundled plugin folders that share a plugin id", async () => {
+    const root = await project([]);
+    for (const folder of ["one", "two"]) {
+      const plugin = join(root, "plugins", folder);
+      await mkdir(plugin, { recursive: true });
+      writeJsonFile(join(plugin, "package.json"), {
+        name: `@fx/tpl-dup-${folder}`,
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"] },
+      });
+      writeJsonFile(join(plugin, "openclaw.plugin.json"), { id: "tpl-dup", configSchema: {} });
+      await writeFile(
+        join(plugin, "index.js"),
+        "export default { id: 'tpl-dup', register() {} };\n",
+      );
+    }
+    await writeFile(
+      join(root, "CLAW.md"),
+      `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "checked" }, plugins: [{ path: "plugins/one" }, { path: "plugins/two" }] })}\n---\nUse one plugin.\n`,
+    );
+    const validated = await validateTemplateProject(root);
+    assert(validated.ok, JSON.stringify(validated.diagnostics));
+    const plan = await buildTemplateAddPlan({
+      ...validated.template,
+      bundledSources: validated.template.snapshot?.bundledSources,
+      context: {
+        workspace: join(root, "new-workspace"),
+        config: {},
+        packagePreflight: async (dependency, workspace, source) =>
+          preflightTemplatePackage(dependency, workspace, { ...source, config: {} }),
+      },
+    });
+    expect(plan.blockers).toEqual([
+      expect.objectContaining({
+        code: "bundled_plugin_collision",
+        path: "$.plugins[1]",
+        message: expect.stringContaining("plugins/one and plugins/two both have plugin id"),
+      }),
+    ]);
+  });
   it.each(["checked", "other"])(
     "plans bundled and referenced skills with explicit destination conflicts (%s)",
     async (ref) => {
@@ -176,6 +217,34 @@ describe("bundled Template project sources", () => {
       });
     },
   );
+
+  it.each([
+    [
+      "bundles/missing",
+      "$.skills[1].path",
+      "Bundled dependency folder bundles/missing does not exist.",
+    ],
+    [
+      "node_modules/checked",
+      "$.skills[1].path",
+      "must not be inside a .git or node_modules folder",
+    ],
+    ["bundles/pdf_tools", "$.skills[1].path", "only letters, digits and hyphens"],
+  ])("explains the bundled skill entry %s", async (path, diagnosticPath, message) => {
+    const root = await project([{ path: "bundles/checked" }, { path }]);
+    if (path !== "bundles/missing") {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(
+        join(root, path, "SKILL.md"),
+        "---\nname: pdf_tools\ndescription: Fixture.\n---\nUse it.\n",
+      );
+    }
+    const result = await validateTemplateProject(root);
+    assert(!result.ok);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ path: diagnosticPath, message: expect.stringContaining(message) }),
+    ]);
+  });
 
   it.each(["symlink", "hardlink"])("rejects a supporting %s", async (kind) => {
     const root = await project();

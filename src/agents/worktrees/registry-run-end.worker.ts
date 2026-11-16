@@ -496,7 +496,10 @@ export function claimWorktreeRemovalInDatabase(
     !record ||
     (params.retiredRemoval
       ? record.removed_at == null ||
-        record.snapshot_ref !== `refs/openclaw/snapshots/${params.worktreeId}`
+        ![
+          `refs/openclaw/snapshots/${params.worktreeId}`,
+          `refs/openclaw/snapshots/clean-v1/${params.worktreeId}`,
+        ].includes(record.snapshot_ref ?? "")
       : params.retiredExact
         ? record.removed_at == null ||
           !record.snapshot_ref?.startsWith("refs/openclaw/snapshots/exact-")

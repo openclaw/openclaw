@@ -32,6 +32,7 @@ it.each([
   "admission_other",
   "receipt_entry",
   "receipt_events",
+  "receipt_value",
   "receipt_other",
 ] as const)("exports numeric %s samples without repeating cumulative values", (component) => {
   using metrics = createMetricsHarness();
