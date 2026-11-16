@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Page, WebSocketRoute } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
@@ -141,16 +141,17 @@ suite.define(() => {
   it("keeps reduced-motion voice activity readable in a narrow viewport", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installTalkGateway(page, googleSession("voice-browser-talk-e2e"), {
-        deferredMethods: ["talk.client.create"],
+        // A held consult keeps Talk thinking while the still meter is read.
+        deferredMethods: ["talk.client.create", "talk.client.toolCall"],
         webSocketPassthroughPrefixes: ["wss://generativelanguage.googleapis.com/"],
       });
       await installTalkBrowserFixtures(page);
-      const providerSetup = Promise.withResolvers<() => void>();
+      const provider = Promise.withResolvers<WebSocketRoute>();
       await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (socket) => {
         socket.onMessage((message) => {
           const frame = JSON.parse(message.toString()) as { setup?: unknown };
           if (frame.setup) {
-            providerSetup.resolve(() => socket.send(JSON.stringify({ setupComplete: {} })));
+            provider.resolve(socket);
           }
         });
       });
@@ -158,9 +159,12 @@ suite.define(() => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       const tapToTalk = page.getByRole("button", { name: "Tap to talk" });
       const activity = page.locator(".agent-chat__voice-activity");
-      // At rest and in reduced motion CSS draws the meter; its strength shows the phase.
-      const restingStrength = () =>
-        activity.evaluate((element) => getComputedStyle(element, "::before").opacity);
+      // At rest and in reduced motion CSS draws the meter; its shape shows the phase.
+      const stillShape = () =>
+        activity.evaluate((element) => {
+          const before = getComputedStyle(element, "::before");
+          return `${before.opacity} ${before.backgroundSize} ${getComputedStyle(element, "::after").content}`;
+        });
       await openTalk(page, 320, 720);
       await tapToTalk.click();
 
@@ -179,23 +183,35 @@ suite.define(() => {
           activity.evaluate((element) => getComputedStyle(element, "::after").animationName),
         )
         .toBe("none");
-      const connectingReducedMotionStrength = await restingStrength();
+      const connectingShape = await stillShape();
 
       await gateway.waitForRequest("talk.client.create");
       await gateway.resolveDeferred("talk.client.create");
-      const completeProviderSetup = await providerSetup.promise;
-      completeProviderSetup();
+      const providerSocket = await provider.promise;
+      providerSocket.send(JSON.stringify({ setupComplete: {} }));
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
-      const reducedMotionStrength = await restingStrength();
-      expect(reducedMotionStrength).not.toBe(connectingReducedMotionStrength);
+      const listeningShape = await stillShape();
+      expect(listeningShape).not.toBe(connectingShape);
 
       await feedAudio(page);
       await expect
         .poll(async () => Number(await activity.getAttribute("data-level")))
         .toBeGreaterThan(0);
-      await expect.poll(restingStrength).toBe(reducedMotionStrength);
+      await expect.poll(stillShape).toBe(listeningShape);
+      // Asking the agent switches Talk to thinking; the held consult keeps it there.
+      providerSocket.send(
+        JSON.stringify({
+          toolCall: {
+            functionCalls: [
+              { id: "consult", name: "openclaw_agent_consult", args: { question: "?" } },
+            ],
+          },
+        }),
+      );
+      await expect.poll(() => activity.getAttribute("data-status")).toBe("thinking");
+      expect(await stillShape()).not.toBe(listeningShape);
 
       await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect.poll(() => tapToTalk.isVisible()).toBe(true);

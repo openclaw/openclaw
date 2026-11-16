@@ -619,8 +619,8 @@
   mask-image: linear-gradient(
     90deg,
     rgb(0 0 0 / 0.15),
-    #000 40px,
-    #000 calc(100% - 40px),
+    black 40px,
+    black calc(100% - 40px),
     rgb(0 0 0 / 0.15)
   );
 }
@@ -651,7 +651,7 @@
 }
 
 .agent-chat__voice-activity[data-status="connecting"]::after {
-  mask: linear-gradient(90deg, transparent, #000, transparent) -100% 0 / 40% 100% no-repeat;
+  mask: linear-gradient(90deg, transparent, black, transparent) -100% 0 / 40% 100% no-repeat;
 }
 
 @keyframes agent-chat-voice-connecting {
@@ -703,10 +703,19 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  /* A still row: short bars while listening, dim dots while connecting. */
-  .agent-chat__voice-activity:not([data-status="connecting"])::before {
+  /* Still states that stay distinct without motion: an even row of short bars
+     while listening, taller bars in the middle while thinking, dim dots while
+     connecting. Talk's text status is screen-reader-only, so the shape carries it. */
+  .agent-chat__voice-activity[data-status="listening"]::before {
     background: linear-gradient(90deg, currentColor 2px, transparent 2px) center / 4px 6px repeat-x;
     opacity: 0.8;
+  }
+
+  .agent-chat__voice-activity[data-status="thinking"]::after {
+    position: absolute;
+    inset: 0 33%;
+    background: linear-gradient(90deg, currentColor 2px, transparent 2px) center / 4px 12px repeat-x;
+    content: "";
   }
 
   .agent-chat__voice-activity[data-status="connecting"]::after {
