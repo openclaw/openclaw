@@ -4,7 +4,6 @@
 // No-op updates and failed validation leave the serving parent untouched.
 import { spawn, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +46,7 @@ import {
   HANDOFF_OWNED_COMMAND_SCRIPT,
   HANDOFF_NOTICE_MARKER,
   HANDOFF_PARK_ADMITTED_MARKER,
+  resolveHandoffLauncherStartIdentity,
   unrefHandoffPipe,
   waitForHandoffResponse,
   type HandoffChild,
@@ -1169,26 +1169,14 @@ async function spawnManagedServiceUpdateHandoff(
       }
     });
     child.stdin.on("error", () => child.stdin.destroy()).once("close", () => child.stdin.destroy());
-    // Failed spawn handles are not processes and must never be signalled.
-    if (!child.pid) {
-      await once(child, "spawn");
-    }
-    try {
-      owner.launcherStartIdentity = child.pid
-        ? (await identityStore.processIdentity(child.pid, child.spawnargs)).startIdentity
-        : null;
-    } catch (error) {
-      forceKillChildProcessTree(child);
-      throw error;
-    }
-    if (owner.launcherStartIdentity == null) {
-      forceKillChildProcessTree(child);
-      throw new Error("managed update handoff process start identity is unavailable");
-    }
     child.once("exit", onExit);
-    // Readiness binds the helper's exact lease independently of the launcher;
-    // triage additionally verifies native cancellation before replying.
-    readiness = await waitForHandoffResponse(child, owner.recoveryTimeoutMs);
+    // Stdout is already flowing; observe readiness and exit before worker admission yields.
+    [readiness] = await Promise.all([
+      waitForHandoffResponse(child, owner.recoveryTimeoutMs),
+      resolveHandoffLauncherStartIdentity(child, identityStore).then((identity) => {
+        owner.launcherStartIdentity = identity;
+      }),
+    ]);
     if (`${readiness}\n` !== HANDOFF_READY_MARKER && !readiness.startsWith(HANDOFF_BUSY_MARKER)) {
       throw new Error("managed update handoff returned an invalid readiness response");
     }
