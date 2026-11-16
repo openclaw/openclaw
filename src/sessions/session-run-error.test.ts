@@ -53,7 +53,7 @@ it.each([
         excludeFromContext: true,
         details: { runId: "failed-run", error: diagnostic },
       });
-      return { ok: true, value: undefined };
+      return { ok: true, value: { appended: true } };
     });
 
     await recordGatewaySessionRunFailure({

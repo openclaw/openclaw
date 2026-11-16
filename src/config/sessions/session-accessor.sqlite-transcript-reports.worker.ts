@@ -152,6 +152,7 @@ export function bindSqliteWorkerBackend(
               projectionNeedsReconcile = true;
             },
           };
+          let appended = false;
           let abortedPartial: AbortedSessionTranscriptPartialResult | undefined;
           if (command.type === "abortedPartial") {
             abortedPartial = appendAbortedSessionTranscriptPartialInTransaction(
@@ -162,6 +163,7 @@ export function bindSqliteWorkerBackend(
               projection,
               onEntryUpdated,
             );
+            appended = !abortedPartial.skipped && abortedPartial.append.appended;
           } else if (command.type === "assistant") {
             const facts = prepareTranscriptReportSelection(database, resolved, {
               kind: "assistant",
@@ -176,6 +178,7 @@ export function bindSqliteWorkerBackend(
                 projection,
                 command.input.preparedMessage,
               );
+              appended = true;
             }
           } else {
             const plan = prepared;
@@ -189,7 +192,7 @@ export function bindSqliteWorkerBackend(
             );
             if (!isDeepStrictEqual(currentVersion, plan.version)) {
               admit("commit");
-              return ok({ committed: false, projectionNeedsReconcile: false });
+              return ok({ committed: false, appended: false, projectionNeedsReconcile: false });
             }
             appendSelectedTranscriptReportInTransaction(
               database,
@@ -198,6 +201,7 @@ export function bindSqliteWorkerBackend(
               command.input,
               projection,
             );
+            appended = true;
           }
           let commitGranted = false;
           const authorizeCommit = () => {
@@ -230,6 +234,7 @@ export function bindSqliteWorkerBackend(
           authorizeCommit();
           return ok({
             committed: true,
+            appended,
             projectionNeedsReconcile,
             cliHistoryChanged,
             ...((cliHistoryChanged ||

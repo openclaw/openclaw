@@ -556,6 +556,8 @@ export function projectChatTranscript(
     if (item.kind === "notice") {
       return {
         kind: "notice",
+        sessionKey: props.sessionKey,
+        agentId: props.agentId,
         item,
         modelCatalog: props.modelCatalog,
         onPermissionRetry: actions.onPermissionRetry,

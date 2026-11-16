@@ -2,6 +2,7 @@
 .chat-run-failure {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
   margin: var(--space-7) 0;
@@ -266,4 +267,32 @@
   .chat-run-failure__chevron {
     transition: none;
   }
+}
+
+.chat-run-failure__plugin-icon,
+.chat-run-failure__receipt > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.chat-run-failure::after {
+  order: 1;
+}
+
+.chat-run-failure__receipt {
+  display: flex;
+  order: 2;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-run-failure__receipt a {
+  cursor: pointer;
 }

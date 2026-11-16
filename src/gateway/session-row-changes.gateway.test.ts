@@ -17,7 +17,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: vi.fn(),
   readSessionTranscriptWatermark: vi.fn(),
-  appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+  appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: { appended: true } })),
 }));
 vi.mock("../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-entry.js")>()),

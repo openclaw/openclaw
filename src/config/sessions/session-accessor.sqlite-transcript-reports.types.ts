@@ -58,6 +58,7 @@ export type PreparedTranscriptReport = {
 
 export type TranscriptReportCommit = {
   committed: boolean;
+  appended: boolean;
   projectionNeedsReconcile: boolean;
   cliHistoryChanged?: boolean;
   abortedPartial?: AbortedSessionTranscriptPartialResult;

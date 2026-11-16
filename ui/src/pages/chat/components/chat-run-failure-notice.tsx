@@ -10,6 +10,7 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import { PluginRunFailureActions } from "../../../plugins/control-ui-run-failure-actions.tsx";
 import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 
@@ -37,6 +38,9 @@ function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top"
 /** One terminal notice, separate from assistant prose and preserved partial output. */
 export function ChatRunFailureNotice(props: {
   summary: string;
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
   cause?: RunFailureCause;
   repeatCount?: number;
   onRetry?: () => void;
@@ -189,7 +193,13 @@ export function ChatRunFailureNotice(props: {
             {t("chat.recovery.tryAgain")}
           </button>
         </Show>
-        <ReportIssueLink />
+        <Show when={props.sessionKey && props.runId} fallback={<ReportIssueLink />}>
+          <PluginRunFailureActions
+            sessionKey={props.sessionKey!}
+            agentId={props.agentId}
+            runFailure={{ runId: props.runId!, summary: props.summary, cause: props.cause }}
+          />
+        </Show>
       </div>
     </openclaw-chat-run-failure-notice>
   );

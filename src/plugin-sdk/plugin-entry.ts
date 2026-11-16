@@ -202,6 +202,8 @@ export type {
   PluginHookMediaFact,
   PluginHookMessageReceivedEvent,
   PluginHookProviderUpdate,
+  PluginHookRunFailedContext,
+  PluginHookRunFailedEvent,
   PluginHookSkillArtifact,
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,

@@ -93,7 +93,7 @@ The standard runner applies these defaults **per handler**:
 | `before_agent_run`, `before_tool_call`, `before_install`                                                       | 15 seconds                          | Block the run, tool call, or install                             |
 | `before_channel_ingress`                                                                                       | 15 seconds                          | Refuse durable intake without logging policy exception contents  |
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
-| `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`                                          | 30 seconds                          | Log and continue                                                 |
+| `agent_end`, `run_failed`, `before_compaction`, `after_compaction`, `skill_changed`                            | 30 seconds                          | Log and continue                                                 |
 | `channel_pairing_requested`                                                                                    | 2 seconds                           | Log and continue                                                 |
 | `gateway_stop`                                                                                                 | 5 seconds                           | Log and continue shutdown                                        |
 | Other asynchronous hooks, including claim hooks                                                                | No runner timeout unless configured | Log and continue                                                 |
@@ -191,6 +191,7 @@ grant additional access.
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
 | `run_stopped`                            | Observe | Observe a user or operator explicitly stopping agent runs    |
+| `run_failed`                             | Observe | Observe a newly committed terminal run-failure receipt       |
 
 Successful engine-owned and built-in native compaction attempts emit
 `after_compaction` even when no history changes, with `compactedCount: 0`.
@@ -242,6 +243,32 @@ If the budget expires, OpenClaw logs `shutdown session-end drain timed out`
 and continues shutdown, so unfinished plugin work can be interrupted.
 
 For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases when the parent is idle. An ordinary parallel child created while its parent is active skips those parent reset hooks and leaves the parent run alive; forks and worktree creation retain their existing active-parent restrictions.
+
+### Terminal run-failure receipts
+
+`run_failed` observes a newly committed failure receipt after the Gateway accepts
+a terminal failed or timed-out run. It does not observe intermediate attempts or
+retryable errors, rejected input that never became the active run, explicit Stop,
+yield, or success. Synthetic notices written outside this lifecycle do not
+dispatch the hook. Repeated persistence of the same receipt does not dispatch it
+again.
+
+The event is `{ runId, summary, cause? }`: the existing plain-text failure notice
+and optional bounded `{ provider, failoverReason? }` cause. Context is
+`{ agentId, sessionKey, sessionId }`. Raw errors, transcripts, workspace paths,
+and desktop-only notice metadata are not included.
+
+This content-bearing hook requires `hooks.allowConversationAccess: true` for
+external plugins. Incognito failures are never disclosed. Registration does not
+grant permission to read or modify another session.
+
+Delivery is best-effort, off the settlement path, through the bounded hook queue.
+The standard per-handler budget is 30 seconds; a thrown error or timeout cannot
+undo the committed failure receipt. Queue overflow or a process crash may lose a
+notification. Plugins own external reporting policy, deduplication, redaction,
+persistence, and recovery; this hook is not an exactly-once delivery guarantee.
+Do not create an agent turn to acknowledge it. A plugin can expose its recorded
+result through a [run-failure action receipt](/plugins/feature-plugins#settled-run-failure-actions).
 
 ### Explicit Stop
 

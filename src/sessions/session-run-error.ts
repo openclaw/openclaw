@@ -14,7 +14,7 @@ import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
-import { readRunFailureCause } from "../shared/run-failure-notice.js";
+import { readRunFailureCause, type RunFailureNotice } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -38,7 +38,7 @@ type GatewaySessionRunFailure = {
 
 export async function recordGatewaySessionRunFailure(
   params: GatewaySessionRunFailure,
-): Promise<void> {
+): Promise<RunFailureNotice | undefined> {
   const { runId } = params;
   const storageFailure = classifyGatewayStorageFailure(params.error);
   const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
@@ -91,4 +91,7 @@ export async function recordGatewaySessionRunFailure(
   if (!result.ok) {
     throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
   }
+  return result.value.appended
+    ? { runId, summary: report.content, ...(cause ? { cause } : {}) }
+    : undefined;
 }

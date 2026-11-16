@@ -1,5 +1,9 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiAction,
+  ControlUiRunFailure,
+  ControlUiSession,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
@@ -41,6 +45,7 @@ export async function runControlUiPluginAction(
     id: string;
     placement: ControlUiAction["placement"];
     session?: ControlUiSession;
+    runFailure?: ControlUiRunFailure;
     signal: AbortSignal;
     isCurrent?: () => boolean;
   },
@@ -75,6 +80,7 @@ export async function runControlUiPluginAction(
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? params.session?.agentId,
     session: params.session ? structuredClone(params.session) : undefined,
+    ...(params.runFailure ? { runFailure: params.runFailure } : {}),
   };
   const state = entry.value.resolve?.(context);
   // A resolver can synchronously withdraw its registration or remove the view.
