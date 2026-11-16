@@ -86,6 +86,20 @@ export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   ownerDevices?: OpenClawIdOwnerDevice[];
   /** The last publication to Discovery, while one was attempted. */
   publication?: OpenClawIdPublication;
+  /** Member invites; a redeemed one waits for the owner as `pending`. */
+  invites?: OpenClawIdPendingInvite<{
+    reported: { email: string | null; displayName: string | null };
+  }>[];
+  /** Node invites; a redeemed one waits for the owner as `pending`. */
+  nodeInvites?: OpenClawIdPendingInvite[];
+};
+
+/** The parts of a listed invite the Inbox needs; times are unix seconds. */
+type OpenClawIdPendingInvite<Pending = unknown> = {
+  inviteId: string;
+  label: string;
+  status: "open" | "pending" | "approved" | "denied" | "expired";
+  pending?: Pending & { requestedAt: number; decideBy: number };
 };
 
 /** An active owner device as `openclawId.people` lists it. */

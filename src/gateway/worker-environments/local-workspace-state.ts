@@ -439,7 +439,7 @@ export function projectionOperations(
               beforeCommit: () => quiescence?.markPhase("acceptance"),
             }),
           });
-          if (!refresh) {
+          if (!refresh || !current().pending_target) {
             await quiescence?.resume();
           }
           quiescence?.markPhase("cleanup");

@@ -40,7 +40,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   caps_escalation:
     "This browser can't give another device more owner permissions than it has. Use your recovery kit to grant them.",
   limit_reached:
-    "This claw has reached its limit for people or devices. Remove one to add another.",
+    "This access request exceeds a limit. Review the error details before changing access.",
   not_yet_valid:
     "This access approval is not valid yet. Check the date and time on your device and the computer running this claw.",
 };

@@ -3,6 +3,8 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/local-workspace-request-bytes-measure.ts
  *   --output .local/workspace-bytes-candidate --instrument bytes --iterations 32 --paths 1000
  * Add --revision <base-sha> to substitute that revision's store and publication owners.
+ * For worker codec changes, execute in complete frozen revisions instead: --revision
+ * substitutes host owners only and does not replace worker entrypoints.
  * Run --instrument timing and allocation separately, in fresh AB/BA processes;
  * those modes do not serialize requests a second time to count their bytes.
  * Each cycle admits source paths, reserves a checkpoint, accepts its prepared root,
