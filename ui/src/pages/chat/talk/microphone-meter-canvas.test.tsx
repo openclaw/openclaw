@@ -31,16 +31,13 @@ it("keeps silence in CSS and preserves the first level transition when activity 
     );
     expect(renderer.create).not.toHaveBeenCalled();
     const host = view.container.querySelector("openclaw-microphone-activity");
-    const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
 
     source.set(0.6);
     expect(renderer.create).toHaveBeenCalledOnce();
     const active = expectDefined(renderer.create.mock.results[0], "active renderer").value;
     expect(vi.mocked(active.setLevel).mock.calls).toEqual([[0], [0.6]]);
     expect(host?.getAttribute("data-level")).toBe("0.6");
-    expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
-      bars,
-    );
+    expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
 
     source.set(0);
     expect(renderer.create).toHaveBeenCalledOnce();
@@ -50,7 +47,7 @@ it("keeps silence in CSS and preserves the first level transition when activity 
   }
 });
 
-it("keeps the host and bars while replacing only the status/source canvas lifetime", async () => {
+it("keeps the host while replacing only the status/source canvas lifetime", async () => {
   const warnings = vi.spyOn(console, "warn");
   const firstSource = new RealtimeTalkLevelSignal();
   firstSource.set(0.2);
@@ -61,10 +58,8 @@ it("keeps the host and bars while replacing only the status/source canvas lifeti
   try {
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(1));
     const host = view.container.querySelector("openclaw-microphone-activity");
-    const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
     const firstCanvas = host?.querySelector("canvas");
     const first = expectDefined(renderer.create.mock.results[0], "first renderer").value;
-    expect(bars).toHaveLength(7);
     expect(first.setLevel).toHaveBeenLastCalledWith(0.2);
 
     firstSource.set(0.8);
@@ -78,15 +73,13 @@ it("keeps the host and bars while replacing only the status/source canvas lifeti
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(2));
     expect(first.dispose).toHaveBeenCalledOnce();
     expect(host?.querySelector("canvas")).not.toBe(firstCanvas);
-    expect(expectDefined(renderer.create.mock.calls[1], "thinking renderer call")[3]).toBe(
+    expect(expectDefined(renderer.create.mock.calls[1], "thinking renderer call")[2]).toBe(
       "thinking",
     );
     const second = expectDefined(renderer.create.mock.results[1], "second renderer").value;
     expect(second.setLevel).toHaveBeenLastCalledWith(0.8);
     expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
-    expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
-      bars,
-    );
+    expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
 
     const replacement = new RealtimeTalkLevelSignal();
     replacement.set(0.35);
@@ -127,7 +120,6 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
     );
     expect(renderer.create).not.toHaveBeenCalled();
     const host = view.container.querySelector("openclaw-microphone-activity");
-    const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
     expect(host?.querySelector("canvas")).toBeNull();
     connectingSource.set(0.6);
     expect(host?.getAttribute("data-level")).toBe("0");
@@ -136,9 +128,7 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(1));
     const active = expectDefined(renderer.create.mock.results[0], "active renderer").value;
     expect(active.setLevel).toHaveBeenLastCalledWith(0.6);
-    expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
-      bars,
-    );
+    expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
 
     setStatus("connecting");
     await waitForSolid(() => expect(active.dispose).toHaveBeenCalledOnce());
@@ -153,7 +143,7 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
 
     setStatus("thinking");
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(2));
-    expect(expectDefined(renderer.create.mock.calls[1], "thinking renderer call")[3]).toBe(
+    expect(expectDefined(renderer.create.mock.calls[1], "thinking renderer call")[2]).toBe(
       "thinking",
     );
     const thinking = expectDefined(renderer.create.mock.results[1], "thinking renderer").value;

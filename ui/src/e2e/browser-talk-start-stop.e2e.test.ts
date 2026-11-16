@@ -158,9 +158,9 @@ suite.define(() => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       const tapToTalk = page.getByRole("button", { name: "Tap to talk" });
       const activity = page.locator(".agent-chat__voice-activity");
-      const firstBar = page.locator(".agent-chat__voice-activity-bar").first();
-      const barTransform = () =>
-        firstBar.evaluate((element) => getComputedStyle(element).transform);
+      // At rest and in reduced motion CSS draws the meter; its strength shows the phase.
+      const restingStrength = () =>
+        activity.evaluate((element) => getComputedStyle(element, "::before").opacity);
       await openTalk(page, 320, 720);
       await tapToTalk.click();
 
@@ -175,9 +175,11 @@ suite.define(() => {
       const pillBox = await page.getByRole("button", { name: "Stop voice input" }).boundingBox();
       expect(pillBox?.width ?? 0).toBeGreaterThanOrEqual(60);
       await expect
-        .poll(() => firstBar.evaluate((element) => getComputedStyle(element).animationName))
+        .poll(() =>
+          activity.evaluate((element) => getComputedStyle(element, "::after").animationName),
+        )
         .toBe("none");
-      const connectingReducedMotionTransform = await barTransform();
+      const connectingReducedMotionStrength = await restingStrength();
 
       await gateway.waitForRequest("talk.client.create");
       await gateway.resolveDeferred("talk.client.create");
@@ -186,14 +188,14 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
-      const reducedMotionTransform = await barTransform();
-      expect(reducedMotionTransform).not.toBe(connectingReducedMotionTransform);
+      const reducedMotionStrength = await restingStrength();
+      expect(reducedMotionStrength).not.toBe(connectingReducedMotionStrength);
 
       await feedAudio(page);
       await expect
         .poll(async () => Number(await activity.getAttribute("data-level")))
         .toBeGreaterThan(0);
-      await expect.poll(barTransform).toBe(reducedMotionTransform);
+      await expect.poll(restingStrength).toBe(reducedMotionStrength);
 
       await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect.poll(() => tapToTalk.isVisible()).toBe(true);

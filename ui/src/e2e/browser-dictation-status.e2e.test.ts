@@ -453,7 +453,7 @@ suite.define(() => {
       await captureComposer(page, "dictation-new-session-tooltip-cancelled.png");
     }));
 
-  it("keeps the slow microphone permission hint whole in a narrow composer", () =>
+  it("keeps the slow microphone permission hint whole and the starting highlight moving in a narrow composer", () =>
     suite.withPage(
       { permissions: ["microphone"], viewport: { width: 320, height: 720 } },
       async ({ page }) => {
@@ -481,6 +481,12 @@ suite.define(() => {
         );
         await captureComposer(page, "dictation-permission-hint-narrow.png");
         expect(clipped).toBe(false);
+        // While the microphone opens, a highlight sweeps across the resting dots.
+        const starting = page.locator('.agent-chat__voice-activity[data-status="connecting"]');
+        const highlight = () =>
+          starting.evaluate((element) => getComputedStyle(element, "::after").maskPosition);
+        const firstHighlight = await highlight();
+        await expect.poll(highlight).not.toBe(firstHighlight);
       },
     ));
 

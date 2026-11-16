@@ -44,10 +44,6 @@ export function ActiveDictationStatus(props: {
             role={current === "connecting" ? "status" : undefined}
             aria-live={current === "connecting" ? "polite" : undefined}
           >
-            <MicrophoneActivity
-              status={current}
-              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
-            />
             <span
               class={[
                 "agent-chat__dictation-phase",
@@ -62,6 +58,11 @@ export function ActiveDictationStatus(props: {
                 t("chat.composer.dictationListening")
               )}
             </span>
+            {/* The timeline fills the rest of the row, so the label leads. */}
+            <MicrophoneActivity
+              status={current}
+              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
+            />
           </div>
         </div>
       )}

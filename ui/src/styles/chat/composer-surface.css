@@ -1143,7 +1143,23 @@
 }
 
 .chat-send-btn--voice-live .agent-chat__voice-activity {
+  /* Talk's timeline prefers 160px and is the first thing to give way when the
+     action row is tight; its 48px minimum keeps the stop pill usable. */
+  width: 160px;
   transition: opacity var(--duration-fast) ease;
+}
+
+.agent-chat__composer-actions:has(> .chat-talk-control--active),
+.chat-talk-control--active,
+.chat-send-btn.chat-send-btn--voice-live {
+  flex-shrink: 1;
+}
+
+/* The one-line phone composer keeps its width for the message. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
+  .chat-send-btn--voice-live
+  .agent-chat__voice-activity {
+  width: 56px;
 }
 
 .chat-send-btn--voice-live:hover:not(:disabled) .agent-chat__voice-activity,
