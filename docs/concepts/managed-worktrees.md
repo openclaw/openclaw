@@ -254,7 +254,10 @@ renames. Initialization retains the identities and timestamp eligibility observe
 while hashing its private checkout, so the first reuse can use those same facts.
 Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
-open does not rewrite their inventories.
+open does not rewrite their inventories. Local checkpoint acceptance reuses the
+prepared tree and checks the affected target paths for conflicts. It does not
+build another target manifest that the checkpoint would discard; rollback
+journals and pending-conflict recovery retain their existing ownership.
 
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing

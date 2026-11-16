@@ -161,6 +161,54 @@ function survivorFiles(version = "2026.8.35", recipe = "config-recipe.mts") {
   return files;
 }
 
+describe("update-channel refusal contract", () => {
+  const target = "src/cli/update-cli/update-command-target.ts";
+  const global = "src/infra/update-global.ts";
+  it.each([
+    { tag: "main", condition: 'explicitTag === "main"', helper: "" },
+    {
+      tag: "MAIN",
+      condition: "isMainPackageTarget(explicitTag)",
+      helper:
+        'export function isMainPackageTarget(value: string | null): boolean {\n  return normalizeLowercaseStringOrEmpty(value) === "main";\n}',
+    },
+  ])("retains the $tag refusal with omissions disabled", ({ tag, condition, helper }) => {
+    const f = fixture({
+      [target]: 'const unsupported = updateInstallKind === "package" && ' + condition + ";",
+      [global]: helper,
+    });
+    // Selection follows committed source, not a dirty working-tree replacement.
+    writeFileSync(join(f.selected.root, target), "throw new Error('untrusted');");
+    const result = f.run(
+      { docker: { lanes: ["update-channel-switch"] } },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.contracts).toContainEqual({
+      consumer: "update-channel-switch",
+      status: "ADMITTED",
+      modes: { OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG: tag },
+      files: [],
+    });
+    expect(record.docker.omitted).toEqual([]);
+    expect(record.sources.selected.map((entry: { path: string }) => entry.path)).toEqual(
+      expect.arrayContaining([target, global]),
+    );
+  });
+
+  it("rejects an unknown refusal contract rather than dropping its probe", () => {
+    const f = fixture({ [target]: "unknownContract();", [global]: "" });
+    expectRejected(
+      f.run(
+        { docker: { lanes: ["update-channel-switch"] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      ),
+      "unsupported selected update main-target contract",
+    );
+  });
+});
+
 describe("frozen admission Docker consumer aliases", () => {
   const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
   const aliases = ["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({

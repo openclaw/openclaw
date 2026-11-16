@@ -456,7 +456,7 @@ describe("opencode provider plugin", () => {
       MODELS_URL,
     ]);
     expect(
-      first.models.filter((model) => model.inference?.chat !== false).map((model) => model.id),
+      first.models.filter((model) => model.inference === undefined).map((model) => model.id),
     ).toEqual([
       "x-preview-f-free",
       "fresh-claude-fixture",
@@ -493,7 +493,8 @@ describe("opencode provider plugin", () => {
       });
     }
     expect(first.models.find((model) => model.id === "text-embedding-3-small")?.inference).toEqual({
-      chat: false,
+      chat: true,
+      chatEvidence: "unlikely",
     });
     expect(dynamicModel("retired-zen-fixture")).toMatchObject({
       id: "retired-zen-fixture",

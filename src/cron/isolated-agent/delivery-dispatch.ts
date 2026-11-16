@@ -121,10 +121,7 @@ export async function dispatchCronDelivery(
       agentId: params.agentId,
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
-      conversation: {
-        sessionKey,
-        lifecycleRevision: params.lifecycleRevision,
-      },
+      conversation: { sessionKey },
       payloads,
       signal: params.abortSignal,
       deliveryAttemptFence: params.deliveryAttemptFence,
@@ -312,7 +309,7 @@ export async function dispatchCronDelivery(
   let conversationError: string | undefined;
   const conversation =
     !params.resolvedDelivery.ok && params.sourceSessionKey && params.sourceSessionGeneration
-      ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
+      ? { sessionKey: params.sourceSessionKey }
       : undefined;
   if (!conversation && !params.resolvedDelivery.ok && !sentByTool) {
     if (params.job.sessionTarget === "current") {
@@ -349,16 +346,6 @@ export async function dispatchCronDelivery(
         admittedReasoning: true,
         sessionGeneration,
         transcriptRoute: params.resolvedDelivery.sessionRoute,
-        transcriptExpectedGeneration:
-          sessionGeneration &&
-          params.resolvedDelivery.sessionRoute?.sessionKey ===
-            toAgentStoreSessionKey({
-              agentId: params.agentId,
-              requestKey: sessionGeneration.sessionKey,
-              mainKey: params.cfgWithAgentDefaults.session?.mainKey,
-            })
-            ? params.sourceSessionGeneration
-            : undefined,
         onTranscriptDiagnostic: (message) => {
           diagnostics = mergeCronRunDiagnostics(
             diagnostics,

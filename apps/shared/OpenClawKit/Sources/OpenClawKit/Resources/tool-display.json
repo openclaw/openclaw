@@ -58,7 +58,7 @@
     "sessions_spawn": {"icon":"bot","title":"Sub-agent","detailKeys":["label","taskName","agentId","model","thinking","runTimeoutSeconds","cleanup"]},
     "agents_wait": {"icon":"clock","title":"Wait for Agents","detailKeys":["ids","timeoutSeconds"]},
     "structured_output": {"icon":"fileText","title":"Structured Output","detailKeys":["result"]},
-    "subagents": {"icon":"users","title":"Subagents","actions":{"list":{"label":"list","detailKeys":["recentMinutes"]},"kill":{"label":"kill","detailKeys":["target"]},"steer":{"label":"steer","detailKeys":["target"]}}},
+    "subagents": {"icon":"bot","title":"Subagents","actions":{"list":{"label":"list","detailKeys":["recentMinutes"]},"kill":{"label":"kill","detailKeys":["target"]},"steer":{"label":"steer","detailKeys":["target"]}}},
     "agents_list": {"icon":"users","title":"Agents","detailKeys":[]},
     "memory_search": {"icon":"search","title":"Memory Search","detailKeys":["query"]},
     "memory_get": {"icon":"brain","title":"Memory Get","detailKeys":["path","from","lines"]},

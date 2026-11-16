@@ -78,12 +78,24 @@ composer; unarchive the session to continue the conversation.
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
 
-Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Activity summaries stay
-dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
-screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
-and outcomes available. Completed group summaries retain their operation counts.
+Tool activity names the recorded action and its target, such as a file, command,
+or conversation. Consecutive eligible actions share a factual summary such as
+**Read files, ran commands**. Expand the group to inspect individual inputs,
+outputs, and outcomes. Narration and events with their own placement separate
+activity groups.
+
+Recorded actions inside Code Mode follow the same presentation rules. Their
+execution title and source remain available in the call details. An execution
+without representative child actions keeps its descriptive title in the activity
+row, including when it fails. Starting another Code Mode execution does not by
+itself start another visual group. Activity
+summaries stay dimmed until hover or keyboard focus brightens their text, without
+an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
+header shows elapsed time without adding a tool-call counter when expanded.
+When a run finishes while you are reading earlier work, that work stays open
+and your reading position is preserved. If you are following the end of the
+conversation, completed work folds above the answer. Opening saved history keeps
+completed work folded until you expand it.
 The **Worked for** summary and reply metadata use the same saved elapsed time,
 from the initiating message to the last recorded output for that run. This includes
 request preparation and waiting, not just model execution. Starting another turn
@@ -190,7 +202,16 @@ same block, with one footer at the end. Below a spoken acknowledgment, a thin
 select it to see the children it waited on and their current status. Until the
 chat's own subagent list has loaded, the rule shows the wait time alone. Tool activity that
 resumes with nothing written in between joins the activity row from before the
-handoff. In dashboard sessions, tool activity recorded after the resumed
+handoff, unless a **Resumed** rule marks the resume.
+
+Work the agent picks up again on its own continues the block it belongs to, with
+or without a handoff: when a background command finishes, when the Gateway
+restarts during a run, or when a subagent of this session finishes. A thin rule
+such as **Resumed · 3m later · Background command finished** marks each place it
+picked up again; the other labels are **Gateway restarted** and **Agent
+finished**. An answer the agent already gave stays in place above the rule. A
+heartbeat, a scheduled automation, or a message from another person or session
+still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
 so the answer stays last; a step that failed there stays where it happened. The
 working indicator
@@ -203,12 +224,14 @@ block, for example when the request is older than the loaded history, both
 lines describe the resumed run alone. A message you send after the handoff
 starts a block of its own, with that run's own clock and closing line.
 
-In the tool activity, a subagent's launch row shows the label its launch gave
-it, when it gave one, rather than its instructions, followed by **running**
-while it works and by its duration once it has finished. A subagent that failed
-or timed out reads **failed** instead, and one that was stopped reads
-**stopped**. Selecting the name opens that subagent in the **Subagents** panel;
-the rest of the row still expands the launch's details. The panel labels elapsed
+In the tool activity, a subagent's launch row records the launch itself, such
+as **Launched Atlas**, using the label its launch gave it rather than its
+instructions. Consecutive launches share one row. A later row reports how each
+subagent ended: **Atlas finished**, **Atlas timed out**, **Atlas failed** or
+**Atlas stopped**, placed when that result arrived. Stopping a subagent and
+listing subagents read **Stopped** and **Listed subagents**. Selecting a name
+opens that subagent in the **Subagents** panel; the rest of the row still
+expands the call's details. The panel labels elapsed
 work as **Duration** and shows **No subagents yet.** before any are listed. Collapsed activity counts subagents on
 their own, such as **1 other operation · 3 subagents**. A launch that was
 refused started no subagent and is counted with the other operations. While the

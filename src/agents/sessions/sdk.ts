@@ -9,11 +9,8 @@ import {
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
-import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
-import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
   type AgentMessage,
@@ -25,13 +22,11 @@ import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlmWithBlockImages } from "./messages.js";
-import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
-import type { SettingsManager } from "./settings-manager.js";
-import { isInstallTelemetryEnabled } from "./telemetry.js";
+import { createSessionStreamFn } from "./session-stream.js";
 
 export interface CreateAgentSessionOptions extends Omit<
   AgentSessionConfig,
@@ -112,83 +107,6 @@ function createSessionPrepareNextTurnWithContext(
       thinkingLevel: effectiveThinkingLevel,
     };
   };
-}
-
-function getAttributionHeaders(
-  model: Model,
-  settingsManager: SettingsManager,
-): Record<string, string> | undefined {
-  // SDK-backed session streams do not all consult the attribution policy, so forward its
-  // documented header set as caller headers. Hidden (spec-only) attribution stays with the
-  // transports that verify it. Like the transport-side policy, this ignores install telemetry.
-  const { attributionHeaders, allowsHiddenAttribution } = resolveProviderRequestPolicy({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  });
-  if (attributionHeaders && !allowsHiddenAttribution) {
-    return attributionHeaders;
-  }
-
-  if (!isInstallTelemetryEnabled(settingsManager)) {
-    return undefined;
-  }
-
-  const baseUrl = model.baseUrl ?? "";
-
-  if (
-    model.provider === "cloudflare-workers-ai" ||
-    model.provider === "cloudflare-ai-gateway" ||
-    baseUrl.includes("api.cloudflare.com") ||
-    baseUrl.includes("gateway.ai.cloudflare.com")
-  ) {
-    return {
-      "User-Agent": "openclaw",
-    };
-  }
-
-  return undefined;
-}
-
-function createSessionStreamFn(
-  modelRegistry: CreateAgentSessionOptions["modelRegistry"],
-  settingsManager: SettingsManager,
-  thinkingExplicit: boolean | undefined,
-): NonNullable<AgentOptions["streamFn"]> {
-  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
-  const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
-    modelResult,
-    context,
-    optionsLocal,
-  ) => {
-    const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
-    if (!auth.ok) {
-      throw new Error(auth.error);
-    }
-    // Isolated session streams bypass the process-default stream facade.
-    const { configureAiTransportRuntimeHost } = await import("../ai-transport-runtime-host.js");
-    configureAiTransportRuntimeHost();
-    optionsLocal?.signal?.throwIfAborted();
-    const providerRetrySettings = settingsManager.getProviderRetrySettings();
-    const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-    const providerOptions = {
-      ...optionsLocal,
-      openclawThinkingExplicit: thinkingExplicit,
-      apiKey: auth.apiKey,
-      timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-      maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-      headers: applyLocalNoAuthHeaders(
-        modelResult.api,
-        auth.apiKey,
-        attributionHeaders || auth.headers || optionsLocal?.headers
-          ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
-          : undefined,
-      ),
-    };
-    return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
-  };
-  bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);
-  return streamFn;
 }
 
 export async function createAgentSession(
