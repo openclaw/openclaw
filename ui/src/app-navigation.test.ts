@@ -227,6 +227,7 @@ it("lets each page decide its sidebar: its section, Sessions, or none", () => {
   expect(sidebarViewForPage("activity")).toBe("online");
   expect(sidebarViewForPage("chat")).toBe("sessions");
   expect(sidebarViewForPage("new-session")).toBe("sessions");
+  expect(sidebarViewForPage("terminal")).toBe("sessions");
   expect(sidebarViewForPage("systems")).toBe("sessions");
   expect(sidebarViewForPage("usage")).toBeUndefined();
   expect(sidebarViewForPage("plugin", "knowledge/overview")).toBeUndefined();
