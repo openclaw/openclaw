@@ -202,9 +202,14 @@ export async function copySqliteFamily(
 ): Promise<void> {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   if (isSqlitePathOnBtrfs(source)) {
-    setSqliteDirectoryNoCow(path.dirname(target));
-  } else {
-    prepareSqliteDatabaseDirectory(target);
+    // NOCOW is a performance policy; a host without chattr must still upgrade.
+    try {
+      setSqliteDirectoryNoCow(path.dirname(target));
+    } catch (error) {
+      createSubsystemLogger("state/upgrade").warn(
+        `Could not enable NOCOW for ${path.dirname(target)}; copying with filesystem defaults: ${String(error)}`,
+      );
+    }
   }
   const files = ["", "-wal", "-journal"].flatMap((suffix) => {
     const stat = fs.statSync(`${source}${suffix}`, { throwIfNoEntry: false });

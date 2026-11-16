@@ -409,6 +409,23 @@ describe("SQLite byte-copy boundary", () => {
     expect(fs.statSync(target).ino).not.toBe(fs.statSync(source).ino);
   });
 
+  it("still copies when the btrfs NOCOW policy cannot be applied", async () => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const shadow = path.join(root, "shadow");
+    fs.mkdirSync(live);
+    const source = path.join(live, "target.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('original')");
+    db.close();
+    vi.spyOn(sqliteFilesystem, "isSqlitePathOnBtrfs").mockReturnValue(true);
+    vi.spyOn(sqliteFilesystem, "setSqliteDirectoryNoCow").mockImplementation(() => {
+      throw new Error("chattr: not found");
+    });
+    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    expect(hash(path.join(shadow, "target.sqlite"))).toBe(hash(source));
+  });
+
   it("recovers committed WAL frames privately without changing the source family", async () => {
     const root = tempDir();
     const live = path.join(root, "live");
