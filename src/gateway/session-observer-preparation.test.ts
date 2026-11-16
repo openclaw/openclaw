@@ -19,9 +19,11 @@ const runtimeMocks = vi.hoisted(() => ({
   completeIsolated: vi.fn(),
 }));
 
+// mock-isolation: Control direct-completion failures without loading real transports or auth state.
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: runtimeMocks.completeDirect,
 }));
+// mock-isolation: Keep observer selection independent of real provider and catalog state.
 vi.mock("../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent: runtimeMocks.selectModel,
 }));

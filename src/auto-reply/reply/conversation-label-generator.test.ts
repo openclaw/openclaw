@@ -11,6 +11,7 @@ const runIsolatedCompletion = vi.hoisted(() => vi.fn());
 const resolveSimpleCompletionSelectionForAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion }));
+// mock-isolation: Keep label fallback tests independent of real provider and catalog state.
 vi.mock("../../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent,
 }));

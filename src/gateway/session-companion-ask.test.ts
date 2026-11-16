@@ -76,6 +76,7 @@ vi.mock("../agents/sessions/index.js", () => ({
     }),
   },
 }));
+// mock-isolation: Keep synthetic companion selection independent of installed providers and auth state.
 vi.mock("../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent: resolveSelection,
 }));
