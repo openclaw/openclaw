@@ -34,27 +34,29 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         .value;
     },
     /** Commit live keystrokes before the owning draft rerenders. */
-    insertTranscript(transcript: string, late?: true): string | null {
+    insertTranscript(transcript: string, late?: true, preservePreview?: true): string | null {
       const target = read();
       if (!target) {
         return null;
       }
       // Delayed finals must not replace edits made after Stop unlocked this draft.
       const selection =
-        capturedSelection && (!late || capturedSelection.value === target.value)
+        capturedSelection && (preservePreview || !late || capturedSelection.value === target.value)
           ? capturedSelection
           : {
               start: late ? target.selectionStart : target.value.length,
               end: late ? target.selectionEnd : target.value.length,
               value: target.value,
             };
-      capturedSelection = null;
       const insertion = insertComposerDictation(
         selection.value,
         transcript,
         selection.start,
         selection.end,
       );
+      capturedSelection = preservePreview
+        ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
+        : null;
       if (insertion.value === selection.value) {
         return null;
       }
@@ -155,13 +157,13 @@ export class DirectDictationControl extends EventTarget {
           : undefined,
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
-      onCommit: (transcript: string, late?: true) => {
+      onCommit: (transcript: string, late?: true, preservePreview?: true) => {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
-        const next = this.options.textarea.insertTranscript(transcript, late);
+        const next = this.options.textarea.insertTranscript(transcript, late, preservePreview);
         if (next !== null) {
           this.options.onMessage(next);
         }

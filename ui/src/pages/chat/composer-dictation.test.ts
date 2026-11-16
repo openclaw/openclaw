@@ -441,7 +441,7 @@ describe("ComposerDictationOwner", () => {
     }
   });
 
-  it.each(["new capture", "draft switch", "session switch", "client switch"])(
+  it.each(["draft switch", "session switch", "client switch"])(
     "unlocks immediately and rejects a pending result after %s",
     async (transition) => {
       const { promise: close, resolve: resolveClose } = createDeferred();
@@ -476,14 +476,8 @@ describe("ComposerDictationOwner", () => {
         } else if (transition === "client switch") {
           controller.update({ ...options, client: createClient() });
         }
-        if (transition !== "new capture") {
-          controller.update(options);
-        } else {
-          expect(controller.startDirect()).toBe(true);
-          await waitForFast(() => expect(sessionsCreated).toBe(2));
-          emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
-        }
-        const currentPreview = transition === "new capture" ? "new preview" : "";
+        controller.update(options);
+        const currentPreview = "";
         expect(controller.transcript).toBe(currentPreview);
         emit({ type: "partial", text: "stale preview" });
         expect(controller.transcript).toBe(currentPreview);
@@ -499,6 +493,90 @@ describe("ComposerDictationOwner", () => {
         controller.dispose();
         await Promise.resolve();
       }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps stopped dictation when a newer capture stops first: %s",
+    async (stopNewer) => {
+      let created = 0;
+      request.mockImplementation(async (method) =>
+        method === "talk.session.create" ? sessionResult(`dictation-${++created}`) : { ok: true },
+      );
+      const { controller, onCommit, options } = createHarness();
+      await startDirect(controller);
+      const first = controller.finishActive();
+      await startDirect(controller);
+      emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
+      const second = stopNewer ? controller.finishActive() : null;
+      if (second) {
+        transcript("Second words", "dictation-2");
+        emit({ transcriptionSessionId: "dictation-2", type: "close", reason: "completed" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(onCommit).not.toHaveBeenCalled();
+      }
+      transcript("First words");
+      emit({ type: "close", reason: "completed" });
+      await expect(first).resolves.toBe(true);
+      if (second) {
+        await expect(second).resolves.toBe(true);
+        expect(onCommit.mock.calls.map(([text]) => text)).toEqual(["First words", "Second words"]);
+        expect(controller.transcribing).toBe(false);
+      } else {
+        expect(controller.active).toBe(true);
+        expect(controller.transcript).toBe("new preview");
+        expect(onCommit).toHaveBeenCalledExactlyOnceWith("First words", true, true);
+        const otherVoice = new GatewaySpeechPlayback();
+        otherVoice.prepare(options.client);
+        expect(controller.active).toBe(false);
+        otherVoice.stop();
+      }
+      expect(request).not.toHaveBeenCalledWith(
+        "talk.session.close",
+        { sessionId: "dictation-1", discard: true },
+        expect.anything(),
+      );
+    },
+  );
+
+  it("keeps stopped text when the next recording cannot open its microphone", async () => {
+    const { controller, onCommit } = createHarness();
+    await startDirect(controller);
+    const first = controller.finishActive();
+    getUserMedia.mockRejectedValueOnce(new DOMException("blocked", "NotAllowedError"));
+    expect(controller.startDirect()).toBe(true);
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    transcript("Keep the earlier recording");
+    emit({ type: "close", reason: "completed" });
+    await expect(first).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("Keep the earlier recording", true);
+  });
+
+  it.each(["draft switch", "Escape", "dispose"])(
+    "retires all pending recordings on %s",
+    async (reason) => {
+      let created = 0;
+      request.mockImplementation(async (method) =>
+        method === "talk.session.create" ? sessionResult("dictation-" + ++created) : { ok: true },
+      );
+      const { controller, onCommit, options } = createHarness();
+      await startDirect(controller);
+      const first = controller.finishActive();
+      await startDirect(controller);
+      const second = controller.finishActive();
+      if (reason === "draft switch") {
+        controller.update({ ...options, draftKey: "next" });
+      } else if (reason === "dispose") {
+        controller.dispose();
+      } else {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      }
+      transcript("Stale first");
+      transcript("Stale second", "dictation-2");
+      await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
+      expect(controller.transcribing).toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
     },
   );
 

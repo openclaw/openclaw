@@ -244,7 +244,15 @@ describe("DirectDictationControl", () => {
     control.prepare("agent-a");
     const controller = expectDefined(dictationHarness.controllers[0], "dictation owner");
     const { container, update } = mountControl(control, true);
+    controller.active = true;
     controller.transcribing = true;
+    update();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toContain(
+        "Listening",
+      ),
+    );
+    controller.active = false;
     update();
     await vi.waitFor(() =>
       expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toMatch(
@@ -306,4 +314,20 @@ describe("DirectDictationControl", () => {
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
   });
+});
+
+it("keeps a newer preview provisional when earlier dictation text arrives", () => {
+  const target = document.createElement("textarea");
+  target.value = "base";
+  target.setSelectionRange(4, 4);
+  const editor = createDirectDictationTextarea(() => target);
+  editor.captureSelection();
+  target.value = editor.previewTranscript("new preview") ?? "";
+  expect(editor.insertTranscript("first", true, true)).toBe("base first");
+  target.value = editor.previewTranscript("new preview") ?? "";
+  expect(target.value).toBe("base first new preview");
+  expect(editor.insertTranscript("second", true, true)).toBe("base first second");
+  expect(editor.previewTranscript("new preview")).toBe("base first second new preview");
+  target.value = "base first second";
+  expect(editor.insertTranscript("final words", true)).toBe("base first second final words");
 });

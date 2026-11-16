@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
@@ -7,6 +8,7 @@ import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import { restoreChatApiAttachments } from "../chat/attachment-restoration.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
+import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as draftBody from "./draft-body.solid.tsx";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -450,3 +452,42 @@ describe("new session draft route ownership", () => {
     expect(message(page)).toBe("");
   });
 });
+
+it.each(["Couldn’t transcribe your voice.", "Transcription provider unavailable"])(
+  "retains an earlier recording's error while the next microphone connects: %s",
+  async (errorMessage) => {
+    const original = NewSessionPageOwner.prototype.composerOptions;
+    const observed = vi.fn(function (
+      this: NewSessionPageOwner,
+      ...args: Parameters<typeof original>
+    ) {
+      return original.apply(this, args);
+    });
+    vi.spyOn(NewSessionPageOwner.prototype, "composerOptions").mockImplementation(observed);
+    await mount(routeData("research"));
+    const owner = expectDefined(observed.mock.contexts[0], "New Session owner");
+    const capture = new ComposerDictationOwner({
+      client: null,
+      connected: false,
+      enabled: false,
+      realtimeTalkActive: false,
+      onCommit: () => {},
+      onError: () => {},
+    });
+    const connecting = vi.spyOn(capture, "connecting", "get").mockReturnValue(true);
+    vi.spyOn(owner.dictation, "dictation", "get").mockReturnValue(capture);
+    owner.dictationError = "Prior error";
+    owner.dictation.dispatchEvent(new Event("change"));
+    expect(owner.dictationError).toBeNull();
+    // The older recording reports a result after the newer capture was admitted.
+    owner.dictationError = errorMessage;
+    owner.dictation.dispatchEvent(new Event("change"));
+    expect(owner.dictationError).toBe(errorMessage);
+    connecting.mockReturnValue(false);
+    owner.dictation.dispatchEvent(new Event("change"));
+    connecting.mockReturnValue(true);
+    owner.dictation.dispatchEvent(new Event("change"));
+    expect(owner.dictationError).toBeNull();
+    capture.dispose();
+  },
+);

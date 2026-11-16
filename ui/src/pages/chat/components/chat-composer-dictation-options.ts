@@ -21,14 +21,17 @@ export function createComposerDictationOptions(
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true) => {
+    onCommit: (transcript: string, late?: true, preservePreview?: true) => {
       const target = state.composerTextarea;
       const captured = state.dictationSelection;
-      const liveValue = target?.value ?? props.getDraft?.() ?? props.draft;
+      // A newer recording may be painting a partial over its captured draft.
+      const liveValue = preservePreview
+        ? (captured?.value ?? props.getDraft?.() ?? props.draft)
+        : (target?.value ?? props.getDraft?.() ?? props.draft);
       // Stop unlocks the draft. Preserve later edits by using the live caret only
       // when a delayed final finds that the captured draft has changed.
       const selection =
-        captured && (!late || captured.value === liveValue)
+        captured && (preservePreview || !late || captured.value === liveValue)
           ? captured
           : {
               start: target?.selectionStart ?? liveValue.length,
@@ -46,7 +49,9 @@ export function createComposerDictationOptions(
         adjustTextareaHeight(target);
       }
       commitComposerDraft(props, insertion.value);
-      state.dictationSelection = null;
+      state.dictationSelection = preservePreview
+        ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
+        : null;
       queueMicrotask(() => {
         const textarea = state.composerTextarea;
         if (!textarea) {

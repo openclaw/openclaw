@@ -32,7 +32,7 @@ export function ActiveDictationStatus(props: {
     }
     return dictation.connecting
       ? "connecting"
-      : dictation.finalizing || dictation.transcribing
+      : dictation.finalizing || !dictation.active
         ? "thinking"
         : "listening";
   });
