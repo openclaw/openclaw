@@ -36,7 +36,7 @@ import {
 import { CommandPaletteModes, paletteDraftShape } from "./command-palette-mode.ts";
 import {
   buildCommandPaletteSessionItems,
-  SESSION_SEARCH_LIMIT,
+  listCommandPaletteSessions,
   SESSION_SEARCH_SCOPE,
 } from "./command-palette-session-search.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.tsx";
@@ -565,16 +565,11 @@ export class CommandPaletteState {
       .then((result) => ({ error: false as const, result }))
       .catch(() => ({ error: true as const, result: null }));
     try {
-      const result = await sessions.list({
-        ...SESSION_SEARCH_SCOPE,
-        source: "command-palette",
-        search,
-        limit: SESSION_SEARCH_LIMIT,
-      });
+      const result = await listCommandPaletteSessions(sessions, search);
       if (!isCurrent() || !result) {
         return;
       }
-      const visibleRows = result.sessions;
+      const { visibleRows, archivedRows } = result;
       const visibleKeys = new Set(visibleRows.map((row) => row.key));
       const transcriptOutcome = await transcriptSearch;
       if (!isCurrent()) {
@@ -587,6 +582,7 @@ export class CommandPaletteState {
         visibleRows,
         visibleKeys,
         transcriptResult,
+        archivedRows,
         search,
       });
     } catch {
