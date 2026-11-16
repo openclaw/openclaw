@@ -309,19 +309,24 @@ export function createApplicationOverlays(
       updates.handleUpdateRunChanged(event.payload);
       return;
     }
+    if (!operatorAccess.canReviewApprovals) {
+      return;
+    }
+    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    const resolvedApproval = requestedApproval
+      ? null
+      : parseApprovalResolvedEvent(event.event, event.payload);
     if (
-      !operatorAccess.canReviewApprovals ||
+      (!requestedApproval && !resolvedApproval) ||
       !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
     ) {
       return;
     }
-    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
     if (requestedApproval) {
       enqueueExecApprovalPrompt(promptState, requestedApproval);
       publish();
       return;
     }
-    const resolvedApproval = parseApprovalResolvedEvent(event.event, event.payload);
     if (resolvedApproval) {
       clearResolvedExecApprovalPrompt(promptState, resolvedApproval.id);
       publish();

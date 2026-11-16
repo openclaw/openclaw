@@ -21,8 +21,8 @@ it("labels certified contention as a calm system notice", () => {
 });
 
 it.each([
-  [{ mode: "snapshot", phase: "saving" }, "Saving snapshot…"],
-  [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment…"],
+  [{ mode: "snapshot", phase: "saving" }, "Saving snapshot"],
+  [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment"],
 ] as const)("prioritizes run and placement phases over cloud mode (%j)", (startStatus, label) => {
   const provisioning = {
     sessionKey: "agent:main:cloud-status",
@@ -36,7 +36,7 @@ it.each([
     chatStartupStatusLabel(null, { ...provisioning, phase: "reconnecting", startStatus }),
     runStatus("provisioning_environment"),
     runStatus("starting_model"),
-  ]).toEqual([label, "Reconnecting…", label, "Waiting for a response"]);
+  ]).toEqual([label, "Reconnecting", label, "Waiting for a response"]);
 });
 
 it("retains the bubble and completed markdown while replacing stream snapshots and settling", () => {

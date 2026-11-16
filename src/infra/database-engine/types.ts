@@ -6,6 +6,10 @@ export type DatabaseEngineInput =
       connectionEnvKey?: string;
       /** Existing sealed stores only; the connection never admits writes or migration. */
       readOnly?: true;
+      /** Opt-in: rollback captures keep their rows on the server instead of a SQLite image. */
+      serverRecoveryCaptures?: true;
+      /** database.postgres.ownership installation: Gateway state ownership is held in PostgreSQL. */
+      ownership?: "installation";
     }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";

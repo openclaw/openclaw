@@ -176,7 +176,7 @@ export async function handoffSessionTool(
       status: "started",
       async: true,
       ...(params.yield ? {} : { yielded: true as const }),
-      message: `${params.name} will run after turn cleanup; its result will resume this session.`,
+      message: `${params.name} will run after turn cleanup. Started is not success: its result, which may be a refusal, resumes this session as the next turn.`,
     } as const;
     const handoffResult = jsonResult(handoffReceipt);
     const message = params.name + " handed off; resume with its result in this same conversation.";
@@ -285,8 +285,6 @@ export async function handoffSessionTool(
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
                     source: "tool_handoff",
-                    // A yielded subagent task resumes as itself only from its own run's handoff.
-                    sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
                     ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),

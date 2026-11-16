@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
@@ -60,8 +61,9 @@ function summaryRevision(row: GatewaySessionRow): string {
 export function createSessionActivity(notify: () => void) {
   let currentResult: SessionsListResult | undefined;
   let currentError: string | undefined;
+  let forbidden = false;
   let incomplete = false;
-  let requestState: "idle" | "loading" | "retrying" = "idle";
+  let requestState: "idle" | "deferred" | "loading" | "retrying" = "idle";
   let currentClient: GatewayBrowserClient | null = null;
   let connected = false;
   let currentQueryKey: string | undefined;
@@ -137,6 +139,7 @@ export function createSessionActivity(notify: () => void) {
     read = undefined;
     incomplete = false;
     currentError = undefined;
+    forbidden = false;
     currentClient = null;
     currentQueryKey = undefined;
     currentResult = undefined;
@@ -342,7 +345,16 @@ export function createSessionActivity(notify: () => void) {
   };
 
   function invalidate(payload?: unknown): void {
-    if (currentClient && currentFilters) {
+    if (connected && currentClient && currentFilters) {
+      const reason = asNullableRecord(payload)?.reason;
+      if (reason === "sharing" || reason === "profile-identity") {
+        // Authority changes supersede reads admitted before the change.
+        void load(currentClient, currentFilters, "authority");
+        return;
+      }
+      if (forbidden) {
+        return;
+      }
       const changes =
         currentFilters === "current"
           ? readCurrentWorkChanges(payload)
@@ -408,7 +420,7 @@ export function createSessionActivity(notify: () => void) {
   function load(
     client: GatewayBrowserClient | null,
     filters: ActivityQuery | null,
-    reason: "query" | "refresh" | "retry" = "query",
+    reason: "query" | "refresh" | "retry" | "authority" = "query",
     canEnsureSummaries = summariesAllowed,
     available = true,
   ): Promise<void> {
@@ -457,7 +469,13 @@ export function createSessionActivity(notify: () => void) {
     const sameQuery = currentClient === client && currentQueryKey === queryKey;
     const sameFilters =
       currentClient === client && JSON.stringify(currentFilters) === JSON.stringify(filters);
-    if (!available) {
+    // Keep a hidden authority catch-up through ordinary Gateway snapshots.
+    const deferRead =
+      available &&
+      !pageActive &&
+      (reason === "authority" ||
+        (sameFilters && requestState === "deferred" && reason !== "retry"));
+    if (!available || deferRead) {
       if (!sameFilters) {
         resetQuery();
         currentClient = client;
@@ -466,23 +484,33 @@ export function createSessionActivity(notify: () => void) {
       } else {
         suspendRequests();
       }
+      if (deferRead) {
+        connected = true;
+        requestState = "deferred";
+        forbidden = false;
+        eventRefresh.schedule();
+      }
       notify();
       return Promise.resolve();
     }
     const wasConnected = connected;
     connected = true;
+    // Moving pulse buckets do not change the selection to which a denial belongs.
+    if (sameFilters && forbidden && wasConnected && reason !== "retry" && reason !== "authority") {
+      return Promise.resolve();
+    }
     if (boundaries && typeof setTimeout === "function") {
       const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
       const rollover = Math.min(boundaries.at(-1)!, midnight);
       bucketRollover = setTimeout(() => eventRefresh.schedule(), rollover - now.getTime() + 1_000);
     }
-    if (sameQuery && pendingRequest && reason !== "retry") {
+    if (sameQuery && pendingRequest && reason !== "retry" && reason !== "authority") {
       if (reason === "refresh") {
         eventRefresh.schedule();
       }
       return pendingRequest.completion.promise;
     }
-    if (reason === "query" && sameQuery && wasConnected) {
+    if (reason === "query" && sameQuery && wasConnected && requestState !== "deferred") {
       void ensureSummaries();
       return Promise.resolve();
     }
@@ -505,6 +533,7 @@ export function createSessionActivity(notify: () => void) {
     changesOverflowed = false;
     requestState = reason === "retry" ? "retrying" : "loading";
     currentError = undefined;
+    forbidden = false;
     if (!sameQuery) {
       historyRows.reset();
       resetSummaries();
@@ -544,6 +573,10 @@ export function createSessionActivity(notify: () => void) {
       .catch((error: unknown) => {
         if (pendingRequest === pending && !pending.controller.signal.aborted) {
           if (error instanceof GatewayRequestError && error.gatewayCode === "FORBIDDEN") {
+            forbidden = true;
+            clearTimeout(bucketRollover);
+            bucketRollover = undefined;
+            eventRefresh.absorb();
             currentResult = undefined;
             historyRows.reset();
             resetSummaries();

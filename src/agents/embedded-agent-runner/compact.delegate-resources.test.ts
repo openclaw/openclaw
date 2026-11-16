@@ -53,7 +53,7 @@ import type { ExtensionContext } from "../sessions/extensions/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 

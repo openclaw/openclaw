@@ -84,7 +84,9 @@ it("excludes the persisted rejected image branch from model context after rewind
     });
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
     const entry = expectDefined(await readSessionEntryReadOnlyInWorker(scope), "rewound session");
-    expect(entry.sessionId).not.toBe(scope.sessionId);
+    // Rewind repoints the existing transcript, so the session id is stable and
+    // the retired incarnation is marked by a new lifecycle revision.
+    expect(entry.sessionId).toBe(scope.sessionId);
     const rewoundScope = { ...scope, sessionId: entry.sessionId };
     expect(contextImages(await modelContext(rewoundScope))).toEqual({
       inline: [],

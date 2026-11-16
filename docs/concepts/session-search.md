@@ -48,6 +48,11 @@ returns at most 25 hits. The tool trims each excerpt to 300 UTF-16 code units
 plus an ellipsis when needed, within a 32 KiB result budget. Query words are
 literal text; punctuation does not become database query syntax.
 
+Broad searches discover the current visible session inventory once, including archived
+sessions, using summary metadata. Discovery runs on demand; it does not retain an
+authorization snapshot between searches. Gateway list diagnostics label these requests
+with `source=sessions-search`. Passing `sessionKey` skips inventory discovery.
+
 Each transcript search request allows up to 90 seconds, leaving dispatch and
 authorization headroom around the reader's 60-second budget, including worker admission.
 If it times out, retry `sessions_search` with a `sessionKey` to search one session

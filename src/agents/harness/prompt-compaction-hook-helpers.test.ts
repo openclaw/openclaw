@@ -16,6 +16,7 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
+import { withAgentPromptProjects } from "../prompt-projects.js";
 import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult as buildBase } from "./prompt-compaction-hook-helpers.js";
 
@@ -182,6 +183,46 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect((await build()).prompt).toBe("contribution\n\nhello");
     expect(retained[0]).not.toBe(retained[1]);
     expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
+  });
+  it("re-runs authorized enrichment for each fallback candidate of one turn", async () => {
+    // Synthetic stand-in for a recall owner that checks live eligibility per model.
+    const eligibleModels = new Set(["primary", "fallback"]);
+    const seen: unknown[] = [];
+    installHooks(
+      promptHook(
+        (event, ctx) => {
+          const { modelId } = ctx as PluginHookAgentContext;
+          seen.push([modelId, (event as { continuity?: unknown }).continuity]);
+          return eligibleModels.has(modelId ?? "")
+            ? { prependContext: `private recall for ${modelId}` }
+            : undefined;
+        },
+        { requiresToolAuthority: true },
+      ),
+    );
+    const build = (modelId: string, state: "resumed" | "invalidated") =>
+      buildPrompt({
+        ctx: { sessionKey: "agent:main:main", sessionId: "session-1", modelId },
+        toolAuthority: toolAuthority(),
+        continuity: { state, history: "none" },
+      });
+    const prompts = await withAgentPromptProjects(async () => {
+      const primary = (await build("primary", "resumed")).prompt;
+      const fallback = (await build("fallback", "invalidated")).prompt;
+      // Eligibility revoked between attempts: the next candidate gets no enrichment.
+      eligibleModels.clear();
+      return [primary, fallback, (await build("fallback", "invalidated")).prompt];
+    });
+    expect(prompts).toEqual([
+      "private recall for primary\n\nhello",
+      "private recall for fallback\n\nhello",
+      "hello",
+    ]);
+    expect(seen).toEqual([
+      ["primary", { state: "resumed", history: "none" }],
+      ["fallback", { state: "invalidated", history: "none" }],
+      ["fallback", { state: "invalidated", history: "none" }],
+    ]);
   });
   it("preserves registration chaining while isolating prepare and authorized dispatches", async () => {
     const messages = [{ role: "user", content: [{ type: "text", text: "original" }] }];

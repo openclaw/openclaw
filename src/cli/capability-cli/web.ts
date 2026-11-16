@@ -7,6 +7,7 @@ import {
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { CapabilityEnvelope } from "./metadata.js";
@@ -126,7 +127,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
           const { createWebFetchTool } = await import("../../agents/tools/web-fetch.js");
           const tool = createWebFetchTool({ config: cfg });
           if (!tool) {
-            throw new Error(disabledMessage);
+            throwExpectedCliError(disabledMessage);
           }
           const { details: result } = await tool.execute(
             "infer-web-fetch",
@@ -151,7 +152,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
           providerId: provider,
         });
         if (!resolved) {
-          throw new Error(
+          throwExpectedCliError(
             cfg.tools?.web?.fetch?.enabled === false
               ? disabledMessage
               : `web.fetch provider "${provider}" is not available; check it with \`openclaw infer web providers\`.`,

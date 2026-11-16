@@ -1,2 +1,0 @@
-# Assert persisted provider failure causes in existing Gateway history proofs.
-11

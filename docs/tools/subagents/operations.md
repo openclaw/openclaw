@@ -120,6 +120,10 @@ When shutdown begins, an active retention sweep finishes its current cleanup
 instead of draining the entire expired backlog. Remaining run records stay saved
 for cleanup after restart, including partially cleaned collector groups.
 
+Large eligible backlogs yield to other Gateway work between batches of runs.
+Each run's ownership is rechecked before acting; completion, cancellation, and
+retention decisions keep their normal order and deadlines.
+
 When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
 retries use bounded backoff in the current Gateway process. If those retries are
 exhausted, the run remains recorded with incomplete cleanup; inspect the warning
@@ -238,8 +242,8 @@ session work, clears its queues, and cancels its active child tree. Session-wide
 requires `clearQueued: true`. Ordinary `chat.abort` without a `runId` does not
 cascade to children. These operations retain their normal authorization checks.
 
-A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
-that branch check is present, `sessionId`. If the check fails during descendant
+A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId`: the leaf
+must still be on the active branch. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
 If child ownership refuses cancellation before the branch check runs, the Gateway

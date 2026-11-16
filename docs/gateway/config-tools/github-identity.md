@@ -46,11 +46,28 @@ GitHub CLI identity is native by default. When `tools.github` is omitted, local 
 
 Gateway GitHub reads and Publish PR account options reuse successful `gh auth token --hostname github.com` reads for up to 60 seconds, matching the credential-verification cache. Host `gh auth login`, `logout`, or `switch` changes can therefore take up to 60 seconds to appear on those read surfaces. Concurrent reads share one native lookup. OAuth shutdown, profile replacement or rotation, and disconnect clear the native-token cache. Environment tokens, managed profile credentials, caller permissions, and session access are still checked live; publication obtains its own live native credential. Failed token reads and anonymous-access absence proofs are not cached.
 
+The Gateway also samples secret-free native configuration facts in its GitHub
+lifecycle, without GitHub API verification or per-turn credential discovery. Only
+authoritative absence narrows built-in OpenClaw `github_publish` listings to
+credential-free readiness and original-request receipt observation;
+`github_identity_status` and public readers remain available. Unknown discovery
+results and configured but unhealthy identities retain their authenticated action declarations; execution still checks
+current credentials and authority. Another agent’s possible delegated publisher
+also keeps the declaration unknown rather than claiming all publishing routes
+are absent. This does not cache absence for credential reads or discard accepted
+publication work. Native configuration is sampled during maintenance, normally
+every 60 seconds. Existing sessions keep their first tool listing across background
+discovery and internal wakes; new sessions, changed tool configuration, or an
+explicit tool refresh use the latest selection. Native and SDK harnesses without
+this session-owned declaration pin retain their existing GitHub action listings;
+this change does not narrow Codex creation-time tools or rotate its warm threads.
+Their execution still checks current credentials and authority.
+
 Publication credentials read from native `gh` storage retain their configured issuer
 in the child environment, even when the Gateway's ambient `GH_HOST` is unset or
 points elsewhere. Ambient Enterprise tokens still require a matching issuer.
 
-Use **Settings → Profile → GitHub accounts** to see **My GitHub** and **System GitHub** together. Administrators explicitly choose **For the system** to configure this shared execution identity; the general connection flow defaults to **For me** for identified users. Per-agent overrides remain an advanced administrative setting under **Agents → Tools**. A personal connection is separate from `tools.github`: it supports explicitly selected Gateway-brokered publication and does not change agent shell credentials, shared defaults, or verified sign-in identity. See [GitHub connections](/concepts/user-model#github-connections).
+Use **Settings → Profile → GitHub accounts** to see **My GitHub**, the **Shared agent account** (`tools.github`), and every agent's account together. Every agent without its own account uses the shared agent account; an agent's account, own or shared, serves its commands, its authenticated dashboard data, and **Publish PR** unless you choose My GitHub. Administrators change the shared account there, and give one agent its own account (`agents.entries.<id>.tools.github`) from that agent's row; the shared account and other agents stay unchanged. **Agents → Tools** shows the selected agent's account read-only. A personal connection is separate from `tools.github`: it supports explicitly selected Gateway-brokered publication and does not change agent shell credentials, shared defaults, or verified sign-in identity. See [GitHub connections](/concepts/user-model#github-connections).
 
 OpenClaw displays a one-time user code with a **Copy code** button beside it; clicking the code selects it in full for manual copying. Open the fixed `https://github.com/login/device` link, paste the code, and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. Setup and refresh do not return credentials in browser responses or place them in config, logs, command arguments, transcripts, or the model runtime environment. OpenClaw-owned local exec receives an access token only through its private process-launch environment, as described below.
 
@@ -99,6 +116,8 @@ If cleanup cannot read a directory's identity, it leaves that directory untouche
 Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
 
 OpenClaw `worker-turn` cloud workers receive the last background-prepared shared identity through their private launch envelope. Binding the identity does not wait for GitHub discovery on the turn path. This binding does not depend on `allowInSandbox` or a role's `sandbox: "required"` policy, so keep people who must not use the shared account off worker profiles. The worker writes the access token to a private per-turn profile in its throwaway state directory. While the repository-bound turn remains authorized, worker heartbeats renew that profile from the same selected account; later exec launches use the renewed token, while running commands keep their launch token. Renewal stops when the caller, session writer, placement, or selected profile loses authority. The profile is removed after the turn’s admitted commands and in-flight credential writes settle; the same OS-user limit described above applies on the worker host. The sealed worker launcher gives each `exec` child the same launch-time credential binding as local exec. GitHub CLI must be installed on the worker host; the bundle includes the launcher, not `gh`. The checkout uses the session-owned branch and an HTTPS `origin` for GitHub repositories; HTTPS Git authentication uses `gh auth git-credential`, with inherited credential helpers cleared. Commits and pushes happen directly on the worker. Reconciliation returns file contents to the Gateway worktree, not commit history. At every turn start, the worker fast-forwards its checkout to the session branch on `origin` when the local branch is behind, bringing in history pushed by an earlier worker; a diverged local branch is left untouched. Paired devices' own GitHub CLI logins are not used for this binding.
+
+Repository-checkpoint publication uses this same selected execution account for the worker’s private Git fetch and integration, independently of the account selected for the final GitHub API/ref/PR writes. The execution account must read the source/head and target/base repositories (one repository in the non-fork case). Each integration owns a fixed credential snapshot bounded by the native transfer deadline and known credential expiry; rotation, removal, selection changes or caller cancellation stop the attempt. It does not borrow an ended turn’s profile or launch a new model turn. Missing execution credentials or repository access fail closed without forwarding a personal publisher token, minting background App grants or falling back to anonymous access. See [Publish with your account](/concepts/user-model#publish-with-your-account) for the saved-request recovery actions.
 
 OpenClaw sandboxes exclude the Gateway's managed GitHub credentials by default; the [per-agent sandbox opt-in](/gateway/config-tools/github-identity#sandbox-opt-in) enables them for an agent's own Docker or Podman sandbox. Ordinary node-host exec and Codex `remote-exec` placements still do not receive these credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a pull request. New PRs are open by default; `draft: true` explicitly creates a draft. Updates preserve the existing PR state.
 
@@ -178,11 +197,16 @@ identity, and keeps current authority through any preparation handoff. The reque
 can be made in one message or established earlier in the conversation before the
 URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
-project first. Existing managed projects must match the PR's head or base
+project first. If it has no PR base history and an accessible registered project
+already provides that history, preparation asks you to start a session in that
+project before fetching. This preserves the empty workspace's files and avoids
+repeating a full-history download. Existing managed projects must match the PR's head or base
 repository.
 
 An ordinary conversation without a project ends its active turn, prepares a new
-session-owned workspace, and resumes in the same conversation. Existing files
+session-owned workspace, and resumes in the same conversation. When its PR base
+matches an accessible registered project, preparation uses that project's shared
+Git history, including for a PR whose head belongs to a fork. Existing files
 stay in their original source; earlier message links open them read-only,
 including downloads and relative HTML assets. The Files panel shows the current
 PR workspace. Sibling conversations keep their original source. Open editors
@@ -236,8 +260,12 @@ deleted.
 
 Content acquisition errors identify the failed Git stage and retain a bounded,
 redacted native reason. A fetch timeout, failed object inventory, and objects
-still missing after a successful fetch are reported separately. Use that reason
-to investigate before retrying `prepare_pr`.
+still missing after a successful fetch are reported separately. A commit-fetch
+timeout directs you to a new session in the PR's base project, where Git can reuse
+its history, instead of repeating the same full-history download. Successful
+commit acquisitions retain `refs/openclaw/fetched/<sha>` in the source repository
+so later fetches can advertise the acquired history even before PR preparation
+finishes. Content-only hydration does not create these refs.
 
 An interrupted preparation retains the same accepted source for retry while
 reconciling the current destination for its review comparison.
@@ -386,6 +414,8 @@ an attachment may already exist.
 
 A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `expectedHeadCommit` and, for a publication receipt, its `requestId`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
+To land a PR that this conversation did not publish, such as one from another session or opened outside OpenClaw, pass its `pullRequestUrl` on each `inspect`, `ready`, `merge`, or `close` call, without `requestId` or `publishingSessionKey`. The same full operator write requirement applies, and the conversation's workspace and any bound PR stay unchanged. The action runs through the shared publisher, so full operator write on the Gateway is the trust boundary: grant it only to people who may merge the repositories that account can merge.
+
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.
 
 For delegated work, the agent must explicitly select the child's `publishingSessionKey`. An authorized person's managed parent conversation receives these PR actions even when its own workspace is ineligible for publication; publishing from that parent remains unavailable. The Gateway verifies that the publishing session belongs to this conversation and binds the operation to its recorded PR. A changed publication or GitHub head requires another inspection and review. If an action's response is interrupted, inspect the same publication before retrying; already-ready, already-merged, or already-closed requests return their observed state without another write. Closing preserves the branch, workspace, and conversation history; it does not reopen a closed PR. Failed checks or unavailable credentials leave the saved work intact.
@@ -411,6 +441,34 @@ Local session-owned worktrees can use the same **Publish PR** action in the Cont
 Automatic shared-publication recovery waits one minute after the first failed attempt and two minutes after the second. After three failed attempts, or a failed attempt on a receipt at least one hour old, it stops GitHub effect recovery and marks the receipt failed with an unconfirmed outcome. If that settlement fails, later attempts retry settlement without repeating GitHub effects. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The attempt count, cooldown, and latest diagnostic reset when the Gateway restarts, but receipt age still bounds failed recovery. Recorded effects and saved work are retained.
 
 During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
+
+Repository-backed cloud publications target the authenticated repository's default
+branch (the parent repository for a fork). A continuation keeps its recorded PR
+repository and base branch. Source branches, tags, and commits select input, not
+the destination. After activation, a background fetch refreshes `origin/main`
+without delaying turns or changing the editing index; failures are advisory.
+
+Publication merges the accepted checkpoint with one observed target tip in private
+worker Git state. It preserves the saved input and any later editing changes. When
+retained history has exactly the checkpoint's tree, the merge uses its original
+ancestry. Conflicts preserve the checkpoint and appear in the receipt. Recovery
+uses the recorded worker destination or required profile without starting a model
+turn; unknown custody is not replaced. Retained compute and runtime reconnects
+require normal dispatch admission. If current startup authorization is needed,
+retry the same request from the original signed-in account. New requests still
+require the exact authoritative disk to be attached for capture; a stored mirror
+cannot replace an unknown disk owner.
+
+An explicit retry with the same idempotency key and unchanged content can reopen
+an unavailable shared request before any publication commit or external write.
+The original requester, selected publisher, and current session authority are
+checked again. A branch rejection can also reconcile a later managed publication
+of the exact saved input by the same requester and account: the recorded commit,
+remote head, and original open PR must match. Recovery extends that commit without
+force-pushing or changing the existing PR metadata. Other branch changes remain
+rejected, and recorded or uncertain effects retain their reconciliation rules.
+API failures report bounded exit, signal, timeout, and HTTP status facts without
+command output.
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 

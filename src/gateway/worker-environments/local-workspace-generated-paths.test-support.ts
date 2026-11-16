@@ -420,3 +420,54 @@ export async function proveGitIgnoredWorkspaceOutputs(owner: LocalWorkspaceOwner
     await expectText(projection, relative, "disposable output\n");
   }
 }
+
+export async function proveLegacyGitIgnoredWorkspaceOutputs(owner: LocalWorkspaceOwner) {
+  const { prepareLocalWorkspaceArchiveFixture } =
+    await import("./local-workspace-incremental.test-support.js");
+  const { service } = await prepareLocalWorkspaceArchiveFixture(owner);
+  const canonical = owner.worktree.path;
+  await fs.writeFile(
+    path.join(canonical, ".gitignore"),
+    ".env.local\ndist/\n.cache/openclaw-bun/\n",
+  );
+  await requireGit(canonical, ["add", ".gitignore"]);
+  await requireGit(canonical, ["commit", "--quiet", "-m", "ignore build outputs"]);
+  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const outputs = ["dist/worker/main.js", ".cache/openclaw-bun/bin/bun"];
+  for (const root of [canonical, projection]) {
+    await writeWorkspaceFiles(root, cacheFiles(outputs, "previous build\n"));
+  }
+  const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
+  const legacy = legacyManifest({
+    ...(await manifestFor(projection)),
+    baseCommit: row.base_commit,
+  });
+  await updateProjection(owner, {
+    baseline_json: legacy.raw,
+    baseline_ref: legacy.ref,
+    tree_root_digest: null,
+    pending_ref: workerWorkspaceResultRef("legacy-unstaged-build-output"),
+    pending_target: "canonical",
+    checkpoint_json: null,
+  });
+  await writeWorkspaceFiles(projection, {
+    ...cacheFiles(outputs, "new build output\n"),
+    "source.txt": "saved source edit\n",
+  });
+  await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  await expectWorkspaceFiles(canonical, {
+    ...cacheFiles(outputs, "previous build\n"),
+    "source.txt": "saved source edit\n",
+  });
+  await expectWorkspaceFiles(projection, cacheFiles(outputs, "new build output\n"));
+  const accepted = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
+  expect(
+    parseWorkerWorkspaceManifest(accepted.rawManifest, accepted.manifestRef).entries.map(
+      (entry) => entry.path,
+    ),
+  ).toEqual([".gitignore", "source.txt"]);
+  expect((await service.gc({ readOwnerState: () => "idle" })).removed).toContain(owner.worktree.id);
+  const restored = await service.restore({ id: owner.worktree.id });
+  await expectWorkspaceFiles(restored.path, { "source.txt": "saved source edit\n" });
+  await expectWorkspaceFiles(projection, cacheFiles(outputs, "new build output\n"));
+}

@@ -34,7 +34,8 @@ type ConfigViewOptions = Partial<
     ConfigData,
     | "schemaRead"
     | "onRetrySchema"
-    | "appearanceDisplayReady"
+    | "configReadAccess"
+    | "appearanceDataRequested"
     | "onAppearanceDataNeeded"
     | "mutationAllowed"
     | "openFileAllowed"

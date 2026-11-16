@@ -1,2 +1,0 @@
-44
-# Regression coverage for config-set audit redaction across option order and non-secret paths.

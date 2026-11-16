@@ -36,11 +36,7 @@ import { sessionTests } from "./session-entry-fixture.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
-import {
-  historyLane,
-  projectionLane,
-  targetDiscoveryLane,
-} from "./session-transcript-worker-resources.js";
+import { historyLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
 import type { SessionEntry } from "./types.js";
 
 const it = sessionTests();
@@ -90,7 +86,7 @@ function interceptReads(hooks: {
   beforeRequest?: (request: unknown) => void;
   afterReply?: (reply: unknown) => Promise<void>;
 }) {
-  const spies = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+  const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
     const run = pool.run.bind(pool);
     return vi.spyOn(pool, "run").mockImplementation((input, options) => {
       const prepare = typeof input === "function" ? input : () => input;

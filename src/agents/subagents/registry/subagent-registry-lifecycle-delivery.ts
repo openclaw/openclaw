@@ -22,6 +22,7 @@ import {
   ensureCompletionState,
   ensureDeliveryState,
   recordPrivateConsumption,
+  recordRequesterHandoff,
 } from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
@@ -110,6 +111,9 @@ export const recordAnnounceDeliveryResult = (
   }
   deliveryState.disposition =
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+  if (delivery.reason === "completion_handoff_pending") {
+    recordRequesterHandoff(entry);
+  }
 };
 
 export const hasPriorRequesterDeliveryMirror = async (

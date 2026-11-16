@@ -83,6 +83,7 @@ function createChildFixture(options: { startupError?: string; finalizationError?
       return run;
     },
     cancel: () => run.cancel(),
+    release: async () => undefined,
     cancelScope: () => run.cancel(),
   };
   const env = {
