@@ -80,6 +80,7 @@ afterEach(async () => {
 async function createPackagedFixture(
   runtimeEnvPatch: NodeJS.ProcessEnv,
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig,
+  currentRuntime: false | string = false,
 ) {
   const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-");
   const tempParentDir = path.join(fixtureRoot, "gateway-temp");
@@ -96,7 +97,14 @@ async function createPackagedFixture(
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
-          argsPrefix: [fixturePath],
+          argsPrefix: currentRuntime
+            ? [
+                "--input-type=module",
+                "--eval",
+                `await import(${JSON.stringify(fixturePath)})`,
+                path.join(process.cwd(), currentRuntime),
+              ]
+            : [fixturePath],
           tempParentDir,
           usePackagedPlugins: true,
         },
@@ -925,6 +933,17 @@ describe("buildQaRuntimeEnv", () => {
       }),
     ).rejects.toThrow("qa gateway child did not reach restart boundary");
   });
+
+  it.each(["openclaw.mjs", "dist/entry.js", "dist/entry.mjs"])(
+    "uses ordinary startup for current runtime %s",
+    async (entry) => {
+      const { start, recordPath } = await createPackagedFixture({}, undefined, entry);
+      await expect(start()).rejects.toThrow("fixture gateway exit");
+      const records = await readJsonLines(recordPath);
+      expect(records.map((record) => record.kind)).toEqual(["auth", "auth", "gateway"]);
+      expect(records.at(-1)?.authProfileIds).toEqual(["qa-mock-openai", "qa-mock-anthropic"]);
+    },
+  );
 
   it("lets a legacy packaged candidate create its auth DB before gateway spawn", async () => {
     const { owner, start, recordPath } = await createPackagedFixture({

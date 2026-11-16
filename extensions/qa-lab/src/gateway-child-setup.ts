@@ -185,6 +185,21 @@ export async function prepareQaGatewayChild(
     params.command ??
     (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
   const usesPackagedCandidate = gatewayCommand?.usePackagedPlugins === true;
+  const runtimeEntry = (
+    gatewayCommand?.processBoundary?.runtimeArgsPrefix ?? gatewayCommand?.argsPrefix
+  )?.at(-1);
+  const runtimeEntryPath = runtimeEntry
+    ? path.resolve(gatewayCommand?.cwd ?? runtimeCwd, runtimeEntry)
+    : undefined;
+  const usesCurrentRuntime = [
+    "openclaw.mjs",
+    "scripts/run-node.mjs",
+    "src/entry.ts",
+    "dist/index.mjs",
+    "dist/index.js",
+    "dist/entry.mjs",
+    "dist/entry.js",
+  ].some((relativePath) => runtimeEntryPath === path.join(params.repoRoot, relativePath));
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -467,7 +482,9 @@ export async function prepareQaGatewayChild(
       await closeQaRuntimeStores(tempRoot);
       lifetime.assertOpen();
 
-      if (usesPackagedCandidate && gatewayCommand) {
+      // Current fresh fixtures use ordinary startup admission. Released packages
+      // retain their explicit upgrade/repair path; never auto-accept plugins at startup.
+      if (usesPackagedCandidate && gatewayCommand && !usesCurrentRuntime) {
         const command = {
           lifetime,
           executablePath: gatewayCommand.executablePath,
@@ -475,8 +492,6 @@ export async function prepareQaGatewayChild(
           cwd: gatewayCwd,
           env: createQaPackagedBootstrapEnv(env),
         };
-        // The separate onboarding smoke cannot prepare this child's state.
-        // Converge the freshly written config before verify-only startup.
         // Published candidates such as 2026.7.1-2 predate capability consent.
         const help = await runQaPackagedBootstrap(
           "installed package plugin setup failed (update repair --help)",
