@@ -287,28 +287,6 @@ describe.skipIf(process.platform === "win32")("gateway-host exec autoAllowSkills
     }
   });
 
-  // After the spawn preflight, the supervisor can still wait on a scope fence or adapter
-  // preparation. Trust withdrawn there must stop the detached launch at native initiation.
-  it("detached approval launch denies at native initiation when trust is withdrawn after preflight", async () => {
-    mockDetachedAllowOnce();
-    const launch = vi.fn();
-    spawn.mockImplementationOnce(async (input) => {
-      uninstallSkillTool();
-      input.initiateSpawn?.(launch);
-      throw new Error("native initiation was not refused");
-    });
-
-    const result = await runGatewayAllowlist("always", { approvalFollowupMode: "agent" });
-
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
-    await vi.waitFor(() => expect(sendFollowup).toHaveBeenCalled(), { timeout: 10_000 });
-    expect(String(sendFollowup.mock.calls.at(-1)?.[1])).toContain(
-      "skill bin authorization changed before execution",
-    );
-    expect(spawn).toHaveBeenCalledOnce();
-    expect(launch).not.toHaveBeenCalled();
-  });
-
   // Skill bins resolve on the command's PATH, which is safe only because host exec refuses a
   // requested PATH; this pins that invariant.
   it("refuses a requested PATH that would reach a planted skill-named binary", async () => {

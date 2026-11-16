@@ -64,7 +64,6 @@ import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-gran
 import {
   chainRevalidations,
   evaluateGatewayShellAllowlistWithSkillAuthority,
-  GatewaySkillBinAuthorityWithdrawnError,
 } from "./bash-tools.exec-host-gateway-revalidation.js";
 import {
   clearAutoReviewDenials,
@@ -285,8 +284,6 @@ export async function processGatewayAllowlist(
       throw new Error("Exec authorization has not been committed");
     }
     assertCommittedAuthorization();
-    // Committed policy never records skill trust; hold it through native initiation too.
-    skillAuthority.assertSkillBinAuthorityCurrent?.();
   };
   const commitExecutionAuthorization = async (options: {
     source: ExecApprovalUsageAuthorization["source"];
@@ -482,7 +479,7 @@ export async function processGatewayAllowlist(
         });
       return {
         execCommandOverride: enforcedCommand,
-        assertCurrent: skillAuthority.holdWith(consumeGrant.assertCurrent),
+        assertCurrent: consumeGrant.assertCurrent,
         initiateSpawn: consumeGrant.initiateSpawn,
         releaseSpawn: consumeGrant.releaseSpawn,
         revalidateBeforeExecution: async () => {
@@ -1109,9 +1106,8 @@ export async function processGatewayAllowlist(
               startupSignal: params.signal,
               assertCurrent,
               beforeSpawn: async () => {
-                // Detached approval can settle long after evaluation, so this launch needs the
-                // same skill-authority re-resolution as the inline paths; assertCurrent then
-                // holds the authority it verifies through native initiation.
+                // Detached approval can settle long after evaluation, so this launch rechecks
+                // skill authority when it starts, as the inline paths do.
                 finalBindingDenied =
                   (await resolveApprovalDrift()) ??
                   (await skillAuthority.resolveSkillBinAuthorityDrift?.());
@@ -1127,9 +1123,6 @@ export async function processGatewayAllowlist(
             }
             if (error === finalBindingDeniedError && finalBindingDenied) {
               return { status: "operand-drift" as const, message: finalBindingDenied };
-            }
-            if (error instanceof GatewaySkillBinAuthorityWithdrawnError) {
-              return { status: "operand-drift" as const, message: error.deniedReason };
             }
             return { status: "spawn-failed" as const };
           }
