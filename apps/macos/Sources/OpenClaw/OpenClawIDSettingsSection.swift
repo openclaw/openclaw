@@ -3,11 +3,17 @@ import SwiftUI
 
 /// What Settings shows about this Mac's OpenClaw ID access. Display data only.
 enum OpenClawIDSettingsPresentation: Equatable {
+    case signIn(removal: MacOpenClawIDRemoval?)
     /// Connected through another route (Tailscale, token, SSH); offer to switch.
     case migrate(claw: String, route: String, address: String)
     /// `needsSignIn`: without a node, the route re-reads the claw with the person's Discovery
     /// session, and that session has ended.
     case owner(claw: String, device: String, runsTools: Bool, approvedWith: String, needsSignIn: Bool)
+    /// A member device, added with an invite or from another of the member's devices: the owner's
+    /// device actions (tools, removal, approvals) are not offered.
+    case member(claw: String, device: String, approvedWith: String, needsSignIn: Bool)
+    /// A member request is waiting for an owner's approval.
+    case pendingJoin(claw: String)
 }
 
 /// Settings' owner of this Mac's OpenClaw ID device actions. Every write is signed with D in this
@@ -32,7 +38,6 @@ final class OpenClawIDSettingsModel {
     }
 
     var confirmation: Confirmation?
-    var signIn: OnboardingOpenClawIDModel?
     private(set) var busy = false
     private(set) var error: String?
     private(set) var revision = 0
@@ -50,6 +55,14 @@ final class OpenClawIDSettingsModel {
     func presentation(state: AppState) -> OpenClawIDSettingsPresentation? {
         _ = self.revision
         let device = InstanceIdentity.displayName
+        if let enrolled = self.store.load(), enrolled.memberRole != nil {
+            return .member(
+                claw: enrolled.hostname,
+                device: device,
+                approvedWith: enrolled.approvedWith == .invite
+                    ? "Added with an invite" : "Approved from your other device",
+                needsSignIn: self.store.session(for: enrolled) == nil)
+        }
         if let enrolled = self.store.load() {
             return .owner(
                 claw: enrolled.hostname,
@@ -59,11 +72,32 @@ final class OpenClawIDSettingsModel {
                     ? "Approved with your recovery kit" : "Approved from your other device",
                 needsSignIn: enrolled.nodeEnrollmentID == nil && self.store.session() == nil)
         }
-        guard state.connectionMode == .remote, MacOpenClawIDConfiguration.current() != nil else { return nil }
-        if state.remoteTransport == .ssh {
-            return .migrate(claw: state.remoteTarget, route: "SSH", address: state.remoteTarget)
+        if let join = self.store.pendingJoin() {
+            return .pendingJoin(claw: join.hostname)
         }
-        guard let url = URL(string: state.remoteUrl), let host = url.host else { return nil }
+        return Self.unenrolledPresentation(
+            available: MacOpenClawIDConfiguration.current() != nil,
+            mode: state.connectionMode,
+            transport: state.remoteTransport,
+            target: state.remoteTarget,
+            url: state.remoteUrl,
+            removal: self.store.lastRemoval())
+    }
+
+    static func unenrolledPresentation(
+        available: Bool,
+        mode: AppState.ConnectionMode,
+        transport: AppState.RemoteTransport,
+        target: String,
+        url: String,
+        removal: MacOpenClawIDRemoval?) -> OpenClawIDSettingsPresentation?
+    {
+        guard available else { return nil }
+        guard mode == .remote else { return .signIn(removal: removal) }
+        if transport == .ssh {
+            return .migrate(claw: target, route: "SSH", address: target)
+        }
+        guard let host = URL(string: url)?.host else { return .signIn(removal: removal) }
         let route = host.hasSuffix(".ts.net") || host.hasPrefix("100.") ? "Tailscale" : "a Gateway token"
         return .migrate(claw: host, route: route, address: host)
     }
@@ -72,15 +106,7 @@ final class OpenClawIDSettingsModel {
         self.confirmation = nil
         switch confirmation {
         case .migrate:
-            let model = OnboardingOpenClawIDModel(
-                service: OnboardingOpenClawIDSignInService(),
-                onJoined: { [weak self] claw in
-                    try self?.completeJoin(claw)
-                    self?.signIn = nil
-                    self?.revision += 1
-                })
-            model.begin(.connect)
-            self.signIn = model
+            MacOpenClawIDSignInPresenter.shared.present()
         case .stopTools: self.run { try await self.stopTools() }
         case .startTools: self.run { try await self.startTools() }
         case .remove: self.run { try await self.removeDevice() }
@@ -169,6 +195,8 @@ final class OpenClawIDSettingsModel {
 
     private func removeDevice() async throws {
         guard let device = self.store.load() else { return }
+        self.store.beginLocalRemoval(device)
+        defer { self.store.endLocalRemoval(device) }
         do {
             try await self.actions(device).removeDevice()
         } catch let refused as OpenClawIDOwnerDeviceActionError {
@@ -178,10 +206,7 @@ final class OpenClawIDSettingsModel {
             // answer can be lost after it succeeded. Finish locally once the claw no longer lists it.
             guard await self.removed(device) else { throw error }
         }
-        MacOpenClawIDOperatorRoute.shared.stop()
-        MacNodeModeCoordinator.shared.selectOpenClawIDTarget(nil)
-        await self.store.forget(device)
-        try? AppStateStore.shared.setPrimaryGateway(.clear)
+        await self.store.remove(device, origin: .here)
     }
 
     /// Whether the claw's verified snapshot no longer lists this Mac's peer key.
@@ -221,6 +246,19 @@ struct OpenClawIDSettingsSection: View {
     var body: some View {
         Section("OpenClaw ID") {
             switch self.presentation {
+            case let .signIn(removal):
+                if let removal {
+                    self.header(
+                        "Removed from \(removal.hostname)", detail: removal.settingsMessage(), icon: "info.circle")
+                }
+                HStack {
+                    self.header(
+                        "Sign in with OpenClaw ID",
+                        detail: "Reach your claw from anywhere with your own approval, no VPN or shared token.",
+                        icon: "person.crop.circle")
+                    Spacer()
+                    Button("Sign in…") { MacOpenClawIDSignInPresenter.shared.present() }
+                }
             case let .migrate(claw, route, address):
                 self.header(
                     "Sign in with OpenClaw ID",
@@ -271,13 +309,29 @@ struct OpenClawIDSettingsSection: View {
                     }
                 }
                 .disabled(self.model.busy)
-                if needsSignIn {
-                    HStack {
-                        self.plain("Sign in to OpenClaw ID again to keep reaching \(claw) from this Mac.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Sign in again…") { self.model.signInAgain() }.disabled(self.model.busy)
-                    }
+                if needsSignIn { self.signInAgain(claw) }
+            case let .member(claw, device, approvedWith, needsSignIn):
+                self.header(
+                    "\(device) · Member of \(claw)",
+                    detail: "\(approvedWith). Chat and the dashboard.",
+                    icon: "person.crop.circle.badge.checkmark")
+                Text("Your assistant can’t use this Mac’s commands, screen or camera.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    self.plain("To remove this Mac, open Your devices on another of your devices, or ask an owner.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open Dashboard") { self.model.retryPrimarySelection() }.disabled(self.model.busy)
+                }
+                if needsSignIn { self.signInAgain(claw) }
+            case let .pendingJoin(claw):
+                HStack {
+                    self.header(
+                        "Waiting to join \(claw)",
+                        detail: "An owner needs to approve this Mac. Open the request to check or cancel it.",
+                        icon: "hourglass")
+                    Spacer()
+                    Button("Open…") { MacOpenClawIDSignInPresenter.shared.present() }
                 }
             }
             if let error = self.model.error {
@@ -287,17 +341,20 @@ struct OpenClawIDSettingsSection: View {
         .sheet(item: self.$model.confirmation) { confirmation in
             OpenClawIDConfirmationSheet(kind: confirmation) { self.model.confirm(confirmation) }
         }
-        .sheet(isPresented: Binding(
-            get: { self.model.signIn != nil },
-            set: { if !$0 { self.model.signIn = nil } }))
-        {
-            if let signIn = self.model.signIn { OnboardingOpenClawIDView(model: signIn) }
-        }
     }
 
     /// Runtime text built from claw and device names (rendered as given).
     private func plain(_ text: String) -> Text {
         Text(text)
+    }
+
+    private func signInAgain(_ claw: String) -> some View {
+        HStack {
+            self.plain("Sign in to OpenClaw ID again to keep reaching \(claw) from this Mac.")
+                .font(.callout).foregroundStyle(.secondary)
+            Spacer()
+            Button("Sign in again…") { self.model.signInAgain() }.disabled(self.model.busy)
+        }
     }
 
     private func header(_ title: String, detail: String, icon: String) -> some View {

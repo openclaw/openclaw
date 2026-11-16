@@ -4,6 +4,8 @@ import Foundation
 public enum OpenClawIDDeviceRouteError: Error, Sendable, Equatable {
     /// No node key is listed and the Discovery session has ended: sign in again.
     case signInRequired
+    /// Local trust data is unavailable; this is not evidence of remote removal.
+    case trustUnavailable
 }
 
 /// Re-verifies an owner or member device's claw before each dial, pinned to the root it enrolled
@@ -23,7 +25,7 @@ public enum OpenClawIDDeviceRoute {
         -> OpenClawIDNodeTrustTarget
     {
         guard let previous = try await store.load(hostname: hostname) else {
-            throw OpenClawIDNodeEnrollmentError.notAdmitted
+            throw OpenClawIDDeviceRouteError.trustUnavailable
         }
         var response: Data?
         if let node {
@@ -41,8 +43,14 @@ public enum OpenClawIDDeviceRoute {
         }
         if response == nil {
             guard let session, session.expiresAt > now() + 60 else { throw OpenClawIDDeviceRouteError.signInRequired }
-            response = try await OpenClawIDDiscoveryAccount(origin: discoveryOrigin, http: http, now: now)
-                .descriptorAndSnapshot(session, clawID: previous.clawID)
+            do {
+                response = try await OpenClawIDDiscoveryAccount(origin: discoveryOrigin, http: http, now: now)
+                    .descriptorAndSnapshot(session, clawID: previous.clawID)
+            } catch OpenClawIDNodeEnrollmentError.discoveryRejected(404) where admission == .member {
+                // Discovery hides a claw from an account that no longer belongs to it: removing a
+                // member's last device removes the member.
+                throw OpenClawIDNodeEnrollmentError.notAdmitted
+            }
         }
         try Task.checkCancellation()
         let assessment = try OpenClawIDNodeTrust.assessDevice(

@@ -4,7 +4,6 @@ import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-s
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -28,6 +27,7 @@ import {
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
+import { describeSessionToolDefinition } from "./session-tool-definition.js";
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
@@ -123,7 +123,7 @@ function changedPromptRoutePart(previous: unknown, current: string): SystemPromp
   return part ? `route:${part}` : "new";
 }
 
-type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
+type ToolDefinition = ReturnType<typeof describeSessionToolDefinition>;
 type PublicationListing = ToolDefinition &
   Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
 
@@ -144,14 +144,6 @@ type ToolSurfaceInput = {
   historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 };
-
-function describeTool(tool: AnyAgentTool): ToolDefinition {
-  // Published schemas are detached, frozen JSON; checkpointing must not copy them per session.
-  if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
-    retainOwnedTranscriptPayload(tool.parameters);
-  }
-  return { name: tool.name, description: tool.description, parameters: tool.parameters };
-}
 
 function resolvePromptHistoryId(params: {
   state: EmbeddedSessionPromptState;
@@ -319,7 +311,7 @@ export function prepareSessionPublicationToolListing(
       ? previous
       : {
           scope,
-          ...describeTool(current),
+          ...describeSessionToolDefinition(current),
           label: current.label,
           async: current.async,
           catalogMode: current.catalogMode,
@@ -384,7 +376,7 @@ export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentToo
   const built = new Set(tools.map((tool) => tool.name));
   const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
   if (changed) {
-    const current = tools.map(describeTool);
+    const current = tools.map(describeSessionToolDefinition);
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,

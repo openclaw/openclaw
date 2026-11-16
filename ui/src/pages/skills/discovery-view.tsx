@@ -281,8 +281,10 @@ export function SkillDiscovery(props: SkillsProps) {
       <Errored fallback={() => null}>
         <Loading on={[query(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&
+            props.libraryEntries !== undefined &&
             entries().length === 0 &&
             !props.loading &&
+            (!props.error || props.state.skillsReport) &&
             props.state.connected && (
               <SettingsGroup>
                 <SettingsEmpty

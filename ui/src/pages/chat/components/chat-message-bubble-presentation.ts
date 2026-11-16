@@ -355,9 +355,8 @@ export function prepareGroupedMessage(
   const templatePluginCards = normalizedMessage.content.filter(
     (item) => item.type === "template_plugin_install",
   );
-  const extractedThinking =
+  const reasoningMarkdown =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);

@@ -1,19 +1,18 @@
 import { createHash } from "node:crypto";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
-import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 
-const snapshots = new Map<string, WeakRef<SessionSkillSnapshot>>();
-const admitted = new WeakSet<SessionSkillSnapshot>();
+const snapshots = new Map<string, WeakRef<object>>();
+const admitted = new WeakSet<object>();
 const MAX_SNAPSHOTS = 256;
 
 /** Replica inputs are decoded persisted JSON, never the mutable runtime skill catalog. */
-export function internSessionSkillSnapshot(snapshot: SessionSkillSnapshot): SessionSkillSnapshot {
+export function internSessionEntryField<T extends object>(snapshot: T): T {
   if (admitted.has(snapshot)) {
     return snapshot;
   }
   // Preserve member order: equal prompts or revisions alone do not imply equal output bytes.
   const hash = createHash("sha256");
-  if (typeof snapshot.prompt === "string") {
+  if ("prompt" in snapshot && typeof snapshot.prompt === "string") {
     // Hash the large prompt directly instead of allocating its JSON-escaped copy.
     // Its member position preserves output order; JSON cannot contain literal NUL.
     const { prompt, ...metadata } = snapshot;
@@ -28,7 +27,8 @@ export function internSessionSkillSnapshot(snapshot: SessionSkillSnapshot): Sess
   const key = hash.digest("hex");
   const existing = snapshots.get(key)?.deref();
   if (existing) {
-    return existing;
+    // SAFETY: Persisted JSON with the same content digest has the same shape and member order.
+    return existing as T;
   }
   freezeTrustedJsonSnapshot(snapshot);
   admitted.add(snapshot);

@@ -25,6 +25,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -122,7 +123,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           [opts.prompt, opts.promptFile, opts.promptStdin].filter((value) => value !== undefined)
             .length !== 1
         ) {
-          throw new Error("Use exactly one of --prompt, --prompt-file, or --prompt-stdin.");
+          throwExpectedCliError("Use exactly one of --prompt, --prompt-file, or --prompt-stdin.");
         }
         let prompt = opts.prompt;
         if (opts.promptFile !== undefined) {
@@ -142,11 +143,11 @@ export function registerModelCapabilityCommands(capability: Command): void {
           );
         }
         if (normalizeOptionalString(prompt) === undefined) {
-          throw new Error("--prompt cannot be empty or whitespace-only.");
+          throwExpectedCliError("--prompt cannot be empty or whitespace-only.");
         }
         const thinking = normalizeThinkLevel(opts.thinking);
         if (opts.thinking !== undefined && !thinking) {
-          throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
+          throwExpectedCliError(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
         }
         const transport = resolveTransport({
           local: Boolean(opts.local),

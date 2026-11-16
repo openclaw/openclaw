@@ -57,12 +57,29 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         self.session = nil
     }
 
-    func signIn() async throws -> String {
+    func signIn(freshLogin: Bool = false) async throws -> String {
         let metadata = try await self.metadata()
         let verifier = Self.base64URL(Self.random(32))
         let state = Self.base64URL(Self.random(16))
         let nonce = Self.base64URL(Self.random(16))
-        guard var url = URLComponents(url: metadata.authorization, resolvingAgainstBaseURL: false) else {
+        let authorize = try self.authorizationURL(
+            endpoint: metadata.authorization, verifier: verifier, state: state, nonce: nonce, freshLogin: freshLogin)
+        let callback = try await self.authenticate(authorize)
+        let code = try Self.code(from: callback, state: state, issuer: self.configuration.issuer)
+        let idToken = try await self.exchange(code: code, verifier: verifier, endpoint: metadata.token)
+        guard Self.nonce(of: idToken) == nonce else { throw MacOpenClawIDSignInError.stateMismatch }
+        return idToken
+    }
+
+    /// A fresh login asks the issuer to authenticate again rather than reuse its browser session.
+    func authorizationURL(
+        endpoint: URL,
+        verifier: String,
+        state: String,
+        nonce: String,
+        freshLogin: Bool) throws -> URL
+    {
+        guard var url = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw MacOpenClawIDSignInError.malformed
         }
         url.queryItems = [
@@ -75,12 +92,9 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
             .init(name: "code_challenge", value: Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))),
             .init(name: "code_challenge_method", value: "S256"),
         ]
+        if freshLogin { url.queryItems?.append(.init(name: "prompt", value: "login")) }
         guard let authorize = url.url else { throw MacOpenClawIDSignInError.malformed }
-        let callback = try await self.authenticate(authorize)
-        let code = try Self.code(from: callback, state: state, issuer: self.configuration.issuer)
-        let idToken = try await self.exchange(code: code, verifier: verifier, endpoint: metadata.token)
-        guard Self.nonce(of: idToken) == nonce else { throw MacOpenClawIDSignInError.stateMismatch }
-        return idToken
+        return authorize
     }
 
     /// Checks the callback's path, state and (RFC 9207) issuer, and returns the authorization code.

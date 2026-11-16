@@ -11,6 +11,10 @@ import {
 import { prepareAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
+import {
+  assertSessionStoreReadCandidate,
+  type SessionStoreReadCustody,
+} from "./session-store-read-candidates.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerSuccess,
@@ -33,6 +37,7 @@ export async function withHistoryDatabase<T>(
   operation: () => T | Promise<T>,
   validation?: OpenClawAgentDatabaseReadValidation,
   holdContext?: SqliteOperationHoldContext,
+  readCustody?: readonly SessionStoreReadCustody[],
   creation?: { witness: AgentCreationClaimWitness; assertCurrent: () => void },
 ): Promise<SessionTranscriptWorkerSuccess<T>> {
   if (
@@ -57,7 +62,21 @@ export async function withHistoryDatabase<T>(
     const value = await withSqliteReaderOwner(
       { operation: `sessions.${operationLabel}`, ownerKind: "worker" },
       () => {
-        const read = () => scope.run({ ...database, validation }, operation);
+        const read = () =>
+          scope.run(
+            {
+              ...database,
+              validation,
+              assertSourceCurrent:
+                readCustody &&
+                (() => {
+                  for (const custody of readCustody) {
+                    assertSessionStoreReadCandidate(custody.sourcePath, custody.candidates);
+                  }
+                }),
+            },
+            operation,
+          );
         return creation
           ? withAgentCreationClaimWitness(creation.witness, creation.assertCurrent, read)
           : read();

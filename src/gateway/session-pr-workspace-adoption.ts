@@ -3,8 +3,11 @@ import { listExecSessionsForCancellation } from "../agents/bash-process-registry
 import { assertLocalSandboxWorkspaceBackend } from "../agents/sandbox/local-workspace.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
-import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
-import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+  validateWorkspaceFilesystemEvidence,
+} from "../agents/workspace-state-guard.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
@@ -38,6 +41,9 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   assertLocalSandboxWorkspaceBackend(sandbox.backendId);
   const cfg = context.getRuntimeConfig();
   const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
+  const filesystem = await captureWorkspaceFilesystemEvidence(workspaceDir);
+  params.signal?.throwIfAborted();
+  params.assertCurrent();
   const originalRoot = sandbox.workspaceDir;
   const prior = entry.priorWorkspace;
   const recovering =
@@ -55,16 +61,14 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       entry.pendingProjectGitUrl ||
       (entry.sessionRoot !== undefined &&
         entry.sessionRoot !== workspaceDir &&
-        entry.sessionRoot !== resolveCanonicalWorkspacePath(workspaceDir)))
+        entry.sessionRoot !== filesystem.canonical))
   ) {
     throw new Error("This conversation already has another source. Its files were preserved.");
   }
-  const assertWorkspaceCurrent = captureWorkspaceStateFilesystemGuard(workspaceDir, false);
   const identities = [target.sessionKey, entry.sessionId];
-  const assertIdle = () => {
+  const assertIdle = createWorkspaceFilesystemSource(filesystem, () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
-    assertWorkspaceCurrent();
     // The handoff holds queued follow-ups; only competing execution blocks adoption.
     // An exited, finalized process cannot compete, and its output stays readable
     // through process log, so an unread result (including a requested stop) is not busy.
@@ -122,7 +126,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
         `This conversation still has background work, a child or a terminal: ${blocker}. Finish that work, then retry workspace preparation; nothing was stopped or moved.`,
       );
     }
-  };
+  });
   assertIdle();
   if (recovering) {
     return entry;
@@ -137,7 +141,10 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     policy: "allow-live",
     signal: params.signal,
     assertCurrent: assertIdle,
-    prepare: async () => assertIdle(),
+    prepare: async () => {
+      await validateWorkspaceFilesystemEvidence(filesystem);
+      assertIdle();
+    },
     run: async () => {
       const oldFiles = await prepareSessionFileWorkspace(
         cfg,

@@ -86,10 +86,9 @@ function renderFilterChips(
   sessions: UsageSessionEntry[],
   { filters, callbacks }: Pick<UsageProps, "filters" | "callbacks">,
 ) {
-  const { selectedDays, selectedHours, selectedSessions } = filters;
-  const { onClearDays, onClearHours, onClearSessions, onClearFilters } = callbacks.filters;
-  const hasFilters =
-    selectedDays.length > 0 || selectedHours.length > 0 || selectedSessions.length > 0;
+  const { selectedDays, selectedSessions } = filters;
+  const { onClearDays, onClearSessions, onClearFilters } = callbacks.filters;
+  const hasFilters = selectedDays.length > 0 || selectedSessions.length > 0;
   if (!hasFilters) {
     return undefined;
   }
@@ -113,10 +112,6 @@ function renderFilterChips(
     selectedDays.length === 1
       ? selectedDays[0]
       : t("usage.filters.daysCount", { count: String(selectedDays.length) });
-  const hoursLabel =
-    selectedHours.length === 1
-      ? `${selectedHours[0]}:00`
-      : t("usage.filters.hoursCount", { count: String(selectedHours.length) });
   const chips = [
     {
       active: selectedDays.length > 0,
@@ -124,13 +119,6 @@ function renderFilterChips(
       value: daysLabel,
       removeKey: "usage.filters.removeDays",
       onClear: onClearDays,
-    },
-    {
-      active: selectedHours.length > 0,
-      labelKey: "usage.filters.hours",
-      value: hoursLabel,
-      removeKey: "usage.filters.removeHours",
-      onClear: onClearHours,
     },
     {
       active: selectedSessions.length > 0,
@@ -156,7 +144,7 @@ function renderFilterChips(
           </div>
         )}
       </For>
-      {(selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0 ? (
+      {selectedDays.length > 0 && selectedSessions.length > 0 ? (
         <button class="btn btn--sm" onClick={onClearFilters}>
           {t("usage.filters.clearAll")}
         </button>
@@ -552,11 +540,13 @@ export function UsageInsights(props: {
                   value={insights().cacheHitLabel}
                   sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().cacheHitRate > 0.6
-                      ? "good"
-                      : insights().cacheHitRate > 0.3
-                        ? "warn"
-                        : "bad"
+                    insights().cacheBase > 0
+                      ? insights().cacheHitRate > 0.6
+                        ? "good"
+                        : insights().cacheHitRate > 0.3
+                          ? "warn"
+                          : "bad"
+                      : undefined
                   }
                 />
                 <SummaryStat

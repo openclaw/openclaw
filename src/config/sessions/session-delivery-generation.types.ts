@@ -16,4 +16,6 @@ export type SessionGenerationEntry = Pick<
 export type SessionGenerationFacts = Omit<SessionDeliveryGeneration, "sessionId"> & {
   sessionId: string | null;
   env?: NodeJS.ProcessEnv;
+  /** Live transcript writers pin the exact transcript; stored references follow edits. */
+  exactTranscript?: true;
 };

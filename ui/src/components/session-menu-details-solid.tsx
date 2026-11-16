@@ -136,7 +136,7 @@ export function useSessionMenuDetails(
           ) : undefined,
         };
       }),
-      ...(options.length === 0
+      ...(options.length === 0 && !ownerSnapshot().loading && !ownerSnapshot().error
         ? [
             {
               kind: "content" as const,

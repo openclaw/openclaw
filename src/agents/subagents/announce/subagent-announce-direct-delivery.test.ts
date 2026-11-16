@@ -466,6 +466,22 @@ it.each([
   ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
   ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
   [
+    "saved-state conflict with intentional suppression",
+    {
+      status: "ok",
+      result: {
+        payloads: [],
+        meta: { error: { kind: "incomplete_turn", code: "item_conflict" } },
+        deliveryStatus: {
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          resultCount: 0,
+        },
+      },
+    },
+    { disposition: "intentional_non_delivery", reason: "delivery_suppressed", terminal: true },
+  ],
+  [
     "partial send failure",
     Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
     { disposition: "ambiguous" },
@@ -484,7 +500,12 @@ it.each([
   const fixture = setup(typeof input === "string" ? "image_generate" : "subagent_settle");
   const resultInput =
     typeof input === "string"
-      ? new GatewayClientRequestError({ code: "INVALID_REQUEST", message: input })
+      ? new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: input,
+          // The Gateway marks transient work-start blocks, such as a pending workspace, retryable.
+          retryable: expected.disposition === "retryable",
+        })
       : input;
   const onDeliveryError = vi.fn();
   fixture.params.onDeliveryError = onDeliveryError;

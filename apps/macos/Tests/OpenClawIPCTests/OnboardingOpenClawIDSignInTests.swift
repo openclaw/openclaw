@@ -61,14 +61,15 @@ struct OnboardingOpenClawIDSignInTests {
             return
         }
         #expect(account == "owner@example.test")
-        #expect(listed.map(\.relationship) == ["Owner", "Owner", "Operator"])
+        #expect(listed.map(\.relationship) == ["Owner", "Owner", "Member"])
         #expect(await http.bearers == ["fixture-id-token", "ds_fixture"])
         #expect(try await service.perform(.selectClaw(Discovery.studio)) == .chooseApproval(
             claw: "studio-k7x2q.crabd.me", device: "Fixture Mac"))
         #expect(try await service.perform(.selectClaw(Discovery.lab)) == .problem(.clawOffline(
             claw: "lab-k7x2q.crabd.me")))
-        #expect(try await service.perform(.selectClaw(Discovery.team)) == .problem(.memberNeedsInvite(
-            claw: "team-k7x2q.crabd.me")))
+        // A member adds this Mac from another of their devices, without an invite.
+        #expect(try await service.perform(.selectClaw(Discovery.team)) == .addMemberDevice(
+            claw: "team-k7x2q.crabd.me", device: "Fixture Mac"))
     }
 
     @Test func `an account without claws and a cancelled sign in`() async throws {
@@ -78,16 +79,78 @@ struct OnboardingOpenClawIDSignInTests {
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await service.perform(.signIn) == .problem(.notInvited(account: "owner@example.test")))
-        environment.signIn = { throw MacOpenClawIDSignInError.cancelled }
+        environment.signIn = { _ in throw MacOpenClawIDSignInError.cancelled }
         let cancelled = OnboardingOpenClawIDSignInService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await cancelled.perform(.signIn) == .signIn)
-        environment.signIn = { throw MacOpenClawIDSignInError.stateMismatch }
+        environment.signIn = { _ in throw MacOpenClawIDSignInError.stateMismatch }
         let failed = OnboardingOpenClawIDSignInService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await failed.perform(.signIn) == .problem(.signInFailed))
+    }
+
+    @Test func `only a fresh login asks the issuer to ignore its browser session`() throws {
+        let signIn = MacOpenClawIDSignIn(configuration: Self.configuration)
+        let endpoint = Self.configuration.issuer.appendingPathComponent("oauth2/authorize")
+        for fresh in [false, true] {
+            let url = try signIn.authorizationURL(
+                endpoint: endpoint,
+                verifier: "fixture-verifier",
+                state: "fixture-state",
+                nonce: "fixture-nonce",
+                freshLogin: fresh)
+            let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+            let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+            #expect(query["prompt"] == (fresh ? "login" : nil))
+            #expect(query["state"] == "fixture-state")
+            #expect(query["nonce"] == "fixture-nonce")
+            #expect(query["code_challenge_method"] == "S256")
+            #expect(query["redirect_uri"] == MacOpenClawIDConfiguration.redirectURI)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `switch account clears Discovery and requests a fresh login`(empty: Bool) async throws {
+        let http = Discovery(empty: empty)
+        var attempts: [Bool] = []
+        var environment = Self.environment(http: http)
+        environment.signIn = { fresh in
+            attempts.append(fresh)
+            if fresh { throw MacOpenClawIDSignInError.cancelled }
+            return "fixture-id-token"
+        }
+        let service = OnboardingOpenClawIDSignInService(
+            configuration: Self.configuration,
+            databaseURL: Self.database(),
+            nodeInvitations: Self.nodeInvitations(),
+            environment: environment)
+        let model = OnboardingOpenClawIDModel(service: service, onJoined: { _ in })
+        await model.begin(.connect)?.value
+        await model.perform(.signIn)?.value
+        if empty {
+            #expect(model.step == .problem(.notInvited(account: "owner@example.test")))
+        } else {
+            guard case let .claws(account, _) = model.step else {
+                Issue.record("expected the claw picker")
+                return
+            }
+            #expect(account == "owner@example.test")
+        }
+        let switching = model.perform(.switchAccount)
+        #expect(model.step == .signingIn)
+        #expect(model.busy)
+        await switching?.value
+        #expect(model.step == .signIn)
+        #expect(attempts == [false, true])
+        // Neither Back nor an old selection can recover the discarded account after cancellation.
+        #expect(try await service.perform(.back) == .signIn)
+        await #expect(throws: CocoaError.self) { try await service.perform(.selectClaw(Discovery.studio)) }
+        #expect(await http.bearers == ["fixture-id-token", "ds_fixture"])
+        await model.perform(.signIn)?.value
+        #expect(attempts == [false, true, true])
+        model.cancel()
     }
 
     @Test func `a code that is not a recovery kit installs nothing`() async throws {
@@ -271,7 +334,7 @@ struct OnboardingOpenClawIDSignInTests {
 
     private static func environment(http: Discovery) -> OnboardingOpenClawIDSignInEnvironment {
         OnboardingOpenClawIDSignInEnvironment(
-            signIn: { "fixture-id-token" },
+            signIn: { _ in "fixture-id-token" },
             discovery: { _ in http },
             describeNode: {
                 try OpenClawIDNodeEnrollmentDescription(
@@ -280,6 +343,13 @@ struct OnboardingOpenClawIDSignInTests {
             deviceName: { "Fixture Mac" },
             keyStore: { _, _ in MemoryKey() },
             readKitFile: { nil },
+            readInviteLink: { nil },
+            store: MacOpenClawIDDeviceStore(
+                defaults: UserDefaults(suiteName: "ocid-sign-in-\(UUID().uuidString)") ?? .standard,
+                databaseURL: self.database()),
+            savedSession: { nil },
+            saveSession: { _ in },
+            forgetKeys: { _, _ in },
             install: { _, _ in Issue.record("nothing in these tests is admitted") })
     }
 
@@ -404,12 +474,13 @@ struct OnboardingOpenClawIDSignInTests {
                 self.enrollments += 1
                 return .ownerConnected(claw: "studio-fixture", device: "Fixture Mac", approvedWith: "Approved")
             case .approveFromDevice:
-                return .ownerCompareCode(
+                return .deviceCompareCode(
                     claw: "studio-fixture",
                     device: "Fixture Mac",
                     code: "123 456",
                     approvalURL: nil,
-                    confirmed: false)
+                    confirmed: false,
+                    member: false)
             case .checkApproval:
                 return try await withCheckedThrowingContinuation { self.decision = $0 }
             case .useRecoveryKit:

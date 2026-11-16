@@ -477,6 +477,7 @@ describe("MCP relay connect entrypoint", () => {
         surface: "tab",
         id: "connected-apps",
         label: "Connected apps",
+        placement: "settings",
         requiredScopes: ["operator.read"],
       }),
     );

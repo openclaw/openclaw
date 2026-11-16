@@ -30,6 +30,22 @@ struct OnboardingFirstRunTests {
         #expect(!presented)
     }
 
+    @Test func `retired claw opens recovery instead of first run or preferred experience after restart`() {
+        for seen in [false, true] {
+            var events: [String] = []
+            OnboardingFirstRun.presentIfNeeded(
+                connectionMode: .unconfigured,
+                onboardingSeen: seen,
+                onboardingVersion: 0,
+                removedClaw: true,
+                markComplete: { events.append("complete") },
+                show: { events.append("show") },
+                openDashboard: { events.append("dashboard") },
+                showRemoval: { events.append("recovery") })
+            #expect(events == ["recovery"])
+        }
+    }
+
     @Test func `joined claw finishes an unfinished first run into its dashboard`() {
         // Regression: a Mac joined over OpenClaw ID reopened setup on the AI page, whose
         // admin-only Gateway check its member key cannot pass, and Next stayed disabled.

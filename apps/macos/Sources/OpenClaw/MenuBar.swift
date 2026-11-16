@@ -585,6 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
                 mode: AppStateStore.shared.connectionMode,
                 remoteUrl: AppStateStore.shared.remoteUrl),
+            removedClaw: MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
             markComplete: { OnboardingController.markComplete() },
             show: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -592,6 +593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     OnboardingController.shared.show()
                 }
             },
-            openDashboard: { AppNavigationActions.openDashboard() })
+            openDashboard: { AppNavigationActions.openDashboard() },
+            showRemoval: { DashboardManager.shared.showFailure(OpenClawIDNodeTransportError.removed) })
     }
 }

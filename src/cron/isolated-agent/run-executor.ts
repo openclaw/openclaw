@@ -1,3 +1,4 @@
+import { openExecYieldResume } from "../../agents/bash-tools.exec-notify.js";
 /** Executes isolated cron prompts with model fallbacks. */
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -16,7 +17,10 @@ import { createCronPromptExecutor } from "./run-prompt-executor.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import type { CronCompletedPromptRun, CronExecutionResult } from "./run.types.js";
 
-/** Executes an isolated cron prompt, including live model-switch retries. */
+/**
+ * Executes an isolated cron prompt, including live model-switch retries. A turn that yields on this
+ * run's wake-armed commands resumes here, in the same operation, with their exit result.
+ */
 export async function executeCronRun(params: CronRunExecutionParams): Promise<CronExecutionResult> {
   return await withSessionTurn(
     {
@@ -56,10 +60,19 @@ async function executeCronRunOwned(params: CronRunExecutionParams): Promise<Cron
   let modelSwitchRetries = 0;
   let promptMediaTaskIds: ReadonlySet<string> = new Set();
   let execution: CronCompletedPromptRun;
+  using execYield = openExecYieldResume(params.runId);
+  let prompt = params.commandBody;
   while (true) {
     try {
       promptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
-      execution = await runPrompt(params.commandBody, runStartedAt);
+      execution = await runPrompt(prompt, runStartedAt);
+      const exitWake = execution.runResult.meta?.yielded
+        ? await execYield.next(params.abortSignal)
+        : undefined;
+      if (exitWake) {
+        prompt = exitWake;
+        continue;
+      }
       break;
     } catch (err) {
       if (

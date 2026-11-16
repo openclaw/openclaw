@@ -41,7 +41,10 @@ import {
   type SessionEntryPair,
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
-import { retainCurrentSessionListPartitions } from "./session-list-view-cache.js";
+import {
+  mergeSessionListOwnerCounts,
+  retainCurrentSessionListPartitions,
+} from "./session-list-view-cache.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
@@ -82,14 +85,17 @@ export function selectSessionEntries(
     params.partitions &&
     params.retained &&
     !params.opts.includePeople &&
-    !params.opts.involvingProfileId &&
-    !params.opts.includeOwnerSessionCounts;
+    !params.opts.involvingProfileId;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
     retainCurrentSessionListPartitions(params.retained!, params.partitions!);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
+    const countParts: SessionListFilteredEntries[] | undefined = params.opts
+      .includeOwnerSessionCounts
+      ? []
+      : undefined;
     let totalCount = 0;
     let hits = 0;
     let misses = 0;
@@ -116,6 +122,7 @@ export function selectSessionEntries(
       } else {
         hits++;
       }
+      countParts?.push(part);
       pages.push(part.entries);
       ownerPages.push(part.ownerEntries);
       totalCount += part.totalCount;
@@ -130,6 +137,7 @@ export function selectSessionEntries(
       ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy),
       totalCount,
       ownerFacet: sortSessionOwnerFacet(owners),
+      ...(countParts ? mergeSessionListOwnerCounts(countParts) : {}),
       ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
     };
   } else {
@@ -578,10 +586,7 @@ export async function listProjectedSessions(params: {
               retained,
             }),
           );
-        const selection =
-          params.acceptsSerializedJson && exactKey === undefined
-            ? presentation.select(opts, select)
-            : select();
+        const selection = exactKey === undefined ? presentation.select(opts, select) : select();
         return {
           now,
           presentation,
@@ -678,6 +683,13 @@ export async function listProjectedSessions(params: {
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );
+          if (!params.acceptsSerializedJson) {
+            // Object readers own response containers and person counts, not the frozen selection.
+            result.owners = result.owners?.slice();
+            if (result.people) {
+              result.people = result.people.map((person) => ({ ...person }));
+            }
+          }
           if (client !== undefined) {
             result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
               callerScopes: client?.connect?.scopes ?? [],
