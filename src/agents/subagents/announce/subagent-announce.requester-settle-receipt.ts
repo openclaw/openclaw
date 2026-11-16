@@ -4,8 +4,54 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import { captureSystemEventStoreCurrentCheck } from "../../../infra/system-event-ownership.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import { evaluateGatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-context.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  subagentRegistryLog,
+} from "../registry/subagent-registry-lifecycle-log.js";
+import { buildRequesterSettleWakeIdentity } from "../registry/subagent-requester-settle-identity.js";
+
+/** Persist only host-authored copy in the replacement; findings retain their original audience. */
+export async function recordRequesterReplacementNotice(params: {
+  requester: { canonicalKey: string; agentId?: string; storePath?: string };
+  identity: { sessionId: string; lifecycleRevision?: string };
+  batchRunIds: readonly string[];
+  rearmGeneration?: number;
+  assertCommitAllowed: () => void;
+}): Promise<boolean> {
+  const { runId } = buildRequesterSettleWakeIdentity({
+    requesterSessionKey: params.requester.canonicalKey,
+    requesterAgentId: params.requester.agentId,
+    batchRunIds: params.batchRunIds,
+    rearmGeneration: params.rearmGeneration,
+  });
+  try {
+    await recordGatewaySessionRunFailure({
+      target: {
+        agentId: params.requester.agentId,
+        storePath: params.requester.storePath,
+        sessionKey: params.requester.canonicalKey,
+        sessionId: params.identity.sessionId,
+        expectedLifecycleRevision: params.identity.lifecycleRevision,
+      },
+      runId,
+      assertCommitAllowed: params.assertCommitAllowed,
+      error: "private completion requester session was replaced",
+      notice:
+        "Subagent results from the previous session were not delivered because a new session was started. Open Tasks to inspect the completed subagents and recover their results.",
+    });
+    return true;
+  } catch (error) {
+    // Throwing would let the lifecycle caller retire the batch as a failed wake.
+    subagentRegistryLog.warn("requester replacement notice could not be persisted", {
+      runId,
+      error: buildSafeLifecycleErrorMeta(error),
+    });
+    return false;
+  }
+}
 
 /** Watch effects retain their original stores; the durable wake keeps its ordinary handoff rules. */
 export function createRequesterSettleReceiptAdmission(params: {
