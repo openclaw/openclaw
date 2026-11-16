@@ -66,6 +66,8 @@ export type SystemAgentSession = {
   verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
   proposalRef: SystemAgentProposalRef;
+  /** Latest host Template output for embedded/native continuation; never authority. */
+  templateResult?: string;
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
   cliSession?: {
     routeKey: string;
@@ -91,6 +93,7 @@ export function createSystemAgentSession(
 export async function cleanupSystemAgentSession(session: SystemAgentSession): Promise<void> {
   delete session.cliSession;
   delete session.sessionManager;
+  delete session.templateResult;
 }
 
 type SystemAgentTurnParams = Parameters<SystemAgentTurnRunner>[0];
