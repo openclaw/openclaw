@@ -195,3 +195,20 @@ export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
       }
     },
 );
+
+export type SqliteWorkerAdmissionHandler = (
+  request: SqliteWorkerAdmissionRequest,
+  grant: (beforeRelease?: () => void) => boolean,
+) => void;
+
+export type SqliteWorkerDatabaseAuthority = {
+  /** Canonical identity captured when the database owner was admitted. */
+  databasePath: string;
+  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
+  /** Only the broker can identify an initial open of its captured primary database. */
+  coldOpenPath?: string;
+  assertRequest?(): void;
+  assertAccess(): void;
+  assertCreate?(databasePath: string): void;
+  acquireSchema(): { assertCurrent(): void; release(): void };
+};

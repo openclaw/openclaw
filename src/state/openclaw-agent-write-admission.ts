@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import { stat } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
@@ -6,6 +7,8 @@ import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-adm
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
   assertExistingDatabaseIdentity,
+  assertDatabaseFileIdentity,
+  readDatabasePathIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
@@ -130,6 +133,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
+  preparedIdentity?: DatabasePathIdentity,
 ): Promise<T> {
   return runOpenClawAgentPathWriteAdmission(
     resolveOpenClawAgentSqlitePath(options),
@@ -139,6 +143,7 @@ export function runOpenClawAgentWriteAdmission<T>(
     signal,
     caller,
     concurrentBoardReads,
+    preparedIdentity,
   );
 }
 
@@ -151,10 +156,17 @@ export function runOpenClawAgentPathWriteAdmission<T>(
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
+  preparedIdentity?: DatabasePathIdentity,
 ): Promise<T> {
-  const identity = readDatabasePathIdentitySync(pathname);
+  const identity = preparedIdentity ?? readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
   const assertCurrent = () => {
+    signal?.throwIfAborted();
+    // Prepared worker dispatch pins the physical identity and rechecks in the queued turn.
+    // Its native opener checks the same identity again at effect time.
+    if (preparedIdentity) {
+      return;
+    }
     if (identity.key.startsWith("file:")) {
       try {
         assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
@@ -187,6 +199,13 @@ export function runOpenClawAgentPathWriteAdmission<T>(
             // writer lock. Their foreground writes must queue, never reenter that owner.
             reentrant: reentrant && !admission.queues.get(storePath)?.holder?.worker,
             fn: async () => {
+              if (preparedIdentity) {
+                if (identity.key.startsWith("file:")) {
+                  assertDatabaseFileIdentity(await stat(pathname, { bigint: true }), identity);
+                } else if ((await readDatabasePathIdentity(pathname)).canonicalPath !== storePath) {
+                  throw new Error("Agent database target changed before write admission");
+                }
+              }
               assertCurrent();
               const queue = admission.queues.get(storePath)!;
               const previousHolder = queue.holder;
@@ -202,6 +221,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
           }),
         [],
         signal,
+        preparedIdentity ? { readIdentities: new Map([[pathname, preparedIdentity]]) } : undefined,
       );
     },
     caller,
@@ -217,6 +237,7 @@ export async function runOpenClawAgentWorkerWrite<T>(
   priority?: "background",
   caller?: WorkerReservationCaller,
   concurrentBoardReads?: "transcript-only",
+  preparedIdentity?: DatabasePathIdentity,
 ): Promise<T> {
   if (priority === "background") {
     const storePath = readDatabasePathIdentitySync(
@@ -242,6 +263,7 @@ export async function runOpenClawAgentWorkerWrite<T>(
         signal,
         undefined,
         concurrentBoardReads,
+        preparedIdentity,
       ),
     caller,
     worker,

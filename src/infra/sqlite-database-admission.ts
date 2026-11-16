@@ -14,6 +14,7 @@ import {
 import {
   exchangeSqliteDatabaseAdmission as exchange,
   sqliteDatabaseAdmissionState as state,
+  retainSqliteDatabaseAdmissionDescriptorAsync,
 } from "./sqlite-database-admission-context.js";
 import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission-read.js";
 import {
@@ -236,6 +237,17 @@ export function retainSqliteDatabaseAdmissionLocation(
   );
   state.registry.observeLocation(location, record.identity);
   seals.load(record);
+}
+
+/** The registry retains numeric descriptor custody; seal preparation never opens a temporary handle. */
+export async function retainSqliteDatabaseAdmissionLocationAsync(
+  location: string,
+  expectedIdentity?: DatabaseFileIdentity,
+): Promise<void> {
+  const record = await retainSqliteDatabaseAdmissionDescriptorAsync(location, expectedIdentity);
+  if (record) {
+    await seals.loadAsync(record);
+  }
 }
 
 function pathAdmission(location: string): Admission | undefined {

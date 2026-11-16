@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
@@ -11,11 +12,8 @@ import {
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import {
-  openOpenClawAgentSqliteWorkerStore,
-  type OpenClawAgentSqliteWorkerStore,
-} from "../state/openclaw-agent-worker-store.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
+import { executeOpenClawAgentWorkerPublication } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
@@ -35,34 +33,52 @@ export async function withPluginModelCatalogWorker<T>(
     scope: Pick<SqliteWorkerStore<PluginModelCatalogCredentialOperations>, "execute">,
   ) => Promise<T>,
 ): Promise<T> {
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  let worker: OpenClawAgentSqliteWorkerStore<PluginModelCatalogCredentialOperations> | undefined;
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
+  const source = createSessionWorkerExecutionSource(
+    () => execution.assertCurrent(),
+    "Catalog database publication authority expired",
+  );
   try {
-    if (prepare) {
-      await runOpenClawAgentWorkerWrite(options, () =>
-        execution.prepare(
-          createSessionWorkerExecutionSource(
-            () => execution.assertCurrent(),
-            "Catalog database preparation authority expired",
-          ),
-        ),
-      );
-    }
-    worker = await openOpenClawAgentSqliteWorkerStore<PluginModelCatalogCredentialOperations>(
+    return await runOpenClawAgentWorkerWrite(
       options,
-      { execution },
-      {
-        moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.pluginModelCatalogCredentials),
-        input: undefined,
+      async () => {
+        if (prepare) {
+          await execution.prepare(source);
+        }
+        const result = await execution.runExisting(source, async (scope) => ({
+          value: await operation({
+            execute: (command, commandOptions) =>
+              executeOpenClawAgentWorkerPublication<
+                PluginModelCatalogCredentialOperations,
+                typeof command.type
+              >(
+                scope,
+                {
+                  id: randomUUID(),
+                  moduleUrl: resolveRuntimeWorkerUrl(
+                    runtimeProcessEntrypoints.pluginModelCatalogCredentials,
+                  ).href,
+                  input: undefined,
+                  command,
+                },
+                commandOptions,
+              ),
+          }),
+        }));
+        if (!result) {
+          throw new Error("Agent database disappeared before catalog publication");
+        }
+        return result.value;
       },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      execution.capturedIdentity,
     );
-    return await worker.run(operation, () => execution.assertCurrent());
   } finally {
-    try {
-      await worker?.close();
-    } finally {
-      await execution.release();
-    }
+    await execution.release();
   }
 }
 

@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   invalidateSqliteCleanCloseSeal as invalidate,
   readSqliteCleanCloseSeal as readSeal,
+  readSqliteCleanCloseSealAsync as readSealAsync,
   writeSqliteCleanCloseSeal as writeSeal,
 } from "./sqlite-clean-close-seal.js";
 
@@ -37,6 +38,16 @@ function editSeal(pathname: string, edit: (contents: string) => string) {
   const seal = `${pathname}.seal`;
   fs.writeFileSync(seal, edit(fs.readFileSync(seal, "utf8")));
 }
+
+it("preserves proof and journal checks with asynchronous reads", async () => {
+  const { pathname, read } = fixture();
+  const file = await fs.promises.stat(pathname, { bigint: true });
+  expect(await readSealAsync(pathname, file)).toEqual(read());
+  fs.writeFileSync(`${pathname}-wal`, "uncheckpointed pages");
+  const refusal = vi.fn();
+  expect(await readSealAsync(pathname, file, refusal)).toBeUndefined();
+  expect(refusal).toHaveBeenLastCalledWith("journal-present");
+});
 
 it.each([
   ["truncated", "malformed-proof", (p: string) => editSeal(p, (s) => s.slice(0, s.length / 2))],

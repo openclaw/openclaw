@@ -1,6 +1,7 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   readDatabasePathIdentitySync,
+  assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
@@ -53,6 +54,7 @@ export type AgentDatabaseExecutionPreparedTarget = {
   pathname: string;
   identity: DatabasePathIdentity;
   initialIdentity?: AgentDatabaseExecutionFileIdentity;
+  observedIdentity?: DatabasePathIdentity;
   expectedCreationIdentity?: DatabasePathIdentity;
   requestedPath?: string;
 };
@@ -156,6 +158,7 @@ export function assertBorrowedAgentDatabaseFileIdentity({
   fileIdentity,
   expectedIdentity,
   nativeIdentity,
+  observedIdentity,
 }: {
   borrowedPath: string;
   identity: DatabasePathIdentity;
@@ -163,10 +166,11 @@ export function assertBorrowedAgentDatabaseFileIdentity({
   fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   nativeIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  observedIdentity?: DatabasePathIdentity;
 }): void {
   // After admission the borrower follows its canonical owner, not a retargeted alias.
   if (!fileIdentity) {
-    const current = readDatabasePathIdentitySync(borrowedPath);
+    const current = observedIdentity ?? readDatabasePathIdentitySync(borrowedPath);
     if (
       current.canonicalPath !== identity.canonicalPath ||
       (creatingTarget?.key.startsWith("file:") &&
@@ -195,5 +199,24 @@ export function assertBorrowedAgentDatabaseFileIdentity({
     ) {
       throw new Error("Agent database borrower belongs to another physical file");
     }
+  }
+}
+
+/** Compare a prepared observation with custody; sync callers retain their immediate path check. */
+export function assertAgentDatabaseBorrowTarget(
+  pathname: string,
+  file: AgentDatabaseExecutionFileIdentity | undefined,
+  observed: DatabasePathIdentity | undefined,
+): void {
+  if (!file) {
+    return;
+  }
+  if (!observed) {
+    assertExistingDatabaseIdentity(pathname, "file:" + file.physicalIdentity, file.birthtime);
+  } else if (
+    observed.key !== "file:" + file.physicalIdentity ||
+    (file.birthtime !== undefined && observed.birthtime !== file.birthtime)
+  ) {
+    throw new Error("Agent database borrower belongs to another physical file");
   }
 }

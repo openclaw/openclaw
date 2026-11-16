@@ -49,6 +49,7 @@ import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-
 import {
   type AgentDatabaseExecutionPreparedTarget,
   assertBorrowedAgentDatabaseFileIdentity,
+  assertAgentDatabaseBorrowTarget,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
   toAgentExecutionConstraints,
@@ -359,17 +360,11 @@ export function createAgentDatabaseExecution(
       return creationIdentity;
     },
     getPendingPreparation: () => generation?.getPendingPreparation(),
-    borrow(borrowedPath, expected, creating, requestedPath) {
+    borrow(borrowedPath, expected, creating, requestedPath, observedIdentity) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
-      if (fileIdentity) {
-        assertExistingDatabaseIdentity(
-          borrowedPath,
-          `file:${fileIdentity.physicalIdentity}`,
-          fileIdentity.birthtime,
-        );
-      }
+      assertAgentDatabaseBorrowTarget(borrowedPath, fileIdentity, observedIdentity);
       const assertReferenceCurrent = (nativeIdentity?: AgentDatabaseExecutionFileIdentity) => {
         assertCurrent();
         assertBorrowedAgentDatabaseFileIdentity({
@@ -379,6 +374,7 @@ export function createAgentDatabaseExecution(
           fileIdentity,
           expectedIdentity,
           nativeIdentity,
+          observedIdentity,
         });
       };
       assertReferenceCurrent();
@@ -718,6 +714,7 @@ export function createAgentDatabaseExecution(
       initialIdentity,
       expectedCreationIdentity,
       prepared.requestedPath,
+      prepared.observedIdentity,
     );
   } catch (error) {
     lifetime.retire();

@@ -1,16 +1,24 @@
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  readDatabasePathIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import * as creationClaims from "./agent-creation-claim.js";
-import { isAgentDatabaseStartupReadReady } from "./agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  isAgentDatabaseStartupReadReady,
+} from "./agent-database-admission.js";
 import {
   assertAgentDeletionCleanupAliases,
   assertAgentDeletionExecutionCleanupAccess,
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
@@ -25,8 +33,11 @@ import {
   assertAgentDatabaseExecutionSharedState,
   type AgentDatabaseExecutionCaptureConstraints,
   supportsOpenClawAgentDatabaseExecution,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 
 export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-scope.js";
 
@@ -105,11 +116,66 @@ export async function prepareOpenClawAgentDatabaseExecution(
   }
 }
 
+/** Observe filesystem identity asynchronously while retaining the current authority cohort. */
+export async function captureOpenClawAgentDatabaseExecutionAsync(
+  options: OpenClawAgentDatabaseOptions,
+): Promise<OpenClawAgentDatabaseExecution & { capturedIdentity: DatabasePathIdentity }> {
+  assertAgentSessionWriteAdmission(options);
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const state = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(options.env));
+  const assertAgentCurrent = captureAgentDatabaseAdmission(options.agentId, { env: options.env });
+  const creationClaim = creationClaims.captureAgentCreationClaim(options);
+  const cleanup = getAgentDeletionDatabaseCleanup(options);
+  const previous = executions.get(pathname);
+  let revoked = false;
+  const unregister = registerOpenClawAgentDatabaseAsyncResource(
+    {
+      agentId: options.agentId,
+      path: pathname,
+      revoke: () => {
+        revoked = true;
+      },
+      close: async () => {},
+    },
+    options,
+  );
+  try {
+    const identity = await readDatabasePathIdentity(pathname);
+    state.admission.assertCurrent();
+    (cleanup?.ownsDatabase ? cleanup.assertCurrentHost : assertAgentCurrent)();
+    creationClaim?.assertCurrent();
+    cleanup?.assertCurrentHost();
+    if (revoked || (previous && executions.get(pathname) !== previous)) {
+      throw new Error("Agent database execution owner retired during capture");
+    }
+    return Object.assign(
+      captureAgentDatabaseExecution(
+        options,
+        toAgentExecutionConstraints(identity),
+        false,
+        identity,
+      ),
+      { capturedIdentity: identity },
+    );
+  } finally {
+    unregister();
+  }
+}
+
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
 export function captureOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: AgentDatabaseExecutionCaptureConstraints = {},
   inheritCreationIdentity = false,
+): OpenClawAgentDatabaseExecution {
+  return captureAgentDatabaseExecution(options, constraints, inheritCreationIdentity);
+}
+
+function captureAgentDatabaseExecution(
+  options: OpenClawAgentDatabaseOptions,
+  constraints: AgentDatabaseExecutionCaptureConstraints,
+  inheritCreationIdentity: boolean,
+  observedIdentity?: DatabasePathIdentity,
 ): OpenClawAgentDatabaseExecution {
   assertAgentSessionWriteAdmission(options);
   assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);
@@ -124,7 +190,7 @@ export function captureOpenClawAgentDatabaseExecution(
     ? Object.freeze({ ...constraints.expectedCreationIdentity })
     : undefined;
   if (!existing || expectedCreationIdentity) {
-    const identity = readDatabasePathIdentitySync(pathname);
+    const identity = observedIdentity ?? readDatabasePathIdentitySync(pathname);
     existing ??= executions.get(identity.canonicalPath);
     if (expectedCreationIdentity) {
       assertAgentDatabaseExecutionCreationIdentity(
@@ -148,6 +214,7 @@ export function captureOpenClawAgentDatabaseExecution(
             expectedCreationIdentity ??
             (inheritCreationIdentity && identity.key.startsWith("path:") ? identity : undefined),
           requestedPath: constraints.requestedPath,
+          observedIdentity,
         },
         executionState,
       );
@@ -165,5 +232,6 @@ export function captureOpenClawAgentDatabaseExecution(
     constraints.expectedIdentity,
     expectedCreationIdentity ?? (inheritCreationIdentity ? existing.creationIdentity : undefined),
     constraints.requestedPath,
+    observedIdentity,
   );
 }

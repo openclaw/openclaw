@@ -12,8 +12,28 @@ import {
   createAliasedAgentCreationWitnessFixture as fixture,
   createAgentCreationWitnessSource as source,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
-import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution as capture,
+  captureOpenClawAgentDatabaseExecutionAsync as captureAsync,
+} from "./openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+it("keeps the canonical creation target after asynchronous identity capture", async () => {
+  const { options, aliased } = fixture();
+  const execution = await captureAsync(aliased);
+  const alias = path.dirname(aliased.path);
+  const replacement = path.join(options.env.OPENCLAW_STATE_DIR, "replacement");
+  fs.mkdirSync(replacement);
+  fs.unlinkSync(alias);
+  fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+  try {
+    await expect(execution.prepare(source())).resolves.toBeUndefined();
+    expect(fs.existsSync(options.path)).toBe(true);
+    expect(fs.existsSync(path.join(replacement, path.basename(aliased.path)))).toBe(false);
+  } finally {
+    await execution.release();
+  }
+});
 
 it.each(["removed", "replaced"])("closes after %s state lock", async (ending) => {
   const { options, aliased } = fixture();

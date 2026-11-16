@@ -7,6 +7,7 @@ import { sqliteDatabaseSealSchemaFor } from "../state/openclaw-database-seal-sch
 import {
   invalidateSqliteCleanCloseSeal,
   readSqliteCleanCloseSeal,
+  readSqliteCleanCloseSealAsync,
   writeSqliteCleanCloseSeal,
 } from "./sqlite-clean-close-seal.js";
 import {
@@ -128,14 +129,52 @@ export class SqliteDatabaseCleanCloseSeals {
     }
     this.loaded.add(record);
     record.cleanCloseRefusal = "malformed-proof";
+    let seal: ReturnType<typeof readSqliteCleanCloseSeal>;
     try {
-      const seal = readSqliteCleanCloseSeal(
+      seal = readSqliteCleanCloseSeal(
         record.location,
         fs.fstatSync(record.descriptor, { bigint: true }),
         (reason) => {
           record.cleanCloseRefusal = reason;
         },
       );
+    } catch {
+      this.references.publish(record);
+      return;
+    }
+    this.admit(record, seal);
+  }
+
+  async loadAsync(record: Admission): Promise<void> {
+    if (threadId !== 0 || this.loaded.has(record)) {
+      return;
+    }
+    const generation = new Int32Array(record.generation).slice();
+    let refusal: typeof record.cleanCloseRefusal = "malformed-proof";
+    const file = await new Promise<fs.BigIntStats>((resolve, reject) => {
+      fs.fstat(record.descriptor, { bigint: true }, (error, observed) =>
+        error ? reject(error) : resolve(observed),
+      );
+    });
+    const seal = await readSqliteCleanCloseSealAsync(record.location, file, (reason) => {
+      refusal = reason;
+    });
+    // Restart proof never supersedes a native publication or revocation during the read.
+    if (
+      this.loaded.has(record) ||
+      generation.some(
+        (value, index) => Atomics.load(new Int32Array(record.generation), index) !== value,
+      )
+    ) {
+      return;
+    }
+    this.loaded.add(record);
+    record.cleanCloseRefusal = refusal;
+    this.admit(record, seal);
+  }
+
+  private admit(record: Admission, seal: ReturnType<typeof readSqliteCleanCloseSeal>): void {
+    try {
       if (!seal || typeof seal.facts !== "string") {
         return;
       }
