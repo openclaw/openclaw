@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createComponent } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -401,7 +402,7 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed());
   });
 
-  it("Escape discards startup finalization after capture ends before session creation", async () => {
+  it("Escape discards startup finalization after Stop during session creation", async () => {
     const createStarted = createDeferred();
     const releaseCreate = createDeferred();
     const closeStarted = createDeferred();
@@ -421,11 +422,10 @@ describe("ComposerDictationOwner", () => {
     const h = createHarness();
     expect(h.controller.startDirect()).toBe(true);
     await createStarted.promise;
-    captureAudio();
     const finishing = h.controller.finishActive();
     releaseCreate.resolve();
     await closeStarted.promise;
-    expectAppended();
+    expect(getUserMedia).not.toHaveBeenCalled();
     try {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
@@ -624,7 +624,7 @@ describe("ComposerDictationOwner", () => {
       );
       expect(controller).toMatchObject({ active: false, locksComposer: false });
       expect(getUserMedia).toHaveBeenCalledOnce();
-      expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
+      await waitForFast(() => expectClosed("dictation-1", true));
       expect(loadSettings().realtimeTalkInputDeviceId).toBe(device);
     } finally {
       controller.dispose();
@@ -696,7 +696,10 @@ describe("ComposerDictationOwner", () => {
       transport: "gateway-relay",
       brain: "none",
     });
-    expect(order.slice(0, 2)).toEqual(["microphone", "talk.session.create"]);
+    await waitForFast(() =>
+      expect(order.slice(0, 2)).toEqual(["talk.session.create", "microphone"]),
+    );
+    await waitForFast(() => expect(controller).toMatchObject({ active: true, connecting: false }));
     captureAudio();
     await waitForFast(() => expectAppended());
     emit({ type: "partial", text: "hello wor" });
@@ -805,26 +808,41 @@ describe("ComposerDictationOwner", () => {
     unsubscribe();
   });
 
-  it("buffers microphone audio while the transcription session is being created", async () => {
-    const { promise: createResult, resolve: resolveCreate } =
-      createDeferred<ReturnType<typeof sessionResult>>();
-    const order = recordRequests(() => createResult);
-    const { controller, onCommit, onError, target } = createHarness();
+  it("opens the microphone only after the Gateway admits the session", async () => {
+    const created = createDeferred<ReturnType<typeof sessionResult>>();
+    recordRequests(() => created.promise);
+    const { controller, target } = createHarness();
     await startHold(target);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(controller.connecting).toBe(true);
+
+    created.resolve(sessionResult());
+    await waitForFast(() => expect(controller).toMatchObject({ active: true, connecting: false }));
+    expect(getUserMedia).toHaveBeenCalledOnce();
     captureAudio();
-    expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", expect.anything());
+    await waitForFast(() => expectAppended());
+  });
 
-    await releaseLatched(target);
-    void controller.finishActive();
-    resolveCreate(sessionResult("late-session"));
-
-    await waitForFast(() => expectAppended("late-session"));
-    await waitForFast(() => expectClosed("late-session"));
-    expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
-      order.indexOf("talk.session.close"),
+  it("reports busy without opening the microphone when no Gateway session is free", async () => {
+    recordRequests(async () => {
+      throw new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Too many active transcription Talk sessions for this connection",
+        retryable: true,
+        details: { code: "TALK_SESSION_CAPACITY" },
+      });
+    });
+    const { controller, onError, target } = createHarness();
+    await startHold(target);
+    await waitForFast(() =>
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        "Dictation is busy finishing earlier recordings. Try again in a moment.",
+        { kind: "busy", preservesText: false },
+      ),
     );
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(controller).toMatchObject({ active: false, locksComposer: false });
   });
 
   it("closes late session creation after the bounded Stop wait", async () => {

@@ -47,6 +47,7 @@ export const GatewayErrorDetailCodes = {
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE,
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
+  TALK_SESSION_CAPACITY: "TALK_SESSION_CAPACITY",
   CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
   TEMPLATE_REVIEW_REQUIRED,
   PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
@@ -141,6 +142,7 @@ export type GatewayErrorDetails =
   | TemplateReviewRequiredErrorDetails
   | PendingInputNotRetiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
+  | { code: typeof GatewayErrorDetailCodes.TALK_SESSION_CAPACITY }
   | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
 
 export function readTemplateReviewRequiredError(

@@ -12,7 +12,7 @@ const HOLD_ARM_DELAY_MS = 150,
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
 
 type ComposerDictationFailure = {
-  kind: "interrupted" | "start";
+  kind: "interrupted" | "start" | "busy";
   preservesText: boolean;
 };
 
@@ -334,13 +334,14 @@ export class ComposerDictationOwner extends EventTarget {
       return;
     }
     let formatStartError: (error: unknown) => string = formatUiError;
+    let formatBusyError: (error: unknown) => string | undefined = () => undefined;
     try {
       // Preserve Safari playback activation before the lazy capture module loads.
       this.playback.prepare(client, () => this.cancel());
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
-      const { ComposerDictationSession, formatDictationError } =
+      const { ComposerDictationSession, formatDictationError, formatDictationBusyError } =
         await import("./composer-dictation-session.ts");
       if (
         this.captureStart !== captureStart ||
@@ -351,6 +352,7 @@ export class ComposerDictationOwner extends EventTarget {
         return;
       }
       formatStartError = formatDictationError;
+      formatBusyError = formatDictationBusyError;
       const session = new ComposerDictationSession(
         client,
         {
@@ -383,7 +385,12 @@ export class ComposerDictationOwner extends EventTarget {
       if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
         return;
       }
-      this.options.onError(formatStartError(error), { kind: "start", preservesText: false });
+      // Stopped recordings hold Gateway sessions until transcribed.
+      const busy = formatBusyError(error);
+      this.options.onError(busy ?? formatStartError(error), {
+        kind: busy ? "busy" : "start",
+        preservesText: false,
+      });
       await this.stop({ commit: false });
     }
   }

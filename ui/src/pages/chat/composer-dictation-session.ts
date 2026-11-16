@@ -2,8 +2,10 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -13,10 +15,11 @@ import {
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
+registerEnglishCatalog(registerChatDictationEnglish);
+
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
-const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
 
 type DictationSessionResult = {
   sessionId: string;
@@ -51,6 +54,12 @@ export function formatDictationError(error: unknown): string {
   return formatUiError(error);
 }
 
+/** No free Gateway transcription session: earlier recordings still hold them. */
+export function formatDictationBusyError(error: unknown): string | undefined {
+  const details = asOptionalObjectRecord(asOptionalObjectRecord(error)?.details);
+  return details?.code === "TALK_SESSION_CAPACITY" ? t("chat.dictation.busy") : undefined;
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -68,8 +77,6 @@ export class ComposerDictationSession {
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
-  private readonly pendingAudio: Float32Array[] = [];
-  private pendingAudioSamples = 0;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
@@ -102,12 +109,33 @@ export class ComposerDictationSession {
       this.options && "inputDeviceId" in this.options
         ? this.options.inputDeviceId
         : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
-    // Start the audio graph while the browser opens the microphone instead of
-    // after it. Microphone errors still win; stopCapture() closes the context.
+    // Start the audio graph while the Gateway admits the session instead of after it.
+    // stopCapture() closes the context on every exit.
     try {
       this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
     } catch {
       this.context = null;
+    }
+    // Claim the Gateway session before the microphone opens. Stopped recordings
+    // hold their sessions while they transcribe, so a full connection must refuse
+    // here rather than after the user has started speaking.
+    const result = await this.client.request<DictationSessionResult>("talk.session.create", {
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
+    });
+    this.sessionId = result.sessionId;
+    this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
+    if (this.stopped) {
+      return;
+    }
+    if (
+      result.audio?.inputEncoding !== DICTATION_ENCODING ||
+      result.audio.inputSampleRateHz !== DICTATION_SAMPLE_RATE_HZ
+    ) {
+      await this.closeRemote();
+      throw new Error(t("chat.composer.dictationAudioUnsupported"));
     }
     const media = await this.input.open(inputDeviceId);
     if (this.stopped) {
@@ -162,53 +190,10 @@ export class ComposerDictationSession {
       if (this.stopped) {
         return;
       }
-      if (!this.sessionId) {
-        const remaining = MAX_PENDING_AUDIO_SAMPLES - this.pendingAudioSamples;
-        if (remaining <= 0) {
-          return;
-        }
-        const buffered = samples.slice(0, remaining);
-        this.pendingAudio.push(buffered);
-        this.pendingAudioSamples += buffered.length;
-        this.detectSilence(samples);
-        return;
-      }
       this.queueAudio(samples);
       this.detectSilence(samples);
     });
     this.callbacks.onReady();
-
-    const result = await this.client.request<DictationSessionResult>("talk.session.create", {
-      mode: "transcription",
-      transport: "gateway-relay",
-      brain: "none",
-      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
-    });
-    this.sessionId = result.sessionId;
-    this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
-    if (
-      result.audio?.inputEncoding !== DICTATION_ENCODING ||
-      result.audio.inputSampleRateHz !== DICTATION_SAMPLE_RATE_HZ
-    ) {
-      await this.closeRemote();
-      throw new Error(t("chat.composer.dictationAudioUnsupported"));
-    }
-    if (this.discarded) {
-      this.pendingAudio.length = 0;
-      this.pendingAudioSamples = 0;
-    } else {
-      const pending = this.pendingAudio.splice(0);
-      this.pendingAudioSamples = 0;
-      for (const samples of pending) {
-        this.queueAudio(samples);
-      }
-    }
-    if (this.stopped) {
-      if (!this.discarded) {
-        await this.appendChain;
-      }
-      await this.closeRemote();
-    }
   }
 
   transcriptSnapshot(): string {
@@ -237,8 +222,6 @@ export class ComposerDictationSession {
 
   async cancel(): Promise<void> {
     this.discarded = true;
-    this.pendingAudio.length = 0;
-    this.pendingAudioSamples = 0;
     this.settleLateFinalDrain?.(true);
     await this.stopAndClose(false);
   }

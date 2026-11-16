@@ -63,8 +63,12 @@ export function createComposerDictationOptions(
     },
     onError: (
       message: string,
-      failure: { kind: "interrupted" | "start"; preservesText: boolean },
+      failure: { kind: "interrupted" | "start" | "busy"; preservesText: boolean },
     ) => {
+      if (failure.kind === "busy") {
+        setError(message);
+        return;
+      }
       const recovery =
         failure.kind === "interrupted" && failure.preservesText
           ? t("chat.composer.dictationInterruptedRecovery")
