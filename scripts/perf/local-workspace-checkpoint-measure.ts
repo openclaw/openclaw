@@ -23,6 +23,8 @@
  * per request. --reconcile-target canonical|projection selects guest export or host
  * import; --reconcile-changed-files N changes N existing files at their original size.
  * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
+ * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
+ * allocation mode reports main and matched worker allocation for each reconcile burst.
  * It also reports uncompressed patch field bytes and journal counts (no paths/content).
  * --build-input-files 24997 --files 3 --file-bytes 32 creates 25k files with a
  * retained build-input inventory; two edited root files still produce a delta journal.
@@ -203,6 +205,7 @@ const { values } = parseArgs({
     "reconcile-traffic": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
+    "reconcile-random-bytes": { type: "string", default: "0" },
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
@@ -454,6 +457,9 @@ assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 
 const reconcileTarget = values["reconcile-target"];
 assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
 const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
+const reconcileRandomBytes = Number(values["reconcile-random-bytes"]);
+assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
+assert(!reconcileRandomBytes || reconcile);
 assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
 assert(!reconcile || reconcileChangedFiles < Number(values.files));
 const nativeTurns = values["native-turns"];
@@ -1704,10 +1710,12 @@ measurement: try {
         const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
         const writeFiles = `
           const fs = require("node:fs");
-          const [root, seed, count, bytes] = process.argv.slice(1);
+          const [root, seed, count, bytes, randomBytes] = process.argv.slice(1);
           for (let i = 1; i <= Number(count); i++) {
             fs.writeFileSync(root + "/file-" + i + ".txt",
-              (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
+              Number(randomBytes)
+                ? require("node:crypto").createHash("shake256", { outputLength: Number(randomBytes) }).update(seed + " file-" + i).digest()
+                : (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
           }
         `;
         assert(pauseBegan === undefined, "Fixture mutation must begin with the guest running");
@@ -1722,6 +1730,7 @@ measurement: try {
             seed,
             String(reconcileChangedFiles),
             String(fileBytes),
+            String(reconcileRandomBytes),
           ]);
         } else {
           execFileSync(process.execPath, [
@@ -1731,6 +1740,7 @@ measurement: try {
             seed,
             String(reconcileChangedFiles),
             String(fileBytes),
+            String(reconcileRandomBytes),
           ]);
         }
         const began = performance.now();
@@ -1753,17 +1763,19 @@ measurement: try {
         });
         assert(pauseBegan === undefined, "Reconciliation must resume the guest");
         for (let i = 1; i <= reconcileChangedFiles; i++) {
-          const expected = `${seed} file-${i}\n`.padEnd(fileBytes, ".");
+          const expected = reconcileRandomBytes
+            ? createHash("shake256", { outputLength: reconcileRandomBytes })
+                .update(`${seed} file-${i}`)
+                .digest()
+            : Buffer.from(`${seed} file-${i}\n`.padEnd(fileBytes, "."));
           for (const directory of [canonical, workspace!]) {
-            assert.equal(fs.readFileSync(path.join(directory, `file-${i}.txt`), "utf8"), expected);
+            assert.deepEqual(fs.readFileSync(path.join(directory, `file-${i}.txt`)), expected);
           }
         }
         if (nativeTurns) {
-          assert.equal(
-            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"], {
-              encoding: "utf8",
-            }),
-            `${seed} file-1\n`.padEnd(fileBytes, "."),
+          assert.deepEqual(
+            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"]),
+            fs.readFileSync(path.join(canonical, "file-1.txt")),
           );
         }
         return;
@@ -2886,7 +2898,9 @@ measurement: try {
   });
   observer.observe({ entryTypes: ["gc"] });
   const nativeWorkerAllocationBefore =
-    nativeTurns && values.instrument === "allocation" ? await sampleWorkerAllocation() : undefined;
+    (nativeTurns || reconcile) && values.instrument === "allocation"
+      ? await sampleWorkerAllocation()
+      : undefined;
   const nativeWorkerStartsBefore = workerStarts,
     nativeWorkerExitsBefore = workerExits;
   const readCgroupCpuUs = () => {
@@ -3060,7 +3074,7 @@ measurement: try {
           tools: reconcile ? 1 : toolsPerTurn,
           changed: reconcile ? 1 : values["all-mutating"] ? toolsPerTurn : toolsPerTurn / 5,
           unchanged: reconcile || values["all-mutating"] ? 0 : (toolsPerTurn * 4) / 5,
-          ...(reconcile ? { reconcileTarget, reconcileChangedFiles } : {}),
+          ...(reconcile ? { reconcileTarget, reconcileChangedFiles, reconcileRandomBytes } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
           snapshotCaptures: checkpointPhases.filter(
