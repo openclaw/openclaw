@@ -125,7 +125,9 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessions: rows,
           featureMethods: ["board.get"],
-          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
+          deferredRequests: [
+            { method: "sessions.list", match: { hasBoard: true, archived: "all" } },
+          ],
           methodResponses: {
             "config.get": themeConfigResponse("dash", mode),
             "sessions.list": { cases: [responseCase({ hasBoard: true }, list(rows))] },
@@ -265,7 +267,9 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             sessions: rows,
             featureMethods: ["board.get"],
-            deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
+            deferredRequests: [
+              { method: "sessions.list", match: { hasBoard: true, archived: "all" } },
+            ],
             methodResponses: {
               "board.get": boardSnapshots[0],
               "sessions.list": {
