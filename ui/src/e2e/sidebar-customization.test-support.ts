@@ -93,16 +93,6 @@ export async function openSidebarPages(page: Page): Promise<Locator> {
   return pages;
 }
 
-// Sessions opens from a Sessions group heading, whose actions show on hover.
-export async function openSessionsPageFromSidebar(page: Page): Promise<void> {
-  const sidebar = page.locator("openclaw-app-sidebar:visible");
-  const head = sidebar.locator(".sidebar-recent-sessions__head", {
-    has: page.locator(".sidebar-session-group-open"),
-  });
-  await head.first().hover();
-  await head.first().locator(".sidebar-session-group-open").click();
-}
-
 export async function openSidebarPinMenu(page: Page, entry = "route:dashboards"): Promise<Locator> {
   const row = page
     .locator("openclaw-app-sidebar:visible")
