@@ -230,7 +230,7 @@ it.each([32, 44])(
     )!;
     const anchorKey = anchor.dataset.sessionKey;
     const anchorOffset = anchor.getBoundingClientRect().top - viewportTop;
-    sidebar.navigationView = "dashboards";
+    sidebar.navigationView = "automations";
     await settleRoster(sidebar);
     sidebar.navigationView = "sessions";
     await settleRoster(sidebar);

@@ -50,7 +50,7 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  const host = new AppSidebarOwner(context, props);
   // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
   host.sessionPullRequests = {
     summary: (_sessionKey, _worktreeId, initial) => initial,
@@ -129,38 +129,6 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
   expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
   expect(art?.style.maskImage).toBe(sessionIconMask("bot", 1.75));
   expect(dom.query(".session-glyph")).toBe(glyph);
-});
-
-it("restores only active dashboards in saved order in the Dashboards view", async () => {
-  const { host, context, dom } = await createCachedHost();
-  host.sidebarAgentsMode = "roster";
-  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    mode: "roster",
-    navigationView: "dashboards",
-    pageScopeId: context.agentSelection.state.scopeId,
-    pages: snapshotSessions([
-      ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
-      projectSidebarSession({ key: "agent:main:archived", hasBoard: true, archived: true }),
-    ]),
-  });
-  host.invalidate();
-  await host.updateComplete;
-  await waitForSolid(() =>
-    expect(
-      dom.present(
-        `.sidebar-dashboards [data-session-key="${dashboardKeys[0]}"]`,
-        '.sidebar-dashboards [data-session-key="agent:main:archived"]',
-        ".sidebar-dashboards .sidebar-session-sort",
-      ),
-    ).toEqual([true, false, false]),
-  );
-  expect(
-    [...dom.all(".sidebar-dashboards [data-sidebar-entry]")].map((entry) =>
-      entry.getAttribute("data-sidebar-entry"),
-    ),
-  ).toEqual(dashboardKeys.map((key) => `session:${key}`));
 });
 
 it("paints the restored roster and workspace before live data arrives", async () => {

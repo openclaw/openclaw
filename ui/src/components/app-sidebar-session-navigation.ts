@@ -93,7 +93,6 @@ import type { SessionOrganizer } from "./session-organizer.ts";
 import { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
-import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { SidebarProjectionMemo, SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import {
   memoizedSidebarCatalogs,
@@ -191,7 +190,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.sessionProjection.refreshPresencePresentation(this, sidebarPresenceScope(this));
   }
 
-  abstract readonly navigationCatalog: SidebarNavigationCatalog;
   sessionPullRequests!: SessionPullRequestIndicators;
 
   readSessionPullRequestRows(): readonly SidebarRecentSession[] {

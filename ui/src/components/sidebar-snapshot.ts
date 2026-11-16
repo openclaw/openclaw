@@ -23,7 +23,6 @@ export function createSidebarSnapshot(host: {
   readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
-    agentSelection: { readonly state: { readonly scopeId: string | null } };
     connectionBootstrap: { readonly foregroundReady: boolean };
   };
   expandedAgentId(): string;
@@ -328,9 +327,7 @@ export function createSidebarSnapshot(host: {
   function matchesAgent(model: SidebarSnapshotModel): boolean {
     return (
       model.mode === host.sidebarAgentsMode &&
-      (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
-      (model.navigationView !== "dashboards" ||
-        model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)
+      (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId())
     );
   }
 

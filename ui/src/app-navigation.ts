@@ -45,16 +45,14 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
   route: NavigationRouteId,
-): "dashboards" | "automations" | "customize" | "online" | undefined {
-  return route === "dashboards"
-    ? "dashboards"
-    : route === "cron"
-      ? "automations"
-      : isPluginsHubRoute(route)
-        ? "customize"
-        : route === "activity"
-          ? "online"
-          : undefined;
+): "automations" | "customize" | "online" | undefined {
+  return route === "cron"
+    ? "automations"
+    : isPluginsHubRoute(route)
+      ? "customize"
+      : route === "activity"
+        ? "online"
+        : undefined;
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the

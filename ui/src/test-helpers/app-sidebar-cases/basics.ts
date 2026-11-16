@@ -143,7 +143,7 @@ it.each(["chip", "roster"] as const)(
       expect(event.defaultPrevented).toBe(false);
       expect(onOpenNewSession).not.toHaveBeenCalled();
     }
-    for (const view of ["dashboards", "sessions", "online"] as const) {
+    for (const view of ["sessions", "online"] as const) {
       sidebar.navigationView = view;
       sidebar.navigationCollapsed = false;
       await sidebar.updateComplete;

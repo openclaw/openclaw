@@ -77,7 +77,7 @@ describe("AppSidebar live narration", () => {
     expect(row()?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
   });
 
-  it.each(["roster", "dashboards", "online", "collapsed", "hidden"] as const)(
+  it.each(["roster", "online", "collapsed", "hidden"] as const)(
     "releases narration while %s hides its consumer and resumes visible previews",
     async (hidden) => {
       const key = "agent:main:visible-preview";

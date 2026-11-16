@@ -27,7 +27,7 @@ it("restores destination offsets and updates fades after content commits", async
   scroller.dispatchEvent(new Event("scroll"));
   await expectFade("middle");
 
-  sidebar.navigationView = "dashboards";
+  sidebar.navigationView = "automations";
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(0);
   await expectFade("top");

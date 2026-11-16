@@ -33,7 +33,6 @@ import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
-import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
 
 const OpenClawIdNotifications = lazy(() => import("./openclaw-id/notifications.tsx"), {
@@ -83,10 +82,8 @@ function AppSidebarContent(
 ): JSX.Element {
   host.style.display = "contents";
   const context = useApplication();
-  const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
-  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, context, host);
+  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(context, host);
   sidebarOwners.set(host, owner);
-  owner.navigationCatalog = catalog;
   owner.bindContext(context);
   // A section page shows its own sidebar however it was reached: rail, link or history.
   createEffect(
@@ -178,8 +175,6 @@ function AppSidebarContent(
       snapshotModel();
       Object.values(props);
       contextual()?.read();
-      // Snapshot capture keeps observing Pages after its navigation view closes.
-      void catalog.dashboards;
       // Arm presence deadlines before preparation can project a row.
       people.capture();
       // Synchronous owners release boot snapshots and restore query state before row consumers read.

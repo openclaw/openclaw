@@ -172,11 +172,10 @@ it("reads a namespaced tab reference from the generic URL", () => {
   expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
 });
 
-it("gives Dashboards, Automations, Customize and Activity a sidebar section of their own", () => {
+it("gives Automations, Customize and Activity a sidebar section of their own", () => {
   expect(
     (
       [
-        "dashboards",
         "cron",
         "plugins",
         "skills",
@@ -188,7 +187,6 @@ it("gives Dashboards, Automations, Customize and Activity a sidebar section of t
       ] as const
     ).map(sidebarSectionForRoute),
   ).toEqual([
-    "dashboards",
     "automations",
     "customize",
     "customize",

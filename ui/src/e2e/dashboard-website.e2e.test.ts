@@ -80,29 +80,10 @@ suite.define(() => {
         const content = page.frameLocator(".board-website__frame");
         await content.getByText("All systems operational", { exact: true }).waitFor();
         const sidebar = page.locator("openclaw-app-sidebar");
-        // Dashboards are pinned from the Dashboards section, reached through the page menu.
-        await sidebar.locator("[data-rail-more]").click();
-        await sidebar
-          .locator(".sidebar-pages-menu")
-          .getByRole("link", { name: "Dashboards", exact: true })
-          .click();
-        const catalogRow = sidebar.locator(".sidebar-dashboards .sidebar-pages__entry").filter({
-          has: page.locator(`[data-sidebar-entry="session:${sessionKey}"]`),
-        });
-        await catalogRow.hover();
-        await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
-        expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
-          1,
-        );
-        // Pinned dashboards join the Sessions list's Pinned section, not the rail.
-        expect(
-          await sidebar
-            .locator(`.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`)
-            .count(),
-        ).toBe(0);
-        await page.goBack();
-        await content.getByText("All systems operational", { exact: true }).waitFor();
-        await sidebar.locator('[data-navigation-view="sessions"]').click();
+        // A personal pin moves the dashboard's Sessions row into the Pinned section.
+        const row = sidebar.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        await row.hover();
+        await row.getByRole("button", { name: "Pin session", exact: true }).click();
         const pinned = sidebar
           .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
           .locator("a.sidebar-recent-session__link");

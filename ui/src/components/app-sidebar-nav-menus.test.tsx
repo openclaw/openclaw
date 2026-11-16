@@ -347,7 +347,7 @@ describe("sidebar rail pin menu", () => {
       "panel",
       TWO_AGENTS,
     );
-    sidebar.navigationView = "dashboards";
+    sidebar.navigationView = "automations";
     sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
     await sidebar.updateComplete;
     const agent = sidebar.querySelector<HTMLButtonElement>(
@@ -366,7 +366,7 @@ describe("sidebar rail pin menu", () => {
       sidebar.navigationCollapsed,
       sidebar.querySelector(".sidebar-agent-menu") !== null,
     ];
-    expect(state()).toEqual(["Molty · Sessions", "false", "dashboards", false, false]);
+    expect(state()).toEqual(["Molty · Sessions", "false", "automations", false, false]);
     // Outside Sessions: go to Sessions.
     await click();
     expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, false]);

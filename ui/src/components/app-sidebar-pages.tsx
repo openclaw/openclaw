@@ -8,12 +8,9 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 
 function PinToggle(props: { host: AppSidebarRenderHost; entry: string }) {
@@ -107,67 +104,6 @@ export function SidebarPagesMenu(props: {
       <Show when={plugins().length > 0}>
         <span class="sidebar-pages-menu__separator" aria-hidden="true" />
         <For each={plugins()}>{(key) => <Entry key={key} />}</For>
-      </Show>
-    </nav>
-  );
-}
-
-/** The Dashboards section: every managed dashboard, newest first, with its author and update. */
-export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.Element {
-  const dashboards = () => props.host.navigationCatalog.dashboards;
-  const dashboardRows = createMemo(() =>
-    props.host.sidebarSnapshot
-      ? props.host.sidebarSnapshot.pages
-          .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, props.host.getRouteSessionKey()))
-      : (dashboards()?.result?.sessions ?? []).map((row) =>
-          props.host.getSessionNavigationState().toSidebarSession(row),
-        ),
-  );
-  const byline = (row: SidebarRecentSession) => {
-    const actor = row.owner?.actor;
-    const author = actor
-      ? props.host.sessionOwnerOptions.find(
-          (option) => option.type === actor.type && option.id === actor.id,
-        )?.label
-      : undefined;
-    const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : undefined;
-    return [author, updated].filter(Boolean).join(" · ") || undefined;
-  };
-  return (
-    <nav
-      class="sidebar-dashboards"
-      aria-label={titleForRoute("dashboards", t)}
-      onDragOver={(event) => props.host.sessionOrganizer.handleSessionListDragOver(event)}
-      onDrop={(event) => props.host.sessionOrganizer.handleSessionListDrop(event)}
-    >
-      <For each={dashboardRows()}>
-        {(row) => {
-          const key = serializeSidebarEntry({ type: "session", key: row.key });
-          // Allocate once per row; the session row owns its reactive fields.
-          const content = props.host.renderPinnedSidebarSession(
-            () => row,
-            () => byline(row),
-          );
-          return (
-            <div class="sidebar-pages__entry">
-              <div class="sidebar-zone-entry" data-sidebar-entry={key}>
-                {content}
-              </div>
-              <PinToggle host={props.host} entry={key} />
-            </div>
-          );
-        }}
-      </For>
-      <Show when={dashboards()?.error}>{(error) => <span role="alert">{error()}</span>}</Show>
-      <Show when={dashboards()?.result?.hasMore}>
-        <button
-          type="button"
-          class="btn btn--sm"
-          onClick={() => props.host.navigationCatalog.loadMoreDashboards()}
-        >
-          {t("chat.selectors.loadMoreSessions")}
-        </button>
       </Show>
     </nav>
   );

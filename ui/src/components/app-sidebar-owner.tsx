@@ -13,7 +13,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import {
   SidebarAutomationsHeader,
   SidebarCustomizeHeader,
-  SidebarDashboardsHeader,
   SidebarOnlineHeader,
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
@@ -34,7 +33,6 @@ import type {
 } from "./app-sidebar-session-narration.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import {
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_SESSION_PAGE_SIZE,
@@ -46,7 +44,6 @@ import {
 import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarScrollContext, type createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
-import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import { createSidebarRendererLoader } from "./sidebar-renderer-loader.tsx";
@@ -65,12 +62,6 @@ import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 const SidebarAgentRoster = lazy(() => import("./sidebar-agent-roster.tsx"), {
   export: "SidebarAgentRoster",
-});
-const SidebarPinnedSession = lazy(() => import("./sidebar-agent-roster.tsx"), {
-  export: "SidebarPinnedSession",
-});
-const SidebarDashboards = lazy(() => import("./app-sidebar-pages.tsx"), {
-  export: "SidebarDashboards",
 });
 const SidebarAutomations = lazy(() => import("./app-sidebar-automations.tsx"), {
   export: "SidebarAutomations",
@@ -230,12 +221,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           return null;
         }))
     );
-  }
-  constructor(
-    public override navigationCatalog: SidebarNavigationCatalog,
-    ...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>
-  ) {
-    super(...args);
   }
   get nativeGatewaySnapshot(): NativeGatewaysSnapshot | null {
     // SAFETY: The macOS dashboard injects its encoded gateway snapshot at this key; browsers leave it unset.
@@ -455,27 +440,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     hidePersonalSidebarCatalog(this, catalogId);
   }
 
-  renderPinnedSidebarSession(
-    session: () => SidebarRecentSession,
-    fallbackSubtitle?: () => string | undefined,
-  ): JSX.Element {
-    const row = (
-      <SessionTree
-        host={this}
-        session={session()}
-        listItem={false}
-        fallbackSubtitle={fallbackSubtitle?.()}
-      />
-    );
-    return (
-      <Show when={this.sidebarAgentsMode === "roster"} fallback={row}>
-        <SidebarViewBoundary fallback={row}>
-          <SidebarPinnedSession host={this} session={session()} />
-        </SidebarViewBoundary>
-      </Show>
-    );
-  }
-
   renderSessionsBody() {
     const host = () => this;
     const navigationState = createMemo(() => host().getSessionNavigationState());
@@ -595,9 +559,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 {/* Every panel header sits above the scroller so it stays pinned, keeps
                   one geometry across views, and the scroll fade starts below it. */}
                 <Switch fallback={toolbar}>
-                  <Match when={this.navigationView === "dashboards"}>
-                    <SidebarDashboardsHeader host={this} />
-                  </Match>
                   <Match when={this.navigationView === "automations"}>
                     <SidebarAutomationsHeader host={this} />
                   </Match>
@@ -633,12 +594,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       </>
                     }
                   >
-                    <Match when={this.navigationView === "dashboards"}>
-                      <SidebarViewBoundary>
-                        <SidebarReady />
-                        <SidebarDashboards host={this} />
-                      </SidebarViewBoundary>
-                    </Match>
                     <Match when={this.navigationView === "automations"}>
                       <SidebarViewBoundary>
                         <SidebarReady />

@@ -34,10 +34,6 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   if (!host.connected || !context) {
     return false;
   }
-  if (host.navigationView === "dashboards") {
-    const pages = host.navigationCatalog.dashboards;
-    return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
-  }
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
@@ -104,8 +100,6 @@ export function captureSidebarSnapshotModel(
   const roster = rosterActivityStore(context).snapshot;
   if (
     host.sidebarSnapshot ||
-    (host.navigationView === "dashboards" &&
-      host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
     (host.navigationView === "online" && host.sessionData.ownerCounts.error !== null) ||
@@ -142,13 +136,6 @@ export function captureSidebarSnapshotModel(
     mode: host.sidebarAgentsMode,
     grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
-    pages: snapshotSessions(
-      (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
-        host.getSessionNavigationState().toSidebarSession(row),
-      ),
-      presentation,
-    ),
-    pageScopeId: context.agentSelection.state.scopeId,
     pinnedSessions: snapshotSessions(
       zone.sidebarEntries.flatMap((value) => {
         const entry = parseSidebarEntry(value);

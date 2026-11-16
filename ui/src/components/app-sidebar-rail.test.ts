@@ -1,12 +1,10 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { ApplicationProvider } from "../lib/reactive/context.ts";
 import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
@@ -17,15 +15,13 @@ import {
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { createMediaQueryList } from "../test-helpers/media-query.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { AppSidebar, getAppSidebarOwner } from "./app-sidebar.tsx";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { dispatchMousePointer, settleTooltip } from "./tooltip.test-support.ts";
@@ -917,117 +913,6 @@ describe("personal navigation rail", () => {
       expect(showToast).not.toHaveBeenCalled();
     },
   );
-
-  it("does not recreate catalog observations in an update queued before removal", async () => {
-    const { sidebar, sessions, gateway } = await fixture();
-    const parent = sidebar.parentElement!;
-    const observeList = sessions.sessions.observeList;
-    const dispose = vi.fn();
-    const observe = vi
-      .spyOn(sessions.sessions, "observeList")
-      .mockImplementation((query, listener) => {
-        const observation = observeList(query, listener);
-        return query.source === "dashboard"
-          ? {
-              ...observation,
-              dispose: () => {
-                dispose();
-                observation.dispose();
-              },
-            }
-          : observation;
-      });
-    const catalogQueries = () =>
-      observe.mock.calls.filter(
-        ([query]) => query.includeOwnerSessionCounts || query.source === "dashboard",
-      );
-    expect(catalogQueries()).toHaveLength(0);
-    sidebar.navigationView = "dashboards";
-    sidebar.remove();
-    await sidebar.updateComplete;
-    expect(catalogQueries()).toHaveLength(0);
-    parent.append(sidebar.hostElement);
-    await sidebar.updateComplete;
-    expect(catalogQueries()).toHaveLength(1);
-    await waitForSolid(() => expect(sidebar.querySelector(".sidebar-dashboards")).not.toBeNull());
-    sidebar.navigationView = "sessions";
-    await sidebar.updateComplete;
-    expect(catalogQueries()).toHaveLength(1);
-    expect(dispose).not.toHaveBeenCalled();
-    gateway.publish({ phase: "reconnecting" });
-    await sidebar.updateComplete;
-    expect(dispose).toHaveBeenCalledOnce();
-    gateway.publish({ phase: "connected" });
-    await sidebar.updateComplete;
-    expect(catalogQueries()).toHaveLength(1);
-    sidebar.navigationView = "dashboards";
-    await sidebar.updateComplete;
-    expect(catalogQueries()).toHaveLength(2);
-  });
-
-  it("observes Dashboards when Solid mounts the sidebar into a connected application", async () => {
-    const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", ["agent:main:dashboard"]);
-    sessions.sessions.state.result!.sessions[0]!.label = "Team board";
-    const context = createContext(gateway.gateway, sessions.sessions);
-    const provider = createApplicationContextProvider(context);
-    document.body.append(provider);
-    const view = mountSolid(
-      () =>
-        createComponent(ApplicationProvider, {
-          value: context,
-          get children() {
-            return createComponent(AppSidebar, { navigationView: "dashboards" });
-          },
-        }),
-      { container: provider },
-    );
-    await waitForSolid(() => {
-      expect(
-        view.container.querySelector(
-          '.sidebar-dashboards [data-sidebar-entry="session:agent:main:dashboard"]',
-        )?.textContent,
-      ).toContain("Team board");
-    });
-  });
-
-  it("renders and paginates the current managed dashboard catalog", async () => {
-    const { sidebar, sessions, result } = await fixture();
-    const dashboard = { ...result.sessions[1]!, key: "agent:main:dashboard", label: "Team board" };
-    sessions.list.mockResolvedValue({
-      ...result,
-      sessions: [dashboard],
-      hasMore: true,
-      nextOffset: 7,
-    });
-    sidebar.navigationView = "dashboards";
-    await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector(
-        '.sidebar-dashboards [data-sidebar-entry="session:agent:main:dashboard"]',
-      )?.textContent,
-    ).toContain("Team board");
-    const pending = createDeferred<typeof result>();
-    sessions.list.mockClear().mockReturnValueOnce(pending.promise);
-    const more = sidebar.querySelector<HTMLButtonElement>(".sidebar-dashboards > .btn")!;
-    more.click();
-    more.click();
-    expect(sessions.list).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ source: "dashboard", offset: 7 }),
-    );
-    pending.resolve({
-      ...result,
-      sessions: [{ ...dashboard, key: "agent:main:second", label: "Second board" }],
-      hasMore: false,
-    });
-    await pending.promise;
-    await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector('.sidebar-dashboards [data-sidebar-entry="session:agent:main:second"]')
-        ?.textContent,
-    ).toContain("Second board");
-    expect(sidebar.querySelector(".sidebar-dashboards > .btn")).toBeNull();
-  });
 
   it("stores only stable person references", () => {
     expect(

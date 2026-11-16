@@ -60,14 +60,6 @@ export function SidebarPanelFilter(props: {
   );
 }
 
-export function SidebarDashboardsHeader(props: { host: AppSidebarRenderHost }) {
-  return (
-    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
-      <span class="sidebar-panel-header__title">{titleForRoute("dashboards", t)}</span>
-    </SidebarPanelHeader>
-  );
-}
-
 export function SidebarAutomationsHeader(props: { host: AppSidebarRenderHost }) {
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
