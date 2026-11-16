@@ -17,6 +17,7 @@ import {
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
+import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import {
   autoReplyReplySubtreeTestInclude,
@@ -80,6 +81,7 @@ import {
   canSplitWholeConfigGroup,
   listScopedOwnerTestFiles,
   listNodeTestConfigFiles,
+  listNodeTestVolumeConfigFiles,
   listWholeConfigFiles,
   listWholeConfigSplitFiles,
   summarizeNodeTestFiles,
@@ -186,44 +188,50 @@ export type NodeTestVolumeContext = {
   readonly runtimePolicy: CiTestRuntimePolicy;
   readonly eligibility: Readonly<RuntimeTestSelection>;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  // The manifest's unselected plan, with its original eligibility and profile.
+  readonly fullPlan?: () => readonly (NodeTestShard | CompactNodeTestShard)[];
 };
 
 const volumeDigest = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-function prepareNodeTestVolumes(
-  groups: readonly NodeTestShardGroup[],
-  configs: Iterable<string>,
-  context: NodeTestVolumeContext,
-) {
-  const inventories = new Map<string, { owned: readonly string[]; eligible: readonly string[] }>();
-  // Capture each owner's original eligible inventory once, before projection.
-  if (
+export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
+  const valid =
     /^[a-f0-9]{40}$/u.test(context.revision) &&
     Array.isArray(context.eligibility.changedPaths) &&
     typeof context.eligibility.includeReleaseOnlyRuntimeTests === "boolean" &&
-    typeof context.eligibility.includePrExemptRuntimeTests === "boolean"
-  ) {
-    for (const config of new Set(configs)) {
-      try {
-        const files = listNodeTestConfigFiles(config);
-        if (files) {
-          const owned = Object.freeze([...files]);
-          inventories.set(config, {
-            owned,
-            eligible: Object.freeze(
-              owned.filter(
-                (file) =>
-                  !isCiProofTestFile(file) && isRuntimeTestFileIncluded(file, context.eligibility),
-              ),
-            ),
-          });
-        }
-      } catch {
-        // Measurement failure cannot widen, narrow, or block the execution plan.
-      }
+    typeof context.eligibility.includePrExemptRuntimeTests === "boolean";
+  const inventories = new Map<string, readonly string[] | undefined>();
+  const inventoryFor = (config: string) => {
+    if (!inventories.has(config)) {
+      inventories.set(config, valid ? listNodeTestVolumeConfigFiles(config) : undefined);
     }
-  }
+    return inventories.get(config);
+  };
+  const project = (config: string, group: NodeTestShardGroup) => {
+    const owned = inventoryFor(config);
+    if (!owned || group.includePatterns?.some((file) => !isPlainRepoRelativePath(file))) {
+      return undefined;
+    }
+    const files = group.includePatterns
+      ? owned.filter((file) => group.includePatterns!.includes(file))
+      : owned;
+    // Never silently remove files that the execution envelope still includes.
+    if (
+      files.some(
+        (file) => isCiProofTestFile(file) || !isRuntimeTestFileIncluded(file, context.eligibility),
+      )
+    ) {
+      return undefined;
+    }
+    return resolveCiTestRuntimeInventory(
+      config,
+      files,
+      { ...context.environment, ...group.env },
+      context.runtimePolicy,
+      group,
+    );
+  };
   const environmentFor = (group: NodeTestShardGroup) =>
     nodeTestVolumeEnvironment(
       { ...context.environment, ...group.env },
@@ -231,37 +239,43 @@ function prepareNodeTestVolumes(
     ).semantic;
   const profileFor = (config: string, group: NodeTestShardGroup) =>
     volumeDigest([config, environmentFor(group), context.runtimePolicy]);
-  const baselines = new Map<
-    string,
-    {
-      runtime: "node" | "bun";
-      engine: "vitest" | "bun-test";
-      files: readonly string[];
-      summary: ReturnType<typeof summarizeNodeTestFiles>;
-    }[]
-  >();
+  const baselines = new Map<string, Map<string, Set<string>>>();
+  const unknownProfiles = new Set<string>();
+  let groups: NodeTestShardGroup[] = [];
+  try {
+    const resolved: NodeTestShardGroup[] = [];
+    for (const job of valid ? (context.fullPlan?.() ?? []) : []) {
+      for (const group of job.groups ??
+        ("configs" in job ? [{ ...job, shard_name: job.shardName }] : [])) {
+        resolved.push({ ...group, env: { ...job.env, ...group.env } });
+      }
+    }
+    groups = resolved;
+  } catch {
+    // An unavailable full plan is unknown accounting, never an execution fallback.
+  }
   for (const group of groups) {
     for (const config of group.configs) {
-      const owner = inventories.get(config);
       const profile = profileFor(config, group);
-      if (!owner || baselines.has(profile)) {
-        continue;
-      }
       try {
-        const entries = resolveCiTestRuntimeInventory(
-          config,
-          owner.eligible,
-          group.env,
-          context.runtimePolicy,
-        );
-        baselines.set(
-          profile,
-          (entries ?? []).flatMap((entry) =>
-            entry ? [{ ...entry, summary: summarizeNodeTestFiles(entry.files) }] : [],
-          ),
-        );
+        const entries = project(config, group);
+        if (!entries || entries.some((entry) => !entry)) {
+          unknownProfiles.add(profile);
+          continue;
+        }
+        const runtimes = baselines.get(profile) ?? new Map<string, Set<string>>();
+        baselines.set(profile, runtimes);
+        for (const entry of entries) {
+          if (!entry) {
+            continue;
+          }
+          const key = `${entry.runtime}/${entry.engine}`;
+          const files = runtimes.get(key) ?? new Set<string>();
+          entry.files.forEach((file) => files.add(file));
+          runtimes.set(key, files);
+        }
       } catch {
-        baselines.set(profile, []);
+        unknownProfiles.add(profile);
       }
     }
   }
@@ -270,33 +284,17 @@ function prepareNodeTestVolumes(
     revision: context.revision,
     policy: context.runtimePolicy,
     entries: group.configs.flatMap((config) => {
-      const owner = inventories.get(config);
-      if (!owner || !group.includePatterns) {
-        return [];
-      }
-      const inventory = owner.eligible;
       const profile = profileFor(config, group);
-      const selected = group.includePatterns.filter((file) => inventory.includes(file));
-      // Explicit execution opt-ins can exceed the original eligibility scope.
-      // Never turn that mismatch into an apparent reduction.
-      const eligible = group.includePatterns.filter((file) => owner.owned.includes(file));
-      if (eligible.some((file) => !inventory.includes(file))) {
-        return [];
-      }
-      return (
-        resolveCiTestRuntimeInventory(config, selected, group.env, context.runtimePolicy) ?? []
-      ).flatMap((selection) => {
+      return (project(config, group) ?? []).flatMap((selection) => {
         if (!selection || selection.files.length === 0) {
           return [];
         }
-        const baseline = baselines
-          .get(profile)
-          ?.find(
-            (entry) => entry.runtime === selection.runtime && entry.engine === selection.engine,
-          );
+        const baseline = unknownProfiles.has(profile)
+          ? undefined
+          : baselines.get(profile)?.get(`${selection.runtime}/${selection.engine}`);
         const full =
-          baseline && selection.files.every((file) => baseline.files.includes(file))
-            ? baseline.summary
+          baseline && selection.files.every((file) => baseline.has(file))
+            ? summarizeNodeTestFiles([...baseline])
             : null;
         return [
           {
@@ -4540,13 +4538,7 @@ export function createSelectedNodeTestShardBundles(
       : [];
   const canonicalGroups = full.flatMap((shard) => shard.groups);
   const describeVolume = options.volumeContext
-    ? prepareNodeTestVolumes(
-        full.flatMap((job) =>
-          job.groups.map((group) => ({ ...group, env: { ...job.env, ...group.env } })),
-        ),
-        configs.values(),
-        options.volumeContext,
-      )
+    ? prepareNodeTestVolumes(options.volumeContext)
     : undefined;
   if (describeVolume) {
     options.onVolumePrepared?.(describeVolume);

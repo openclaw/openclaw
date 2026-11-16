@@ -508,8 +508,9 @@ export function resolveCiTestRuntimeSelections(
 export function resolveCiTestRuntimeInventory(
   config: string,
   files: readonly string[],
-  env: Record<string, string> | undefined,
+  env: Record<string, string | undefined> | undefined,
   policy: CiTestRuntimePolicy,
+  execution?: Pick<TestSelection, "configs" | "includePatterns">,
 ) {
   if (
     env?.OPENCLAW_VITEST_INCLUDE_FILE ||
@@ -519,30 +520,32 @@ export function resolveCiTestRuntimeInventory(
     return undefined;
   }
   return resolveCiTestRuntimeSelections(
-    { configs: [config], includePatterns: files, env },
+    { ...(execution ?? { configs: [config], includePatterns: files }), env },
     policy,
-  ).map((selection) => {
-    if (selection.engine === "bun-test") {
+  )
+    .filter((selection) => !selection.configs || selection.configs.includes(config))
+    .map((selection) => {
+      if (selection.engine === "bun-test") {
+        return {
+          runtime: selection.runtime,
+          engine: selection.engine,
+          args: [],
+          files: selection.files.filter((file) => files.includes(file)),
+        };
+      }
+      if (selection.includeAfterShard) {
+        return undefined;
+      }
+      const args = selection.vitestArgs ?? [];
       return {
         runtime: selection.runtime,
-        engine: selection.engine,
-        args: [],
-        files: selection.files,
+        engine: "vitest" as const,
+        args,
+        files: files.filter((file) =>
+          matchesVitestCliSelection(file, [file], args, "", {}, selection.includePatterns ?? files),
+        ),
       };
-    }
-    if (selection.includeAfterShard) {
-      return undefined;
-    }
-    const args = selection.vitestArgs ?? [];
-    return {
-      runtime: selection.runtime,
-      engine: "vitest" as const,
-      args,
-      files: files.filter((file) =>
-        matchesVitestCliSelection(file, [file], args, "", {}, selection.includePatterns ?? files),
-      ),
-    };
-  });
+    });
 }
 
 /** Match the shard runner's original process envelopes without splitting or dropping coverage. */
