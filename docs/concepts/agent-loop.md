@@ -323,6 +323,10 @@ The session watchdog follows the request guard's current deadline with a recover
 margin derived from its warning interval. Request stalls therefore surface as
 transient timeouts for bounded retry and configured model fallback before the
 watchdog stops the whole reply. Explicit execution deadlines still apply.
+Every completed request retains that bounded recovery window for cleanup and
+retry admission, including an output-limit continuation after a long stream.
+Repeated cleanup does not extend it; if no continuation starts, the session
+watchdog can still stop the stalled reply when the window expires.
 
 The built-in OpenClaw harness publishes the current model attempt's execution
 deadline to the queue. When an attempt times out, configured fallback can start

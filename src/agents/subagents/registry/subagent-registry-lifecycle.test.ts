@@ -3247,7 +3247,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual(batch);
       expect(readLifecycleRun(entry).delivery).toMatchObject({
         status: "pending",
-        disposition: "intentional_non_delivery",
+        disposition: undefined,
       });
       expect(readLifecycleRun(entry).delivery?.lastError).toBeUndefined();
       expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
@@ -4080,9 +4080,8 @@ describe("requester settle wake trigger", () => {
             path: "none",
             reason: "completion_handoff_pending",
             terminal: true,
-            disposition: "intentional_non_delivery",
           });
-          return "intentional_non_delivery" as const;
+          return "requester_waiting" as const;
         },
       );
       onTestFinished(seedResidentLifecycleRun(entry));
@@ -4102,8 +4101,8 @@ describe("requester settle wake trigger", () => {
       );
       expect(readLifecycleRun(entry).delivery).toMatchObject({
         status: "pending",
-        disposition: "intentional_non_delivery",
-        lastError: "completion_handoff_pending",
+        disposition: undefined,
+        lastError: undefined,
       });
       expect(readLifecycleRun(entry).delivery?.deliveredAt).toBeUndefined();
 
@@ -4270,9 +4269,8 @@ describe("requester settle wake trigger", () => {
           path: "none",
           reason: "completion_handoff_pending",
           terminal: true,
-          disposition: "intentional_non_delivery",
         });
-        return "intentional_non_delivery" as const;
+        return "requester_waiting" as const;
       },
     );
     let pendingDescendantRuns = 0;
@@ -4298,7 +4296,7 @@ describe("requester settle wake trigger", () => {
 
     expect(readLifecycleRun(entry).delivery).toMatchObject({
       status: "failed",
-      disposition: "intentional_non_delivery",
+      disposition: "permanent_failure",
       lastError: "requester settle wake attempts exhausted",
     });
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();

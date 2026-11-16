@@ -13,27 +13,19 @@ import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-saf
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
-  assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
-  type AbsolutePathSymlinkPolicy,
-  type EnsureAbsoluteDirectoryOptions,
-  type EnsureAbsoluteDirectoryResult,
-  type ResolvedAbsolutePath,
-  type ResolvedWritableAbsolutePath,
 } from "@openclaw/fs-safe/advanced";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExistsSync } from "@openclaw/fs-safe/advanced";
-export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
+export { movePathToTrash } from "@openclaw/fs-safe/advanced";
 export { resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
-  appendRegularFileSync,
   readRegularFile,
   readRegularFileSync,
-  resolveRegularFileAppendFlags,
   statRegularFile,
   statRegularFileSync,
 } from "@openclaw/fs-safe/advanced";
@@ -45,18 +37,8 @@ export {
   type ReadResult,
 } from "@openclaw/fs-safe/root";
 export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
-export {
-  readSecureFile,
-  type SecureFileReadOptions,
-  type SecureFileReadResult,
-} from "@openclaw/fs-safe/secure-file";
-export {
-  walkDirectory,
-  walkDirectorySync,
-  type WalkDirectoryEntry,
-  type WalkDirectoryOptions,
-  type WalkDirectoryResult,
-} from "@openclaw/fs-safe/walk";
+export { readSecureFile } from "@openclaw/fs-safe/secure-file";
+export { walkDirectory, walkDirectorySync } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
 
 /** Follow links; all filesystem failures mean the optional path is unavailable. */

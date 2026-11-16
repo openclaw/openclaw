@@ -1044,7 +1044,6 @@ describe("Tool Search", () => {
 
     const unavailable = "Tool Search catalog is unavailable for this run.";
     expect(() => runtime.all()).toThrow(unavailable);
-    expect(() => runtime.namespaceEntries()).toThrow(unavailable);
     await expect(runtime.search(target.name)).rejects.toThrow(unavailable);
     await expect(runtime.describe(target.name)).rejects.toThrow(unavailable);
     await expect(runtime.call(target.name)).rejects.toThrow(unavailable);

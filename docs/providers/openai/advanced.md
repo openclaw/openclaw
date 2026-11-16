@@ -323,6 +323,22 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     replaying a request after output or tool work has started. Azure and custom
     endpoint storage policies are unchanged.
 
+    If the server rejects saved items with `item_conflict` before output starts,
+    OpenClaw automatically retries once using saved conversation text and tool
+    results, without the rejected item IDs, reasoning, or compaction checkpoint.
+    Opening a stream or reporting compaction progress does not count as output.
+    Tool calls and results receive matching replacement IDs. The recovery is
+    recorded in the transcript so later turns and reloads retain the repair.
+    Unaffected sessions keep their existing prompt prefix and continuation.
+    Gateway logs record `item_conflict_recovery`, a session hash, and the outcome
+    (`started`, `recovered`, `failed`, or `deferred`). If both requests fail, the reply offers
+    retry, `/compact`, and model-switch guidance. A response that already produced
+    output is not automatically replayed, because tools may have done work; its
+    repair is saved for the next request (`deferred`), including a new run or an
+    internal session-effects fork of that history. Successful requests that apply
+    a saved repair also log `recovered`. Encrypted checkpoints remain bound to their
+    original session.
+
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model
     request, including between completed tool rounds. It sends the normal

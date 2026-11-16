@@ -3,12 +3,14 @@ import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
+import { createMemberWelcomeSlot } from "../../../components/openclaw-id/member-welcome-slot.tsx";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
@@ -200,7 +202,11 @@ export function renderChatComposerView(
       )}
     </Show>
   );
-  const showComposerInput = createMemo(() => props.disabledBanner?.kind !== "composer-replacement");
+  const application = useOptionalApplication();
+  const memberWelcome = createMemberWelcomeSlot(() => application);
+  const showComposerInput = createMemo(
+    () => !memberWelcome.active() && props.disabledBanner?.kind !== "composer-replacement",
+  );
   const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
@@ -667,6 +673,8 @@ export function renderChatComposerView(
           </div>
           <ComposerWidthEdge options={() => props} shell={() => shell} />
         </ComposerInputScope>
+      ) : memberWelcome.active() ? (
+        memberWelcome.step()
       ) : props.disabledBanner?.kind === "composer-replacement" ? (
         disabledBanner
       ) : undefined}

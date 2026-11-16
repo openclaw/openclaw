@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   expectObjectFields,
   mockCall,
@@ -192,6 +193,7 @@ async function withPlanFile(
 }
 
 describe("secrets CLI", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const runSecrets = async (args: string[]) => {
     const program = new Command();
     program.exitOverride();
@@ -474,7 +476,7 @@ describe("secrets CLI", () => {
       runtimeLogs.length = 0;
       runtimeErrors.length = 0;
 
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-cli-fifo-"));
+      const tmpDir = tempDirs.make("openclaw-secrets-cli-fifo-");
       const fifoPath = path.join(tmpDir, "plan.json");
       await execFileAsync("mkfifo", [fifoPath]);
 
@@ -505,7 +507,6 @@ describe("secrets CLI", () => {
           const releaseWriter = execFileAsync("sh", ["-c", 'printf x > "$1"', "sh", fifoPath]);
           await Promise.allSettled([parse, releaseWriter]);
         }
-        await fs.rm(tmpDir, { recursive: true, force: true });
       }
     },
   );

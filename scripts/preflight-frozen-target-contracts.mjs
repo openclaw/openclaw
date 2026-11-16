@@ -73,8 +73,9 @@ const shellOwners = {
   ],
   plugins: ["plugin_harness_capabilities", [`${prefix}PLUGIN_UNINSTALL_MODE`]],
   "upgrade-survivor": [
-    "upgrade_survivor_capabilities",
+    ["upgrade_survivor_capabilities", "upgrade_skill_library_contract"],
     [
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE",
       "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE",
       "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE",
     ],
@@ -473,6 +474,10 @@ async function planWorkflowAdmission(input) {
     }
   }
   const sourcePaths = new Set();
+  if (consumers.has("upgrade-survivor")) {
+    sourcePaths.add("src/config/skill-library-tool-split-migration.ts");
+    sourcePaths.add("src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts");
+  }
   if (allow) {
     for (const consumer of consumers) {
       for (const path of selectedMetadata[
@@ -995,6 +1000,12 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
   const contracts = [];
   for (const consumer of [...consumers].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const contract = { consumer, status: "ADMITTED", modes: {}, files: [] };
+    if (consumer === "upgrade-survivor") {
+      sources.selected.readText("src/config/skill-library-tool-split-migration.ts");
+      sources.selected.readText(
+        "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts",
+      );
+    }
     const owner = shellOwners[consumer === "kitchen-sink-plugin" ? "plugins" : consumer];
     if (owner) {
       const [fn, names] = owner;

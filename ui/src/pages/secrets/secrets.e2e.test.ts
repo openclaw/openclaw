@@ -187,6 +187,13 @@ suite.define(() => {
       await protectedBulk.getByText("1 protected secret detected").waitFor();
       await reject(protectedBulk, "EMPTY_API_KEY: Enter a value.");
 
+      const invalidName = await openDialog(page, "Add", "Add secret");
+      await field(invalidName, "Name").fill("A".repeat(129));
+      await reject(
+        invalidName,
+        "Use 1–128 characters: start with A–Z, then use A–Z, 0–9, or underscores.",
+      );
+
       const secret = await openDialog(page, "Add", "Add secret");
       await field(secret, "Name").fill("SERVICE_API_KEY");
       await field(secret, "Value").fill("super-secret-material");
@@ -194,7 +201,7 @@ suite.define(() => {
       await field(secret, "Name").press("Enter");
       await notice(
         page,
-        "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. 2 runtime warnings.",
+        "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. Runtime warnings: 2.",
       );
       expect(await page.content()).not.toContain("super-secret-material");
 
@@ -215,7 +222,7 @@ suite.define(() => {
       await button(envBulk, "Save").click();
       await notice(
         page,
-        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
+        "Entries saved: 2 (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
       );
 
       expect((await gateway.getRequests("secrets.store.set")).map(({ params }) => params)).toEqual([
@@ -229,6 +236,36 @@ suite.define(() => {
         { name: "BULK_PRIVATE_KEY", value: "line one\nline two", kind: "secret" },
         { name: "EMPTY_BULK_ENV", value: "", kind: "env" },
       ]);
+    });
+  });
+
+  it("keeps partial counts conservative when a saved write returns an error", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const savedEntry = entry("AUDIT_URL", "https://service.example.test");
+      const gateway = await openStore(page, {
+        list: { sequence: [[], [savedEntry], [savedEntry]].map((entries) => ({ entries })) },
+        set: {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message:
+              "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload.",
+          },
+        },
+      });
+      const dialog = await openDialog(page, "Bulk add");
+      await dialog.locator('dialog[data-phase="open"]').waitFor();
+      await bulkValue(dialog).fill("AUDIT_URL=https://service.example.test");
+      await button(dialog, "Save").click();
+      const failure = dialog.getByRole("alert");
+      await failure.waitFor();
+      expect(await failure.textContent()).toContain("Confirmed saves before the error: 0 of 1.");
+      expect(await failure.textContent()).toContain("entry was saved");
+      expect(await page.getByRole("listitem", { name: "AUDIT_URL", exact: true }).count()).toBe(1);
+      await button(dialog, "Cancel").click();
+      await button(page, "Retry").click();
+      await page.getByRole("listitem", { name: "AUDIT_URL", exact: true }).waitFor();
+      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(1);
+      expect(await gateway.getRequests("secrets.store.list")).toHaveLength(3);
     });
   });
 

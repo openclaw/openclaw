@@ -18,12 +18,15 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/session-compaction-persistence.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
+  persistCompactionBoundaryWithSessionEntryAsync,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
@@ -41,6 +44,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -92,6 +96,86 @@ async function attemptRealWrite(
     close();
   }
 }
+
+it("continues a resumed turn after compaction and a runtime row notification", async ({
+  signal,
+}) => {
+  await withOpenClawTestState(
+    { label: "restart-runtime-publication", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:dashboard:runtime-recovery" };
+      await replaceSessionEntry(target, {
+        sessionId: "runtime-recovery",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
+      });
+      const captured = await captureSessionEventTargetForHost(target.agentId, target.sessionKey);
+      const filePath = path.join(state.workspaceDir, "recovered-after-compaction.txt");
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        const host = await openEventToolHost(params, "resumed turn");
+        try {
+          const scope = {
+            ...target,
+            sessionId: captured.sessionId,
+            storePath: expectDefined(captured.storePath, "captured store path"),
+          };
+          const manager = await SessionManager.openAsync(scope, state.workspaceDir);
+          const kept = await manager.appendMessageAsync({
+            role: "user",
+            content: "retained work",
+            timestamp: 1,
+          });
+          await withSessionCompactionPersistenceAsync(
+            manager,
+            (prepared) =>
+              persistCompactionBoundaryWithSessionEntryAsync(scope, {
+                prepared,
+                transcriptByteCompactionLatch: null,
+              }),
+            () =>
+              manager.appendCompactionAsync(
+                "Continue the recovered work",
+                expectDefined(kept, "retained entry"),
+                100,
+              ),
+          );
+          sessionChanges.emit({ ...scope, scope: "runtime" });
+          await expectDefined(
+            host.tools.find((tool) => tool.name === "write"),
+            "write tool",
+          ).execute("recovery-write", { path: filePath, content: "completed\n" });
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        } finally {
+          host.close();
+        }
+      });
+      try {
+        const receipt = enqueueSessionEventForHost("Resume required work", {
+          ...target,
+          source: "restart",
+          expectedTarget: captured,
+          abortSignal: signal,
+          deliver: false,
+        });
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(outcome, outcome.error).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
+        expect(await fs.readFile(filePath, "utf8")).toBe("completed\n");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      } finally {
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
 
 it("executes a recovery event after its producer's plugin scope closes", async ({ signal }) => {
   await withOpenClawTestState(
@@ -241,7 +325,7 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         expect(executionScope).toHaveBeenCalledOnce();
         expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
         expect(outcome).toMatchObject({ status: "failed", executionStarted: true });
-        expect(outcome.error).not.toContain("Plugin invocation scope is closed");
+        expect(outcome.error).not.toContain("reloaded or disabled");
         expect(outcome.error).toContain("couldn't finish this reply");
         expect(check.mock.results.some((result) => result.type === "return" && result.value)).toBe(
           true,
