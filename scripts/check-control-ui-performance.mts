@@ -64,7 +64,9 @@ const controlUiPerformanceBudgets = {
   // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
   // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
   // (+1,215 B over main 97dd78cc) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_313_246,
+  // Ayaan approved the #198133 tool-call history cost (2026-11-16): measured 1,323,552 B
+  // (+10,244 B over main b7e618de) plus 64 B headroom.
+  chatBootJsGzipBytes: 1_323_616,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   newBootJsGzipBytes: 815_806,
@@ -89,8 +91,10 @@ const controlUiPerformanceBudgets = {
   // Measured on main a58dbe09: exact totals, with no added headroom.
   // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
   // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
-  totalCssGzipBytes: 336_943,
-  totalCssRawBytes: 1_737_754,
+  // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
+  // measured 337,198 B gzip (+209 B over main) / 1,740,090 B raw (+2,064 B), plus 64 B each.
+  totalCssGzipBytes: 337_262,
+  totalCssRawBytes: 1_740_154,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
