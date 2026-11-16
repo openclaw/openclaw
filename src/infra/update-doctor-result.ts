@@ -330,14 +330,23 @@ export function createUpdateDoctorDatabaseWriteCapture(
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= matches;
         if (!matches && first) {
-          // A capture already stale when Doctor starts: the parent's restore is refused by
-          // the same comparison, and a published parent's forward recovery would migrate
-          // unattributed. Attribute this Doctor's writes from what it admitted; writes after
-          // admission still refuse. A no-write WAL index rebuild after capture lands here.
-          expectedGenerations = { ...generations };
-          options.warn(
-            "Databases changed after the updater captured them; automatic database restoration is unavailable for this update.",
+          // Published parents bind WAL-index iChange into their capture, so a no-write
+          // index rebuild after capture (readers exiting, then a native reopen) looks like
+          // a write and their forward recovery strands the Gateway. Adopt only that shape;
+          // the receipt stays unchanged=false, so no parent restores, and any other
+          // difference still refuses at the first attributed write.
+          const { hasRebuiltWalIndexOverFrames } = await import("./update-database-generations.js");
+          const stale = Object.entries(generations).filter(
+            ([pathname, generation]) => generation !== expectedGenerations?.[pathname],
           );
+          if (stale.every(([pathname]) => hasRebuiltWalIndexOverFrames(pathname))) {
+            for (const [pathname, generation] of stale) {
+              expectedGenerations[pathname] = generation;
+            }
+            options.warn(
+              "SQLite rebuilt a database index after the updater captured it; automatic database restoration is unavailable for this update.",
+            );
+          }
         }
       }
     },

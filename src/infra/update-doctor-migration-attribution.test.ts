@@ -321,7 +321,7 @@ it("migrates after a no-write WAL index rebuild while the parent's restore stays
     migrate(database, pathname);
   });
   expect(warnings).toEqual([
-    "Databases changed after the updater captured them; automatic database restoration is unavailable for this update.",
+    "SQLite rebuilt a database index after the updater captured it; automatic database restoration is unavailable for this update.",
   ]);
   expect(receipt).toMatchObject({ unchanged: false, fromGenerations: admitted });
   const backup: UpdateDatabaseBackup = {
@@ -388,12 +388,17 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
       if (change === "same-content commit") {
         writer.exec("UPDATE retained SET value = 7;");
       }
-      // The outside writer is gone once Doctor holds maintenance custody.
-      writer.close();
     }
     const { receipt, warnings } = await withCapture(env, generations, async () => {
       using database = new DatabaseSync(pathname);
-      migrate(database, pathname);
+      if (change === "unchanged") {
+        migrate(database, pathname);
+        expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
+      } else {
+        expect(() => migrate(database, pathname)).toThrow(
+          "SQLite migration source changed after update capture:",
+        );
+      }
     });
     expect(receipt?.unchanged).toBe(change === "unchanged");
     if (change === "unchanged") {
@@ -402,12 +407,6 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
         fromGenerations: generations,
         generations: { [pathname]: legacyGeneration(pathname), [missing]: null },
       });
-    } else {
-      // Changed before admission: the parent's restore stays refused; Doctor still migrates.
-      expect(receipt?.fromGenerations).not.toEqual(generations);
-      expect(warnings).toEqual([
-        "Databases changed after the updater captured them; automatic database restoration is unavailable for this update.",
-      ]);
     }
   },
 );
