@@ -52,13 +52,13 @@ export class DtmfElevationGate {
     },
   ) {}
 
-  /** Undefined unless this is an inbound call from an allowlisted number. */
+  /** Undefined unless the other party (caller inbound, callee outbound) is allowlisted. */
   openCall(
-    call: Pick<CallRecord, "direction" | "from">,
+    call: Pick<CallRecord, "direction" | "from" | "to">,
     onOutcome: (outcome: DtmfElevationOutcome) => void,
   ): DtmfElevationCall | undefined {
-    const caller = normalizePhoneNumber(call.from);
-    if (call.direction !== "inbound" || !isAllowlistedCaller(caller, this.params.allowFrom)) {
+    const caller = normalizePhoneNumber(elevationCounterparty(call));
+    if (!isAllowlistedCaller(caller, this.params.allowFrom)) {
       return undefined;
     }
     const { pin, config } = this.params;
@@ -171,7 +171,8 @@ const ELEVATION_REJECTED_NOTICE =
 /** Reports one call's keypad outcomes: logs without digits, tells the model, hangs up on lockout. */
 export function createRealtimeElevationReporter(params: {
   callId: string;
-  caller: string | undefined;
+  /** The call whose other party (caller or callee) is reported, hashed, on lockout. */
+  call: Pick<CallRecord, "direction" | "from" | "to">;
   isCurrent: () => boolean;
   sendNotice: (notice: string) => void;
   hangUp: () => Promise<{ success: boolean; error?: string }>;
@@ -196,7 +197,7 @@ export function createRealtimeElevationReporter(params: {
       return;
     }
     console.warn(
-      `[voice-call] Realtime keypad elevation locked out caller=${redactIdentifier(params.caller)}; hanging up callId=${callId}`,
+      `[voice-call] Realtime keypad elevation locked out caller=${redactIdentifier(elevationCounterparty(params.call))}; hanging up callId=${callId}`,
     );
     void params.hangUp().then(
       (result) => {
@@ -213,6 +214,13 @@ export function createRealtimeElevationReporter(params: {
       },
     );
   };
+}
+
+/** The number on the other end: the caller of an inbound call, the callee of an outbound one. */
+export function elevationCounterparty(
+  call: Pick<CallRecord, "direction" | "from" | "to">,
+): string | undefined {
+  return call.direction === "inbound" ? call.from : call.to;
 }
 
 /** Consult context fields for one call: its tool policy, and `elevated` once its PIN was accepted. */

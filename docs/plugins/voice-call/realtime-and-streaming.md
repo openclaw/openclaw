@@ -327,7 +327,9 @@ submits after 3 seconds without a key or at 12 digits; `*` restarts entry. Each
 consult reads the call's policy when it starts, so a consult that is already
 running keeps the policy it started with.
 
-- Only inbound calls from numbers in `allowFrom` can elevate. Elevation needs
+- Only calls whose other party is in `allowFrom` can elevate: the caller of an
+  inbound call, or the callee of an outbound call. Whoever answers an outbound
+  call still has to enter the PIN; elevation is never automatic. Elevation needs
   `inboundPolicy: "allowlist"` or `"pairing"` and a `toolPolicy` other than
   `none`. Caller ID can be spoofed, so the PIN is the credential; the allowlist
   only narrows who may try.
@@ -344,7 +346,7 @@ running keeps the policy it started with.
   Caller audio is withheld from the model between the prefix and submission.
   Logs record only the outcome and attempt count. After a correct or wrong PIN,
   the realtime model receives a short notice so it can tell the caller.
-- Wrong entries count per hashed caller number across calls within
+- Wrong entries count per hashed number across calls (inbound and outbound) within
   `lockoutMs`, so hanging up and redialing does not reset them. After
   `maxAttempts` wrong entries OpenClaw hangs up and locks the caller out for
   `lockoutMs`. During a lockout any entry hangs up the call without checking
