@@ -79,6 +79,9 @@ export async function prepareChildRuntimeViability(params?: {
   if (available) {
     try {
       await fs.access(execPath, constants.X_OK);
+      const probe = await probeChildRuntimeExecutable(execPath);
+      const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
+      available = !classifyRuntimeProbe(execPath, probe, identity, probe.error);
     } catch (error) {
       available = publishRuntimeViability(execPath, error).available;
     }
@@ -181,13 +184,15 @@ export function assertChildRuntimeAvailable(): void {
   }
 }
 
-function recordUnavailableRuntime(execPath: string, cause?: unknown): Error {
+function recordUnavailableRuntime(execPath: string, cause?: unknown, stderr?: string): Error {
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
   runtime.execPath = execPath;
   runtime.failure = Object.assign(
-    new Error(formatMissingChildRuntimeWarning({ execPath, available: false }), { cause }),
+    new Error(stderr?.trim() || formatMissingChildRuntimeWarning({ execPath, available: false }), {
+      cause,
+    }),
     { code: "NODE_RUNTIME_UNAVAILABLE" },
   );
   createSubsystemLogger("gateway/runtime").error(runtime.failure.message);
@@ -229,7 +234,7 @@ function classifyRuntimeProbe(
         hasErrnoCode(probe.error, "ENOEXEC") ||
         hasErrnoCode(probe.error, "EACCES") ||
         hasErrnoCode(probe.error, "EPERM")));
-  return unavailable ? recordUnavailableRuntime(execPath, cause) : undefined;
+  return unavailable ? recordUnavailableRuntime(execPath, cause, probe.stderr) : undefined;
 }
 
 /** The public synchronous SQLite reader retains immediate failure classification. */
@@ -245,7 +250,7 @@ export function classifyChildRuntimeFailure(params: RuntimeFailure): Error | und
     loaderFailure.test(params.stderr ?? "") ||
     (params.error && !readChildRuntimeViability({ execPath }).available)
   ) {
-    return recordUnavailableRuntime(execPath, params.error);
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
   if (!needsRuntimeProbe(params)) {
     return undefined;
@@ -269,11 +274,8 @@ export async function prepareChildRuntimeFailure(
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
-  if (
-    loaderFailure.test(params.stderr ?? "") ||
-    (params.error && !(await prepareChildRuntimeViability({ execPath })).publish().available)
-  ) {
-    return recordUnavailableRuntime(execPath, params.error);
+  if (loaderFailure.test(params.stderr ?? "")) {
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
   if (!needsRuntimeProbe(params)) {
     return undefined;

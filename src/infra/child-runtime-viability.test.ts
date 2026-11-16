@@ -71,7 +71,7 @@ it("records a permanent loader failure once and does not confuse a post-handshak
   log.error.mockClear();
   expect(classifyChildRuntimeFailure({ ...input, started: true })).toBeUndefined();
   const failure = classifyChildRuntimeFailure(input);
-  expect(failure).toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE" });
+  expect(failure).toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE", message: input.stderr });
   expect(classifyChildRuntimeFailure({ execPath, signal: "SIGABRT" })).toBe(failure);
   expect(readChildRuntimeViability({ execPath }).available).toBe(false);
   expect(log.error).toHaveBeenCalledExactlyOnceWith(failure?.message);
