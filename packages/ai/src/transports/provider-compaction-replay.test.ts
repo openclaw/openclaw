@@ -30,7 +30,7 @@ const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 });
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const wire = (messages: Context["messages"]) =>
   convertResponsesMessages(model, { messages }, new Set(["openai"]), replayIdentity);

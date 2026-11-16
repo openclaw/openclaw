@@ -15,7 +15,7 @@ import {
 import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
 const model = fixtures.createReplayModel();
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 
 const createOutput = () => fixtures.createAssistant(model);
 
@@ -59,10 +59,8 @@ function replayTypes(output: AssistantMessage): string[] {
 const convertProvider = (context: Context) =>
   convertProviderResponsesMessages(model, context, new Set(["openai"]), replayIdentity);
 
-const convertTransport = (
-  context: Context,
-  identity: { sessionId?: string; authProfileId?: string } = replayIdentity,
-) => convertResponsesMessages(model, context, new Set(["openai"]), identity);
+const convertTransport = (context: Context, identity: { sessionId?: string } = replayIdentity) =>
+  convertResponsesMessages(model, context, new Set(["openai"]), identity);
 
 function createAssistant(
   content: string | AssistantMessage["content"],
@@ -295,7 +293,7 @@ describe("OpenAI Responses compaction replay", () => {
     );
   });
 
-  it.each<[string, Partial<ProviderReplayState>, { sessionId?: string; authProfileId?: string }]>([
+  it.each<[string, Partial<ProviderReplayState>, { sessionId?: string }]>([
     ["model", { model: "other-model" }, replayIdentity],
     ["base route", { baseUrlHash: "0000000000000000" }, replayIdentity],
     ["session", {}, { ...replayIdentity, sessionId: "session-b" }],

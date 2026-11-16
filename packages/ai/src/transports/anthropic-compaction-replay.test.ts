@@ -13,7 +13,6 @@ const model = makeAnthropicTransportModel({ baseUrl: "https://api.anthropic.com/
 const replayOptions = {
   enabled: true,
   sessionId: "session-1",
-  authProfileId: "anthropic:work",
 };
 
 function assistant(texts: string[]): AssistantMessage {
