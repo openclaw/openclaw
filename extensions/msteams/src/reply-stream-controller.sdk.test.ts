@@ -354,7 +354,7 @@ describe("Teams native final text preparation", () => {
     controller.preparePayload({ text });
     await expect(controller.finalize()).resolves.toMatchObject({ visibleReplySent: true });
     const final = requests.findLast((request) => request.scenario === "presentation-timeout");
-    expect(final?.text).toBe("# Status\n\nAll good");
+    expect(final?.text).toBe("**Status**\n\nAll good");
     expect(final?.entities).toEqual(
       expect.arrayContaining([
         {
@@ -376,12 +376,12 @@ describe("Teams native final text preparation", () => {
       const text = canceled
         ? "# Deployment status\n"
         : "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
-      const { controller } = await acknowledgedController(scenario, text, "# Deployment status");
+      const { controller } = await acknowledgedController(scenario, text, "**Deployment status**");
       controller.preparePayload({ text, presentation });
       await expect(controller.finalize()).resolves.toEqual({
         ...receipt(
           scenario,
-          canceled ? "# Deployment status" : "# Deployment status\n\n<at>Alex</at>",
+          canceled ? "**Deployment status**" : "**Deployment status**\n\n<at>Alex</at>",
         ),
         ...(canceled
           ? {}

@@ -63,14 +63,14 @@ describe("createTeamsReplyStreamController", () => {
     const ctrl = makeController(stream);
     ctrl.onPartialReply({ text: "# Sta" });
     ctrl.onPartialReply({ text: "# Status\n" });
-    expect(stream.emit.mock.calls).toEqual([["# Status"]]);
-    stream.acknowledge("# Status");
+    expect(stream.emit.mock.calls).toEqual([["**Status**"]]);
+    stream.acknowledge("**Status**");
     stream.close.mockRejectedValueOnce(new Error("network failure"));
     expect(ctrl.preparePayload({ text: "# Status\nAll good" })).toBeUndefined();
 
     await expect(ctrl.finalize()).resolves.toMatchObject({
       ...acknowledged,
-      content: "# Status",
+      content: "**Status**",
       fallbackPayload: { text: "All good" },
     });
   });

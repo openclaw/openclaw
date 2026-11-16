@@ -3,7 +3,7 @@ export const teamsQuotedRawTable =
 
 export const teamsQuotedTableReply = {
   source: `# Status\r\n\r\n${teamsQuotedRawTable}\n\n# Next`,
-  expected: `# Status\n\n${teamsQuotedRawTable}\n\n# Next`,
+  expected: `**Status**\n\n${teamsQuotedRawTable}\n\n**Next**`,
 };
 
 export const teamsMarkdownDeliveryCases = [
@@ -12,11 +12,11 @@ export const teamsMarkdownDeliveryCases = [
   {
     name: "table-looking code inside an open list fence",
     source: "- ```\n  code\n\n  > | A | B |\n  > |---|---|\n  > | x | y |",
-    expected: "- ```\ncode\n\n> | A | B |\n> |---|---|\n> | x | y |\n```",
+    expected: "• ```\ncode\n\n> | A | B |\n> |---|---|\n> | x | y |\n```",
   },
   {
     name: "raw table after list-fence outdent",
     source: "- ```\n  code\n\n> >   | A | B |\n> >   |---|---|\n> >   | x | y |",
-    expected: "- ```\ncode\n\n```\n>   | A | B |\n> >   |---|---|\n> >   | x | y |",
+    expected: "• ```\ncode\n\n```\n>   | A | B |\n> >   |---|---|\n> >   | x | y |",
   },
 ];
