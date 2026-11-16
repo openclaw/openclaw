@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CallBrief } from "./call-brief-schema.js";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 
-const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+const ProviderNameSchema = z.enum(["livekit", "telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 /** Internal call identifier (UUID) */

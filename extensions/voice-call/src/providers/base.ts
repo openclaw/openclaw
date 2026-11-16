@@ -28,9 +28,17 @@ export interface VoiceCallProvider {
    * Verify webhook signature/HMAC before processing.
    * Must be called before parseWebhookEvent.
    */
-  verifyWebhook(ctx: WebhookContext): WebhookVerificationResult;
+  verifyWebhook(
+    ctx: WebhookContext,
+  ): WebhookVerificationResult | Promise<WebhookVerificationResult>;
 
-  parseWebhookEvent(ctx: WebhookContext, options?: WebhookParseOptions): ProviderWebhookParseResult;
+  /** Stop admission and join owned carrier/audio resources. */
+  stop?(): Promise<void>;
+
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult | Promise<ProviderWebhookParseResult>;
 
   /**
    * Consume one-time TwiML that must be served before shortcut handlers such as
@@ -74,6 +82,12 @@ export interface VoiceCallProvider {
    */
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
 }
+
+/**
+ * A provider failed call setup but still owes a durable final-transcript drain.
+ * The manager must keep the active record instead of finalizing it as failed.
+ */
+export class ProviderSetupDurabilityError extends Error {}
 
 export function assertVoiceCallProviderSetting(value: unknown, message: string): asserts value {
   if (!value) {
