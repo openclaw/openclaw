@@ -230,7 +230,9 @@ export async function prepareTemplateDraft(params: {
     choices?.displayName?.trim() || draftManifest.agent.name || titleCaseTemplateName(draftName);
   // New drafts start with `description: ""`; that must not erase the CLAW.md description.
   const description = (
-    choices?.description ?? (authored.description || draftManifest.agent.description) ?? ""
+    choices?.description ??
+    (authored.description || draftManifest.agent.description) ??
+    ""
   ).trim();
   draftManifest.agent.id = draftName;
   draftManifest.agent.name = displayName;
