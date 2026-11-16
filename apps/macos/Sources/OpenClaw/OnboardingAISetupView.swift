@@ -252,7 +252,7 @@ struct OnboardingAISetupView: View {
                             "Enable an account integration on the computer running OpenClaw, then check again, " +
                             "or go back to use a local model.",
                         docsSlug: "concepts/model-providers",
-                        retryTitle: "Check again",
+                        retryTitle: "Refresh account options",
                         retry: { self.model.retryFromScratch() })
                 }
                 self.providerAuthSection

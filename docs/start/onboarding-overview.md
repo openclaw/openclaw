@@ -94,7 +94,9 @@ succeeds but no account options are available, the account path explains how to
 enable an integration or return to local setup. Failed discovery is reported
 separately with a retry action.
 
-Automatic setup keeps an existing configured model. Otherwise it tries usable
+### Dashboard automatic AI setup
+
+Dashboard automatic setup keeps an existing configured model. Otherwise it tries usable
 connections in this order:
 
 1. Saved OpenClaw auth profiles.

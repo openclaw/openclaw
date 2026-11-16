@@ -2183,6 +2183,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.bb24048d5940285c","source":"Enable or install a text-inference provider plugin on this Gateway, then check again."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.15eca1ed7ecdd40c","source":"No account connections are available"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.8b03cb2a68bec9dd","source":"No key-based providers are available"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.9d852133a338425b","source":"Refresh account options"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.3b6743644882a839","source":"Run a model on a computer you control, without an AI subscription."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.86c86388eb5c3f0a","source":"That key didn’t work"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.d4d40add2415ce06","source":"Try again"},

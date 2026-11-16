@@ -1067,6 +1067,16 @@ struct OnboardingAISetupTests {
             }
             window.orderFront(nil)
             try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
+            try await TestWait.state("account options rendered") {
+                let current = try await inspectAISetupAccessibility(hosting)
+                if catalog == "normal" {
+                    return current.labels.contains("Sign in with ChatGPT (Beta)")
+                }
+                if catalog == "discovery-failed" {
+                    return current.actions["Try again"] == true && current.actions["Back"] == true
+                }
+                return current.labels.contains("No account connections are available")
+            }
             let snapshot = try await inspectAISetupAccessibility(hosting)
             #expect(snapshot.actions["Back"] == true)
             #expect(snapshot.actions["Check again"] == true)
@@ -1081,7 +1091,10 @@ struct OnboardingAISetupTests {
             }
             #expect(snapshot.labels.contains("No account connections are available") ==
                 (catalog == "empty" || catalog == "local-only"))
-            try await pressOnboardingEntryButton("Check again", in: hosting)
+            let recoveryAction = catalog == "empty" || catalog == "local-only"
+                ? "Refresh account options" : "Check again"
+            #expect(snapshot.actions[recoveryAction] == true)
+            try await pressOnboardingEntryButton(recoveryAction, in: hosting)
             try await TestWait.state("explicit account rediscovery") {
                 await harness.recorder.snapshot().methods.filter { $0 == "openclaw.setup.detect" }.count == 2
             }
