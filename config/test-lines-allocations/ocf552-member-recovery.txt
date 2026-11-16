@@ -1,0 +1,5 @@
+# Recovery-only authority and key separation require distinct negative protocol cases.
+# Gateway mailbox persistence/replay/removal tests prove the production commit boundary.
+# Owner-only history, immutable Inbox dismissal and light/dark browser coverage prove
+# the separately required notice path; these cannot share the loader's mocked SW tests.
+472

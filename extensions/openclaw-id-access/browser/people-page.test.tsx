@@ -8,7 +8,7 @@ import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { PeoplePage } from "./people-page.js";
 import { button, hostFor, linked, pendingInvite, rolePicker } from "./people-page.test-support.js";
-import type { StatusResult } from "./types.js";
+import type { MemberRecoveryUse, StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -22,6 +22,16 @@ vi.mock("./owner-signing.js", () => ({
 
 const { default: plugin } = await import("./index.js");
 const disposers: Array<() => void> = [];
+
+const recoveryUse: MemberRecoveryUse = {
+  seq: 8,
+  accountId: "acct-mira",
+  memberName: "Mira <Example>",
+  deviceLabel: "Firefox <Linux>",
+  peerKey: `iroh:${"1".repeat(64)}`,
+  peerFp: `fp:${"1".repeat(64)}`,
+  usedAt: 1_800_000_000,
+};
 
 async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
   const harness = hostFor([statuses[0]!, ...statuses], submitResult);
@@ -735,7 +745,9 @@ describe("Access page", () => {
   });
 
   it("shows no people to a client that is not an owner, and never asks for them", async () => {
-    const { host, request } = hostFor([{ ...linked(), owner: false }]);
+    const { host, request } = hostFor([
+      { ...linked({ recoveryUses: [recoveryUse] }), owner: false },
+    ]);
     const container = document.createElement("div");
     document.body.append(container);
     disposers.push(render(() => <PeoplePage host={host} />, container));
@@ -746,7 +758,40 @@ describe("Access page", () => {
     );
     expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
     expect(container.textContent).not.toContain("member@example.test");
+    expect(container.textContent).not.toContain("Recovery kit history");
+    expect(container.textContent).not.toContain(recoveryUse.memberName);
     expect(button(container, "Add node")).toBeUndefined();
+  });
+
+  it("keeps literal recovery history after a member disappears and renders labels as text", async () => {
+    const member = {
+      accountId: recoveryUse.accountId,
+      role: "operator",
+      peerKeys: [],
+      displayName: recoveryUse.memberName,
+    };
+    const harness = await mountPage([
+      linked({ invites: [], members: [member], recoveryUses: [recoveryUse] }),
+      linked({ invites: [], members: [], recoveryUses: [recoveryUse] }),
+    ]);
+    const history = () =>
+      harness.container.querySelector('[aria-labelledby="ocid-access-recovery-uses"]');
+    await vi.waitFor(() =>
+      expect(history()?.textContent).toContain("Mira <Example> used a recovery kit"),
+    );
+    expect(history()?.textContent).toContain("Browser added: Firefox <Linux>");
+    expect(history()?.querySelector("time")?.getAttribute("datetime")).toBe(
+      "2027-01-15T08:00:00.000Z",
+    );
+    expect(history()?.querySelector("time")?.textContent).toMatch(/2027/);
+    expect(history()?.querySelector("example, linux")).toBeNull();
+    expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(1);
+    harness.emit();
+    await vi.waitFor(() =>
+      expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(0),
+    );
+    expect(history()?.textContent).toContain("Mira <Example> used a recovery kit");
+    expect(history()?.textContent).toContain("Browser added: Firefox <Linux>");
   });
 
   it("is read-only in a browser that is not an owner device", async () => {

@@ -37,7 +37,7 @@ import { memberName, removalNote, roleName } from "./people-format.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
-import { Members, PendingRequests, type RemovedMemberNotice } from "./people-sections.js";
+import { Members, PendingRequests, RecoveryUses, type RemovedMemberNotice } from "./people-sections.js";
 import type { Invite, Link, Member, MemberDevice, RemovalSummary, StatusResult } from "./types.js";
 
 // Canonical device fingerprints stay available in the request's details disclosure.
@@ -371,6 +371,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                     onRemove={remove}
                     onRemoveDevice={removeDevice}
                   />
+                  <RecoveryUses uses={current().link.recoveryUses ?? []} locale={host.locale} />
                 </section>
                 <Show when={latest(ownDevicePub)}>
                   <OperationError

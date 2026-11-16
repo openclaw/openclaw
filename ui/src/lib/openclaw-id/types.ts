@@ -83,6 +83,8 @@ type OpenClawIdConnection =
 export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
   members?: { accountId: string; displayName: string | null; email: string | null }[];
+  /** Accepted member recovery-kit uses, retained after member or browser removal. */
+  recoveryUses?: OpenClawIdRecoveryUse[];
   /** Active owner devices only; removed and expired ones are not listed. */
   ownerDevices?: OpenClawIdOwnerDevice[];
   /** The last publication to Discovery, while one was attempted. */
@@ -104,6 +106,17 @@ export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
     requestedAt: number;
     expiresAt: number;
   }[];
+};
+
+export type OpenClawIdRecoveryUse = {
+  seq: number;
+  accountId: string;
+  memberName: string;
+  deviceLabel: string;
+  peerKey: string;
+  peerFp: string;
+  /** Gateway-observed admission time, Unix seconds. */
+  usedAt: number;
 };
 
 /** The parts of a listed invite the Inbox needs; times are unix seconds. */

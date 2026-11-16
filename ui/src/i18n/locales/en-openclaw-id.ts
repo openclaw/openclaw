@@ -142,6 +142,8 @@ const enOpenClawId = {
     joinRequestMore: "{count} more waiting",
     joinRequestLater: "Later",
     joinRequestReview: "Review",
+    memberUsedRecoveryKit: "{name} used a recovery kit",
+    memberRecoveryUseDetail: "{browser} was added. Review access in Access → People.",
   },
 } satisfies TranslationMap;
 

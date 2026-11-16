@@ -247,6 +247,27 @@ time. The owner Inbox displays that record even after browser/member removal. Th
 records are not published in snapshots and never grant authority. Replacing or deleting the kit
 invalidates its future approvals but keeps already admitted browsers. Remove those browsers
 through the existing device controls, whose member-device descendant cascade is unchanged.
+
+### Admission policy and owner evidence
+
+Immediate admission lets a member recover while the owner is unavailable. Possession of the kit
+and control of the same signed-in account are sufficient to add a browser. The owner receives a
+warning Inbox item that names the member, browser and Gateway-observed time. Dismissing the
+item on one browser does not erase the retained use record in Access → People. Refused or
+replayed statements do not create successful-use records.
+
+Requiring owner approval for every kit use is a separate design option. It prevents admission
+until an owner reviews the new browser, but makes recovery depend on owner availability. That
+option needs pending-request expiry, refusal, and revalidation of the account, kit and membership
+sequence when the owner approves. It is not implemented or exposed as a configuration flag.
+`admitRecoveredMemberDevice` is the decision point after key/account validation; the public
+owner-evidence record is independent of that policy choice.
+
+The Gateway stores each use in a separate `member-recovery-use:<seq>` row in its claw namespace,
+in the same transaction as membership. Records retain the display name at admission and survive
+kit replacement, browser revocation and member removal. Only the owner People response exposes
+them. No record contains a kit secret, and no record grants admission. History remains with the
+claw record; no age-based deletion policy is applied.
 Removing the member deletes the whole MemberRecord, including its kit; re-invitation creates
 no recovery key. A saved signature still needs the current membership sequence and listed key.
 
