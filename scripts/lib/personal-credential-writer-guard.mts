@@ -33,6 +33,7 @@ const authSqlite = "src/agents/auth-profiles/sqlite.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authUpdate = "src/agents/auth-profiles/store-update.ts";
+const authUpdater = "src/agents/auth-profiles/store-updater.ts";
 const authEnrollment = "src/agents/auth-profiles/authorization-enrollment.ts";
 const authEnrollmentRuntime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
 const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
@@ -157,7 +158,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   [
     key(authUpdate, "runAuthProfileStoreUpdate"),
     [
-      key(authUpdate, "createAuthProfileStoreUpdater/updateAuthProfileStoreWithLock"),
+      key(authUpdater, "createAuthProfileStoreUpdater/updateAuthProfileStoreWithLock"),
       key(authProfiles, "removeAuthProfileTargetsWithLocks"),
       key(authProfiles, "removeAuthProfileTargetsWithLocks/publish"),
       key("src/agents/auth-profiles/upsert-with-lock.ts", "persistAuthProfileBatch"),
@@ -288,7 +289,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     ],
   ],
   [
-    key(authUpdate, "createAuthProfileStoreUpdater"),
+    key(authUpdater, "createAuthProfileStoreUpdater"),
     [key(authStore, "createAuthProfileStoreRuntime")],
   ],
   [

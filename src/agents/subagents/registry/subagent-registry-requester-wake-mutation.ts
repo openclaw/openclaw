@@ -11,6 +11,7 @@ import type {
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
 import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
+import { resolveRequesterDeliveryOutcome } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -109,25 +110,6 @@ export async function mutateRequesterSettleWakeBatch(
   return result.applied === true && result.publication === "published";
 }
 
-/** Records one observed outcome, or retires a wake that owes no delivery. */
-export function settleRequesterSettleWakeBatch(
-  context: SubagentLifecycleWakeContext,
-  batch: readonly SubagentRunRecord[],
-  rearmGeneration: number | undefined,
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-  stateContext: OpenClawStateWorkerContext,
-  receipt: RequesterWakeMutationReceipt = {},
-): Promise<boolean> {
-  return mutateRequesterSettleWakeBatch(
-    context,
-    batch,
-    rearmGeneration,
-    outcome ? { kind: "settle", outcome } : { kind: "complete" },
-    stateContext,
-    receipt,
-  );
-}
-
 // Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
 // retired owners; the scope keeps a later yield generation from consuming an older receipt.
 export const pendingRequesterSettlements = new WeakMap<
@@ -178,12 +160,16 @@ export function createRequesterWakeSettlement(params: {
     scope,
     batch,
     rearmGeneration,
-    outcome,
+    outcome: observedOutcome,
     onCommitted,
     stateContext,
     admittedWake,
     release,
   } = params;
+  const outcome = resolveRequesterDeliveryOutcome(
+    batch.map((member) => context.options.runs.get(member.runId) ?? member),
+    observedOutcome,
+  );
   // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
   const receipt: RequesterWakeMutationReceipt = {};
   const retireInputs = batch.map(captureSubagentControllerInputRetirement);
@@ -206,11 +192,11 @@ export function createRequesterWakeSettlement(params: {
           members.length === batch.length);
       if (
         settlesMembers &&
-        !(await settleRequesterSettleWakeBatch(
+        !(await mutateRequesterSettleWakeBatch(
           context,
           members,
           rearmGeneration,
-          outcome,
+          outcome ? { kind: "settle", outcome } : { kind: "complete" },
           stateContext,
           receipt,
         ))

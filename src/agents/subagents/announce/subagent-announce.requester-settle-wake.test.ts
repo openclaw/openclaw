@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
@@ -95,6 +96,45 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves delivered replies when consumption bookkeeping fails", async () => {
+    setChildren();
+    const failure = new Error("consumption registry write failed");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await expect(input.onTranscriptCommitted!("requester-continuation")).rejects.toBe(failure);
+      expect(input.custody.failure).toBe(failure);
+      return { delivered: true, path: "direct" };
+    });
+    await expectWake({
+      recordRequesterDelivery: async () => {
+        throw failure;
+      },
+    });
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
+  it("retires its unadopted input when dispatch and waiting publication are rejected", async () => {
+    setChildren();
+    const failure = new Error("Requester wake batch changed before its outcome was recorded");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      throw new Error("unreachable");
+    });
+    await expect(
+      wake({
+        transitionBatch: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect([...sessionControllerMailboxes()].flatMap((mailbox) => mailbox.entries)).toEqual([]);
+  });
+
   it("preserves route notices from compacted completed siblings in the requester message", async () => {
     const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
     const { buildRequesterSettleWakeMessage } =

@@ -449,6 +449,14 @@ describe("realtime relay close persistence", () => {
     { changeState: true, createRecord: false, cold: true },
     { changeState: true, permitFails: true },
     { changeState: true, createRecord: false, cold: true, sourceFails: true },
+    {
+      providerAsync: false,
+      fails: true,
+      changeState: true,
+      createRecord: false,
+      cold: true,
+      sourceFails: true,
+    },
     { changeState: true, createRecord: false, cold: true, silent: true },
   ])(
     "settles realtime relay close with overrides %j",
@@ -577,7 +585,7 @@ describe("realtime relay close persistence", () => {
         expect(recordStatus()).toBe("open");
       }
       const emitted = () => broadcastToConnIds.mock.calls.map(([, payload]) => payload);
-      expect(emitted().some((payload) => payload.type === "close")).toBe(!providerAsync);
+      expect(emitted().some((payload) => payload.type === "close")).toBe(!providerAsync && !cold);
       expect(emitted().some((payload) => payload.type === "toolCall")).toBe(false);
       if (providerAsync) {
         if (!fails) {
@@ -590,7 +598,14 @@ describe("realtime relay close persistence", () => {
       } else {
         completion.resolve();
       }
-      if (sourceFails || permitFails) {
+      if (sourceFails && fails) {
+        await expect(closing).rejects.toMatchObject({
+          errors: [
+            failure,
+            expect.objectContaining({ message: expect.stringContaining("regular file") }),
+          ],
+        });
+      } else if (sourceFails || permitFails) {
         await expect(closing).rejects.toThrow(sourceFails ? "regular file" : "admission is closed");
       } else if (fails) {
         await expect(closing).rejects.toBe(failure);

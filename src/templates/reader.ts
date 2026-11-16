@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { inspectTemplateBundledPlugin } from "./bundled-plugin-metadata.js";
@@ -376,6 +377,12 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
       .map((entry) => entry.source),
     ...parsed.manifest.workspace.files.map((entry) => entry.source),
   ].toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+  const heartbeatSources = new Set(
+    [
+      parsed.manifest.workspace.bootstrapFiles["HEARTBEAT.md"],
+      ...parsed.manifest.workspace.files.filter((entry) => entry.path === "HEARTBEAT.md"),
+    ].flatMap((entry) => (entry ? [entry.source] : [])),
+  );
 
   const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
   const workspaceSources: TemplateWorkspaceSourceSnapshot[] = [];
@@ -433,6 +440,26 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
           `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
           "$.workspace",
         );
+      }
+      if (heartbeatSources.has(sourcePath)) {
+        // Add imports HEARTBEAT.md as cron scratch, which has its own size and encoding contract.
+        const label = `HEARTBEAT.md source ${JSON.stringify(sourcePath)}`;
+        if (bytes.byteLength > CRON_JOB_SCRATCH_MAX_BYTES) {
+          return fileFailure(
+            "heartbeat_too_large",
+            `${label} is ${bytes.byteLength} bytes; the limit is ${CRON_JOB_SCRATCH_MAX_BYTES} bytes.`,
+            "$.workspace",
+          );
+        }
+        try {
+          decodeUtf8Input(bytes, label);
+        } catch (error) {
+          return fileFailure(
+            "heartbeat_invalid",
+            error instanceof Error ? error.message : String(error),
+            "$.workspace",
+          );
+        }
       }
       const digest = digestTemplateBytes(bytes);
       add(`workspace:${sourcePath}`, bytes);

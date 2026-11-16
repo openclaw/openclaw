@@ -512,7 +512,7 @@ it("recovers only an untouched package service after source publication fails", 
 
   await expectFailure(devUpdate(gitRoot, { json: true }));
 
-  expect(mocks.candidateValidation).toHaveBeenCalledOnce();
+  expect(mocks.candidateCheck).toHaveBeenCalledOnce();
   expect(
     (await fs.readdir(nodeModules)).filter(
       (entry) =>

@@ -57,7 +57,7 @@ export function createSessionControllerWatchdog(params: {
   expireCleanup: (
     effect: SessionWatchdogEffect,
   ) => SessionWatchdogEffectResult | Promise<SessionWatchdogEffectResult>;
-  onWarning?: (decision: SessionWatchdogDecision) => void;
+  onBlocked?: (decision: SessionWatchdogDecision) => void;
 }): SessionControllerWatchdog {
   const now = Date.now;
   const abortMs = Math.max(SESSION_WATCHDOG_ABORT_FLOOR_MS, 3 * SESSION_WATCHDOG_WARNING_MS);
@@ -90,8 +90,7 @@ export function createSessionControllerWatchdog(params: {
   let attemptReleases: Set<() => void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
-  let warningAt: number | undefined;
-  let blockedWarning = false;
+  let blockedReported = false;
   let recovery: SessionWatchdogSnapshot["recovery"];
   let recoveryAction: "stop" | "expire_cleanup" | undefined;
   let pendingTick:
@@ -165,7 +164,6 @@ export function createSessionControllerWatchdog(params: {
         retryAllowanceAt = undefined;
       }
       reason = nextReason;
-      warningAt = undefined;
     } else if (kind === "finalization" && cleanupAt !== undefined) {
       cleanupAt = transportAt + SESSION_WATCHDOG_CLEANUP_MS;
       reason = nextReason;
@@ -205,7 +203,6 @@ export function createSessionControllerWatchdog(params: {
       hasActiveAttempt: attempt?.isCurrent() === true,
       semanticProgressAtMs: progressOrigin(at),
       lastProgressReason: stagnationCurrent(at) ? "tool_loop:argument_churn" : reason,
-      warningMs: SESSION_WATCHDOG_WARNING_MS,
       semanticDeadlineAtMs: semanticDeadline(at),
       executionDeadlineAtMs: [executionAt, ...[...executions].map(executionDeadline)]
         .filter((deadline): deadline is number => deadline !== undefined)
@@ -251,19 +248,16 @@ export function createSessionControllerWatchdog(params: {
     ) {
       recovery = undefined;
       recoveryAction = undefined;
-      blockedWarning = false;
+      blockedReported = false;
     }
     const decision = decide(at);
-    if (decision.action === "warn" || decision.action === "blocked") {
-      if (warningAt !== semanticAt || (decision.action === "blocked" && !blockedWarning)) {
-        warningAt = semanticAt;
-        if (decision.action === "blocked" && recovery) {
-          blockedWarning = true;
-          recovery.status = "blocked";
-          pendingTick?.resolve(decision);
-          pendingTick = undefined;
-        }
-        params.onWarning?.(decision);
+    if (decision.action === "blocked") {
+      if (!blockedReported && recovery) {
+        blockedReported = true;
+        recovery.status = "blocked";
+        pendingTick?.resolve(decision);
+        pendingTick = undefined;
+        params.onBlocked?.(decision);
       }
       return decision;
     }
@@ -358,7 +352,7 @@ export function createSessionControllerWatchdog(params: {
             } else {
               assessment.check(now());
             }
-            blockedWarning = false;
+            blockedReported = false;
             const resumedPhase = params.readPhase();
             if (resumedPhase === "finishing" || resumedPhase === "terminal") {
               cleanupAt = now() + SESSION_WATCHDOG_CLEANUP_MS;

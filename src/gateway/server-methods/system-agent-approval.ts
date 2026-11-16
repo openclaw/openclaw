@@ -22,6 +22,10 @@ import {
 } from "../../system-agent/delegated-change-policy.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
+import {
+  getSystemAgentTemplateGateway,
+  withSystemAgentTemplateGateway,
+} from "../../system-agent/template-gateway.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import { readAgentRuntimeAutomaticChangePolicyAssertion } from "../agent-runtime-automatic-change-policy.js";
 import type {
@@ -132,6 +136,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   };
   trustedAgentRuntime?: AgentRuntimeIdentity;
 }): Promise<DelegatedProposalResolver> {
+  const templateGateway = getSystemAgentTemplateGateway();
   const callerIdentity = getGatewayToolCallerIdentity();
   const trustedAgentRuntime = callerIdentity ? undefined : params.trustedAgentRuntime;
   // Automatic application must re-assert live policy at decision time. An in-process
@@ -246,21 +251,23 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         if (decision && decision !== "deny") {
           assertLiveApprovalAuthority();
         }
-        return await params.session.engine.resolveOperatorApproval(
-          decision,
-          proposal.hash,
-          () => {
-            assertLiveApprovalAuthority();
-            if (automatic) {
-              if (!assertAutomaticChangePolicyCurrent) {
-                throw new DelegatedChangeApprovalRequiredError(
-                  "OpenClaw can no longer verify current policy for this change.",
-                );
+        return await withSystemAgentTemplateGateway(templateGateway, () =>
+          params.session.engine.resolveOperatorApproval(
+            decision,
+            proposal.hash,
+            () => {
+              assertLiveApprovalAuthority();
+              if (automatic) {
+                if (!assertAutomaticChangePolicyCurrent) {
+                  throw new DelegatedChangeApprovalRequiredError(
+                    "OpenClaw can no longer verify current policy for this change.",
+                  );
+                }
+                assertAutomaticChangePolicyCurrent();
               }
-              assertAutomaticChangePolicyCurrent();
-            }
-          },
-          terminalStatus,
+            },
+            terminalStatus,
+          ),
         );
       };
       const resolveCorrection = async (
@@ -326,7 +333,8 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (!manager) {
         throw new Error("OpenClaw approval registry unavailable");
       }
-      const operationDescription = describeSystemAgentPersistentOperation(proposal.operation);
+      const operationDescription =
+        proposal.description ?? describeSystemAgentPersistentOperation(proposal.operation);
       const description = approvalReason
         ? `${operationDescription}\n\n${approvalReason}`
         : operationDescription;

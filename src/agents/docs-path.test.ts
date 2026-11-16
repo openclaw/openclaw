@@ -49,6 +49,7 @@ describe("resolveOpenClawReferencePaths", () => {
     ["remote", "/remote/workspace/docs", "/remote/workspace"],
     ["remote-alias", "/remote/workspace/docs", "/remote/workspace"],
     ["read-only", "/agent/docs", "/agent"],
+    ["agent-bind-tie", "/reference/docs", "/reference"],
     ["bind", "/reference", null],
     ["shadow", null, "/workspace"],
     ["symlink", null, null],
@@ -74,7 +75,7 @@ describe("resolveOpenClawReferencePaths", () => {
     const sandbox = createSandboxTestContext({
       overrides: {
         workspaceDir,
-        agentWorkspaceDir: scenario === "read-only" ? root : workspaceDir,
+        agentWorkspaceDir: ["read-only", "agent-bind-tie"].includes(scenario) ? root : workspaceDir,
         workspaceAccess: scenario === "read-only" ? "ro" : "rw",
       },
     });
@@ -84,7 +85,9 @@ describe("resolveOpenClawReferencePaths", () => {
         ? [`${root}/docs:/reference:ro`]
         : scenario === "shadow"
           ? [`${workspace}:/workspace/docs:ro`]
-          : [];
+          : scenario === "agent-bind-tie"
+            ? [`${root}:/reference:ro`]
+            : [];
     if (scenario === "remote" || scenario === "remote-alias") {
       sandbox.fsBridge = createRemoteShellSandboxFsBridge({
         sandbox,
@@ -98,7 +101,8 @@ describe("resolveOpenClawReferencePaths", () => {
       const context = { ...sandbox, backend: { runShellCommand: rejectShell } };
       sandbox.fsBridge = createSandboxFsBridge({ sandbox: context });
     }
-    using realpath = vi.spyOn(syncFs, "realpathSync");
+    using realpath = vi.spyOn(syncFs.realpathSync, "native");
+    using exists = vi.spyOn(syncFs, "existsSync");
     const references = await resolveOpenClawReferencePaths({
       workspaceDir: sandbox.workspaceDir,
       cwd: scenario === "remote-alias" ? workspaceDir : root,
@@ -106,5 +110,6 @@ describe("resolveOpenClawReferencePaths", () => {
     });
     expect(references).toEqual({ docsPath, sourcePath });
     expect(realpath).not.toHaveBeenCalled();
+    expect(exists).not.toHaveBeenCalled();
   });
 });

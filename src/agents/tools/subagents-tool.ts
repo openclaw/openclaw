@@ -99,6 +99,7 @@ function mapRun(
         }
       : undefined,
     deliveryStatus: run.delivery?.status,
+    requesterDelivery: run.delivery?.requesterDelivery,
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
     ...(pausedForMs === undefined ? {} : { pausedForMs }),

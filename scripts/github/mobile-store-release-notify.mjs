@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { setTimeout as delay } from "node:timers/promises";
+import timers from "node:timers/promises";
 
 const SUPPRESS_EMBEDS = 1 << 2;
 const repository = "openclaw/openclaw";
@@ -48,7 +48,7 @@ async function request(url, options, service) {
         retryDelay = Math.max(retryDelay, Math.ceil(retryAfter * 1_000));
       }
     }
-    await delay(retryDelay);
+    await timers.setTimeout(retryDelay);
   }
 }
 

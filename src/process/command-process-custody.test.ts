@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
-import * as identity from "../shared/pid-alive.js";
 import * as groups from "./child-process-tree.js";
 import { settleCommandProcessGroups } from "./command-process-custody.js";
+import * as identity from "./command-process-identity.js";
 import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "./exec-spawn.js";
 import * as termination from "./kill-tree.js";
 
@@ -14,8 +14,10 @@ it.skipIf(process.platform === "win32")(
   "never signals an unknown, orphaned, or recycled group leader",
   async () => {
     const kill = vi.spyOn(termination, "killProcessTree").mockReturnValue(undefined);
-    vi.spyOn(groups, "isChildProcessTreeAlive").mockImplementation(({ pid }) => pid !== 4244);
-    vi.spyOn(identity, "getProcessInstanceStartTime").mockImplementation((pid) =>
+    vi.spyOn(groups, "isChildProcessTreeAliveAsync").mockImplementation(
+      async ({ pid }) => pid !== 4244,
+    );
+    vi.spyOn(identity, "readCommandProcessStartTime").mockImplementation(async (pid) =>
       pid === 4242 ? 2 : null,
     );
     const result = await settleCommandProcessGroups([
@@ -34,8 +36,9 @@ it.skipIf(process.platform === "win32")(
   async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(termination, "killProcessTree").mockReturnValue(undefined);
-    vi.spyOn(groups, "isChildProcessTreeAlive").mockReturnValue(true);
-    vi.spyOn(identity, "getProcessInstanceStartTime").mockReturnValue(1);
+    vi.spyOn(groups, "isChildProcessTreeAliveAsync").mockResolvedValue(true);
+    vi.spyOn(groups, "isProcessGroupGoneByKernel").mockReturnValue(false);
+    vi.spyOn(identity, "readCommandProcessStartTime").mockResolvedValue(1);
     const result = settleCommandProcessGroups([{ pid: 4242, startedAt: 1 }]);
     await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
     expect(await result).toMatchObject({ settled: false, pids: [4242] });
@@ -57,7 +60,7 @@ it.skipIf(process.platform === "win32")(
         code: pid !== -(4_194_304 + 1) && Date.now() < disappearsAt ? "EPERM" : "ESRCH",
       });
     });
-    vi.spyOn(identity, "getProcessInstanceStartTime").mockReturnValue(1);
+    vi.spyOn(identity, "readCommandProcessStartTime").mockResolvedValue(1);
     const result = settleCommandProcessGroups([{ pid: 4242, startedAt: 1 }]);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(await result).toEqual({ settled: true, pids: [] });
