@@ -1542,6 +1542,26 @@ it("batches native milestone updates and prevents pending updates after final de
   expect(stopSlackStreamMock).toHaveBeenCalledOnce();
 });
 
+it("does not replay expired progress text after a final reply was delivered normally", async () => {
+  const session = createNativeStreamSession();
+  startSlackStreamMock.mockResolvedValueOnce(session);
+  stopSlackStreamMock.mockImplementationOnce(async () => {
+    session.pendingText = "stale progress narration";
+    throw new NotDeliveredError(session.pendingText, "message_not_in_streaming_state");
+  });
+
+  await dispatchNativeProgressScenario(
+    [{ kind: "item", progressText: "stale progress narration" }],
+    { finalPayload: { text: FINAL_REPLY_TEXT, isError: true } },
+  );
+
+  expect(deliverRepliesMock).toHaveBeenCalledOnce();
+  expect(mockRecord(deliverRepliesMock, 0).replies).toEqual([
+    { text: FINAL_REPLY_TEXT, isError: true },
+  ]);
+  expect(stopSlackStreamMock).toHaveBeenCalledOnce();
+});
+
 it("flushes approval attention immediately while ordinary progress is batched", async () => {
   vi.useFakeTimers();
   const pending = taskUpdate(

@@ -65,6 +65,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     usedReplyThreadTs: undefined as string | undefined,
     usedBlockReplyThreadTs: undefined as string | undefined,
     observedReplyDelivery: false,
+    finalReplyDelivered: false,
   };
   const startStream = async (
     params: Pick<
@@ -289,7 +290,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
             markSlackStreamFallbackDelivered(session);
             await stopStream(session);
             state.observedReplyDelivery ||= session.delivered;
-          } else if (error instanceof SlackStreamNotDeliveredError) {
+          } else if (
+            error instanceof SlackStreamNotDeliveredError &&
+            !state.finalReplyDelivered
+          ) {
             await deliverPendingStreamFallback(session, error);
           } else {
             throw error;
@@ -369,6 +373,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return { visibleReplySent: false };
     }
     state.observedReplyDelivery = true;
+    state.finalReplyDelivered ||= params.kind === "final";
     const deliveredThreadTs = resolveSlackReplyThreadTs({
       replyToMode: replyDeliveryMode,
       replyToId: params.payload.replyToId,
@@ -521,6 +526,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return { visibleReplySent: false };
     }
     state.observedReplyDelivery = true;
+    state.finalReplyDelivered ||= params.kind === "final";
     rememberDeliveredThreadTs(params.kind, threadTs);
     replyPlan.markSent();
     markDelivered(deliveryKey);
