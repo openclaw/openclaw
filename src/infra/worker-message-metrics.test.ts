@@ -5,6 +5,7 @@ import { captureSqliteWorkerCommitReceipt as captureReceipt } from "./sqlite-wor
 import {
   getWorkerMessageMetrics,
   recordWorkerMessage,
+  recordWorkerAuthorityMessage,
   observeWorkerMessage,
   type WorkerMessageKind,
   type WorkerMessageDirection,
@@ -149,6 +150,110 @@ describe("worker message metrics", () => {
   });
 });
 
+it.each([
+  "appendedEvents",
+  "authorityReceipts",
+  "reload",
+  "modelPromptProjection",
+  "entryMetadata",
+  "initialEntry",
+  "metadataReload",
+])("attributes large %s receipts after native delivery", (shape) => {
+  using random = vi.spyOn(Math, "random").mockReturnValue(0);
+  const rows = Array.from({ length: 1024 }, (_, rawSeq) => ({
+    rawSeq,
+    event: `${rawSeq}:${"x".repeat(512)}`,
+  }));
+  const append = {
+    kind: shape === "metadataReload" ? "metadata" : "message",
+    value: { reload: shape === "reload" || shape === "metadataReload" ? rows : undefined },
+    modelPromptProjection: shape === "modelPromptProjection" ? { rows } : undefined,
+    initialEntry: shape === "initialEntry" ? { entry: { rows } } : undefined,
+  };
+  const outcome = {
+    kind: "committed",
+    value: append,
+    receipt: {
+      postimage: { entry: undefined },
+      entryMetadata:
+        shape === "entryMetadata" ? [{ facts: new Map([["synthetic", rows]]) }] : undefined,
+      transcript: {
+        append,
+        appendedEvents: shape === "appendedEvents" ? rows : undefined,
+        authorityReceipts: shape === "authorityReceipts" ? rows : undefined,
+      },
+    },
+  };
+  const captured = captureReceipt(outcome);
+  if (captured.kind !== "inline") {
+    throw new Error("Expected inline fixture");
+  }
+  const read = () =>
+    getWorkerMessageMetrics().find(
+      (row) => row.kind === "authority" && row.direction === "from_worker",
+    )?.payloadComponents?.["session.actor.appendTranscriptEvent"];
+  const before = read();
+  const admission = createAdmission((_request, grant) => grant());
+  admission.requestClass = "session.actor.appendTranscriptEvent";
+  try {
+    admission.port.postMessage(
+      {
+        kind: "native-settlement",
+        settlement: {
+          kind: "completed",
+          committed: { version: 1, sequence: 1, facts: captured.facts },
+        },
+        payloadBytes: captured.payloadBytes,
+      },
+      [],
+    );
+    admission.service();
+    expect(random).toHaveBeenCalledTimes(1);
+    expect(admission.committed?.facts).toEqual(outcome);
+    const after = read();
+    const delta = (component: keyof NonNullable<typeof after>) =>
+      (after?.[component]?.bytes ?? 0) - (before?.[component]?.bytes ?? 0);
+    const sum = (samples: typeof after) =>
+      Object.entries(samples ?? {})
+        .filter(([key]) => key.startsWith("receipt_"))
+        .reduce((total, [, sample]) => total + (sample?.bytes ?? 0), 0);
+    expect(sum(after) - sum(before)).toBe(captured.payloadBytes);
+    const component =
+      shape === "entryMetadata"
+        ? "receipt_entry"
+        : shape === "appendedEvents" || shape === "authorityReceipts"
+          ? "receipt_events"
+          : "receipt_value";
+    expect(delta(component)).toBeGreaterThan(500_000);
+  } finally {
+    void admission.finish();
+  }
+});
+
+it("retains known receipt bytes when attribution throws and skips unsampled facts", () => {
+  const requestClass = "session.actor.read";
+  const read = () =>
+    getWorkerMessageMetrics().find(
+      (row) => row.kind === "authority" && row.direction === "from_worker",
+    )?.payloadComponents?.[requestClass];
+  const before = read();
+  const wire = {
+    kind: "native-commit",
+    payloadBytes: 524288,
+    committed: { facts: { receipt: { transcript: () => undefined } } },
+  };
+  recordWorkerAuthorityMessage(wire, requestClass, false);
+  expect(read()).toEqual(before);
+  expect(() => recordWorkerAuthorityMessage(wire, requestClass, true)).not.toThrow();
+  const after = read();
+  expect((after?.receipt_other?.bytes ?? 0) - (before?.receipt_other?.bytes ?? 0)).toBe(
+    wire.payloadBytes,
+  );
+  expect((after?.receipt_other?.unmeasured ?? 0) - (before?.receipt_other?.unmeasured ?? 0)).toBe(
+    1,
+  );
+});
+
 it.each([false, true])("samples complete actor operations with entry reference=%s", (reference) => {
   let draw = 0;
   using random = vi.spyOn(Math, "random").mockImplementation(() => ((draw++ % 128) + 0.5) / 128);
@@ -219,7 +324,7 @@ it.each([false, true])("samples complete actor operations with entry reference=%
         [],
       );
       admission.service();
-      expect(serialize(admission.committed?.facts).equals(serialized)).toBe(true);
+      expect(admission.committed?.facts).toEqual(outcome);
     } finally {
       void admission.finish();
     }
@@ -243,6 +348,7 @@ it.each([false, true])("samples complete actor operations with entry reference=%
   expect(
     delta("receipt_entry", "bytes") +
       delta("receipt_events", "bytes") +
+      delta("receipt_value", "bytes") +
       delta("receipt_other", "bytes"),
   ).toBe(serialized.byteLength);
   expect(JSON.stringify(after)).not.toMatch(/synthetic-private|projection|prompt/);
