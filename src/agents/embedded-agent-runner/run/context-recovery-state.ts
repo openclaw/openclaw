@@ -1,4 +1,4 @@
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
 import {
   restoreEmbeddedRunTimeoutAbandonment,
   type EmbeddedRunTimeoutRecoveryMarker,

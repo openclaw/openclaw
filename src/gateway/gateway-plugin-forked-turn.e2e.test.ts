@@ -311,7 +311,11 @@ async function withForkGateway(
             foregroundRequests.push(payload);
             if (foreground.toolCalls > 0) {
               foreground.toolCalls -= 1;
-              toolCallResponse(response, `fg_${serial}`, "read", { path: "notes.txt" });
+              // Grow the transcript without exercising the identical-arguments repeat guard.
+              toolCallResponse(response, `fg_${serial}`, "read", {
+                path: "notes.txt",
+                limit: foreground.toolCalls + 1,
+              });
               return;
             }
           }

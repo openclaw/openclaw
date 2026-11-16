@@ -6,9 +6,18 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const completionSelectionEntries = [
+  "src/gateway/session-companion.ts",
+  "src/gateway/session-companion-policy.ts",
+  "src/agents/utility-completion.ts",
+  "src/auto-reply/reply/conversation-label-generator.ts",
+  "src/system-agent/setup-inference-detect.ts",
+  "src/agents/simple-completion-selection.ts",
+];
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
+    ...completionSelectionEntries,
     "src/gateway/call.ts",
     "src/gateway/config-get-response.ts",
     "src/gateway/method-scopes.ts",
@@ -51,6 +60,79 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(completionSelectionEntries)(
+    "selects models in %s without loading completion execution",
+    (entry) => {
+      const modules = collectStaticValueImports(entry);
+      expect(modules).not.toContain(path.normalize("src/agents/simple-completion-runtime.ts"));
+      expect(modules).not.toContain(path.normalize("src/agents/simple-completion-execution.ts"));
+    },
+  );
+
+  it("resolves an explicit setup utility alias without loading completion execution", async () => {
+    await withOpenClawTestState(
+      { label: "setup-selection-cold-import", applyEnv: false },
+      async (state) => {
+        await state.writeConfig({
+          agents: {
+            defaults: {
+              model: "fixture/primary",
+              utilityModel: "fast@fixture:utility",
+              models: { "fixture/utility": { alias: "fast" } },
+            },
+            entries: { main: {} },
+          },
+          models: {
+            mode: "merge",
+            providers: {
+              fixture: {
+                baseUrl: "http://127.0.0.1:9/v1",
+                api: "openai-completions",
+                models: [
+                  { id: "primary", name: "Primary" },
+                  { id: "utility", name: "Utility" },
+                ],
+              },
+            },
+          },
+          plugins: { enabled: false },
+          gateway: { mode: "local" },
+        });
+        const entry = new URL("../system-agent/setup-inference-detect.ts", import.meta.url).href;
+        const result = await runNodeScript(
+          [
+            "--import",
+            fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+            "--input-type=module",
+            "--eval",
+            `
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (["runtime", "execution"].some((owner) =>
+    [".ts", ".js"].some((extension) =>
+      resolved.url.endsWith("/simple-completion-" + owner + extension)))) {
+    throw new Error("Setup selection loaded completion execution");
+  }
+  return resolved;
+}});
+const { listManualSetupInferenceOptions } = await import(${JSON.stringify(entry)});
+const result = await listManualSetupInferenceOptions("main");
+console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: result.setupComplete }));
+`,
+          ],
+          { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
+          30_000,
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          utilityModel: "fixture/utility",
+          setupComplete: true,
+        });
+      },
+    );
+  });
+
   it("skips unused sandbox prewarming without loading worktree execution", async () => {
     await withOpenClawTestState(
       { label: "prewarm-cold-import", applyEnv: false },
