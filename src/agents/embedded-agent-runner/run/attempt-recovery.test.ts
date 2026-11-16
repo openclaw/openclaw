@@ -31,6 +31,7 @@ import {
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
@@ -624,24 +625,24 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  // The controller owns the cap matrix; this boundary must forward replay safety.
-  it.each([true, false])("honors retry caps only when replay-safe=%s", async (replaySafe) => {
-    const expectedSleepMs = replaySafe ? undefined : 9_897_000;
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+  it("surfaces over-cap rate limits after tool work without replay or rotation", async () => {
+    const fixture = await recoverAfterTransportDrop({
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: true,
-      replaySafe,
+      replaySafe: false,
       providerRetryMaxDelayMs: 30_000,
       diagnostics: [],
     });
-    expect(recovery.action).toBe(expectedSleepMs === undefined ? "proceed" : "retry");
-    if (expectedSleepMs === undefined) {
-      expect(sleepWithAbort).not.toHaveBeenCalled();
-      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
-    } else {
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(expectedSleepMs, undefined);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    }
+    expect(fixture.recovery.action).toBe("proceed");
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expect(await handleAssistantFailureAfterRecovery(fixture)).toMatchObject({ action: "proceed" });
+    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    const [payload] = buildEmbeddedRunPayloads({ ...fixture.attempt, sessionKey: "cap-test" });
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
   });
 
   it("exhausts sixteen rate-limited attempts with bounded history before rotation and failover", async () => {
