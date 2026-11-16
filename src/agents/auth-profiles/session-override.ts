@@ -307,7 +307,10 @@ async function resolveSessionAuthProfileOverride(
     !sessionEntry.authProfileOverride?.trim() &&
     !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
-    !(await hasAnyAuthProfileStoreSourceAsync(agentDir, params.reader))
+    !(await hasAnyAuthProfileStoreSourceAsync(
+      agentDir,
+      params.reader ? { agentId, reader: params.reader } : undefined,
+    ))
   ) {
     return { profileId: undefined, store: undefined };
   }

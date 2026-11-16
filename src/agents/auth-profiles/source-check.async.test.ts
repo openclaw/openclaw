@@ -13,10 +13,12 @@ import {
   type OpenClawTestState as State,
 } from "../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
+import { resolveSessionAuthSelection } from "./session-override.js";
 import { hasAnyAuthProfileStoreSourceAsync as hasSource } from "./source-check.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import * as readers from "./sqlite-read.js";
+import * as sqlite from "./sqlite.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 async function prepareSourceCohort(state: State) {
@@ -135,11 +137,37 @@ it("refreshes absent and malformed rows through the cohort", () =>
       if (json !== undefined) {
         peer.prepare(`INSERT INTO auth_profile_${table} VALUES ('primary', ?, 1)`).run(json);
       }
-      await expectSource(state.agentDir(), expected, reader);
+      await expectSource(state.agentDir(), expected, { agentId: "main", reader });
     }
     expect(
       standalone.mock.calls.filter(([input]) => input.databasePath === database.path),
     ).toHaveLength(0);
+  }));
+
+it("checks session auth sources through the admitted identity without reverse discovery", () =>
+  withState(async (state) => {
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
+    await using cohort = await prepareSourceCohort(state);
+    const { reader } = cohort;
+    const sessionEntry = { sessionId: "auth-source", updatedAt: 1 };
+    using readCohort = vi.spyOn(reader, "withRead");
+    using reverseOwner = vi.spyOn(sqlite, "resolveAuthProfileDatabaseOwnerId");
+    expect(
+      await resolveSessionAuthSelection({
+        cfg: {},
+        provider: "openai",
+        modelId: "synthetic-model",
+        agentId: "main",
+        agentDir: state.agentDir(),
+        reader,
+        sessionEntry,
+        sessionKey: reader.sessionKey,
+        sessionStore: { [reader.sessionKey]: sessionEntry },
+        isNewSession: false,
+      }),
+    ).toBeUndefined();
+    expect(readCohort).toHaveBeenCalled();
+    expect(reverseOwner).not.toHaveBeenCalled();
   }));
 
 it("rejects cohort path, agent owner, and state root mismatches", () =>
@@ -154,7 +182,7 @@ it("rejects cohort path, agent owner, and state root mismatches", () =>
       { env: { ...reader.database.env, OPENCLAW_STATE_DIR: state.path("another-state-root") } },
     ]) {
       const mismatched = { ...reader, database: { ...reader.database, ...changed } };
-      expect(await hasSource(state.agentDir(), mismatched)).toBe(true);
+      expect(await hasSource(state.agentDir(), { agentId: "main", reader: mismatched })).toBe(true);
     }
     expect(readCohort).not.toHaveBeenCalled();
   }));

@@ -31,7 +31,6 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
 } from "./sqlite.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
@@ -94,8 +93,9 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
 /** Runtime source detection retains the existing readers through classification and cleanup. */
 export async function hasAnyAuthProfileStoreSourceAsync(
   agentDir?: string,
-  reader?: SessionEntryCohortReader,
+  cohort?: { agentId: string; reader: SessionEntryCohortReader },
 ): Promise<boolean> {
+  const reader = cohort?.reader;
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const localPath = agentDir ? resolveAuthProfileDatabasePath(agentDir) : undefined;
@@ -115,20 +115,14 @@ export async function hasAnyAuthProfileStoreSourceAsync(
   }
   const legacySharedPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
   const paths = [...new Set([legacySharedPath, ...(localPath ? [localPath] : [])])];
-  let cohortPath =
+  const cohortPath =
     reader &&
+    cohort?.agentId === reader.database.agentId &&
     path.resolve(resolveStateDir(reader.database.env)) === path.resolve(resolveStateDir(env))
       ? paths.find(
           (databasePath) => path.resolve(databasePath) === path.resolve(reader.database.path),
         )
       : undefined;
-  if (
-    cohortPath &&
-    reader &&
-    resolveAuthProfileDatabaseOwnerId(path.dirname(cohortPath)) !== reader.database.agentId
-  ) {
-    cohortPath = undefined;
-  }
   // Each possible shared owner captures revocation before filesystem preparation yields.
   const readers = new Map(
     await Promise.all(
