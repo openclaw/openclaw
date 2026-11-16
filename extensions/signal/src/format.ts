@@ -57,7 +57,11 @@ const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
 // Parsers percent-encode non-ASCII destinations, while labels keep the authored characters.
 function decodeLinkHref(href: string): string {
   try {
-    const decoded = decodeURI(href);
+    // "%25" stays encoded: "%2541" (a literal "%41") and "%41" ("A") are different targets.
+    const decoded = href
+      .split(/%25/i)
+      .map((part) => decodeURI(part))
+      .join("%25");
     // A decoded space or control would no longer read as one URL, so keep the suffix.
     return /[\s\p{Cc}]/u.test(decoded) ? href : decoded;
   } catch {

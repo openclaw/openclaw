@@ -62,6 +62,10 @@ describe("Signal formatting", () => {
     expect(markdownToSignalText("https://example.com/a%20b").text).toBe(
       "https://example.com/a b (https://example.com/a%20b)",
     );
+    // An escaped percent sign names a different target, so the destination stays visible.
+    expect(markdownToSignalText("[https://example.com/%41](https://example.com/%2541)").text).toBe(
+      "https://example.com/%41 (https://example.com/%2541)",
+    );
   });
 
   it("marks a transcript-role header promoted to a chunk boundary", () => {
