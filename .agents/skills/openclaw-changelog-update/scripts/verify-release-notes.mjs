@@ -1562,7 +1562,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   };
 }
 
-function graphql(query, notFoundNumbers = []) {
+function graphql(query, notFoundNumbers = [], optionalUserAliases = []) {
   let lastError;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -1574,13 +1574,19 @@ function graphql(query, notFoundNumbers = []) {
         errors.some(
           (error) =>
             error.type !== "NOT_FOUND" ||
-            !allowed.some(
-              (number) =>
-                error.path?.[0] === "n" + number &&
-                error.path?.[1] === "issueOrPullRequest" &&
-                error.path.length === 2 &&
-                response.data?.["n" + number]?.issueOrPullRequest === null,
-            ),
+            (!optionalUserAliases.some(
+              (alias) =>
+                error.path?.length === 1 &&
+                error.path[0] === alias &&
+                response.data?.[alias] === null,
+            ) &&
+              !allowed.some(
+                (number) =>
+                  error.path?.[0] === "n" + number &&
+                  error.path?.[1] === "issueOrPullRequest" &&
+                  error.path.length === 2 &&
+                  response.data?.["n" + number]?.issueOrPullRequest === null,
+              )),
         )
       ) {
         const failure = new Error("GitHub GraphQL errors: " + JSON.stringify(errors));
@@ -2280,7 +2286,12 @@ function resolveGitHubHandles(handles) {
           `u${index + offset}: user(login: ${JSON.stringify(handle)}) { __typename login }`,
       )
       .join("\n");
-    const { data } = graphql(`query { ${fields} }`);
+    // Missing users are optional credit, unlike required issue/PR references.
+    const { data } = graphql(
+      `query { ${fields} }`,
+      [],
+      chunk.map((_, offset) => `u${index + offset}`),
+    );
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const user = data[`u${index + offset}`];
       if (user?.__typename === "User" && isEligibleHandle(user.login)) {

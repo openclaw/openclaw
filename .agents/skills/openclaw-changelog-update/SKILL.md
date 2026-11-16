@@ -131,7 +131,8 @@ of this skill; initial generation must never overwrite them.
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
    <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
-   Unavailable historical issues may be recovered only with explicit
+   Historical issue recovery ([incident and contract: PR #199961](https://github.com/openclaw/openclaw/pull/199961)):
+   unavailable historical issues may be recovered only with explicit
    `--historical-issue-snapshot <path>` and
    `--historical-issue-snapshot-sha256 <sha256>` inputs. Supply the original,
    immutable canonical snapshot and its independently retained digest, never a

@@ -229,6 +229,7 @@ syncBuiltinESMExports();
       const manifest = join(cwd, "proposal.json");
       const result = runVerifier(cwd, {
         base,
+        target: base,
         version,
         manifest,
         write: false,
@@ -252,7 +253,7 @@ syncBuiltinESMExports();
       expect(git(cwd, ["rev-parse", "initial-source"])).toBe(base);
       expect(git(cwd, ["show", `${sourceRef}:CHANGELOG/${version}.md`])).toContain("0 unique PRs");
       writeFileSync(entry, initial);
-      const restored = runVerifier(cwd, { base, version, write: false });
+      const restored = runVerifier(cwd, { base, target: base, version, write: false });
       expect(restored.status, restored.stderr || restored.stdout).toBe(0);
       expect(JSON.parse(restored.stdout)).not.toHaveProperty("changelogSource");
     },
@@ -2463,6 +2464,55 @@ console.log(JSON.stringify({ data }));
       expect(verified.status, verified.stdout).toBe(0);
     }
   });
+
+  it.each(["missing", "mixed", "wrong-path", "non-null"])(
+    "preserves optional missing-user semantics at the CLI boundary: %s",
+    (mode) => {
+      const { cwd, base } = seedRepository("openclaw-release-optional-user-", "main");
+      const target = commitAll(
+        cwd,
+        "chore: source\n\nCo-authored-by: Former <123+former-user@users.noreply.github.com>\nCo-authored-by: Verified <456+verified-user@users.noreply.github.com>",
+      );
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}
+const query = process.argv.find(arg => arg.startsWith("query="))?.slice(6) ?? "";
+const mode = ${JSON.stringify(mode)};
+const data = {}, errors = [];
+for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) {
+  data[alias] = login === "former-user" && mode !== "non-null" ? null : { __typename: "User", login };
+  if (login === "former-user") errors.push({ type: "NOT_FOUND", path: mode === "wrong-path" ? [alias, "login"] : [alias], message: "Could not resolve to a User" });
+}
+if (errors.length && mode === "mixed") errors.push({ type: "FORBIDDEN", path: ["unrelated"], message: "Resource not accessible" });
+console.log(JSON.stringify({ data, ...(errors.length ? { errors } : {}) }));
+if (errors.length) { for (const error of errors) console.error("gh: " + error.message); process.exitCode = 1; }
+`,
+      );
+      chmodSync(gh, 0o755);
+      splitChangelog({ rootDir: cwd });
+      const manifest = join(cwd, "manifest.json");
+      const before = readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8");
+      const result = runVerifier(cwd, {
+        base,
+        target,
+        manifest,
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+      if (mode !== "missing") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("GitHub GraphQL errors");
+        expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(before);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        const output = readFileSync(manifest, "utf8");
+        expect(output).toContain("verified-user");
+        expect(output).not.toContain('"former-user"');
+        expect(JSON.parse(result.stdout).errors).toEqual([]);
+      }
+    },
+  );
 
   it.each([
     { mode: "recover", attempts: 2, error: undefined, waits: [500] },
