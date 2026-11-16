@@ -1,14 +1,14 @@
-# +1292 net test lines against main after the member-approval stack landed.
+# +1326 net test lines against main after the member-approval stack landed.
 # 379 protocol: artifact/key separation and recovery-only authority, replay, replacement,
 #     removal/reinvite and pending-invite collision negatives at the signed boundary.
 # 226 Gateway: malformed mail, commit failure, reload/replay, owner-only persisted history,
 #     member provenance and tunnel principal decoding at the production storage boundary.
-# 126 People page/support (net): literal safe history, non-owner access and retained route
-#     updates/browser ordering. Confirmed removal/history transitions live in browser E2E.
+# 160 People page/support (net): literal safe history, non-owner access and retained route
+#     updates/browser ordering; separate recovery suite keeps the main role suite below its cap.
 # 398 browser: source core + plugin Inbox deep link, owner-key signing, confirmed removal,
 #     retained history, same-key admission toast and light/dark mobile/desktop proof.
 # 126 core UI: owner-only Inbox/dismissal persistence and current-admission notice provenance.
 # 37 compression: folded gate-fix parity coverage proves measured gzip matches shipped bytes.
 # The browser composition covers routing/key/mailbox/toast lifetimes that isolated page
-# or protocol tests cannot. 400 default lines + 892 allocation = 1292 total.
-892
+# or protocol tests cannot. 400 default lines + 926 allocation = 1326 total.
+926
