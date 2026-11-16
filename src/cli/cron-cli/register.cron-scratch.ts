@@ -20,7 +20,7 @@ export function registerCronScratchCommand(cron: Command) {
       .option("--set <text>", "Replace scratch with exact text")
       .option("--file <path>", "Replace scratch from a file, or - for stdin")
       .option("--unset", "Remove the scratch row", false)
-      .option("--expected-revision <n>", "Require the current scratch revision")
+      .option("--expected-revision <n>", "Require the current scratch revision for a write")
       .action(async (idArg, opts) => {
         try {
           const id = requireCronJobId(idArg);
@@ -31,6 +31,9 @@ export function registerCronScratchCommand(cron: Command) {
           ].filter(Boolean).length;
           if (mutations > 1) {
             throw new CronCliError("choose only one of --set, --file, or --unset");
+          }
+          if (mutations === 0 && opts.expectedRevision !== undefined) {
+            throw new CronCliError("--expected-revision requires --set, --file, or --unset");
           }
           // Inline writes with a valid explicit revision already have their CAS input.
           // Keep the initial read before file/stdin consumption and input errors.
