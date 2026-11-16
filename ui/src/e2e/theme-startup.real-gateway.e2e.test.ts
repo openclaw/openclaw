@@ -108,6 +108,19 @@ suite.define(() => {
             entries: { "ui.theme": "knot", "ui.themeMode": "dark" },
           }),
         ).toMatchObject({ status: "ok" });
+        // A clean browser has no settings record or last-seen profile mirror.
+        await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+          const url = new URL("settings/appearance", suite.server.baseUrl);
+          url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
+          await page.goto(url.href);
+          await page
+            .locator("openclaw-gateway-url-confirmation")
+            .getByRole("button", { name: `Switch to ${gatewayUrl.host}`, exact: true })
+            .click();
+          await waitForControlUiGatewayReady(page);
+          await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("openknot");
+          console.log("[theme-proof] clean browser restored authenticated Knot/dark");
+        });
         await suite.withPage(
           { colorScheme: "light", viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
           async ({ page }) => {
@@ -192,7 +205,14 @@ suite.define(() => {
                 );
                 localStorage.setItem(
                   `openclaw.control.settings.v1:${scope}`,
-                  JSON.stringify({ gatewayUrl: url, theme: "knot", themeMode: "dark" }),
+                  // v2026.11.4 settings.ts writes these fields under the same v1 key.
+                  JSON.stringify({
+                    gatewayUrl: url,
+                    theme: "knot",
+                    themeMode: "dark",
+                    navWidth: 310,
+                    locale: "en",
+                  }),
                 );
               },
               { url: gatewayUrl.href, scope: gatewayOriginScope(gatewayUrl.href) },
@@ -228,7 +248,18 @@ suite.define(() => {
                     ),
                   gatewayOriginScope(gatewayUrl.href),
                 ),
-              ).toMatchObject({ theme: "knot", themeMode: "dark" });
+              ).toMatchObject({ theme: "knot", themeMode: "dark", navWidth: 310, locale: "en" });
+              expect(
+                await evaluateControlUiContext(page, (app) => ({
+                  theme: app.theme.settings.theme,
+                  themeMode: app.theme.settings.themeMode,
+                  navWidth: app.theme.settings.navWidth,
+                  locale: app.theme.settings.locale,
+                })),
+              ).toEqual({ theme: "knot", themeMode: "dark", navWidth: 310, locale: "en" });
+              console.log(
+                "[theme-proof] v2026.11.4-format v1 record retained theme, mode, width and locale before hydration",
+              );
             } finally {
               connect();
             }

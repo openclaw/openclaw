@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ThemesListResult } from "../../../packages/gateway-protocol/src/schema/themes.ts";
+import type { ThemeDescriptor } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createThemeDefinitionFixture } from "../../../test/helpers/theme-fixture.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -27,14 +29,15 @@ it.each(["before", "after"] as const)(
     const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
     const id = "space-pack/xenovessel";
     const entries = { "ui.theme": id, "ui.themeMode": "dark" };
-    const descriptor = {
+    const descriptor: ThemeDescriptor = {
       id,
       name: "Synthetic plugin theme",
+      description: "Synthetic appearance regression fixture",
       source: "plugin",
       pluginId: "space-pack",
       modes: ["dark"],
     };
-    const catalog = {
+    const catalog: ThemesListResult = {
       themes: [descriptor],
       theme: descriptor,
       definition: createThemeDefinitionFixture(),
@@ -53,7 +56,7 @@ it.each(["before", "after"] as const)(
     const theme = createApplicationTheme(loadSettings(), context.gateway);
     Object.assign(context, { theme });
     const { readStarted, reply } = holdProfileAppearanceRead(request);
-    request.mockImplementation(async (method?: string) => {
+    request.mockImplementation(async (method) => {
       if (method === "users.prefs.get") {
         return { status: "ok", entries };
       }
