@@ -1,0 +1,82 @@
+name: CI Boat Recovery
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] reads setup metadata only; never checks out or executes workflow source
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: ci-boat-recovery-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      - name: Recover quota-only setup failures on hosted runners
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const expected = context.payload.workflow_run;
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const getRun = async () => (await github.rest.actions.getWorkflowRun({
+              ...context.repo, run_id: expected.id,
+            })).data;
+            const eligible = (run) => run.id === expected.id &&
+              run.path === '.github/workflows/ci.yml' &&
+              run.repository.full_name === repository &&
+              run.head_repository.full_name === repository &&
+              run.head_sha === expected.head_sha && run.run_attempt === 1 &&
+              run.status === 'completed' && run.conclusion === 'failure' &&
+              ['pull_request', 'push'].includes(run.event);
+            const run = await getRun();
+            if (!eligible(run)) return;
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              ...context.repo, run_id: run.id, attempt_number: 1, per_page: 100,
+            });
+            const failed = jobs.filter((job) => job.conclusion === 'failure');
+            const boat = failed.filter((job) => job.name !== 'openclaw/ci-gate');
+            if (!boat.length || jobs.some((job) => !['success', 'failure', 'skipped'].includes(job.conclusion))) return;
+            for (const job of boat) {
+              const failures = job.steps.filter((step) => step.conclusion === 'failure');
+              if (!job.labels.some((label) => /^boat(?:-large|-xlarge)?$/.test(label)) ||
+                  failures.length !== 1 || failures[0].name !== 'Set up runner') return;
+              const checkRunId = Number(job.check_run_url.split('/').at(-1));
+              const annotations = await github.paginate(github.rest.checks.listAnnotations, {
+                ...context.repo, check_run_id: checkRunId, per_page: 100,
+              });
+              if (!annotations.some((annotation) => annotation.title === 'Paused by plan limit' &&
+                  /You used all [\d,]+ sandbox starts included in the last 24 hours\./.test(annotation.message))) return;
+            }
+            const currentHead = async () => {
+              if (run.event === 'pull_request') {
+                // workflow_run can omit pull_requests even for a same-repository PR.
+                const { data: prs } = await github.rest.pulls.list({
+                  ...context.repo, state: 'open', head: `${context.repo.owner}:${run.head_branch}`,
+                  per_page: 100,
+                });
+                return prs.some((pr) => pr.head.repo.full_name === repository &&
+                  pr.head.sha === run.head_sha);
+              }
+              const { data: branch } = await github.rest.repos.getBranch({
+                ...context.repo, branch: run.head_branch,
+              });
+              return branch.commit.sha === run.head_sha;
+            };
+            // Revalidate after metadata reads; a human retry or new push owns the next attempt.
+            if (!(await currentHead()) || !eligible(await getRun())) return;
+            await github.rest.actions.reRunWorkflowFailedJobs({ ...context.repo, run_id: run.id });
+            core.info(`Requested one hosted retry for ${boat.length} Boat quota setup failures in CI ${run.id}.`);

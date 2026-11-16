@@ -1135,6 +1135,8 @@ jobs:
           REQUESTED_RUNNER_PROFILE: ${{ inputs.runner_backend || 'default' }}
           QUALIFICATION_DISPATCH: ${{ steps.qualification_dispatch.outputs.eligible || 'false' }}
           CI_SHAPE: ${{ inputs.ci_shape || 'default' }}
+          BOAT_API_KEY: ${{ github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && secrets.BOAT_API_KEY || '' }}
+          BOAT_ORG: ${{ vars.BOAT_ORG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1200,6 +1202,7 @@ jobs:
             node_runner_backend=runson
           fi
           effective_runner_backend="${CONFIGURED_RUNNER_PROFILE:-blacksmith}"
+          boat_node_job_limit=
           if [[ "$ci_qualification" == "true" ]]; then
             effective_runner_backend=github
             [[ "${GITHUB_RUN_ATTEMPT:-1}" != "1" ]] || effective_runner_backend="$qualification_runner_backend"
@@ -1211,6 +1214,34 @@ jobs:
               runner_profile=hybrid
               node_runner_backend=boat
               effective_runner_backend=boat
+              if [[ "$ci_qualification" == "false" ]]; then
+                # Ordinary CI shares a start allowance; only its longest Node
+                # rows use Boat. Other work retains the hybrid overflow route.
+                node_runner_backend=hybrid
+                effective_runner_backend=hybrid
+                boat_node_job_limit="$(node --input-type=module <<'JS'
+          const key = process.env.BOAT_API_KEY;
+          const org = process.env.BOAT_ORG;
+          let budget = 0;
+          try {
+            if (!key || !org) throw new Error('missing account scope');
+            const { resolveBoatNodeJobBudget } = await import('./.ci-harness/scripts/lib/ci-node-test-capacity.mts');
+            const response = await fetch('https://boat.dev/api/v1/limits', {
+              headers: { Authorization: `Bearer ${key}`, 'X-Boat-Org': org },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (!response.ok) throw new Error('limits unavailable');
+            const limits = await response.json();
+            if (limits.teamId !== org) throw new Error('account scope mismatch');
+            budget = resolveBoatNodeJobBudget(limits);
+          } catch {
+            console.error('::warning::Boat limits unavailable; using hybrid CI.');
+          }
+          console.log(budget);
+          JS
+                )"
+                echo "Boat admission: up to $boat_node_job_limit Node jobs; remaining jobs use hybrid CI."
+              fi
             else
               runner_profile=github
               node_runner_backend=github
@@ -1237,6 +1268,9 @@ jobs:
             "placement_runner_backend=$placement_runner_backend" \
             "runner_profile=$runner_profile" \
             "node_runner_backend=$node_runner_backend" >> "$GITHUB_OUTPUT"
+          if [[ -n "$boat_node_job_limit" ]]; then
+            echo "boat_node_job_limit=$boat_node_job_limit" >> "$GITHUB_OUTPUT"
+          fi
       - name: Resolve exact diff base
         id: diff_base
         env:
@@ -1617,6 +1651,7 @@ jobs:
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_runtime_policy || '' }}
           OPENCLAW_CI_RUNNER_PROFILE: ${{ steps.runner_profile.outputs.runner_profile }}
           OPENCLAW_CI_NODE_RUNNER_BACKEND: ${{ steps.runner_profile.outputs.node_runner_backend }}
+          OPENCLAW_CI_BOAT_NODE_JOB_LIMIT: ${{ steps.runner_profile.outputs.boat_node_job_limit }}
           OPENCLAW_CI_QUALIFICATION: ${{ steps.runner_profile.outputs.ci_qualification }}
           OPENCLAW_CI_SHAPE: ${{ steps.runner_profile.outputs.ci_shape }}
           OPENCLAW_CI_RUNNER_BACKEND: ${{ steps.runner_profile.outputs.placement_runner_backend }}
@@ -2673,7 +2708,7 @@ jobs:
           cache-mode: *cache_mode
           node-version: "24.22.1"
           install-bun: "false"
-          dependency-cache: &trusted_first_attempt_dependency_cache ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && 'false' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          dependency-cache: &trusted_first_attempt_dependency_cache ${{ (needs.preflight.outputs.effective_runner_backend == 'boat' || startsWith(matrix.runner_label || matrix.runner || '', 'boat')) && 'false' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           restore-test-caches: *restore_test_caches
 
       - *install_playwright_chromium
@@ -3891,7 +3926,7 @@ jobs:
         env:
           PREDICTED_TEST_SECONDS: ${{ matrix.predicted_seconds || '' }}
           SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
-          OPENCLAW_NODE_TEST_CPU_BUDGET: ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && matrix.cpu_budget || '' }}
+          OPENCLAW_NODE_TEST_CPU_BUDGET: ${{ startsWith(matrix.runner_label || matrix.runner, 'boat') && github.run_attempt == 1 && matrix.cpu_budget || '' }}
           FROZEN_TARGET: *frozen_target
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
           RUNSON_JOB: ${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && 'true' || 'false' }}
