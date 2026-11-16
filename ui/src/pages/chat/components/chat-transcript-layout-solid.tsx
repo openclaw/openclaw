@@ -140,7 +140,14 @@ function TranscriptRows(props: {
                 return source(index());
               });
               const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
-              const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
+              const forecast = () => props.snapshot.forecastRowKeys?.has(row()?.key ?? "") === true;
+              const preparing = createMemo(
+                () => row()?.key === props.snapshot.preparingRowKey || forecast(),
+              );
+              const paintPreparing = createMemo(
+                () => forecast() && !props.snapshot.unsettledRowKeys?.has(row()?.key ?? ""),
+              );
+              const before = () => forecast() && virtualRow().index < (activeRows()[0]?.index ?? 0);
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
@@ -155,11 +162,34 @@ function TranscriptRows(props: {
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
                     style={{
-                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
-                      display: active() ? undefined : preparing() ? "flow-root" : "none",
+                      "min-height":
+                        active() || preparing()
+                          ? `${props.snapshot.layout.rowMinimum(index())}px`
+                          : "0",
+                      // Chromium keeps a parked box for timely forecast paint; WebKit
+                      // releases it in CSS to avoid restyling hidden subtrees.
+                      height: active() || preparing() ? undefined : "0",
                       position: active() ? undefined : "absolute",
-                      top: active() ? undefined : "0",
-                      opacity: active() ? undefined : "0",
+                      // A forecast row before the flow hangs above the rows between, painted
+                      // or not; one after it sits at its slot once painted.
+                      top: active()
+                        ? undefined
+                        : before()
+                          ? "auto"
+                          : paintPreparing()
+                            ? `${virtualRow().start - blockStart()}px`
+                            : "0",
+                      bottom:
+                        !active() && before()
+                          ? `calc(100% + ${blockStart() - virtualRow().end}px)`
+                          : undefined,
+                      opacity: active() || paintPreparing() ? undefined : "0",
+                      // Incoming forecast rows paint at their slots while native measurement
+                      // runs; only admitted rows affect normal flow.
+                      clip:
+                        !active() && paintPreparing() && !before()
+                          ? `rect(0, auto, ${virtualRow().size}px, auto)`
+                          : undefined,
                       "content-visibility":
                         preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
                     }}
@@ -352,7 +382,6 @@ export class ChatTranscriptRenderer {
         // Keep layout measurable, but do not paint the initial estimated range
         // before the session owner has placed it at the correct reading edge.
         this.syncInitialPosition();
-        this.element.toggleAttribute("data-measuring-rows", current.measureRows);
         current.layout.commitRange(
           this.element,
           current.virtualizer.getTotalSize() + current.headerHeight,

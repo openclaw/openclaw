@@ -568,6 +568,7 @@ function Allowlist(props: {
               <IconButton
                 icon="x"
                 label={t("devices.execApprovals.remove")}
+                tooltip={false}
                 disabled={props.state.disabled}
                 onClick={() =>
                   props.state.onRemove(props.entries.length <= 1 ? path() : [...path(), index])

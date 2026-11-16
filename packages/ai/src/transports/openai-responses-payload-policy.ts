@@ -1,5 +1,6 @@
 import { resolveModelServiceTierContextTokens } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -31,6 +32,7 @@ type OpenAIResponsesPayloadPolicy = {
   defaultManagedReasoningEffort: "none" | undefined;
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
+  requiresStatelessCompactionReplay: boolean;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
@@ -154,6 +156,8 @@ function resolveOpenAIResponsesPayloadCapabilities(model: OpenAIResponsesPayload
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
     explicitContinuationOptIn,
+    requiresStatelessCompactionReplay:
+      endpointClass === "openai-public" || (isOpenAIProvider && endpointClass === "default"),
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
@@ -372,6 +376,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : undefined,
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
+    requiresStatelessCompactionReplay: capabilities.requiresStatelessCompactionReplay,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
     shouldStripPromptCache:
@@ -385,6 +390,30 @@ export function resolveOpenAIResponsesPayloadPolicy(
   };
 }
 
+/** Enforce replay storage on the final input, including items introduced by payload hooks. */
+export function enforceOpenAIResponsesCompactionReplayStorage(
+  payloadObj: Record<string, unknown>,
+  policy: Pick<
+    OpenAIResponsesPayloadPolicy,
+    "requiresStatelessCompactionReplay" | "shouldStripStore"
+  >,
+): void {
+  if (
+    policy.requiresStatelessCompactionReplay &&
+    Array.isArray(payloadObj.input) &&
+    payloadObj.input.some((item) => isRecord(item) && item.type === "compaction")
+  ) {
+    // Storing a replayed checkpoint can fail after output has streamed. Prevent
+    // the conflict instead of replaying a request that may already have done work.
+    if (policy.shouldStripStore) {
+      delete payloadObj.store;
+    } else {
+      payloadObj.store = false;
+    }
+    delete payloadObj.previous_response_id;
+  }
+}
+
 /** Mutate a Responses request payload according to the resolved endpoint policy. */
 export function applyOpenAIResponsesPayloadPolicy(
   payloadObj: Record<string, unknown>,
@@ -396,6 +425,7 @@ export function applyOpenAIResponsesPayloadPolicy(
   if (policy.shouldStripStore) {
     delete payloadObj.store;
   }
+  enforceOpenAIResponsesCompactionReplayStorage(payloadObj, policy);
   if (policy.shouldStripPromptCache) {
     delete payloadObj.prompt_cache_key;
     delete payloadObj.prompt_cache_retention;

@@ -1,9 +1,10 @@
-/** One controller-owned steer of a reserved input into its captured execution owner. */
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
 } from "../auto-reply/reply/queue/lifecycle.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import type {
   ReplySteerNowResult,
   ReplySteerNowState,
@@ -52,6 +53,10 @@ export type SessionControllerSteerResult =
       reason:
         | Extract<ReplyMessageInjectionOutcome, { status: "rejected" }>["reason"]
         | "admission_declined";
+      runtimeReason?: Extract<
+        ReplyMessageInjectionOutcome,
+        { status: "rejected" }
+      >["runtimeReason"];
       errorMessage?: string;
     };
 
@@ -76,7 +81,9 @@ export async function beginSessionControllerSteer(
         params.options.abortSignal?.throwIfAborted();
       } catch (error) {
         // A revoked source cannot become a runnable followup when preparation unwinds.
-        retireSessionControllerInput(params.input);
+        if (!isOperatorAuthorityUnavailable(error)) {
+          retireSessionControllerInput(params.input);
+        }
         throw error;
       }
     };
@@ -157,6 +164,15 @@ export async function beginSessionControllerSteer(
       }
       // The failure owner already retains ambiguous acceptance and releases proven withdrawal.
       await finish(nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate");
+      if (nativeOutcome.status === "rejected" && nativeOutcome.errorMessage) {
+        diagnosticLogger.warn("steering runtime rejected input", {
+          sessionKey: params.input.mailbox.key,
+          activeRunId: attempt.targetRunId,
+          reason: nativeOutcome.reason,
+          ...(nativeOutcome.runtimeReason ? { runtimeReason: nativeOutcome.runtimeReason } : {}),
+          error: nativeOutcome.errorMessage.slice(0, 512),
+        });
+      }
       return nativeOutcome;
     },
     async (error: unknown) => {
@@ -280,8 +296,7 @@ export async function submitSessionControllerSteer(
   });
   const { targetRunId } = finalization;
   if (finalization.status === "rejected") {
-    const { reason, errorMessage } = finalization.outcome;
-    return { status: "rejected", reason, ...(errorMessage ? { errorMessage } : {}) };
+    return finalization.outcome;
   }
   if (finalization.status === "indeterminate") {
     return {

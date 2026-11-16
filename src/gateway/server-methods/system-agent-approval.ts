@@ -1,6 +1,7 @@
 // Owns delegated system-agent authorization and exact-proposal completion.
 import { randomUUID } from "node:crypto";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -15,8 +16,16 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  DelegatedChangeApprovalRequiredError,
+  describeDelegatedChangePolicyApproval,
+} from "../../system-agent/delegated-change-policy.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
+import {
+  getSystemAgentTemplateGateway,
+  withSystemAgentTemplateGateway,
+} from "../../system-agent/template-gateway.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
@@ -121,6 +130,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     turnSourceThreadId?: string | number;
   };
 }): Promise<DelegatedProposalResolver> {
+  const templateGateway = getSystemAgentTemplateGateway();
   const callerIdentity = getGatewayToolCallerIdentity();
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
@@ -199,15 +209,23 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       const applyDecision = async (
         decision: ExecApprovalDecision | null,
         terminalStatus?: "expired" | "cancelled",
+        automatic = false,
       ) => {
         if (decision && decision !== "deny") {
           assertLiveApprovalAuthority();
         }
-        return await params.session.engine.resolveOperatorApproval(
-          decision,
-          proposal.hash,
-          assertLiveApprovalAuthority,
-          terminalStatus,
+        return await withSystemAgentTemplateGateway(templateGateway, () =>
+          params.session.engine.resolveOperatorApproval(
+            decision,
+            proposal.hash,
+            () => {
+              assertLiveApprovalAuthority();
+              if (automatic) {
+                callerIdentity!.assertAutoApproveChangesCurrent!();
+              }
+            },
+            terminalStatus,
+          ),
         );
       };
       const resolveCorrection = async (
@@ -245,8 +263,24 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
-      if (callerIdentity?.fullPermission === true) {
-        const reply = await applyDecision("allow-once");
+      let automatic = false;
+      let approvalReason = describeDelegatedChangePolicyApproval(
+        proposal.operation,
+        selectLiveRuntimeConfig(),
+      );
+      if (!approvalReason && callerIdentity?.assertAutoApproveChangesCurrent) {
+        try {
+          callerIdentity.assertAutoApproveChangesCurrent();
+          automatic = callerIdentity.fullPermission !== false;
+        } catch (error) {
+          if (error instanceof DelegatedChangeApprovalRequiredError) {
+            approvalReason = error.message;
+          }
+          // A retired automatic grant may still request an exact human decision.
+        }
+      }
+      if (automatic) {
+        const reply = await applyDecision("allow-once", undefined, true);
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");
         }
@@ -255,7 +289,11 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (!manager) {
         throw new Error("OpenClaw approval registry unavailable");
       }
-      const description = describeSystemAgentPersistentOperation(proposal.operation);
+      const operationDescription =
+        proposal.description ?? describeSystemAgentPersistentOperation(proposal.operation);
+      const description = approvalReason
+        ? `${operationDescription}\n\n${approvalReason}`
+        : operationDescription;
       const request: SystemAgentApprovalRequestPayload = {
         title: "OpenClaw change",
         description,

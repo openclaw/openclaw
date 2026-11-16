@@ -316,11 +316,17 @@ nonempty text, reasoning, or tool argument deltas count as progress, including h
 reasoning. To tolerate long hidden-reasoning phases, Responses uses a 15-minute
 model-progress deadline, or the effective idle budget when larger. Real progress
 resets this deadline; ordinary network silence retains the existing idle budget.
+Tool activity and periodic tool heartbeats can keep the connection active, but
+they do not reset the model-progress deadline while a model stream remains open.
 Computation that emits only bookkeeping can still time out at this long ceiling.
 The session watchdog follows the request guard's current deadline with a recovery
 margin derived from its warning interval. Request stalls therefore surface as
 transient timeouts for bounded retry and configured model fallback before the
 watchdog stops the whole reply. Explicit execution deadlines still apply.
+Every completed request retains that bounded recovery window for cleanup and
+retry admission, including an output-limit continuation after a long stream.
+Repeated cleanup does not extend it; if no continuation starts, the session
+watchdog can still stop the stalled reply when the window expires.
 
 The built-in OpenClaw harness publishes the current model attempt's execution
 deadline to the queue. When an attempt times out, configured fallback can start

@@ -13,6 +13,29 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 Remote clients can continue the same Gateway-owned conversation by URL or short
 reference. See [Session synchronization and attachment](/concepts/session-attachment).
 
+## OpenClaw ID from a source checkout
+
+Maintainers running from `main` must build the local iroh transport before using
+OpenClaw ID. From the repository root, run:
+
+```bash
+pnpm build:iroh
+```
+
+Install [rustup](https://rustup.rs/) and your platform's native build tools first
+(a C/C++ toolchain and linker; Xcode Command Line Tools on macOS). The crate pins
+Rust 1.99.0, matching its CI builds, without changing your default toolchain.
+If your shell sets `RUSTUP_TOOLCHAIN`, unset it for this command so rustup uses
+the crate pin.
+The command writes the native `.node` file beside
+`crates/openclaw-iroh-node/index.js` and skips compilation when it is newer than
+the crate's sources and build inputs. Run it again after pulling native changes.
+It is opt-in: `pnpm build` does not compile Rust. Restart your source Gateway
+after building to use the binding.
+
+An installed build without the transport cannot enable OpenClaw ID remote access;
+the Gateway keeps running and other access methods remain available.
+
 ## OpenClaw ID nodes (Labs)
 
 With **OpenClaw ID** enabled in Labs, headless nodes can reach a claw through its
@@ -21,8 +44,24 @@ Gateway token. Each node generates and keeps its own tunnel key. The owner
 registers a signed, single-use node invitation; the link defaults to 10 minutes
 and cannot last longer than one hour.
 
-Run the join command supplied by the owner, including the deployment's Discovery
-origin:
+From an approved owner browser, open **Access → Nodes → Add node**, enter a
+label, and choose **Create invite**. The dialog shows the single-use invite link
+with **Copy invite link**. Expand **Use the
+command line** for a POSIX shell command that uses the Gateway's OpenClaw version
+through `npx` and installs the node as a service after approval, and for the
+installed CLI command.
+
+The browser builds the secret-bearing link and both commands locally. Neither the
+link nor the secret is sent to the Gateway, stored by the UI, or logged. Closing
+the dialog discards the link; pending requests remain available under **Nodes**.
+When the Gateway has `gateway.openclawId.discoveryUrl` configured, the link carries
+that Discovery origin, so the link alone is enough to join. If Discovery is
+unconfigured, the dialog still shows the link but no command: configure
+`gateway.openclawId.discoveryUrl` on the Gateway first. The relay must be running.
+
+Run the join command supplied by the owner. `--discovery-url` is needed only when
+the link carries no Discovery origin and none is saved, and it overrides the
+link's origin when given:
 
 ```bash
 openclaw node join '<node-join-link>' --discovery-url https://discovery.example.test
@@ -32,7 +71,16 @@ Treat the join link as a secret. The node terminal and the owner's approval dial
 show the same six-digit verification code. Compare all six digits, review the
 self-reported name, platform, commands, and capabilities, then explicitly approve.
 An open dialog never approves a node automatically. The Discovery service can
-relay a pending request but cannot admit the node.
+relay a pending request but cannot admit the node. Select **Codes match — approve
+node** only after comparing the terminal code and reviewing the complete declared
+surface. Sensitive commands and capabilities are highlighted. **Deny node** grants
+no access; ask the node operator to stop the waiting command.
+
+The **Nodes** list shows each node's name, platform, last seen, and approving owner
+device. **Remove node** explains and confirms disconnection and deletion of the
+node pairing. Removing only a pairing in **Devices** leaves its OpenClaw ID key
+admitted but makes subsequent pairing manual. Members and viewers cannot manage
+nodes.
 
 An admitted node key grants only `role: "node"` with client mode `node`. It grants
 no owner or member identity, operator scopes, plugin cookies, or operator HTTP

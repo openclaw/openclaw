@@ -9,10 +9,12 @@ import { resolveSuggestedWorkerProfile } from "../../plugins/worker-profile-sugg
 import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import { environmentsHandlers } from "./environments.js";
 import { workerService } from "./environments.test-support.js";
 import { expectRpcResult } from "./rpc-response.test-support.js";
+import type { RespondFn } from "./types.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
@@ -91,10 +93,12 @@ beforeEach(() => {
       snapshot,
       nextConfig,
       writeOptions,
+      respond,
     }: {
       snapshot: { hash?: string };
       nextConfig: OpenClawConfig;
       writeOptions: ConfigWriteOptions;
+      respond?: RespondFn;
     }) => {
       writeOptions.assertCurrent?.();
       writeOptions.assertBeforePublish?.();
@@ -108,6 +112,7 @@ beforeEach(() => {
         config: storedConfig,
         hash: storedHash,
         queueFollowUp: vi.fn(),
+        reply: replyWithBillingRouteWarnings(respond, [], undefined),
       };
     },
   );

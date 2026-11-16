@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { publishBootstrapFile } from "../../agents/workspace-bootstrap-publish.js";
+import { runWorkspaceFilesystemOperation } from "../../agents/workspace-filesystem.js";
 import { runWorkspacePreparation } from "../../agents/workspace-preparation.js";
 import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
@@ -52,7 +53,8 @@ const resolveDevWorkspaceDir = (env: NodeJS.ProcessEnv = process.env): string =>
 
 async function ensureDevWorkspace(dir: string) {
   const resolvedDir = resolveUserPath(dir);
-  await runWorkspacePreparation(resolvedDir, async (assertCurrent) => {
+  await runWorkspacePreparation(resolvedDir, async (filesystem) => {
+    const guard = { filesystem: [filesystem] };
     const [agents, soul, identity, user] = await Promise.all([
       loadDevTemplate(
         "AGENTS.dev.md",
@@ -71,14 +73,11 @@ async function ensureDevWorkspace(dir: string) {
         `# USER.md - User Profile\n\n- Name:\n- Preferred address:\n- Notes:\n`,
       ),
     ]);
-    assertCurrent();
-    await fs.promises.mkdir(resolvedDir, { recursive: true });
-    assertCurrent();
-    await publishBootstrapFile(path.join(resolvedDir, "AGENTS.md"), agents, assertCurrent);
-    await publishBootstrapFile(path.join(resolvedDir, "SOUL.md"), soul, assertCurrent);
-    await publishBootstrapFile(path.join(resolvedDir, "IDENTITY.md"), identity, assertCurrent);
-    await publishBootstrapFile(path.join(resolvedDir, "USER.md"), user, assertCurrent);
-    assertCurrent();
+    await runWorkspaceFilesystemOperation({ kind: "mkdir", dir: resolvedDir }, guard);
+    await publishBootstrapFile(path.join(resolvedDir, "AGENTS.md"), agents, guard);
+    await publishBootstrapFile(path.join(resolvedDir, "SOUL.md"), soul, guard);
+    await publishBootstrapFile(path.join(resolvedDir, "IDENTITY.md"), identity, guard);
+    await publishBootstrapFile(path.join(resolvedDir, "USER.md"), user, guard);
   });
 }
 

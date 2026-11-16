@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   hasBeforeToolCallPolicy,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
@@ -69,12 +68,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     startupAuthProfileId,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
-  const loopDetectionEnabled =
-    (sessionAgentId && params.config
-      ? resolveAgentConfig(params.config, sessionAgentId)?.tools?.loopDetection?.enabled
-      : undefined) ??
-    params.config?.tools?.loopDetection?.enabled ??
-    false;
   try {
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -116,6 +109,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      onDeveloperInstructions: prompt.setThreadDeveloperInstructions,
       systemPromptReplaced: turnState.promptBuild.systemPromptReplaced,
       refreshableInstructions:
         joinPresentSections(
@@ -134,10 +128,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
           (connection.options.nativeHookRelay?.enabled !== false &&
             params.pluginHarnessToolPolicyRestricted !== true &&
             connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-            (hasBeforeToolCallPolicy() ||
-              (appServer.loopDetectionPreToolUseRelay &&
-                Boolean(connection.sandboxSessionKey) &&
-                loopDetectionEnabled)))),
+            hasBeforeToolCallPolicy())),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,

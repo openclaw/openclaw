@@ -291,6 +291,7 @@ function packRegistryPackages(dependencyDirs: string[], destination: string) {
 function writePatchedRuntimeFixture(bundling = "default") {
   const optionalDirect = bundling === "optional-direct" || bundling === "skipped-optional";
   const nested = bundling.startsWith("nested-");
+  const optOut = bundling.startsWith("opt-out-");
   const policy = ["range-policy", "locked-optional"].includes(bundling);
   const { repoDir, packageDir, params } = makePublishableFixture("patched-artifact", false);
   const depsDir = join(packageDir, "deps");
@@ -321,7 +322,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
         }
       : {},
   );
-  if (nested) {
+  if (nested || optOut) {
     sourceManifest.dependencies["unpatched-sibling"] = "1.0.0";
     artifacts.push(packRegistryDependency("unpatched-sibling"));
   }
@@ -340,6 +341,10 @@ function writePatchedRuntimeFixture(bundling = "default") {
     sourceManifest.dependencies["local-runtime-dep"] = "0.0.0";
     sourceManifest.optionalDependencies = { "local-runtime-dep": "1.0.0" };
   }
+  if (optOut) {
+    sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
+    sourceManifest.bundleDependencies = ["local-runtime-dep"];
+  }
   if (bundling === "partial") {
     sourceManifest.bundledDependencies = ["unpatched-sibling"];
   } else if (bundling === "explicit-all") {
@@ -351,7 +356,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
     policy
       ? 'import dep from "local-runtime-dep"; export default dep.value; export const sibling = dep.child;\n'
       : 'export { default } from "local-runtime-dep";\n' +
-          (nested ? 'export { default as sibling } from "unpatched-sibling";\n' : ""),
+          (nested || optOut ? 'export { default as sibling } from "unpatched-sibling";\n' : ""),
   );
   writeFileText(join(packageDir, "dist/setup-entry.js"), "export {};\n");
   const installedSource = policy
@@ -399,6 +404,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
     snapshots: {
       [`local-runtime-dep@${patchedVersion}`]: {},
       ...(bundling === "nested-other" ? { "local-runtime-dep@2.0.0": {} } : {}),
+      ...(optOut ? { "unpatched-sibling@1.0.0": {} } : {}),
       ...(nested
         ? {
             "unpatched-sibling@1.0.0": {
@@ -1117,6 +1123,8 @@ it.each([
   "isolated-short",
   "partial",
   "clawhub",
+  "opt-out-npm",
+  "opt-out-clawhub",
   "optional-direct",
   "nested-other",
   "nested-same",
@@ -1139,12 +1147,18 @@ it.each([
     );
     writeJsonFile(join(packageDir, "package.json"), sourceManifest);
   }
+  if (bundling === "isolated") {
+    // pnpm's content-addressed hardlink store deduplicates identical declarations.
+    writeFileText(join(installedDir, "index.d.ts"), "declare const value: 2; export = value;\n");
+    fs.linkSync(join(installedDir, "index.d.ts"), join(installedDir, "index.d.mts"));
+  }
+  const optOut = bundling.startsWith("opt-out-");
   const consumerDir = join(repoDir, "consumer");
   mkdirSync(consumerDir);
   const originalManifest = readText(packageDir, "package.json");
   await withRegistry(repoDir, artifacts, async (registryEnv) => {
     let packResult: NpmPackResult;
-    if (bundling === "clawhub") {
+    if (bundling === "clawhub" || bundling === "opt-out-clawhub") {
       const cli = join(repoDir, "clawhub");
       const cliEntry = join(repoDir, "clawhub.mjs");
       const metadata = join(consumerDir, "pack-metadata.json");
@@ -1175,6 +1189,7 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
         SOURCE_COMMIT: "1".repeat(40),
         SOURCE_REF: "fixture",
         OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
+        ...(optOut ? { OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1" } : {}),
         OPENCLAW_CLAWHUB_CLI: cli,
         OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: consumerDir,
         CLAWHUB_FIXTURE_RUNTIME: process.execPath,
@@ -1207,7 +1222,7 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
             ...registryEnv,
             OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: repoDir,
             OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES:
-              bundling === "all" || bundling.startsWith("nested-") ? "1" : "0",
+              bundling === "all" || bundling.startsWith("nested-") || optOut ? "1" : "0",
           },
         },
       );
@@ -1225,7 +1240,12 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     runChecked("tar", ["-xzf", join(consumerDir, packResult.filename), "-C", consumerDir]);
     const consumerPackage = join(consumerDir, "package");
     const expectedSibling =
-      bundling === "nested-other" ? 20 : bundling === "nested-same" ? 2 : null;
+      bundling === "nested-other" ? 20 : bundling === "nested-same" ? 2 : optOut ? 3 : null;
+    if (optOut) {
+      expect(
+        packResult.files.some(({ path }) => path.startsWith("node_modules/unpatched-sibling/")),
+      ).toBe(false);
+    }
     if (bundling.startsWith("nested-")) {
       expectRuntimeValues(consumerPackage, expectedSibling);
     }
@@ -1251,6 +1271,9 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     const published = readPackageJson(consumerPackage);
     expect(published.dependencies).toEqual(sourceManifest.dependencies);
     expect(published.optionalDependencies).toEqual(sourceManifest.optionalDependencies);
+    if (optOut) {
+      expect(published.openclaw.release.bundleRuntimeDependencies).toBe(false);
+    }
     expect(published.bundledDependencies).toEqual(
       ["partial", "all", "explicit-all"].includes(bundling) || bundling.startsWith("nested-")
         ? ["local-runtime-dep", "unpatched-sibling"]
@@ -1258,6 +1281,16 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     );
     expect(packResult.files.some(({ path }) => path.endsWith(".tgz"))).toBe(false);
     expect(readText(installedDir, "index.js")).toBe(installedSource);
+    if (bundling === "isolated") {
+      for (const file of ["index.d.ts", "index.d.mts"]) {
+        expect(readText(join(consumerPackage, "node_modules/local-runtime-dep"), file)).toBe(
+          "declare const value: 2; export = value;\n",
+        );
+      }
+      expect(fs.statSync(join(installedDir, "index.d.ts")).ino).toBe(
+        fs.statSync(join(installedDir, "index.d.mts")).ino,
+      );
+    }
     expect(readText(packageDir, "package.json")).toBe(originalManifest);
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
   });
@@ -1364,42 +1397,72 @@ it("installs bundled dependencies whose shared node npm reloads under another ov
   });
 });
 
-it.each(["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"])(
-  "rejects a patched artifact when its packaging precondition fails (%s)",
-  (scenario) => {
-    const { repoDir, packageDir, params, sourceManifest, installedDir, lock } =
-      writePatchedRuntimeFixture();
-    if (scenario === "bundle opt-out") {
-      sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
-      writeJsonFile(join(packageDir, "package.json"), sourceManifest);
-    } else if (scenario === "stale install") {
-      writeJsonFile(join(repoDir, "node_modules/.pnpm/lock.yaml"), {
-        ...lock,
-        patchedDependencies: {},
-      });
-    } else if (scenario === "stale importer spec") {
-      lock.importers["extensions/diffs"].dependencies = {
-        "local-runtime-dep": { specifier: "2.0.0", version: "2.0.0" },
-      };
-      writeJsonFile(join(repoDir, "pnpm-lock.yaml"), lock);
-    } else {
-      writeJsonFile(join(installedDir, "package.json"), {
-        name: "local-runtime-dep",
-        version: "2.0.0",
-      });
+it("preserves npm JSON and verbose diagnostics when packing a patched dependency fails", () => {
+  const { repoDir, packageDir, sourceManifest } = writePatchedRuntimeFixture();
+  writeJsonFile(join(packageDir, "package.json"), {
+    ...sourceManifest,
+    devEngines: { packageManager: { name: "pnpm", onFail: "error" } },
+  });
+  const result = spawnSync(
+    process.execPath,
+    manifestArgs(packageDir, [process.execPath, "-e", "process.exit(0)"]),
+    { cwd: repoDir, encoding: "utf8", env: process.env },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    "packing patched runtime dependency failed: local-runtime-dep@1.0.0",
+  );
+  expect(result.stderr).toContain('"code": "EBADDEVENGINES"');
+  expect(result.stderr).toContain("verbose stack");
+});
+
+it.each([
+  "bundle opt-out",
+  "unselected opt-out patch",
+  "blanket opt-out bundle",
+  "stale install",
+  "stale importer spec",
+  "wrong package identity",
+])("rejects a patched artifact when its packaging precondition fails (%s)", (scenario) => {
+  const { repoDir, packageDir, params, sourceManifest, installedDir, lock } =
+    writePatchedRuntimeFixture();
+  const optOut = scenario.includes("opt-out");
+  if (optOut) {
+    sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
+    if (scenario !== "bundle opt-out") {
+      sourceManifest.bundledDependencies =
+        scenario === "blanket opt-out bundle" ? true : ["unpatched-sibling"];
     }
-    expect(() => withManifest(params, unexpectedPackCallback)).toThrow(
-      scenario === "bundle opt-out"
-        ? "bundleRuntimeDependencies=false"
-        : scenario === "stale install"
-          ? "matching frozen pnpm install"
-          : scenario === "stale importer spec"
-            ? "frozen pnpm importer"
-            : "identity mismatch",
-    );
-    expect(readText(installedDir, "index.js")).toBe("module.exports = 2;\n");
-  },
-);
+    writeJsonFile(join(packageDir, "package.json"), sourceManifest);
+  } else if (scenario === "stale install") {
+    writeJsonFile(join(repoDir, "node_modules/.pnpm/lock.yaml"), {
+      ...lock,
+      patchedDependencies: {},
+    });
+  } else if (scenario === "stale importer spec") {
+    lock.importers["extensions/diffs"].dependencies = {
+      "local-runtime-dep": { specifier: "2.0.0", version: "2.0.0" },
+    };
+    writeJsonFile(join(repoDir, "pnpm-lock.yaml"), lock);
+  } else {
+    writeJsonFile(join(installedDir, "package.json"), {
+      name: "local-runtime-dep",
+      version: "2.0.0",
+    });
+  }
+  expect(() =>
+    withManifest({ ...params, bundleDependencies: true }, unexpectedPackCallback),
+  ).toThrow(
+    optOut
+      ? "bundleRuntimeDependencies=false"
+      : scenario === "stale install"
+        ? "matching frozen pnpm install"
+        : scenario === "stale importer spec"
+          ? "frozen pnpm importer"
+          : "identity mismatch",
+  );
+  expect(readText(installedDir, "index.js")).toBe("module.exports = 2;\n");
+});
 
 it.each(["foreign target", "redirected slot", "unpatched slot"])(
   "rejects an isolated package link outside its frozen patched slot (%s)",

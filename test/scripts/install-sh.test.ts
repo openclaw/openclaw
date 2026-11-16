@@ -515,6 +515,32 @@ NODE
     expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
+  it("publishes Git clones before Node is provisioned (#195366)", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() { shift; "$@"; }
+      ui_error() { :; }
+      ui_info() { :; }
+      node() { echo "node ran before ensure_node" >&2; return 127; }
+      git() {
+        local target="\${*: -1}"
+        mkdir -p "$target/.git" "$target/src"
+        printf 'complete\\n' > "$target/checkout.marker"
+      }
+      fresh="$HOME/no-node/fresh"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$fresh" --filter=blob:none
+      [[ -f "$fresh/checkout.marker" && -d "$fresh/.git" && -d "$fresh/src" ]]
+      empty="$HOME/no-node/empty"
+      mkdir -p "$empty"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$empty"
+      [[ -f "$empty/checkout.marker" && -d "$empty/.git" && -d "$empty/src" ]]
+      [[ -z "$(find "$HOME/no-node" "$empty" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
   it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
     const result = runInstallShell(`
       set -euo pipefail

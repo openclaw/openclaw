@@ -16,7 +16,7 @@ import {
 } from "./doctor-session-transcript-scan.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
-const NOTE_TITLE = "Session transcript labels";
+const NOTE_TITLE = "Chat history labels";
 
 export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;

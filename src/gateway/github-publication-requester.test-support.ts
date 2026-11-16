@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -35,9 +37,12 @@ import {
   overrideCommands,
   persistPublicationTestSession,
   root,
+  SESSION_ID,
+  SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
 import {
@@ -139,6 +144,7 @@ export async function createGitHubPublicationRequesterFixture(params: {
   sessionKey: string;
   agentId: string;
   getCommittedRuntimeConfig?: () => OpenClawConfig;
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
 }) {
   const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
     import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
@@ -155,6 +161,9 @@ export async function createGitHubPublicationRequesterFixture(params: {
     hasAvatar: false,
     updatedAt: 1,
   };
+  if (params.openclawIdPrincipal) {
+    client.internal = { ...client.internal, openclawIdPrincipal: params.openclawIdPrincipal };
+  }
   prepareGatewayConnectOperatorAccess(client);
   const context = {
     getRuntimeConfig: currentGitHubPublicationConfig,
@@ -240,6 +249,33 @@ export async function createRequesterPolicyFixture(
 ) {
   await persistPublicationTestSession(session.sessionKey);
   return await createRequesterPolicySources(session, "/repo/worktree");
+}
+
+export const createLocalPublicationFixture = () =>
+  createRequesterPublicationFixture(vi.fn(), "local", {
+    sessionId: SESSION_ID,
+    sessionKey: SESSION_KEY,
+  });
+
+export async function useRealSessionReads() {
+  const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+    "./session-utils-store-worker.js",
+  );
+  const store = await import("./session-utils-store-worker.js");
+  const read = vi
+    .spyOn(store, "loadGatewaySessionEntryReadOnlyInWorker")
+    .mockImplementation(actual.loadGatewaySessionEntryReadOnlyInWorker);
+  onTestFinished(() => read.mockRestore());
+}
+
+export async function readPublicationWorktreeState(
+  workspace: Awaited<ReturnType<typeof createRealPublicationWorkspace>>,
+) {
+  return {
+    head: await workspace.git("rev-parse", "HEAD"),
+    index: await fs.readFile(path.join(workspace.cwd, ".git/index")),
+    diff: await workspace.git("diff", "HEAD"),
+  };
 }
 
 export async function createRequesterPublicationFixture(

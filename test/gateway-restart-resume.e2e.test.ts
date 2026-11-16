@@ -295,6 +295,10 @@ async function providerFixture(signal: AbortSignal) {
             );
             return;
           }
+          if (name === "parent") {
+            tool("sessions_yield", {});
+            return;
+          }
           text(`FINISHED_${cycle}_${name}`);
         },
         { ignoreAborted: true },
@@ -713,6 +717,7 @@ it.skipIf(process.platform === "win32")(
     const instance = await createOpenClawTestInstance({
       name: "restart-untiered-person",
       signal,
+      gracefulShutdownTimeoutMs: 60_000,
       config: {
         ...restartResumeConfig(model),
         gateway: {
@@ -737,16 +742,15 @@ it.skipIf(process.platform === "win32")(
     });
     const connectAs = (user: string, requested: string[]) =>
       connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
-    const connectPerson = () => connectAs(email, scopes);
     const sessionKey = key(2, "stream");
-    let client: Awaited<ReturnType<typeof connectPerson>> | undefined;
+    let client: Awaited<ReturnType<typeof connectAs>> | undefined;
     onTestFailed(() => {
       process.stderr.write(`${instance.logs()}\n`);
     });
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectPerson();
+        client = await connectAs(email, scopes);
         const self = await client.call<{ profile: { id: string } }>("users.self", {});
         expect(self.profile.id).not.toBe("gateway-owner");
         // The first send creates the session; its accepted input alone records the source.
@@ -789,7 +793,7 @@ it.skipIf(process.platform === "win32")(
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         await instance.startGateway();
-        client = await connectPerson();
+        client = await connectAs(email, scopes);
         await provider.wait("resume:2:stream");
         provider.release(2);
         await vi.waitFor(
@@ -1041,6 +1045,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 } else if (name !== "tool") {
                   if (name === "parent") {
                     await waitProvider(`child:${cycle}`);
+                    await waitProvider(`ready:${cycle}:${name}`);
+                    const parked = readRestartSession(
+                      instance.state.agentDir("main"),
+                      key(cycle, name),
+                      sharedStore,
+                    );
+                    assert(parked?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+                    expect(
+                      await client!.request("agent.wait", {
+                        runId: parked.lifecycleRunId,
+                        timeoutMs: 30_000,
+                      }),
+                    ).toMatchObject({ status: "ok", yielded: true });
+                    return;
                   }
                   await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
                 }
@@ -1152,7 +1170,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             provider.releaseFinalizer();
             expect.soft(provider.finalizerAdmission()).toEqual({
-              admission: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              admission: "accepted",
               attempts: 1,
             });
           }
@@ -1230,8 +1248,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle")
+              .filter((name) => name !== "stream" && name !== "idle" && name !== "background")
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+            // The stopped background command is reported as its own input, not as a resume.
+            ...(cases.includes("background")
+              ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
             { name: "stream", text: `HANDLED_${fresh(cycle)}` },
@@ -1268,14 +1290,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             const resumes = calls.filter((call) => call.resumeInput);
             if (name === "background") {
-              expect(resumes[0]?.current).toContain(
-                "Background exec processes were stopped; rerun them if still needed.",
-              );
+              // The process registry reports the stopped command; the resume input does not.
+              expect(
+                calls.some((call) =>
+                  call.current.includes("was stopped when the Gateway shut down"),
+                ),
+              ).toBe(true);
             }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(

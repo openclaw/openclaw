@@ -1,5 +1,5 @@
 // Backup create/verify tests cover archive creation, runtime output, and verification failure handling.
-import fsSync, { existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { makeBackupResult } from "../infra/backup-create.test-support.js";
@@ -8,9 +8,13 @@ import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(actual.existsSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
+const { existsSync: nativeExistsSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
 
 const createBackupArchiveMock = vi.hoisted(() => vi.fn());
 const verifyBackupArchiveMock = vi.hoisted(() => vi.fn());
@@ -48,7 +52,7 @@ describe("backupCreateCommand verification", () => {
     const databasePath = resolveOpenClawStateSqlitePath();
     vi.mocked(existsSync)
       .mockReset()
-      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
+      .mockImplementation((value) => value === databasePath || nativeExistsSync(value));
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -117,7 +121,26 @@ describe("backupCreateCommand verification", () => {
     );
 
     expect(result.verified).toBe(true);
-    expect(verifyBackupArchiveMock).toHaveBeenCalledExactlyOnceWith("/tmp/openclaw-backup.tar.gz");
+    expect(verifyBackupArchiveMock).toHaveBeenCalledExactlyOnceWith(
+      "/tmp/openclaw-backup.tar.gz",
+      [],
+      expect.any(Function),
+    );
+  });
+
+  it("keeps progress on stderr for JSON backups without exposing source paths", async () => {
+    createBackupArchiveMock.mockImplementation(async (options) => {
+      options.onProgress({ stage: "sqlite-source-integrity", phase: "start", bytes: 4096 });
+      return makeBackupResult({ verified: true });
+    });
+    const runtime = createTestRuntime();
+    await backupCreateCommand(runtime, { json: true });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Backup progress: stage=sqlite-source-integrity phase=start bytes=4096",
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(writeRuntimeJsonMock).toHaveBeenCalledOnce();
   });
 
   it("does not claim completion when both backup and outcome recording fail", async () => {

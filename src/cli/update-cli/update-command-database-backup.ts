@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -8,6 +9,7 @@ import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.inspection.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
@@ -30,6 +32,7 @@ import {
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 type Progress = MutableUpdateExecutionParams["progress"];
 
@@ -78,6 +81,30 @@ export async function assertUpdatePostgresCaptureOwnership(params: {
   }
 }
 
+/**
+ * Candidate validation runs before the managed-service stop and can take minutes. Only a running
+ * service the updater stops (owned or unresolved), or a Gateway a foreground update parks, can
+ * release a live owner before activation; refuse any other held owner before validation. The
+ * probe before activation still covers an owner that starts later.
+ */
+export async function assertUpdatePostgresOwnerReleasable(params: {
+  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+  env: NodeJS.ProcessEnv;
+  hasRun: boolean;
+  parksBeforeActivation: boolean;
+  service: Pick<PreManagedServiceStop, "running" | "serviceUpdateVerdict"> | undefined;
+}): Promise<void> {
+  const { hasRun, service } = params;
+  const stopped =
+    service?.running &&
+    (service.serviceUpdateVerdict?.kind === "owned" ||
+      service.serviceUpdateVerdict?.kind === "unresolved");
+  if (!hasRun || params.parksBeforeActivation || stopped) {
+    return;
+  }
+  await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
+}
+
 export async function captureUpdateDatabases(params: {
   transaction: PackageUpdateTransaction;
   execution: MutableUpdateExecutionParams;
@@ -90,6 +117,15 @@ export async function captureUpdateDatabases(params: {
   const env = context?.env ?? execution.opts.run!.env;
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
+  params.assertCurrent();
+  // Activation replaced the install. A state reader started earlier would lazy-import
+  // chunks the new build renamed, failing the ownership check that authorizes restore.
+  const [{ captureRetainedNativeWorkerSource }, { retireIdleOpenClawStateReadWorkers }] =
+    await Promise.all([
+      import("../../infra/worker-native-lifecycle.js"),
+      import("../../state/openclaw-state-read-worker.js"),
+    ]);
+  await retireIdleOpenClawStateReadWorkers(captureRetainedNativeWorkerSource());
   params.assertCurrent();
   const ownership = await acquireUpdateCaptureOwnership(env);
   const maintenance = ownership.maintenance;
@@ -154,6 +190,7 @@ export async function captureUpdateDatabases(params: {
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
+        postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
       });
       if (execution.updateInstallKind === "git") {
         // Git runtime transactions have no package journal; retire these snapshots with them.
@@ -186,6 +223,13 @@ export async function captureUpdateDatabases(params: {
     throw outcome.error;
   }
   const backup = outcome.value;
+  transaction.discardDatabaseCaptures = async () => {
+    const { discardPostgresSchemaCaptures } = await import("../../snapshot/database-backup.js");
+    await discardPostgresSchemaCaptures(
+      source.config,
+      backup.databases.flatMap((entry) => (entry.exportDirectory ? [entry.exportDirectory] : [])),
+    );
+  };
   params.assertCurrent();
   const restorable =
     maintenance !== null &&
@@ -215,6 +259,39 @@ export async function captureUpdateDatabases(params: {
   await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
   assertCurrent();
   return { backup: restorable ? backup : undefined, step };
+}
+
+/**
+ * The activated-release boot is this update's own writer: it records boot and
+ * config bookkeeping. When nothing else wrote since Doctor, attribute the boot's
+ * writes to the update so a failed boot can still restore the baseline.
+ * Accepted: another writer during the boot window is attributed the same way.
+ */
+export async function adoptUpdateBootDatabaseWrites(
+  backup: UpdateDatabaseBackup,
+  env: NodeJS.ProcessEnv,
+  boot: () => Promise<UpdateRunResult>,
+): Promise<UpdateRunResult> {
+  const paths = [
+    ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
+  ];
+  // An unreadable generation leaves the existing refusal in place.
+  const read = () =>
+    readUpdateDatabaseGenerationsIsolated(paths, { env, pluginOwners: backup.pluginOwners }).catch(
+      () => undefined,
+    );
+  const expected = backup.migration?.to ?? backup.sourceGenerations;
+  const unchanged = isDeepStrictEqual(await read(), expected);
+  const result = await boot();
+  const booted = unchanged && result.status === "error" ? await read() : undefined;
+  if (booted) {
+    if (backup.migration) {
+      backup.migration.to = booted;
+    } else {
+      backup.sourceGenerations = booted;
+    }
+  }
+  return result;
 }
 
 /** Called only before this update admits a candidate Gateway, after its child has settled. */
@@ -277,14 +354,17 @@ export async function restoreFailedUpdateDatabases(params: {
     // Every restore path, including a settled Doctor failure before finalization,
     // must retain this run's matching recovery pair in the restored database.
     // Preserve the source artifacts until the restore owner checks their generation.
-    const pair = loadPluginCohortRecovery(params.runId, {
-      env: params.env,
-    });
+    // Use the binding captured before Doctor: this (previous) build cannot open a
+    // state database Doctor migrated to a newer schema. The restore owner still
+    // validates the live pair from the raw database before replacing it.
+    const pair = params.backup.pluginCohortRecovery
+      ? undefined
+      : loadPluginCohortRecovery(params.runId, { env: params.env });
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
-      pluginCohortRecovery: pair
-        ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId }
-        : undefined,
+      pluginCohortRecovery:
+        params.backup.pluginCohortRecovery ??
+        (pair ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId } : undefined),
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
       onLiveMutation: () => {
         liveMutationStarted = true;

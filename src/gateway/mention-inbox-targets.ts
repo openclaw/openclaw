@@ -85,8 +85,10 @@ export function createMentionTargetCache(params: {
     targetAliases.set(key, canonicalKey);
   }
 
-  async function prepareTargets(): Promise<void> {
-    for (const item of params.readItems()) {
+  async function prepareTargets(
+    items: Iterable<StoredMention> = params.readItems(),
+  ): Promise<void> {
+    for (const item of items) {
       const { sessionKey, agentId } = item.message.content;
       const pending = prepareTarget(sessionKey, agentId, item.targetKey);
       if (pending) {

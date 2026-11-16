@@ -1,9 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import fs from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../../shared/monotonic-time.js";
+import {
+  isPidDefinitelyDead,
+  isPidDefinitelyDeadAsync,
+  parseLinuxProcessStat,
+} from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
+import type { ReleasedProcess } from "./types.js";
 
 export type ProcessCommand =
   | {
@@ -16,7 +24,14 @@ export type ProcessCommand =
       owner?: "same" | "different" | "unknown";
     }
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
-  | { argvUnavailable: true; uid?: never; owner: "different" };
+  | { argvUnavailable: true; uid?: never; owner: "different" }
+  /** A sealed Apple binary whose argument image Darwin redacts (no-read-procargs). */
+  | {
+      argvUnavailable: true;
+      executable: string;
+      uid?: never;
+      owner?: "same" | "different" | "unknown";
+    };
 
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
@@ -53,7 +68,10 @@ function readLinuxProcessUid(pid: number): number | undefined {
   }
 }
 
-/** Only kernel absence, observed outside the owned group, confirms extinction. */
+/**
+ * For the relay's own anchor group: only kernel absence, observed outside the owned group, confirms extinction.
+ * Unlike `isProcessGroupGone`, EPERM deliberately stays "not gone" here (kernel-only proof).
+ */
 export function isOwnedProcessGroupGone(pgid: number): boolean {
   try {
     process.kill(-pgid, 0);
@@ -86,6 +104,31 @@ export function killOwnedProcessGroupMembers(): void {
   }
 }
 
+type ProcessGroupMember = {
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+};
+
+function parseLinuxProcessGroupMember(pid: number, stat: string) {
+  const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
+  if (!match || Number(match[1]) !== pid) {
+    throw new Error("Process group census is unavailable");
+  }
+  return { pid, ppid: Number(match[3]), pgid: Number(match[4]), state: match[2]! };
+}
+
+/** Membership and birth come from one row, immediately before a caller's signal. */
+export async function readLinuxProcessGroupMemberAsync(pid: number) {
+  const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+  return {
+    ...parseLinuxProcessGroupMember(pid, stat),
+    startedAt: parseLinuxProcessStat(pid, stat)?.startedAt ?? null,
+  };
+}
+
 /** The caller supplies command inspection; group cleanup only reads native topology. */
 export function* readProcessGroupMembers(
   timeoutMs: number,
@@ -95,13 +138,7 @@ export function* readProcessGroupMembers(
       owner: "same" | "different" | "unknown",
     ) => ProcessCommand | undefined;
   },
-): Generator<{
-  pid: number;
-  ppid?: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-}> {
+): Generator<ProcessGroupMember> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;
@@ -148,8 +185,8 @@ export function* readProcessGroupMembers(
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
       // A task reaped during do_task_stat can retain the kernel's pgid=-1 sentinel.
-      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
-      if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
+      const member = parseLinuxProcessGroupMember(pid, stat);
+      if (Date.now() >= deadline) {
         throw new Error("Process group census is unavailable");
       }
       if (argv?.length === 0) {
@@ -171,12 +208,12 @@ export function* readProcessGroupMembers(
       }
       yield {
         pid,
-        pgid: Number(match[4]),
-        state: match[2]!,
+        pgid: member.pgid,
+        state: member.state,
         ...(argv
-          ? { command: { ppid: Number(match[3]), argv, ...(uid === undefined ? {} : { uid }) } }
+          ? { command: { ppid: member.ppid, argv, ...(uid === undefined ? {} : { uid }) } }
           : opaqueForeignOwner && uid !== undefined
-            ? { command: { ppid: Number(match[3]), argvUnavailable: true, uid } }
+            ? { command: { ppid: member.ppid, argvUnavailable: true, uid } }
             : {}),
       };
     }
@@ -247,6 +284,116 @@ export function* readProcessGroupMembers(
   }
 }
 
+// A zombie leader may retain live Linux threads; share the existing check.
+function isLiveCensusMember({ pid, state }: { pid: number; state: string }): boolean {
+  return !state.startsWith("Z") || (process.platform === "linux" && !isPidDefinitelyDead(pid));
+}
+
+/**
+ * Whether the process table is this PID namespace's. A nested PID namespace with the parent's
+ * /proc mounted still lists processes under the parent's numbers, so a pid row proves nothing;
+ * only /proc/self naming this pid does. Other platforms read a host-wide table.
+ */
+export function isOwnProcfs(): boolean {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Denied-probe fallback for groups whose members we only observe; callers reach it through
+ * `isProcessGroupGone`. A failed census, or a procfs that is not this PID namespace's, keeps the
+ * group alive. Accepted edge case: hidepid or a restricted `/proc` can still hide a member, so an
+ * otherwise empty census reads as gone.
+ */
+export function isProcessGroupGoneByCensus(pgid: number): boolean {
+  if (!isOwnProcfs()) {
+    return false;
+  }
+  try {
+    for (const member of readProcessGroupMembers(1_000)) {
+      if (member.pgid === pgid && isLiveCensusMember(member)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Runtime group cleanup needs topology; command inspection retains its synchronous contract. */
+export async function* readLinuxProcessGroupMembersAsync(
+  timeoutMs: number,
+): AsyncGenerator<ReturnType<typeof parseLinuxProcessGroupMember>> {
+  if (process.platform !== "linux") {
+    throw new Error("Asynchronous Linux process census requires Linux");
+  }
+  const deadline = Date.now() + timeoutMs;
+  for (const name of await fs.readdir("/proc")) {
+    if (Date.now() >= deadline) {
+      throw new Error("Process group census exceeded its deadline");
+    }
+    if (!/^\d+$/.test(name)) {
+      continue;
+    }
+    const pid = Number(name);
+    let stat: string;
+    try {
+      stat = await fs.readFile(`/proc/${name}/stat`, "utf8");
+    } catch (error) {
+      // Foreign processes may disappear between enumeration and their stat read.
+      if (pid !== process.pid && ["ENOENT", "ESRCH"].includes(extractErrorCode(error) ?? "")) {
+        continue;
+      }
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Process group census exceeded its deadline");
+    }
+    yield parseLinuxProcessGroupMember(pid, stat);
+  }
+  if (Date.now() >= deadline) {
+    throw new Error("Process group census exceeded its deadline");
+  }
+}
+
+export async function isOwnProcfsAsync(): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    return (await fs.readlink("/proc/self")) === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+/** Runtime denied-probe observation; no synchronous procfs fallback. */
+export async function isProcessGroupGoneByCensusAsync(pgid: number): Promise<boolean> {
+  if (!(await isOwnProcfsAsync())) {
+    return false;
+  }
+  try {
+    for await (const member of readLinuxProcessGroupMembersAsync(1_000)) {
+      if (
+        member.pgid === pgid &&
+        (!member.state.startsWith("Z") || !(await isPidDefinitelyDeadAsync(member.pid)))
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Advisory retirement timing only; the host owns kernel group-disappearance proof. */
 export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | undefined {
   let observedOwner = false;
@@ -259,11 +406,7 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
           return undefined;
         }
         observedOwner = true;
-      } else if (
-        pgid === process.pid &&
-        // A zombie leader may retain live Linux threads; share the existing check.
-        (!state.startsWith("Z") || (process.platform === "linux" && !isPidDefinitelyDead(pid)))
-      ) {
+      } else if (pgid === process.pid && isLiveCensusMember({ pid, state })) {
         return true;
       }
     }
@@ -271,4 +414,165 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
     return undefined;
   }
   return observedOwner ? false : undefined;
+}
+
+const MAX_RELEASED_COMMAND_CHARS = 200;
+
+type ProcessRow = { pid: number; ppid: number; pgid: number; live: boolean; command?: string };
+
+function readLinuxProcessRow(pid: number): ProcessRow | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const command = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+      .split("\0")
+      .filter(Boolean)
+      .join(" ");
+    return {
+      pid,
+      ppid: Number(fields[1]),
+      pgid: Number(fields[2]),
+      live: fields[0] !== "Z" && fields[0] !== "X",
+      command: command || undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readProcessRows(): ProcessRow[] {
+  if (process.platform === "linux") {
+    return readdirSync("/proc")
+      .filter((name) => /^\d+$/.test(name))
+      .flatMap((name) => readLinuxProcessRow(Number(name)) ?? []);
+  }
+  const listing = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,command="], {
+    encoding: "utf8",
+    timeout: 1_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (listing.status !== 0 || listing.error) {
+    throw listing.error ?? new Error(`ps exited with status ${String(listing.status)}`);
+  }
+  return listing.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+    return match
+      ? [
+          {
+            pid: Number(match[1]),
+            ppid: Number(match[2]),
+            pgid: Number(match[3]),
+            live: !match[4]!.startsWith("Z"),
+            command: match[5]!.trim() || undefined,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
+ * Name every live process a command left behind: members of the owner's group,
+ * caller-observed children (adopted orphans), and all of their descendants, even
+ * those that started a new session. The owner's own helpers (its direct children
+ * other than the command root) and their descendants are not the command's.
+ * `earlier` is a previous census: each of its processes that still runs the same
+ * command stays named, even after the parent that tied it to the command exited.
+ * Undefined when the process table cannot be read: the caller must then stop the
+ * tree instead of releasing processes it cannot account for.
+ */
+function describeReleasedProcesses(
+  rootPid: number | undefined,
+  adoptedPids: readonly number[] = [],
+  earlier: readonly ReleasedProcess[] = [],
+): ReleasedProcess[] | undefined {
+  let rows: ProcessRow[];
+  try {
+    rows = readProcessRows();
+  } catch {
+    return undefined;
+  }
+  if (rows.length === 0) {
+    return undefined;
+  }
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    const siblings = children.get(row.ppid);
+    if (siblings) {
+      siblings.push(row);
+    } else {
+      children.set(row.ppid, [row]);
+    }
+  }
+  const closure = (seeds: Iterable<number>) => {
+    const found = new Set<number>();
+    const queue = [...seeds];
+    for (let pid = queue.pop(); pid !== undefined; pid = queue.pop()) {
+      if (found.has(pid)) {
+        continue;
+      }
+      found.add(pid);
+      queue.push(...(children.get(pid) ?? []).map((child) => child.pid));
+    }
+    return found;
+  };
+  // Only children the owner itself started are helpers (a source loader's compiler, for
+  // example). Orphans the Linux subreaper adopted are the command's, not the owner's.
+  const helpers = closure(
+    (children.get(process.pid) ?? [])
+      .filter((row) => row.pid !== rootPid && !adoptedPids.includes(row.pid))
+      .map((row) => row.pid),
+  );
+  const known = new Map(earlier.map(({ pid, command }) => [pid, command]));
+  const seeds = rows
+    .filter(
+      (row) =>
+        adoptedPids.includes(row.pid) ||
+        row.pgid === process.pid ||
+        (known.has(row.pid) && known.get(row.pid) === truncateCommand(row.command)),
+    )
+    .map((row) => row.pid)
+    .filter((pid) => pid !== process.pid && !helpers.has(pid));
+  const released = closure(seeds);
+  return rows
+    .filter((row) => row.live && released.has(row.pid) && !helpers.has(row.pid))
+    .toSorted((left, right) => left.pid - right.pid)
+    .map(({ pid, command }) =>
+      command === undefined ? { pid } : { pid, command: truncateCommand(command) },
+    );
+}
+
+function truncateCommand(command: string | undefined): string | undefined {
+  return command && command.length > MAX_RELEASED_COMMAND_CHARS
+    ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`
+    : command;
+}
+
+// A process the command leaves running is a service only if it still runs this long after root exit.
+const RELEASE_SETTLE_MS = 2_000;
+const RELEASE_SETTLE_POLL_MS = 100;
+
+/**
+ * After root exit, only what still runs at the end of the settle window was left
+ * running on purpose: helpers that are still exiting (git, cp, tee) are not services.
+ * Each census keeps the earlier survivors, so none escapes by outliving its parent.
+ * A root that still runs is handed off at once. Undefined when the census fails or
+ * `releasing` turns false (cancellation then owns the tree).
+ */
+export async function settleSurvivors(
+  rootPid: number | undefined,
+  subreaper: { children(): readonly number[] } | undefined,
+  releasing: () => boolean,
+): Promise<ReleasedProcess[] | undefined> {
+  const deadline = monotonicDeadlineAfter(RELEASE_SETTLE_MS);
+  let survivors = describeReleasedProcesses(rootPid, subreaper?.children());
+  while (
+    survivors?.length &&
+    !survivors.some(({ pid }) => pid === rootPid) &&
+    remainingMonotonicMs(deadline) > 0 &&
+    releasing()
+  ) {
+    await delay(Math.min(RELEASE_SETTLE_POLL_MS, remainingMonotonicMs(deadline)));
+    survivors = describeReleasedProcesses(rootPid, subreaper?.children(), survivors);
+  }
+  return releasing() ? survivors : undefined;
 }

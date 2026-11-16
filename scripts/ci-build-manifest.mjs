@@ -8,7 +8,9 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -22,15 +24,20 @@ const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
-  process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
   (process.env.OPENCLAW_CI_QUALIFICATION === "true" ||
-    process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson");
+    (process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
+      process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson"));
 const mainQualification = ciQualification && process.env.OPENCLAW_CI_SHAPE === "main";
-const eventName = ciQualification
-  ? mainQualification
-    ? "push"
-    : "pull_request"
-  : workflowEventName;
+const exactMainQualification =
+  mainQualification && process.env.OPENCLAW_CI_RELEASE_GATE === "false";
+// Admission owns identity. Project only coverage; the raw event still owns trust and provenance.
+const eventName = exactMainQualification
+  ? "schedule"
+  : ciQualification
+    ? mainQualification
+      ? "push"
+      : "pull_request"
+    : workflowEventName;
 const eventRef = mainQualification ? "refs/heads/main" : process.env.GITHUB_REF;
 const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
 const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
@@ -146,6 +153,17 @@ const createPluginContractTestShards =
       ];
 const createMatrix = (include) => ({
   include: include.map((row) => {
+    // Project before serialization so direct and late-planned matrices agree.
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(row.runner, row.check_name, undefined, [
+            ...(row.includePatterns ?? []),
+            ...(row.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
+    if (capacity) {
+      return { ...row, runner: capacity.runner, runner_label: capacity.runner };
+    }
     const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
     return label ? { ...row, runner_label: label } : row;
   }),
@@ -165,6 +183,9 @@ const packageScripts = packageJson.scripts ?? {};
 const hasPackageScript = (name) => typeof packageScripts[name] === "string";
 const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
 const changedPaths = (() => {
+  if (exactMainQualification) {
+    return null;
+  }
   try {
     const manifestPath = process.env.OPENCLAW_CI_CHANGED_PATHS_FILE;
     // Frozen target producers can predate the complete file transport.
@@ -178,8 +199,9 @@ const changedPaths = (() => {
     return null;
   }
 })();
-const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
-const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const docsOnly = !exactMainQualification && parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
+const docsChanged = exactMainQualification || parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const scopeEnabled = (value) => exactMainQualification || parseCiEnvFlag(value);
 const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
@@ -190,6 +212,9 @@ const runProofTier = eventName !== "pull_request" && !releaseGate;
 const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
 const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
 const mainValidation = validationTier === "main";
+if (exactMainQualification && !mainValidation) {
+  throw new Error("Exact main qualification requires validation_tier=main");
+}
 if (validationTier !== "full" && !mainValidation) {
   throw new Error("validation_tier must be full or main");
 }
@@ -199,7 +224,8 @@ if (
     !isCanonicalRepository ||
     frozenTarget ||
     compatibilityTarget ||
-    ciQualification ||
+    (ciQualification && !exactMainQualification) ||
+    (exactMainQualification && checkoutRevision !== workflowRevision) ||
     releaseGate ||
     releaseScope !== "full" ||
     process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER)
@@ -283,11 +309,12 @@ const nativeGeneratedOnly =
 const runNode =
   !nodeDataOnly &&
   !nativeGeneratedOnly &&
-  ((parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
+  ((scopeEnabled(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
 const runNodeFastOnly =
   runNode &&
   !runtimePullRequest &&
   !toolingOwnerChange &&
+  !exactMainQualification &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
 const runBuiltSourceVerifiers =
@@ -351,9 +378,13 @@ if (
 }
 
 const runNodeFastPluginContracts =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
 const runNodeFastCiRouting =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
 const proposedCheckScope =
   runtimePullRequest &&
   (!frozenTarget || releaseGate) &&
@@ -370,10 +401,25 @@ const pluginContractShards =
     : [];
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
+// Reuse releaseGate's existing exact-SHA/PR admission; never acquire a backend
+// or download models for ordinary PR, push, schedule, or unrelated dispatches.
+const mlxNativeProofScope =
+  workflowEventName === "workflow_dispatch" && releaseGate && !frozenTarget && !compatibilityTarget
+    ? await importTargetPlan("./scripts/ci-changed-scope.mjs")
+    : null;
+const runMlxNativeProof =
+  workflowEventName === "workflow_dispatch" &&
+  releaseGate &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  releaseScope === "full" &&
+  typeof mlxNativeProofScope?.hasMlxNativeProofInputs === "function" &&
+  mlxNativeProofScope.hasMlxNativeProofInputs(changedPaths);
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
   isCanonicalRepository &&
   !releaseFastLane;
@@ -382,7 +428,7 @@ const runMacosNode =
   runMacos ||
   (!ordinaryPullRequest &&
     !nativeGeneratedOnly &&
-    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
+    scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
     !releaseFastLane);
@@ -391,14 +437,14 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
-  runMacos &&
+  (runMacos || runMlxNativeProof) &&
   !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -407,7 +453,7 @@ const iosBuildScope =
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
   !docsOnly &&
   isCanonicalRepository &&
@@ -423,18 +469,18 @@ const runAndroidAccessNative =
     ));
 let runWindows =
   !ordinaryPullRequest &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
   !runNodeFastOnly &&
   isCanonicalRepository;
 const runSkillsPython =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
 const runControlUiI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
   fullUiPullRequest ||
-  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+  (scopeEnabled(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
     !docsOnly &&
     !nodeDataOnly &&
     !releaseFastLane);
@@ -470,11 +516,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Match four observed CPUs per 16-class job; nine Control UI shards fit slow hosted runners.
 // Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 7
+  ? 10
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -493,7 +539,7 @@ const supportsNativeI18n =
   hasPackageScript("android:i18n:check") &&
   hasPackageScript("apple:i18n:check");
 const runNativeI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -608,11 +654,32 @@ const testRuntimeMode = testRuntimePolicy
       ? "dual-all"
       : "bun-all")
   : "node";
+// Preserve deliberate daily/PR colocation and capacity. Only full manual validation
+// pays duplicate runtime setup for independent execution and retries.
+const splitRuntimeJobs =
+  eventName === "workflow_dispatch" &&
+  !runtimePullRequest &&
+  !mainValidation &&
+  typeof testRuntimePolicy?.ciTestShardRuntimes === "function";
 // Timing readers and the executor must price the same runtime before planning.
 process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
 const nodeSelectionReasons = [];
 let selectedTestTargets;
+// Preserve the original policy independently of later execution opt-ins.
+const nodeVolumeContext =
+  runtimePullRequest && changedPaths !== null
+    ? Object.freeze({
+        revision: checkoutRevision,
+        runtimePolicy: testRuntimeMode,
+        environment: Object.freeze({ ...process.env }),
+        eligibility: Object.freeze({
+          changedPaths: Object.freeze([...changedPaths]),
+          includeReleaseOnlyRuntimeTests,
+          includePrExemptRuntimeTests,
+        }),
+      })
+    : undefined;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
     throw new Error("Current PR CI requires complete changed paths for Node test planning");
@@ -632,7 +699,10 @@ if (runtimePullRequest && runNodeFull) {
       !frozenTarget &&
       !compatibilityTarget &&
       nodeSelectionMode === "aggressive",
-    onSelection: (selection) => nodeSelectionReasons.push(selection),
+    onSelection: (selection) => {
+      nodeSelectionReasons.push(selection);
+      console.log(`Node test selection provenance: ${JSON.stringify(selection)}`);
+    },
   });
 }
 const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
@@ -855,8 +925,8 @@ const publishedDriverUpdate =
     : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
-// main have no branch-protection consumers. Dispatch (release
-// validation) keeps the full named matrix.
+// main have no branch-protection consumers. Dispatch keeps the complete
+// inventory; runtime-capable full dispatches share the existing bounded packer.
 const compactPlanMode = !isCanonicalRepository
   ? undefined
   : runtimePullRequest
@@ -874,6 +944,7 @@ if (runtimePullRequest && runNodeFull) {
     throw new Error("Current PR CI target does not export createChangedNodeTestShards");
   }
   changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+    volumeContext: nodeVolumeContext,
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     compactNodeJobCap: compactPlanMode ? nodeMatrixLimit : undefined,
     selectedTestTargets,
@@ -971,10 +1042,11 @@ if (runCheckPlan && proposedCheckScope?.types) {
 }
 const fullCoreLintStripes =
   runnerProfile === "hybrid" &&
+  nodeRunnerBackend !== "boat" &&
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||
-    ciQualification)
+    (ciQualification && !exactMainQualification))
     ? [1, 2]
     : [1, 2, 3, 4, 5];
 const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
@@ -1075,6 +1147,8 @@ if (
 }
 const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
+  "package.json",
+  "pnpm-lock.yaml",
   ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
@@ -1122,6 +1196,7 @@ const postgresConformancePaths = [
   "src/cron/store/row-codec.ts",
   "src/cron/store/runtime-rows.kernel.ts",
   "src/cron/store/run-finalization.worker.ts",
+  "src/cron/store/run-queue.worker.ts",
   "src/cron/service.ts",
   "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
@@ -1242,9 +1317,15 @@ const rawNodeTestShards = runNodeFull
           // Keep the legacy boolean for historical targets. Hourly main uses
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
-          compactMode: mainValidation ? "pull-request" : compactPlanMode,
+          compactMode: mainValidation
+            ? "pull-request"
+            : (compactPlanMode ??
+              (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
           mainValidation,
-          compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
+          compactNodeJobCap:
+            splitRuntimeJobs && testRuntimeMode !== "node"
+              ? undefined
+              : nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
         ...nodeWorkerE2eShards,
@@ -1341,6 +1422,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 }) => ({
   configs,
   env,
@@ -1349,6 +1431,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 });
 const uiTestRuntimePolicy =
   (!compatibilityTarget || Boolean(dispatchRuntimePolicy)) &&
@@ -1368,6 +1451,7 @@ const uiTestRuntimePolicy =
   )
     ? testRuntimeMode
     : "node";
+
 const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
 const knownToolingConfigs = new Set([
   goToolingConfig,
@@ -1387,6 +1471,34 @@ const shardRequiresTests = (shard, tests, fallback) =>
       ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
       : fallback(plan);
   });
+const workerPresetOwner =
+  frozenTarget || !existsSync("./scripts/lib/vitest-runtime-selection.mts")
+    ? undefined
+    : await importTargetPlan("./scripts/lib/vitest-runtime-selection.mts");
+const workerCachePreset = (shard) => {
+  if (
+    shard.requiresDist ||
+    shard.pretestBuildMode ||
+    !workerPresetOwner?.resolveCiVitestWorkerPreset
+  ) {
+    return undefined;
+  }
+  const plans = shard.targets?.length
+    ? shard.targets.map((target) => ({ target }))
+    : (shard.groups ?? [shard]).map((group) =>
+        Object.assign({}, group, { env: { ...shard.env, ...group.env } }),
+      );
+  // Unknown flags keep the full archive; the runtime recomputes the decision.
+  const hasExtraArgs = [shard, ...plans].some((plan) => {
+    const args = plan.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON;
+    return (
+      args !== undefined &&
+      (typeof args !== "string" || (args.trim() !== "" && args.trim() !== "[]"))
+    );
+  });
+  const preset = workerPresetOwner.resolveCiVitestWorkerPreset(plans, hasExtraArgs);
+  return preset === "full" ? undefined : preset;
+};
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
@@ -1395,7 +1507,21 @@ const nodeTestShards = targetNodeTestShards
       Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
-  .map((shard) => {
+  .flatMap((shard) => {
+    const runtimes =
+      !shard.requiresDist && splitRuntimeJobs
+        ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
+        : null;
+    // Node-hosted packaging proof also launches a pinned Bun child.
+    const needsBunChild =
+      !shard.requiresDist &&
+      shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+        plan.configs?.includes(goToolingConfig),
+      );
+    const minTotalMemoryBytes = Math.max(
+      0,
+      ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
+    );
     const groups =
       shard.groups?.map(projectNodeTestGroup) ??
       (nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
@@ -1411,8 +1537,23 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
+            ...(shard.includePatterns ?? []),
+            ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
+    const auditCliObservations =
+      eventName === "schedule" &&
+      isCanonicalRepository &&
+      !frozenTarget &&
+      !shard.requiresDist &&
+      groups?.some((group) => resolveCiTestAuditConfig(group.configs)) &&
+      !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
     const row = {
       check_name: shard.checkName,
+      audit_cli_observations: auditCliObservations || undefined,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       adaptive_observations:
         (shard.groups ?? [shard]).some((group) =>
@@ -1420,30 +1561,28 @@ const nodeTestShards = targetNodeTestShards
         ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
-          // Node-hosted packaging proof also launches a pinned Bun child.
-          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-            plan.configs?.includes(goToolingConfig),
-          )),
+        ((runtimes
+          ? runtimes.includes("bun")
+          : Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode))) ||
+          needsBunChild),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
+      worker_cache_preset: workerCachePreset(shard),
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
-      runner: shard.runner,
-      runner_label: blacksmithRunnerLabel(
-        shard.runner,
-        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
-      ),
+      runner: capacity?.runner ?? shard.runner,
+      runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
-        !shard.requiresDist && testRuntimeMode === "dual-all"
+        !shard.requiresDist && testRuntimeMode === "dual-all" && !splitRuntimeJobs
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
+      cpu_budget: capacity?.cpuBudget ?? shard.cpuBudget,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
       requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
@@ -1511,11 +1650,30 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    const rows = runtimes
+      ? runtimes.map((runtime) =>
+          Object.assign({}, row, {
+            base_check_name: row.check_name,
+            check_name: `${row.check_name} (${runtime})`,
+            test_runtime: runtime,
+            requires_bun: runtime === "bun" || needsBunChild,
+          }),
+        )
+      : [row];
     if (packedGroups) {
-      packedNodeTestRows.push({ row, groups });
+      packedNodeTestRows.push(...rows.map((runtimeRow) => ({ row: runtimeRow, groups })));
     }
-    return row;
+    return rows;
   });
+// Vary the single audit capture across runs instead of always observing the first row.
+const auditCliRows = nodeTestShards.filter((row) => row.audit_cli_observations);
+if (auditCliRows.length > 0) {
+  const runId = process.env.GITHUB_RUN_ID ?? "";
+  const auditIndex = /^\d+$/u.test(runId) ? Number(BigInt(runId) % BigInt(auditCliRows.length)) : 0;
+  auditCliRows.forEach((row, index) => {
+    row.audit_cli_observations = index === auditIndex || undefined;
+  });
+}
 const nodeTestGroupPools = {};
 if (
   typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
@@ -1617,7 +1775,7 @@ const additionalChecks = [
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
   // Main-shaped qualifications are still dispatches with an exact comparison range.
-  ...(eventName === "workflow_dispatch" || mainQualification
+  ...(eventName === "workflow_dispatch" || (mainQualification && !exactMainQualification)
     ? [
         // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
@@ -1904,6 +2062,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
+  run_mlx_native_proof: runMlxNativeProof,
   run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
@@ -1989,7 +2148,7 @@ if (hybridHostedEligible) {
         "runtime-topology-architecture",
         "plugin-sdk-api-diff",
         "dependencies",
-      ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
+      ].includes(row.group) || row.runner === "ubuntu-24.04",
   ).length;
   const hostedPlanner =
     process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" || nodeRunnerBackend === "runson";
@@ -2050,14 +2209,19 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance, 3),
+    "postgres-conformance": count(
+      manifest.run_postgres_conformance,
+      workflowEventName === "pull_request" ? 4 : 3,
+    ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(
       manifest.run_checks_windows,
       manifest.checks_windows_matrix.include.length,
     ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-    "macos-swift": count(manifest.run_macos_swift, 2),
+    // Eligible profiles emit one app test row plus packages and mlx; settings
+    // and release rows require a different dispatch admission.
+    "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),

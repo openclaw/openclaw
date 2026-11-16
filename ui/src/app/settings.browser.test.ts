@@ -87,3 +87,15 @@ it.each([
 ])("normalizes message width %s", (value, expected) => {
   expect(normalizeChatMessageMaxWidth(value)).toBe(expected);
 });
+
+it("keeps the inline command trail opt-in in this browser's Gateway-scoped preferences", () => {
+  const gatewayUrl = "ws://command-trail.example:18789";
+  localStorage.removeItem(settingsKeyForGateway(gatewayUrl));
+  expect(loadSettings(gatewayUrl).chatInlineCommands).not.toBe(true);
+  saveSettings({ ...loadSettings(gatewayUrl), chatInlineCommands: true });
+  expect(loadSettings(gatewayUrl).chatInlineCommands).toBe(true);
+  expect(loadSettings("ws://other-command-trail.example:18789").chatInlineCommands).not.toBe(true);
+  saveSettings({ ...loadSettings(gatewayUrl), chatInlineCommands: false });
+  expect(loadSettings(gatewayUrl).chatInlineCommands).not.toBe(true);
+  expect(stored(gatewayUrl)).not.toHaveProperty("chatInlineCommands");
+});
