@@ -115,7 +115,8 @@ export function prepareToolSearchCatalogDescriptors(entries: readonly ToolSearch
           // The key's stableStringify keeps `undefined` members, which are not JSON;
           // snapshot MCP metadata through JSON, which drops them.
           ...(descriptor.mcp
-            ? { mcp: freezeTrustedJsonSnapshot(JSON.parse(JSON.stringify(descriptor.mcp))) }
+            ? // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON encoding must omit undefined; structuredClone preserves those members.
+              { mcp: freezeTrustedJsonSnapshot(JSON.parse(JSON.stringify(descriptor.mcp))) }
             : {}),
         }),
       ),
