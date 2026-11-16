@@ -881,7 +881,9 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(await f.git("rev-parse", "ORIG_HEAD")).toBe(originalHead);
       expect(await f.git("show", "ORIG_HEAD:newer-base.txt")).toBe("base advanced after PR");
       if (boundRuntime) {
-        expect(runtime?.isPaused()).toBe(true);
+        // Canonical acceptance precedes the guest freeze for projection application.
+        expect(runtime?.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "during-install.txt"), "later guest write\n");
       }
       await f.advanceHead({ "newer-pr.txt": "remote advanced during first import\n" });
       if (!boundRuntime) {
@@ -893,8 +895,18 @@ describe("existing PR preparation through the registered agent action", () => {
         headChanged: true,
       });
       expect(runtime?.isPaused() ?? false).toBe(false);
+      if (boundRuntime) {
+        expect(await fs.readFile(path.join(f.projection, "during-install.txt"), "utf8")).toBe(
+          "later guest write\n",
+        );
+        expect(await fs.readFile(path.join(f.cwd, "during-install.txt"), "utf8")).toBe(
+          "later guest write\n",
+        );
+      }
       expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
-      expect(await f.git("diff", "--name-only", f.headCommit)).toBe("");
+      expect(await f.git("diff", "--name-only", f.headCommit)).toBe(
+        boundRuntime ? "during-install.txt" : "",
+      );
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
       expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(

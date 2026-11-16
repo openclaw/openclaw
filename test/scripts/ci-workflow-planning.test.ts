@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -15,7 +16,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import type { createChangedCiLintPlan } from "../../scripts/check-changed.mts";
 import {
@@ -24,12 +25,13 @@ import {
   shouldRunNativeI18n,
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
-import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
 import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
 } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { listNodeTestConfigFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
@@ -820,6 +822,7 @@ function runDiffBaseFixture(options: {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
+  reportCommand?: string;
   task?:
     | "guards"
     | "guards-architecture"
@@ -931,6 +934,9 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     );
   }
   const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
+  if (options.reportCommand) {
+    scripts["deadcode:report"] = options.reportCommand;
+  }
   if (options.types?.compose) {
     // The full-path root-coverage probe must see the actual package alias.
     scripts["tsgo:test"] = (
@@ -2812,8 +2818,10 @@ describe("ci workflow guards", () => {
       ) as Array<{
         vitest_max_workers: number;
       }>;
-      expect(controlRows).toHaveLength(release ? 12 : 6);
-      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(24);
+      expect(controlRows).toHaveLength(release ? 12 : 9);
+      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(
+        release ? 24 : 36,
+      );
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
@@ -3011,8 +3019,8 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
-    ["macos-swift-packages", false, "workflow_dispatch", false, ["packages", "mlx"]],
+    ["macos-swift", false, "workflow_dispatch", false, ["tests"]],
+    ["macos-swift-packages", false, "workflow_dispatch", false, ["release", "packages", "mlx"]],
     ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
     ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
@@ -3180,9 +3188,9 @@ describe("ci workflow guards", () => {
       const appPhases: string[] = Array.isArray(job.strategy.matrix.phase)
         ? job.strategy.matrix.phase
         : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
-      expect(appPhases).toEqual(full ? ["release", "tests"] : ["tests"]);
+      expect(appPhases).toEqual(["tests"]);
       const packagePhases = evaluateWorkflowExpression(packages.strategy.matrix.phase, context);
-      expect(packagePhases).toEqual(["packages", "mlx"]);
+      expect(packagePhases).toEqual(full ? ["release", "packages", "mlx"] : ["packages", "mlx"]);
       const phases = [...appPhases, ...packagePhases];
       expect(job.strategy["max-parallel"]).toBe(2);
       const env = Object.fromEntries(
@@ -3287,7 +3295,7 @@ describe("ci workflow guards", () => {
         "Restore Swift build directory cache",
         "Validate Swift build cache",
       ]) {
-        expect(selectedPhases(name), name).toEqual(full ? ["release", "tests"] : ["tests"]);
+        expect(selectedPhases(name), name).toEqual(full ? ["tests", "release"] : ["tests"]);
       }
       expect(selectedPhases("Render isolated macOS health fixtures")).toEqual(
         full ? ["tests"] : [],
@@ -5502,7 +5510,11 @@ describe("ci workflow guards", () => {
         },
         changedPlannerSource: `
         export const createChangedNodeTestShards = (_paths, options = {}) => {
-          console.log("dedicated-coverage:" + JSON.stringify(options));
+          const { environment, ...volumeContext } = options.volumeContext;
+          if (environment.OPENCLAW_CI_TEST_RUNTIME_POLICY !== volumeContext.runtimePolicy) {
+            throw new Error("Volume environment must retain the planner runtime policy");
+          }
+          console.log("dedicated-coverage:" + JSON.stringify({ ...options, volumeContext }));
           return ${
             buildImpact
               ? "[]"
@@ -5545,6 +5557,18 @@ describe("ci workflow guards", () => {
           (file) => !CI_MANIFEST_FIXTURE_TARGETS.real.includes(file),
         ),
         dedicatedMaxLinesRatchet: true,
+        volumeContext: {
+          revision: "a".repeat(40),
+          runtimePolicy: "node",
+          eligibility: {
+            changedPaths: [
+              buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts",
+              ...nativePaths,
+            ],
+            includeReleaseOnlyRuntimeTests: false,
+            includePrExemptRuntimeTests: false,
+          },
+        },
       });
       const workflow = readCiWorkflow();
       const typeContext = {
@@ -8728,6 +8752,29 @@ describe("ci workflow guards", () => {
     expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
 
+  it.each([false, true])(
+    "uses combined finding coverage only with the exact target capability (frozen=%s)",
+    (frozenTarget) => {
+      const scripts = ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"];
+      const combined = runCheckShardFixture({
+        task: "dependencies",
+        frozenTarget,
+        scripts,
+        reportCommand: "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all",
+      });
+      expect(combined.status, combined.output).toBe(0);
+      expect(combined.calls).toEqual(["deadcode:report"]);
+      const oldReport = runCheckShardFixture({
+        task: "dependencies",
+        frozenTarget,
+        scripts,
+        reportCommand: "pnpm deadcode:full && pnpm deadcode:exports",
+      });
+      expect(oldReport.status, oldReport.output).toBe(0);
+      expect(oldReport.calls.toSorted()).toEqual(scripts.toSorted());
+    },
+  );
+
   it.each([false, true])("uses all three stable deadcode checks for frozen=%s", (frozenTarget) => {
     const result = runCheckShardFixture({
       task: "dependencies",
@@ -8789,6 +8836,65 @@ describe("ci workflow guards", () => {
     expect(incompleteCurrent.output).toContain(
       "Target does not provide a supported deadcode check.",
     );
+  });
+
+  it.each(["bun-all", "dual-all"])("schedules independent required %s runtime jobs", (policy) => {
+    const targets = ["src/cli/cli-process-diagnostics.test.ts", "src/utils/fixture.test.ts"];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      bunTestRuntime: true,
+      bunUiTestRuntime: true,
+      runtimeJobs: true,
+      targetFiles: ["ui/src/pages/chat/chat-pane-retention.test.ts"],
+      historicalCompatibility: false,
+      releaseGate: false,
+      eventName: "workflow_dispatch",
+      scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      nodeTestShards: [
+        {
+          checkName: "checks-node-runtime-proof",
+          shardName: "runtime-proof",
+          configs: ["fixture-bun.config.ts"],
+          targets,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          timeoutMinutes: 20,
+        },
+      ],
+      changedPaths: [
+        "scripts/lib/ci-node-test-plan.mts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+      ],
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
+      "checks-node-runtime-proof (node)",
+      "checks-node-runtime-proof (bun)",
+    ]);
+    expect(rows.map((row: { base_check_name: string }) => row.base_check_name)).toEqual([
+      "checks-node-runtime-proof",
+      "checks-node-runtime-proof",
+    ]);
+    for (const row of rows) {
+      expect(row).toMatchObject({ targets, timeout_minutes: 20, test_runtime_policy: policy });
+      expect(row.requires_bun).toBe(row.test_runtime === "bun");
+      const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+      expect(job.strategy["fail-fast"]).toBe(false);
+      const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+      expect(
+        evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME, {
+          matrix: row,
+          repository: "openclaw/openclaw",
+          eventName: "workflow_dispatch",
+          runAttempt: 1,
+        }),
+      ).toBe(row.test_runtime);
+    }
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(3);
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    expect(gate.needs).toContain("checks-node-core-test-nondist-shard");
+    expect(gate.needs).toContain("checks-ui");
   });
 
   it.each([
@@ -8859,7 +8965,7 @@ describe("ci workflow guards", () => {
       bun: true,
     },
   ] as const)(
-    "routes test runtimes without adding jobs ($eventName, capability=$capability)",
+    "routes legacy test runtimes without adding jobs ($eventName, capability=$capability)",
     (scenario) => {
       const { eventName, capability, uiCapability, policy, uiPolicy, bun } = scenario;
       const manifest = runCiManifestFixture({
@@ -11626,15 +11732,15 @@ describe("ci workflow guards", () => {
       }
       const rows = readJsonOutput(manifest.outputs, "ui_e2e_matrix").include;
       expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
-        ...(control ? [1, 2, 3, 4, 5, 6] : []),
+        ...(control ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : []),
         ...(browser && manifest.outputs.reuse_browser_extension_build !== "true"
-          ? [control ? 7 : 1]
+          ? [control ? 10 : 1]
           : []),
       ]);
       for (const row of rows) {
         expect(row).toMatchObject({
-          shard_count: control ? 7 : 1,
-          vitest_shard_count: control ? 6 : 0,
+          shard_count: control ? 10 : 1,
+          vitest_shard_count: control ? 9 : 0,
           vitest_max_workers: 4,
         });
       }
@@ -11957,7 +12063,7 @@ describe("ci workflow guards", () => {
     const expectedUiE2eMatrices = (
       [
         [8, 3],
-        [6, 4],
+        [9, 4],
         [12, 2],
       ] as const
     ).map(([vitestShardCount, workers]) => ({
@@ -13167,6 +13273,23 @@ describe("ci workflow guards", () => {
           includePatterns: ["src/a.test.ts"],
           shard_name: "first",
           timing_key: "first#include-1",
+          volume: {
+            version: 1,
+            revision: "a".repeat(40),
+            policy: "node",
+            entries: [
+              {
+                config: "test/vitest/vitest.unit-fast.config.ts",
+                runtime: "node",
+                engine: "vitest",
+                profile: "b".repeat(64),
+                environment: "c".repeat(64),
+                argsDigest: "d".repeat(64),
+                full: { count: 2, digest: "e".repeat(64), id: "f".repeat(64) },
+                selected: { count: 1, digest: "0".repeat(64) },
+              },
+            ],
+          },
         },
       ],
       [
@@ -13227,13 +13350,15 @@ describe("ci workflow guards", () => {
 
   it.each([
     { eventName: "schedule", runId: "", selected: ["first-cli"] },
-    { eventName: "schedule", runId: "1", selected: ["second-cli"] },
-    { eventName: "schedule", runId: "2", selected: ["first-cli"] },
-    { eventName: "schedule", runId: "9007199254740993", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "1", selected: ["gateway-database"] },
+    { eventName: "schedule", runId: "2", selected: ["gateway-methods"] },
+    { eventName: "schedule", runId: "9007199254740993", selected: ["gateway-database"] },
+    { eventName: "schedule", runId: "3", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "4", selected: ["first-cli"] },
     { eventName: "schedule", runId: "invalid", selected: ["first-cli"] },
     { eventName: "pull_request", runId: "1", selected: [] },
   ] as const)(
-    "assigns one separate CLI audit row by run identity ($eventName, $runId)",
+    "assigns one shared CLI/Gateway audit row by run identity ($eventName, $runId)",
     ({ eventName, runId, selected }) => {
       const cli = "test/vitest/vitest.cli-process.config.ts";
       const unit = "test/vitest/vitest.unit-fast.config.ts";
@@ -13241,6 +13366,28 @@ describe("ci workflow guards", () => {
         { name: "first-cli", configs: [cli] },
         { name: "unit", configs: [unit] },
         { name: "mixed", configs: [unit, cli] },
+        {
+          name: "gateway-database",
+          configs: [
+            "test/vitest/vitest.gateway-server-isolated.config.ts",
+            "test/vitest/vitest.gateway-database-workers.config.ts",
+          ],
+        },
+        {
+          name: "gateway-methods",
+          configs: [
+            "test/vitest/vitest.gateway-methods.config.ts",
+            "test/vitest/vitest.gateway-methods-isolated.config.ts",
+          ],
+        },
+        { name: "unknown-gateway", configs: ["test/vitest/vitest.gateway-server.config.ts"] },
+        {
+          name: "unqualified-mixed",
+          configs: [
+            "test/vitest/vitest.gateway-methods.config.ts",
+            "test/vitest/vitest.infra.config.ts",
+          ],
+        },
         { name: "second-cli", configs: [cli] },
       ];
       const manifest = runCiManifestFixture({
@@ -13355,6 +13502,208 @@ describe("ci workflow guards", () => {
       }
     },
   );
+
+  it("keeps the volume-enabled PR manifest within bounds and aligned through warm runtime admission", async () => {
+    const databaseConfig = "test/vitest/vitest.gateway-database-workers.config.ts";
+    const targets = listNodeTestConfigFiles(databaseConfig)!;
+    const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
+    const sourceRoot = process.cwd();
+    const normalEnv = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_CI_TEST_RUNTIME: "node",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+      // The enclosing test runner owns these filters; ordinary CI shards do not inherit them.
+      OPENCLAW_VITEST_INCLUDE_FILE: "",
+      OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "",
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
+    };
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: targets,
+      selectedTestTargets: targets,
+      scopeEnv: { ...normalEnv, NODE_OPTIONS: "", OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
+      changedPlannerSource: `
+        import { createChangedNodeTestShards as create } from ${JSON.stringify(planner)};
+        export { hasQaSmokeAffectingChange, isCiDocumentationPath } from ${JSON.stringify(planner)};
+        export function createChangedNodeTestShards(paths, options) {
+          if (!options.volumeContext || options.volumeContext.revision !== "${"a".repeat(40)}") {
+            throw new Error("Missing active volume context");
+          }
+          const previous = process.cwd();
+          try {
+            process.chdir(${JSON.stringify(sourceRoot)});
+            const baseline = create(paths, { ...options, volumeContext: undefined });
+            const result = create(paths, options);
+            const stripped = result.map(job => ({ ...job, groups: job.groups?.map(group => {
+              const { volume, ...rest } = group;
+              return rest;
+            }) }));
+            if (JSON.stringify(stripped) !== JSON.stringify(baseline)) {
+              throw new Error("Volume metadata changed the execution plan");
+            }
+            return result;
+          } finally { process.chdir(previous); }
+        }
+      `,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputChars).toBeLessThan(262_144);
+    const pools = JSON.parse(manifest.outputs.node_test_group_pools_json || "{}");
+    for (const encoded of Object.values(pools)) {
+      expect(String(encoded).length).toBeLessThanOrEqual(60_000);
+    }
+    const denominators = new Map<string, string[]>();
+    const runtimeRows: {
+      row: Record<string, unknown>;
+      plans: ReturnType<typeof resolveShardPlans>;
+    }[] = [];
+    for (const row of readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include) {
+      const groups = row.groups_pool
+        ? decodeNodeTestGroups(pools[row.groups_pool])[row.groups_index]
+        : row.groups;
+      if (row.groups_pool && !Array.isArray(groups)) {
+        throw new Error("Missing pooled groups");
+      }
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_pool
+          ? encodeNodeTestGroups(groups)
+          : row.groups_gzip_base64,
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups),
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(row.configs),
+      });
+      if (plans.some((plan) => plan.kind === "group" && plan.plan.volume?.entries.length)) {
+        runtimeRows.push({ row, plans });
+      }
+      for (const plan of plans) {
+        if (plan.kind !== "group") {
+          continue;
+        }
+        for (const entry of plan.plan.volume?.entries ?? []) {
+          expect(entry.runtime).toBe("node");
+          expect(entry.full).not.toBeNull();
+          if (entry.full) {
+            const key = JSON.stringify([entry.config, entry.runtime, entry.profile]);
+            denominators.set(key, [...(denominators.get(key) ?? []), entry.full.id]);
+          }
+        }
+      }
+    }
+    expect(runtimeRows.length).toBeGreaterThan(0);
+    expect([...denominators.values()].some((ids) => ids.length > 1)).toBe(true);
+    for (const ids of denominators.values()) {
+      expect(new Set(ids).size).toBe(1);
+    }
+
+    const output: string[] = [];
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    try {
+      for (const { row, plans } of runtimeRows) {
+        const expected = plans.flatMap((plan) =>
+          plan.kind === "group"
+            ? (plan.plan.volume?.entries ?? []).map((entry) => ({
+                config: entry.config,
+                full: entry.full,
+                selected: entry.selected,
+                profile: entry.profile,
+              }))
+            : [],
+        );
+        const execute = async (warm: boolean, workers: number, scenario = false) => {
+          output.length = 0;
+          const runChild = vi
+            .fn<NonNullable<NonNullable<Parameters<typeof runShardPlans>[1]>["runChild"]>>()
+            .mockImplementation(async (args, env) => {
+              expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(String(workers));
+              expect(env.OPENCLAW_VITEST_WORKER_CACHE).toBe(warm ? "1" : undefined);
+              const files: string[] = JSON.parse(
+                readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"),
+              );
+              for (const config of args.slice(
+                0,
+                args.includes("--") ? args.indexOf("--") : args.length,
+              )) {
+                const owner = new Set(listNodeTestConfigFiles(config));
+                const selected = files.filter((file) => owner.has(file)).toSorted();
+                expect(expected).toContainEqual(
+                  expect.objectContaining({
+                    config,
+                    selected: {
+                      count: selected.length,
+                      digest: createHash("sha256").update(JSON.stringify(selected)).digest("hex"),
+                    },
+                  }),
+                );
+              }
+              return 0;
+            });
+          const admittedPlans = structuredClone(plans);
+          for (const plan of admittedPlans) {
+            if (plan.kind === "group") {
+              plan.plan.fallbackMaxWorkers = workers;
+              plan.plan.minTotalMemoryBytes = Number.MAX_SAFE_INTEGER;
+            }
+          }
+          const code = await runShardPlans(admittedPlans, {
+            concurrency: 1,
+            scratchDir: tempDirs.make("openclaw-volume-runtime-"),
+            env: {
+              ...process.env,
+              ...normalEnv,
+              RUNNER_ENVIRONMENT: "self-hosted",
+              FROZEN_TARGET: "false",
+              NODE_OPTIONS: "--max-old-space-size=8192",
+              OPENCLAW_VITEST_MAX_WORKERS: "6",
+              OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+              OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(row.env ?? {}),
+              OPENCLAW_VITEST_WORKER_CACHE: warm ? "1" : undefined,
+              ...(scenario ? { OPENCLAW_TEST_VOLUME_SCENARIO: "different" } : {}),
+            },
+            runChild,
+          });
+          expect(code).toBe(0);
+          const records = output
+            .filter((line) => line.startsWith("[shard:volume] "))
+            .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
+          expect(records).toHaveLength(expected.length);
+          expect(runChild).toHaveBeenCalled();
+          return { records, commands: runChild.mock.calls.map(([args]) => args) };
+        };
+        const cold = await execute(false, 1);
+        const warm = await execute(true, 1);
+        const fallback = await execute(true, 2);
+        for (const result of [cold, warm, fallback]) {
+          expect(result.commands).toEqual(cold.commands);
+          expect(
+            result.records.map(({ config, full, selected, profile }) => ({
+              config,
+              full,
+              selected,
+              profile,
+            })),
+          ).toEqual(expected);
+        }
+        expect(warm.records.map((record) => record.admittedProfile)).not.toEqual(
+          cold.records.map((record) => record.admittedProfile),
+        );
+        expect(fallback.records.map((record) => record.admittedProfile)).not.toEqual(
+          warm.records.map((record) => record.admittedProfile),
+        );
+        const overridden = await execute(true, 2, true);
+        expect(overridden.commands).toEqual(cold.commands);
+        expect(
+          overridden.records.every((record) => record.full === null && record.selected === null),
+        ).toBe(true);
+      }
+    } finally {
+      stdout.mockRestore();
+    }
+  });
 
   it("uses projected legacy groups for historical targets without the codec", () => {
     const groups = [

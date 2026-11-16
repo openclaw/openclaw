@@ -1,14 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { formatEd25519PublicKey } from "@openclaw/openclaw-id-protocol";
 import { render } from "@solidjs/web";
 import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { PeoplePage } from "./people-page.js";
-import { InviteForm } from "./people-sections.js";
-import type { Invite, StatusResult } from "./types.js";
+import { button, hostFor, linked, pendingInvite, rolePicker } from "./people-page.test-support.js";
+import type { StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -22,136 +22,6 @@ vi.mock("./owner-signing.js", () => ({
 
 const { default: plugin } = await import("./index.js");
 const disposers: Array<() => void> = [];
-
-const pendingInvite: Invite = {
-  inviteId: "inv-1",
-  label: "member@example.test",
-  role: "operator",
-  audience: { kind: "email", value: "member@example.test" },
-  createdAt: 1_800_000_000,
-  expiresAt: 1_800_600_000,
-  status: "pending",
-  pending: {
-    accountId: "acct-member",
-    devicePub: formatEd25519PublicKey(new Uint8Array(32).fill(7)),
-    peerKey: "iroh:member",
-    requestedAt: 1_800_000_100,
-    decideBy: 1_800_086_400,
-    reported: { email: "member@example.test", displayName: "Mia", locationHint: "Falkenstein, DE" },
-  },
-};
-
-function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
-  return {
-    status: { state: "on" },
-    channel: "tunnel",
-    owner: true,
-    link: {
-      linked: true,
-      clawId: "claw-1",
-      hostname: "studio-e61zr.crabd.xyz",
-      rootPub: "ed25519:root",
-      seq: 4,
-      ownerDevices: [
-        { devicePub: "ed25519:mine", label: "This browser", peerKeys: ["iroh:a"], cert: {} },
-        { devicePub: "ed25519:old-laptop", label: "Old laptop", peerKeys: ["iroh:b"], cert: {} },
-      ],
-      members: [],
-      invites: [pendingInvite],
-      ...overrides,
-    },
-  };
-}
-
-// The host owns picker behavior; this adapter exposes its public selection contract here.
-const mountSelectPicker: UI.ControlUiHost["components"]["mountSelectPicker"] = (
-  container,
-  initial,
-) => {
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", initial.accessibleLabel);
-  let current = initial;
-  const update = (next: typeof initial) => {
-    current = next;
-    select.replaceChildren(
-      ...next.options.map((option) => {
-        const element = document.createElement("option");
-        element.value = option.value;
-        element.textContent = `${option.label} · ${option.description}`;
-        return element;
-      }),
-    );
-    select.value = next.value;
-    select.disabled = next.disabled ?? false;
-  };
-  select.addEventListener("change", () => current.onSelect(select.value));
-  container.append(select);
-  update(initial);
-  return { update, dispose: () => select.remove() };
-};
-
-// Activates the plugin, mounts its page and returns the host's request spy.
-// Activation reads the status once (the flag gate) before the page reads its own.
-function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
-  // openclawId.people answers with the link of the status last read (owner only).
-  let last: StatusResult | undefined;
-  const request = vi.fn(async (method: string) => {
-    if (method === "openclawId.status") {
-      last = statuses.length > 1 ? statuses.shift() : statuses[0];
-      return { ...last, link: { linked: last!.link.linked, hostname: last!.link.hostname } };
-    }
-    if (method === "openclawId.people") {
-      return { link: last!.link };
-    }
-    return submitResult;
-  });
-  const disposePage = vi.fn();
-  const disposeNavigation = vi.fn();
-  const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => disposePage);
-  const registerNavigation = vi.fn(() => disposeNavigation);
-  const subscribers = new Set<() => void>();
-  const events = new Map<string, Set<(payload: unknown) => void>>();
-  const controller = new AbortController();
-  const host = {
-    locale: "en-US",
-    redact: (text: string) => text.replace(/Bearer \S+/g, "Bearer [redacted]"),
-    signal: controller.signal,
-    connection: { connected: true, canRead: true, canWrite: true, canAdmin: true },
-    request,
-    subscribe: (listener: () => void) => {
-      subscribers.add(listener);
-      return () => subscribers.delete(listener);
-    },
-    onEvent: (event: string, listener: (payload: unknown) => void) => {
-      const listeners = events.get(event) ?? new Set();
-      events.set(event, listeners);
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    sessions: {
-      rows: [{ key: "agent:main:trip", derivedTitle: "Trip ideas" }],
-      normalizeKey: (key: string) => key,
-    },
-    ui: { registerPage, registerNavigation },
-    components: { mountSelectPicker },
-  } as unknown as UI.ControlUiHost;
-  return {
-    host,
-    request,
-    registerPage,
-    registerNavigation,
-    disposePage,
-    disposeNavigation,
-    controller,
-    subscribers,
-    events,
-    emit: () => events.get("openclawId.people.changed")?.forEach((listener) => listener({})),
-    connect: (connected: boolean) => {
-      host.connection.connected = connected;
-      subscribers.forEach((listener) => listener());
-    },
-  };
-}
 
 async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
   const harness = hostFor([statuses[0]!, ...statuses], submitResult);
@@ -175,9 +45,6 @@ async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
   disposers.push(dispose);
   return { ...harness, request, container, dispose };
 }
-
-const button = (container: HTMLElement, label: string) =>
-  [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
 
 describe("Access page", () => {
   afterEach(() => {
@@ -224,6 +91,7 @@ describe("Access page", () => {
           <InviteForm
             motion={createPeopleMotion()}
             components={hostFor([linked()]).host.components}
+            roles={linked().link.roles!}
             disabled={false}
             locale="en-US"
             onCreate={onCreate}
@@ -239,10 +107,10 @@ describe("Access page", () => {
     expect(container.textContent).toContain("The link expires in 7 days.");
     expect(container.textContent).toContain("Invites cannot grant owner access.");
     expect(container.querySelector('option[value="operator"]')?.textContent).toBe(
-      "Operator · Chat, run tools, and use connected services",
+      "Operator · Read and change other people's sessions · Sandbox follows agent settings · No administrator access",
     );
     expect(container.querySelector('option[value="owner"]')).toBeNull();
-    const picker = container.querySelector("select")!;
+    const picker = rolePicker(container)!;
     picker.value = "viewer";
     picker.dispatchEvent(new Event("change"));
     flush();
@@ -251,15 +119,281 @@ describe("Access page", () => {
     expect(container.textContent).toContain(
       "Anyone with it can request access, but only you can approve them.",
     );
-    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer");
+    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer", false, undefined);
     expect(container.querySelector("form")).toBeNull();
     expect(container.textContent).toContain("Viewer invite · expires");
     button(container, "Invite someone")!.click();
     flush();
     expect(container.querySelector("input")?.value).toBe("");
     expect(document.activeElement).toBe(container.querySelector("input"));
-    expect(container.querySelector("select")?.value).toBe("operator");
+    expect(rolePicker(container)?.value).toBe("operator");
     expect(container.textContent).not.toContain("https://example.test/#synthetic-invite");
+  });
+
+  it("keeps the existing-person selection local to invite registration", async () => {
+    const { container, request } = await mountPage([
+      linked({
+        rootPub: pendingInvite.pending!.devicePub,
+        existingProfiles: [{ id: "person-mia", displayName: "Mia's existing profile" }],
+      }),
+    ]);
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Existing person on this claw"]')).not.toBeNull(),
+    );
+    const picker = container.querySelector<HTMLSelectElement>(
+      '[aria-label="Existing person on this claw"]',
+    )!;
+    expect(picker.options[0]?.textContent).toBe("Create a new person");
+    picker.value = "person-mia";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    const input = container.querySelector<HTMLInputElement>('input[type="email"]')!;
+    input.value = "friend@example.test";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    button(container, "Create invite link")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "openclawId.authority",
+        expect.objectContaining({ action: "register_invite", existingProfileId: "person-mia" }),
+      ),
+    );
+    const { signAsOwner } = await import("./owner-signing.js");
+    expect(signAsOwner).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "InviteCap",
+      expect.not.objectContaining({ existingProfileId: expect.anything() }),
+    );
+    await vi.waitFor(() => expect(button(container, "Invite someone")).toBeDefined());
+    button(container, "Invite someone")!.click();
+    flush();
+    expect(
+      container.querySelector<HTMLSelectElement>('[aria-label="Existing person on this claw"]')
+        ?.value,
+    ).toBe("");
+  });
+
+  it("shows the chosen profile before approval and a persisted fallback after approval", async () => {
+    const bound = {
+      ...pendingInvite,
+      existingProfile: { id: "person-mia", displayName: "Mia's existing profile" },
+    };
+    const { container, emit } = await mountPage([
+      linked({ invites: [bound] }),
+      linked({
+        invites: [
+          {
+            ...bound,
+            status: "approved",
+            pending: undefined,
+            existingProfile: {
+              ...bound.existingProfile,
+              fallbackReason:
+                "This person is already linked to another OpenClaw ID. A new profile was created.",
+            },
+          },
+        ],
+      }),
+    ]);
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Will join as Mia's existing profile"),
+    );
+    emit();
+    await vi.waitFor(() => expect(container.textContent).toContain("A new profile was created."));
+    expect(container.textContent).toContain(
+      "This person is already linked to another OpenClaw ID.",
+    );
+    expect(container.textContent).not.toContain("Will join as");
+  });
+
+  it("lists defined roles with summaries and confirms administrator invites", async () => {
+    const { container, request } = await mountPage([
+      linked({
+        rootPub: pendingInvite.pending!.devicePub,
+        roles: [
+          { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+          {
+            name: "root-helper",
+            defined: true,
+            sessions: "write",
+            requiresSandbox: false,
+            admin: true,
+          },
+          {
+            name: "operator",
+            defined: true,
+            sessions: "write",
+            requiresSandbox: false,
+            admin: false,
+          },
+          {
+            name: "isolated",
+            defined: true,
+            sessions: "none",
+            requiresSandbox: true,
+            admin: false,
+          },
+          { name: "deleted", defined: false, requiresSandbox: false },
+        ],
+      }),
+    ]);
+    await vi.waitFor(() => expect(rolePicker(container)).not.toBeNull());
+    const picker = rolePicker(container)!;
+    expect([...picker.options].map((o) => o.value)).toEqual([
+      "operator",
+      "isolated",
+      "root-helper",
+      "viewer",
+    ]);
+    expect(picker.value).toBe("operator");
+    expect(picker.textContent).toContain("No access to other people's sessions");
+    expect(picker.textContent).toContain("Sandbox required");
+    expect(picker.textContent).toContain("Administrator access");
+    const input = container.querySelector("input")!;
+    input.value = "friend@example.test";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    picker.value = "root-helper";
+    picker.dispatchEvent(new Event("change"));
+    flush();
+    button(container, "Create invite link")!.click();
+    flush();
+    expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+    expect(container.textContent).toContain("change Gateway settings");
+    button(container, "Confirm administrator invite")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "openclawId.authority",
+        expect.objectContaining({ action: "register_invite" }),
+      ),
+    );
+  });
+
+  it.each([
+    { roles: [] },
+    {
+      roles: [
+        { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+      ],
+    },
+  ] as const)(
+    "uses the first role without operator and refuses an empty catalog (%j)",
+    async ({ roles }) => {
+      const { container } = await mountPage([linked({ roles: [...roles] })]);
+      await vi.waitFor(() => expect(button(container, "Create invite link")).toBeDefined());
+      expect(rolePicker(container)?.value ?? "").toBe(roles[0]?.name ?? "");
+      if (roles.length === 0) {
+        expect(container.textContent).toContain("No roles are defined on this claw");
+        expect(button(container, "Create invite link")?.disabled).toBe(true);
+      }
+    },
+  );
+
+  it("repairs a blocked member with a signed role change at the fresh seq", async () => {
+    const member = {
+      accountId: "blocked",
+      displayName: "Bo",
+      role: "deleted",
+      roleDefined: false,
+      peerKeys: [],
+    };
+    const { container, request } = await mountPage([linked({ members: [member] })]);
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("The role deleted is not defined on this claw"),
+    );
+    button(container, "Change role")!.click();
+    flush();
+    const picker = container.querySelector(
+      ".ocid-access__row--member select",
+    )! as HTMLSelectElement;
+    picker.value = "viewer";
+    picker.dispatchEvent(new Event("change"));
+    flush();
+    request.mockImplementation(async (method: string) =>
+      method === "openclawId.people"
+        ? { link: linked({ members: [member], seq: 6 }).link }
+        : method === "openclawId.status"
+          ? linked()
+          : {},
+    );
+    button(container, "Save role")!.click();
+    const { signMembershipChange } = await import("./owner-signing.js");
+    await vi.waitFor(() =>
+      expect(signMembershipChange).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 6 }), {
+        op: "set_role",
+        account_id: "blocked",
+        role: "viewer",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("openclawId.authority", {
+      action: "submit",
+      statement: { signed: { op: "set_role", account_id: "blocked", role: "viewer" } },
+    });
+  });
+
+  it.each(["invite", "change"] as const)(
+    "reconfirms a freshly administrative role before signing %s",
+    async (action) => {
+      const member = { accountId: "blocked", role: "deleted", roleDefined: false, peerKeys: [] };
+      const initial = linked({ rootPub: pendingInvite.pending!.devicePub, members: [member] });
+      const { container, request } = await mountPage([initial]);
+      await vi.waitFor(() => expect(rolePicker(container)?.value).toBe("operator"));
+      const fresh = linked({
+        ...initial.link,
+        roles: initial.link.roles!.map((role) =>
+          role.name === "operator" ? Object.assign({}, role, { admin: true }) : role,
+        ),
+      });
+      request.mockImplementation(async (method) =>
+        method === "openclawId.people"
+          ? { link: fresh.link }
+          : method === "openclawId.status"
+            ? fresh
+            : {},
+      );
+      if (action === "invite") {
+        const input = container.querySelector("input")!;
+        input.value = "friend@example.test";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        button(container, "Change role")!.click();
+      }
+      flush();
+      const { signAsOwner, signMembershipChange } = await import("./owner-signing.js");
+      vi.mocked(signAsOwner).mockClear();
+      vi.mocked(signMembershipChange).mockClear();
+      button(container, action === "invite" ? "Create invite link" : "Save role")!.click();
+      const confirmLabel =
+        action === "invite" ? "Confirm administrator invite" : "Confirm administrator role";
+      await vi.waitFor(() => expect(button(container, confirmLabel)).toBeDefined());
+      expect(container.textContent).toContain("change Gateway settings");
+      expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+      expect(signAsOwner).not.toHaveBeenCalled();
+      expect(signMembershipChange).not.toHaveBeenCalled();
+      button(container, confirmLabel)!.click();
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "openclawId.authority",
+          expect.objectContaining({ action: action === "invite" ? "register_invite" : "submit" }),
+        ),
+      );
+    },
+  );
+
+  it("shows a member their own role without requesting people or exposing controls", async () => {
+    const { container, request } = await mountPage([
+      { ...linked(), owner: false, connection: { kind: "member", role: "researcher" } },
+    ]);
+    await vi.waitFor(() => expect(container.textContent).toContain("Your role: researcher"));
+    expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
+    for (const label of [
+      "Create invite link",
+      "Change role",
+      "Approve",
+      "Deny",
+      "Remove",
+      "Add node",
+    ]) {
+      expect(button(container, label)).toBeUndefined();
+    }
   });
 
   it("shows who is asking, from which device, and which invite they used", async () => {
@@ -331,7 +465,7 @@ describe("Access page", () => {
     expect(create.getAttribute("aria-busy")).toBe("true");
     expect(create.querySelector(".btn__spinner")).not.toBeNull();
     expect(input.disabled).toBe(true);
-    expect(container.querySelector("select")?.disabled).toBe(true);
+    expect(rolePicker(container)?.disabled).toBe(true);
     for (const label of ["Add node", "Remove node", "Review node", "Approve", "Deny"]) {
       expect(button(container, label)?.disabled, label).toBe(false);
     }

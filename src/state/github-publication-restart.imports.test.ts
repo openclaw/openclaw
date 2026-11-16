@@ -48,7 +48,7 @@ it("restarts personal publications with committed receipts without loading sourc
       type: "githubPublications.personalRestart",
       input: { operation: "restart", instanceId: "current", operationId: "restart-proof" },
     } as const;
-    const restart = () => {
+    const restart = async () => {
       const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
         context.admission.assertCurrent();
         grant();
@@ -71,14 +71,14 @@ it("restarts personal publications with committed receipts without loading sourc
         return admission.committed?.facts;
       } finally {
         dispatch.mockRestore();
-        admission.finish();
+        await admission.finish();
       }
     };
     try {
       expect(loaded).toEqual({ publication: false, source: false });
       await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
       expect(tableExists(database.db, "github_personal_publication_requests")).toBe(false);
-      expect(restart()).toMatchObject({
+      expect(await restart()).toMatchObject({
         operationId: "restart-proof",
         operation: "restart",
         kind: "personal",
@@ -116,7 +116,7 @@ it("restarts personal publications with committed receipts without loading sourc
         },
         { database },
       );
-      expect(restart()).toMatchObject({
+      expect(await restart()).toMatchObject({
         operationId: "restart-proof",
         operation: "restart",
         kind: "personal",

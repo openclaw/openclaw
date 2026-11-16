@@ -8,6 +8,8 @@ import type {
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import type { SandboxStateOwnerPath } from "../sandbox/state-owner-path.js";
+import type { WorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
 
 export type WorktreeWaitBudget = { remainingMs: number };
 
@@ -91,6 +93,8 @@ export type WorktreeLeaseSet = {
 
 /** Explicit worker authority replaces the native guard, including predicate-only authority. */
 export type WorktreeWorkerAuthority = {
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
+  stateOwnerPath?: SandboxStateOwnerPath;
   leaseSet?: WorktreeLeaseSet;
   signal?: AbortSignal;
   assertCurrent?: () => void;

@@ -44,6 +44,25 @@ function retry<Key>(instruction: string, idempotencyKey: Key) {
 }
 
 describe("agent harness lifecycle hook helpers", () => {
+  it("carries presentation only on a supported accepted candidate, never an exhausted revision", async () => {
+    const finalPresentation = { blocks: [{ type: "text", text: "Summary" }] };
+    const supported = { ...EVENT, supportsFinalPresentation: true as const };
+    await expect(finalizer([{ finalPresentation }], supported)()).resolves.toEqual({
+      action: "continue",
+      finalPresentation,
+    });
+    await expect(finalizer([{ finalPresentation }])()).resolves.toEqual({ action: "continue" });
+    await expect(
+      finalizer([{ action: "finalize", reason: "Done", finalPresentation }], supported)(),
+    ).resolves.toEqual({ action: "finalize", reason: "Done", finalPresentation });
+    const revise = finalizer(
+      [{ action: "revise", retry: retry("Correct the answer", "presentation"), finalPresentation }],
+      supported,
+    );
+    await expect(revise()).resolves.toEqual({ action: "revise", reason: "Correct the answer" });
+    await expect(revise()).resolves.toEqual({ action: "continue" });
+  });
+
   afterEach(() => {
     log.warn.mockClear();
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
@@ -97,7 +116,7 @@ describe("agent harness lifecycle hook helpers", () => {
     },
   );
 
-  it("admits agent_end handlers inside the turn's plugin scope when evidence loads late", async () => {
+  it("runs agent_end handlers after the turn's plugin scope is released", async () => {
     const plugin = createOwnedTestInstance("agent-end-probe");
     const scope = new PluginInvocationScope(plugin.owner!.registry!, [plugin], { retained: true });
     const outcomes: unknown[] = [];
@@ -123,7 +142,8 @@ describe("agent harness lifecycle hook helpers", () => {
     try {
       await scope.run(() => runAgentEndSideEffectsAsync({ event, ctx, hookRunner }));
     } finally {
-      // The foreground turn releases its prepared plugin scope once finalization returns.
+      // The foreground turn releases its prepared plugin scope once finalization returns;
+      // the late handler then takes ordinary counted admission on its live instance.
       scope.release();
     }
     await vi.waitFor(() => expect(outcomes).toHaveLength(1));

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -80,15 +81,19 @@ describe("worktrees cli", () => {
     ["restore", "--recover-exact-state", "."],
     ["create", "--source-profile"],
   ])("rejects invalid %s requests before mutation", async (command, ...flags) => {
-    const remove = vi.spyOn(owner, "remove");
-    const lossless = vi.spyOn(owner, "removeIfLossless");
-    const restore = vi.spyOn(owner, "restore");
-    const create = vi.spyOn(owner, "create");
-    const error = flags.includes(".") ? /regular.*file/ : /with option|argument missing/;
-    await expect(run([command, "worktree-id", ...flags])).rejects.toThrow(error);
-    expect([remove, lossless, restore, create].some((spy) => spy.mock.calls.length)).toBe(false);
+    const methods = ["remove", "removeIfLossless", "restore", "create"] as const;
+    const mutations = methods.map((method) => vi.spyOn(owner, method));
+    for (const content of flags.includes(".") ? [undefined, "{", "{}"] : [undefined]) {
+      const file = path.join(tempDirs.make("openclaw-exact-state-"), "request.json");
+      if (content !== undefined) {
+        await fs.writeFile(file, content);
+      }
+      const args = flags.map((flag) => (flag === "." && content !== undefined ? file : flag));
+      const error = flags.includes(".") ? /regular.*file/ : /with option|argument missing/;
+      await expect(run([command, "worktree-id", ...args])).rejects.toThrow(error);
+    }
+    expect(mutations.some((spy) => spy.mock.calls.length)).toBe(false);
   });
-
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
     const result: Awaited<ReturnType<ManagedWorktreeService["recoverRemoval"]>> = {
@@ -105,27 +110,22 @@ describe("worktrees cli", () => {
     expect(output).toHaveBeenCalledWith(result);
   });
 
-  const retireSnapshotArgs = (removedAt: string) => [
-    "retire-snapshot",
-    "worktree-id",
-    "--expected-ref",
-    "refs/openclaw/snapshots/worktree-id",
-    "--expected-oid",
-    "a".repeat(40),
-    "--removed-at",
-    removedAt,
-    "--retained-ref",
-    "refs/heads/main",
-    "--retained-oid",
-    "b".repeat(40),
-  ];
-
   it.each(["1700000000100ms", "-1", "", "9007199254740993"])(
     "rejects the malformed --removed-at value %j before retiring a snapshot",
     async (removedAt) => {
       setRuntimeConfigSnapshot({}, {});
       const retire = vi.spyOn(owner, "retireSnapshot");
-      const pending = run(retireSnapshotArgs(removedAt));
+      const pending = run([
+        "retire-snapshot",
+        "worktree-id",
+        ...Object.entries({
+          "--expected-ref": "refs/openclaw/snapshots/worktree-id",
+          "--expected-oid": "a".repeat(40),
+          "--removed-at": removedAt,
+          "--retained-ref": "refs/heads/main",
+          "--retained-oid": "b".repeat(40),
+        }).flatMap(([flag, value]) => [flag, value]),
+      ]);
       await expect(pending).rejects.toThrow(
         "--removed-at must be a non-negative integer (epoch milliseconds).",
       );

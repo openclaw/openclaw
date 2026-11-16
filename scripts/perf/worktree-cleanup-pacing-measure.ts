@@ -57,6 +57,12 @@
  * reuse its closed agent database with --agent-db-fixture for every measured arm.
  * The transcript owner compresses synthetic content; report physical DB bytes, not
  * the requested logical size. COPYFILE_EXCL refuses replacing an already opened DB.
+ * --pending-integration prepares real local projections with MERGE_HEAD set.
+ * Both arms must retain the checkout, user notes and merge state; the candidate
+ * must create zero recovery refs instead of one per refused removal. Compare
+ * owner wall/CPU/allocation using two A/A controls and five interleaved pairs.
+ * --reuse-pending-integration reuses a completed, preserved fixture for warm retries;
+ * snapshotRefUpdates counts changed recovery refs, separately from retained refs.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -86,6 +92,8 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "18432" },
     worktrees: { type: "string", default: "3" },
     profile: { type: "boolean", default: false },
+    "pending-integration": { type: "boolean", default: false },
+    "reuse-pending-integration": { type: "boolean", default: false },
     "scratch-clones": { type: "string", default: "0" },
     "scratch-order": { type: "boolean", default: false },
     "scratch-binding": { type: "string" },
@@ -148,18 +156,26 @@ assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
 assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
 assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
 const scratchBinding = values["scratch-binding"];
+const pendingIntegration = values["pending-integration"];
 assert(!scratchBinding || (scratchOrder && ["missing", "stale"].includes(scratchBinding)));
-const reused = values["reuse-scratch-order"]
-  ? JSON.parse(fs.readFileSync(path.join(output, "report.json"), "utf8"))
-  : undefined;
+const reused =
+  values["reuse-scratch-order"] || values["reuse-pending-integration"]
+    ? JSON.parse(fs.readFileSync(path.join(output, "report.json"), "utf8"))
+    : undefined;
 if (reused) {
-  assert(scratchOrder && reused.scratchOrder && reused.worktrees === worktrees);
-  assert.equal(reused.scratchClones, scratchClones);
-  assert(
-    reused.scratchRemaining === 0 ||
-      (reused.scratchRemaining === scratchClones &&
-        (reused.result.scratch?.filesRemoved ?? 0) === 0),
-  );
+  assert.equal(reused.worktrees, worktrees);
+  if (values["reuse-pending-integration"]) {
+    assert(pendingIntegration && reused.pendingIntegration && !scratchOrder && !scratchClones);
+    assert.equal(reused.result.failedCount, worktrees);
+  } else {
+    assert(scratchOrder && reused.scratchOrder);
+    assert.equal(reused.scratchClones, scratchClones);
+    assert(
+      reused.scratchRemaining === 0 ||
+        (reused.scratchRemaining === scratchClones &&
+          (reused.result.scratch?.filesRemoved ?? 0) === 0),
+    );
+  }
 }
 fs.mkdirSync(output, { recursive: Boolean(reused) });
 for (const directory of ["home", "tmp", "state"]) {
@@ -355,6 +371,32 @@ for (let offset = 0; offset < sessions; offset += 100) {
   );
 }
 const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
+if (pendingIntegration && !reused) {
+  const { withLocalWorkspaceProjection } =
+    await import("../../src/gateway/worker-environments/local-workspace-projection.js");
+  for (const [index, worktree] of records.entries()) {
+    await withLocalWorkspaceProjection(
+      {
+        agentId: "main",
+        sessionKey: worktree.ownerId!,
+        sessionId: `team-shape-session-${index}`,
+        lifecycleRevision: `synthetic-${index}`,
+        worktree,
+        assertCurrent: () => {},
+      },
+      (state) => state.prepare(),
+    );
+    fs.writeFileSync(
+      path.resolve(worktree.path, git(worktree.path, "rev-parse", "--git-path", "MERGE_HEAD")),
+      `${fixture.snapshot}\n`,
+    );
+  }
+}
+const snapshotRefsBefore = new Set(
+  git(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/openclaw/snapshots/").split(
+    "\n",
+  ),
+);
 agentDatabase.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 const agentDatabaseBytes = fs.statSync(agentDatabase.path).size;
 const preparationFlushMs: number[] = [];
@@ -580,7 +622,7 @@ try {
     (await managedWorktrees.listRegistryRecords()).map((record) => [record.id, record]),
   );
   const trees: string[] = [];
-  for (const record of observeMs || scratchOrder ? [] : records) {
+  for (const record of observeMs || scratchOrder || pendingIntegration ? [] : records) {
     const current = archived.get(record.id);
     assert(current?.removedAt !== undefined && current.snapshotRef);
     assert(!fs.existsSync(record.path));
@@ -594,7 +636,17 @@ try {
     );
     trees.push(git(repo, "rev-parse", `${current.snapshotRef}^{tree}`));
   }
-  if (!observeMs && !scratchOrder) {
+  if (pendingIntegration) {
+    assert.equal(result.failedCount, worktrees);
+    for (const record of records) {
+      assert.equal(archived.get(record.id)?.removedAt, undefined);
+      assert.equal(
+        fs.readFileSync(path.join(record.path, "user-notes.txt"), "utf8"),
+        "synthetic unsaved work\n",
+      );
+      assert.equal(git(record.path, "rev-parse", "MERGE_HEAD"), fixture.snapshot);
+    }
+  } else if (!observeMs && !scratchOrder) {
     assert.equal(new Set(trees).size, 1);
   }
   const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -602,6 +654,8 @@ try {
   for (const relative of [
     "src/agents/worktrees/gc-removal.ts",
     "src/agents/worktrees/service.ts",
+    "src/agents/worktrees/removal.ts",
+    "src/gateway/worker-environments/local-workspace-state.ts",
     "src/agents/worktrees/registry-read.kernel.ts",
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
@@ -630,6 +684,18 @@ try {
     filesPerWorktree: fixture.files,
     bytesPerWorktree: fixture.files * fixture.fileBytes,
     worktrees,
+    pendingIntegration,
+    snapshotRefs: git(repo, "for-each-ref", "--format=%(refname)", "refs/openclaw/snapshots/")
+      .split("\n")
+      .filter(Boolean).length,
+    snapshotRefUpdates: git(
+      repo,
+      "for-each-ref",
+      "--format=%(refname) %(objectname)",
+      "refs/openclaw/snapshots/",
+    )
+      .split("\n")
+      .filter((ref) => ref && !snapshotRefsBefore.has(ref)).length,
     sessions,
     agentDatabaseBytes,
     preparationFlushMs,

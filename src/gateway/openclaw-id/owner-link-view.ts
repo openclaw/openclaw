@@ -16,6 +16,7 @@ import type { OpenClawIdEffects } from "./service.js";
 
 export async function readOwnerLinkStatus(params: {
   enabled: boolean;
+  includeSandboxBackend?: true;
   getAuthority: () => Promise<OpenClawIdAuthority>;
   getEffects: () => Promise<OpenClawIdEffects> | undefined;
   lastPublish: PublishOutcome | undefined;
@@ -71,12 +72,28 @@ export async function readOwnerLinkStatus(params: {
   const { describeOwnerDevices } = await import("./owner-devices-view.js");
 
   const members = state ? await describeMembers(state.members, record?.member_approved_at) : [];
-  const definitions = getRuntimeConfigSnapshot()?.gateway?.roles?.definitions ?? {};
+  const cfg = getRuntimeConfigSnapshot() ?? undefined;
+  const definitions = cfg?.gateway?.roles?.definitions ?? {};
+  const sandboxBackend = params.includeSandboxBackend
+    ? await (await import("./sandbox-availability.js")).readSandboxBackendAvailability(cfg)
+    : undefined;
   const defined = (name: string) => Object.hasOwn(definitions, name);
   return {
     roles: [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
       .toSorted()
-      .map((name) => ({ name, defined: defined(name) })),
+      .map((name) => {
+        const definition = defined(name) ? definitions[name] : undefined;
+        return definition
+          ? {
+              name,
+              defined: true as const,
+              sessions: definition.sessions.others,
+              requiresSandbox: definition.sandbox === "required",
+              admin: definition.scopes.includes("operator.admin"),
+            }
+          : { name, defined: false as const, requiresSandbox: false };
+      }),
+    sandboxBackend,
     linked: Boolean(state),
     clawId: record?.claw_id,
     hostname: record?.hostname ?? undefined,
@@ -93,6 +110,7 @@ export async function readOwnerLinkStatus(params: {
       : undefined,
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
     members: members.map((member) => Object.assign(member, { roleDefined: defined(member.role) })),
+    existingProfiles: await (await getAuthority()).inviteProfiles(),
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
     nodes: Object.entries(state?.nodes ?? {})
       .filter(

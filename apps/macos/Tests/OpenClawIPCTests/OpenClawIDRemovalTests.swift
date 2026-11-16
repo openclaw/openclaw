@@ -46,6 +46,56 @@ struct OpenClawIDRemovalTests {
         #expect(restarted.lastRemoval() == nil)
     }
 
+    @Test func `an owner device and removal saved before member devices still load`() throws {
+        let suite = "ocid-stored-before-members-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let device = UUID()
+        let node = UUID()
+        // The exact preference shapes main wrote before this change: no member fields.
+        defaults.set([
+            "hostname": "studio.example.test", "clawID": "fixture", "discoveryOrigin": "https://id.example.test",
+            "deviceEnrollmentID": device.uuidString, "nodeEnrollmentID": node.uuidString, "approvedWith": "device",
+        ], forKey: "openclaw.mac.openClawID.device")
+        let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
+        let loaded = try #require(store.load())
+        #expect(loaded.deviceEnrollmentID == device && loaded.nodeEnrollmentID == node)
+        #expect(loaded.approvedWith == .device && loaded.memberRole == nil && loaded.memberAccountID == nil)
+        #expect(loaded.admission == .owner)
+        #expect(store.pendingJoin() == nil)
+        defaults.set([
+            "hostname": "studio.example.test", "shortName": "studio", "timestamp": Self.now.timeIntervalSince1970,
+            "origin": "elsewhere",
+        ], forKey: "openclaw.mac.openClawID.lastRemoval")
+        let removal = try #require(store.lastRemoval())
+        #expect(!removal.member)
+        #expect(removal.dashboardMessage(now: Self.now).contains("recovery kit"))
+    }
+
+    @Test func `a removed member is sent to their other devices or a new invite, not a recovery kit`() async throws {
+        let suite = "ocid-member-removal-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
+        let member = try MacOpenClawIDDevice(
+            hostname: "team.example.test", clawID: "fixture",
+            discoveryOrigin: #require(URL(string: "https://id.example.test")), deviceEnrollmentID: UUID(),
+            nodeEnrollmentID: nil, approvedWith: .invite, memberRole: "operator")
+        store.save(member)
+        #expect(store.load() == member)
+        #expect(store.load()?.admission == .member)
+        await store.remove(
+            member, origin: .elsewhere, now: Self.now, stopRoute: {}, deselectNode: {}, forgetKeys: { _ in },
+            clearPrimary: {})
+        let removal = try #require(
+            MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: store.databaseURL).lastRemoval())
+        #expect(removal.member)
+        #expect(removal.dashboardMessage(now: Self.now).contains("another of your devices"))
+        #expect(removal.dashboardMessage(now: Self.now).contains("new invite"))
+        #expect(!removal.dashboardMessage(now: Self.now).contains("recovery kit"))
+        #expect(!removal.settingsMessage(now: Self.now).contains("recovery kit"))
+    }
+
     @Test func `remote removal retires the current node key rather than the route capture`() async throws {
         let suite = "ocid-stale-node-removal-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

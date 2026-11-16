@@ -1,7 +1,8 @@
+import os from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { AsyncContext } from "../../shared/async-context.js";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import type { SpawnBrokerHost } from "./host.js";
 
 const context = new AsyncContext<SpawnBrokerHost | null>(Symbol("spawnBroker"));
 let gatewayBroker: SpawnBrokerHost | undefined;
@@ -15,9 +16,17 @@ export async function startGatewaySpawnBroker(options: {
   if (gatewayStartupDisabled) {
     return undefined;
   }
+  const constrained = process.constrainedMemory();
+  const memory = constrained > 0 ? Math.min(os.totalmem(), constrained) : os.totalmem();
+  // On small hosts, keep the broker's resident memory available to requests.
+  // Direct spawning retains the existing lifecycle at the cost of Linux fork latency.
+  if (memory <= 1024 ** 3) {
+    return undefined;
+  }
   let broker: SpawnBrokerHost | undefined;
   let entryPath: string = runtimeProcessEntrypoints.spawnBroker.distWorkerPath;
   try {
+    const { createSpawnBrokerHost } = await import("./host.js");
     broker = createSpawnBrokerHost({
       onReady: options.onReady,
       onClosed: () => {

@@ -16,6 +16,7 @@ import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announ
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import {
   getSubagentRunsForChildSession,
   subagentRuns,
@@ -56,8 +57,17 @@ type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
 async function recordRequiredCompletionFailure(
   entry: SubagentRunRecord,
+  reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
 ): Promise<void> {
+  if (subagentRuns.get(entry.runId)?.delivery?.status === "delivered") {
+    return;
+  }
+  subagentRegistryLog.warn("Subagent completion delivery failed", {
+    runId: entry.runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason,
+  });
   if (
     entry.expectsCompletionMessage !== true ||
     entry.completionTarget !== "parent" ||
@@ -500,7 +510,7 @@ export async function blockSubagentCompletionDelivery(
       params.suspendedReason === "permanent_failure" ||
       params.disposition === "permanent_failure")
   ) {
-    await recordRequiredCompletionFailure(params.subagent, params.requesterBatch);
+    await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
   }
   return result.applied === true;
 }
@@ -638,7 +648,11 @@ export async function mutateRequesterCompletionBatch(
     !params.operation.outcome.delivered
   ) {
     for (const entry of params.entries) {
-      await recordRequiredCompletionFailure(entry, params.entries);
+      await recordRequiredCompletionFailure(
+        entry,
+        params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
+        params.entries,
+      );
     }
   }
   return publication;

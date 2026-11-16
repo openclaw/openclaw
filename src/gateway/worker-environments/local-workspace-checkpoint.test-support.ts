@@ -104,7 +104,7 @@ async function proveReconcilePauseWindow(owner: LocalWorkspaceOwner) {
   await writeText(owner.worktree.path, "source.txt", "host edit\n");
   await withLocalWorkspaceProjection(owner, (state) => state.synchronize("projection"));
   await expectText(projection, "source.txt", "host edit\n");
-  expect(targetCaptures, "The frozen target needs only one complete inventory capture").toBe(1);
+  expect(targetCaptures, "Checkpoint acceptance must reuse its already prepared tree").toBe(0);
   expect(paused).toBe(false);
   concurrentEdit = true;
   await writeText(owner.worktree.path, "source.txt", "next host edit\n");

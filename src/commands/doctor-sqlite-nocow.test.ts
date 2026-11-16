@@ -10,6 +10,7 @@ import { registerAgentDatabaseReaderCloser } from "../infra/agent-database-reade
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -34,10 +35,13 @@ import {
 } from "./doctor-sqlite-nocow.test-support.js";
 import * as updateCaptureCleanup from "./update-capture-cleanup.js";
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: vi.fn() };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("../infra/sqlite-wal-filesystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-wal-filesystem.js")>()),
   isSqlitePathOnBtrfs: vi.fn(() => true),
@@ -562,6 +566,25 @@ describe("Doctor NOCOW recovery identities", () => {
       latestVerifiedFinishedAt: 0,
       hasPendingRecovery: false,
     });
+  });
+
+  it("retains recovery originals when the SQLite generation probe fails", async () => {
+    const backupPath = await prepareCompletedBackup();
+    expect((await rewrite()).changes).toHaveLength(1);
+    const execute = vi.mocked(spawnSync).getMockImplementation()!;
+    vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+      if (command === process.execPath && args?.includes(SQLITE_READONLY_CHILD_ARG)) {
+        throw new Error("injected SQLite generation probe failure");
+      }
+      return execute(command, args, options);
+    });
+    const result = await retire();
+    expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+      outcome: "blocked",
+      reason: "destination-verification-failed",
+      detail: expect.stringContaining("injected SQLite generation probe failure"),
+    });
+    expect(fs.existsSync(backupPath)).toBe(true);
   });
 
   it.each([false, true])(

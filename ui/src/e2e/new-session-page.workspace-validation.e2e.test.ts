@@ -159,7 +159,7 @@ async function expectPendingNewSession(page: Page, message: string) {
   await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
   await pollLocatorText(submittedPrompt).toContain(message);
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
   expect(await messageInput(page).isVisible()).toBe(false);
 }
@@ -306,11 +306,9 @@ suite.define(() => {
       await expectFocus(name);
       await expectOpen(checkout, true);
       await name.fill("picker-inputs");
-      await checkout
-        .getByText("Creates branch openclaw/picker-inputs in a separate checkout.", {
-          exact: true,
-        })
-        .waitFor();
+      await expect
+        .poll(() => name.getAttribute("title"))
+        .toBe("Creates branch openclaw/picker-inputs in a separate checkout.");
 
       const box = await name.boundingBox();
       expect(box).not.toBeNull();

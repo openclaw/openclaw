@@ -65,7 +65,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   inspectionUrl?: string;
   sessionGeneration?: SessionDeliveryGeneration;
   transcriptRoute?: OutboundSessionRoute;
-  transcriptExpectedGeneration?: { sessionId: string; lifecycleRevision?: string };
+  transcriptExpectedGeneration?: { lifecycleRevision?: string };
   onTranscriptDiagnostic?: (message: string) => void;
   completion?: {
     job: CronJob;

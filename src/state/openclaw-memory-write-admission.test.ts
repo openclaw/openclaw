@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configSnapshot from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +34,7 @@ let root: string;
 let workspace: string;
 let config: OpenClawConfig;
 let originalEnv: NodeJS.ProcessEnv;
-let cwd: MockInstance<() => string>;
+let originalCwd: string;
 const refusal = "fixture state owner refuses this agent";
 const refusalAdmission = {
   agentId: "main",
@@ -56,9 +56,11 @@ const openDatabase = () => agentDb.openOpenClawAgentDatabase({ agentId: "main", 
 const otherEnv = () => ({ OPENCLAW_STATE_DIR: path.join(root, "other", "state") });
 
 beforeEach(async () => {
+  originalCwd = process.cwd();
   root = await fs.realpath(tempDirs.make("openclaw-memory-write-owner-"));
   workspace = path.join(root, "workspace");
   await fs.mkdir(workspace);
+  await fs.mkdir(path.join(root, "other"));
   await fs.writeFile(path.join(workspace, "MEMORY.md"), "Original memory.");
   originalEnv = { OPENCLAW_STATE_DIR: path.join(root, "state") };
   configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
@@ -75,21 +77,25 @@ beforeEach(async () => {
   // Warm the supported runtime entry before the test controls queue admission.
   await (await acquire(config, "status")).close?.();
   vi.stubEnv("OPENCLAW_STATE_DIR", "state");
-  cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+  process.chdir(root);
 });
 
 afterEach(async () => {
-  recordAgentDatabaseAdmissions([], { env: originalEnv });
-  recordAgentDatabaseAdmissions([], { env: otherEnv() });
-  await memoryRuntime.closeAllMemorySearchManagers?.();
-  await closeOpenClawAgentDatabasesAsync();
-  agentDb.closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  state.resetPluginStateStoreForTests();
-  configSnapshot.clearRuntimeConfigSnapshot();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  configureMemoryCoreDreamingState(() => assert.fail("memory test state is closed"));
+  try {
+    recordAgentDatabaseAdmissions([], { env: originalEnv });
+    recordAgentDatabaseAdmissions([], { env: otherEnv() });
+    await memoryRuntime.closeAllMemorySearchManagers?.();
+    await closeOpenClawAgentDatabasesAsync();
+    agentDb.closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    state.resetPluginStateStoreForTests();
+    configSnapshot.clearRuntimeConfigSnapshot();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    configureMemoryCoreDreamingState(() => assert.fail("memory test state is closed"));
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 it.each(["creation", "replacement"] as const)(
@@ -133,7 +139,7 @@ it.each(["creation", "replacement"] as const)(
           creating.then(() => assert.fail("Replacement skipped its previous manager's close")),
         ]);
       }
-      cwd.mockReturnValue(path.join(root, "other"));
+      process.chdir(path.join(root, "other"));
       release.resolve();
       const manager = await creating;
       expect(manager.status().dbPath).toBe(database.path);
@@ -153,7 +159,7 @@ it("rechecks retained writes against their original state owner after cwd change
   const before = database.db.prepare("SELECT text FROM memory_index_chunks").all();
   await fs.writeFile(path.join(workspace, "MEMORY.md"), "Changed after admission was revoked.");
   refuse(originalEnv);
-  cwd.mockReturnValue(path.join(root, "other"));
+  process.chdir(path.join(root, "other"));
   await expect(manager.sync({ reason: "revoked", force: true })).rejects.toThrow(refusal);
   expect(database.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual(before);
 });

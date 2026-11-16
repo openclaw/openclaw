@@ -261,6 +261,8 @@ export type PreparedModelCatalogProviderFacts = {
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  /** Acquired scopes stay live-owned even when replacement auth discards their rows. */
+  acquiredProviderIds?: ReadonlySet<string>;
   /** An unscoped provider acquisition completed; retained across provider-local refreshes. */
   fullProviderDiscovery?: true;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;

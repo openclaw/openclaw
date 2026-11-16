@@ -40,11 +40,62 @@ import {
   useRequesterSettleDispatchFixture,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
+import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 describe("requester settle watch admission", () => {
   useRequesterSettleDispatchFixture();
   afterEach(() => clearRuntimeConfigSnapshot());
+
+  it("refuses a watch when its retained requester database is missing", async () => {
+    const state = await createOpenClawTestState({
+      prefix: "missing-settle-watch-",
+      layout: "state-only",
+    });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.statePath("missing-requester.sqlite");
+    const cfg = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
+    const receipt = createRequesterSettleReceiptAdmission({
+      requester: { canonicalKey: REQUESTER_KEY, agentId: "main", storePath },
+      identity: { sessionId: "requester-session" },
+      storeSessionKey: REQUESTER_KEY,
+      storeAgentId: "main",
+      storePaths: () => [storePath],
+      isSourceCurrent: () => true,
+      readCurrent: () => ({ sessionId: "requester-session" }),
+      isStoreCurrent: () => true,
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      cfg,
+      "missing-settle-watch",
+      "main",
+      "settle-watch-test",
+    );
+    onTestFinished(() => admission.close());
+    const caller = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: await admission.admit("gateway"),
+      agentId: "main",
+      sessionKey: REQUESTER_KEY,
+      receiptAuthority: () => true,
+      receiptAdmission: receipt,
+    });
+    const target = "agent:main:missing-requester-watch-target";
+    await expect(
+      withGatewayToolCallerIdentity(caller, () =>
+        registerSessionStateWatch(
+          { watcherSessionKey: REQUESTER_KEY, targetSessionKey: target },
+          { prepareCurrent: prepareGatewayToolCallerAssertion },
+        ),
+      ),
+    ).resolves.toBe(false);
+    const row = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT target_session_key FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+      )
+      .get(REQUESTER_KEY, target);
+    expect(row).toBeUndefined();
+  });
 
   it("waits for requester startup preparation before reserving a delivery attempt", async () => {
     setRuntimeConfigSnapshot({});

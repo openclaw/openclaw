@@ -164,7 +164,7 @@ async function createNativePublicationTransport(
     if (argv[0] !== "gh") {
       throw new Error("Unexpected combined fixture command");
     }
-    inspect?.publisher(options?.env, argv);
+    inspect?.publisher(options?.preparedEnv ?? options?.env, argv);
     if (unavailable && argv.some((arg) => arg.endsWith("/git/blobs"))) {
       return {
         ...commandResult("", 1),
@@ -637,7 +637,10 @@ describe("personal publisher credential custody", () => {
       mocks.runCommand.mockImplementation((argv, options) => {
         const deniedRepository =
           scenario === "read-denied" ? "owner/repository" : "upstream/repository";
-        if (options?.env?.GH_TOKEN === sharedToken && argv.includes("repos/" + deniedRepository)) {
+        if (
+          (options?.preparedEnv ?? options?.env)?.GH_TOKEN === sharedToken &&
+          argv.includes("repos/" + deniedRepository)
+        ) {
           negativeExercised = true;
           return {
             ...commandResult("", 1),

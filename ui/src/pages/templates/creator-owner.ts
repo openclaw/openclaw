@@ -72,7 +72,7 @@ function requestTemplateCreator(
   const client = context.gateway.snapshot.client;
   const unavailable = templateDraftUnavailableReason(context);
   if (!client || unavailable) {
-    if (review) {
+    if (review && unavailable !== "loading") {
       showToast({
         severity: "warning",
         message: t(

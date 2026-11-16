@@ -42,7 +42,7 @@ suite.define(() => {
                 displayName: "Reconnect account",
                 type: "oauth",
                 status: "expired",
-                reasonCode: "expired",
+                reasonCode: "refresh_failed",
               },
             ],
           },
@@ -192,13 +192,14 @@ suite.define(() => {
         );
         expect(
           await selected.locator('[data-profile-id="example-selected:excluded"]').textContent(),
-        ).toContain("Sign in again");
+        ).toContain("Not signed in");
         const mixed = page.locator('[data-provider-id="example-mixed"]');
         expect((await mixed.locator(".provider-row__status").textContent())?.trim()).toBe(
           "Credentials rejected",
         );
         const excluded = mixed.locator('[data-profile-id="example-mixed:excluded"]');
-        expect(await excluded.textContent()).toContain("Sign-in unavailable");
+        // A refresh in progress settles on its own: no sign-in prompt.
+        expect(await excluded.textContent()).toContain("Refreshing");
         expect(await excluded.textContent()).not.toContain("Sign in again");
         const oauth = page.locator('[data-provider-id="example-oauth"]');
         expect((await oauth.locator(".provider-row__status").textContent())?.trim()).toBe("Ready");

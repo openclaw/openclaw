@@ -468,7 +468,7 @@ it.each([
 });
 
 it.each(["trigger", "Escape", "selection"])(
-  "retains provider toggles after closing through %s",
+  "reopens on the selected model's provider after closing through %s",
   async (close) => {
     const { picker, trigger, toggle, open, update, params } = mountPicker();
     await open();
@@ -501,16 +501,14 @@ it.each(["trigger", "Escape", "selection"])(
     expect(search.value).toBe("");
     update();
     await toggle(() => userEvent.click(trigger));
-    expect(option("example/beta")).toBeNull();
-    expectExpanded();
-    await vi.waitFor(() => {
-      const visible = option("other/gamma");
-      expect(visible).toMatchObject({ hidden: false });
-      expect(visible.checkVisibility()).toBe(true);
-    });
-    trigger.focus();
-    await toggle(() => userEvent.keyboard("1"));
-    expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
+    // A provider tab without the selected model never survives closing.
+    await vi.waitFor(() =>
+      expect([
+        providerToggle("example").ariaSelected,
+        providerToggle("other").ariaSelected,
+      ]).toEqual(["true", "false"]),
+    );
+    expect(option("other/gamma")).toBeNull();
   },
 );
 

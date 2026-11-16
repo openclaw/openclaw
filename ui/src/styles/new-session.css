@@ -669,6 +669,14 @@ span.new-session-page__select {
 
 /* Compact menus share the native anchor, viewport budget, and surface. */
 .oc-popover.new-session-page__picker-popover {
+  /* Pills sit one inset from the panel edge, which keeps their corners
+     concentric with it; row content sits one more inset inside its pill. The
+     field, headings, rows, empty states and footer all share those two edges. */
+  --picker-inset: 8px;
+  --picker-row-inset: 8px;
+  --picker-row-height: 30px;
+  /* Icon column plus its gap: where row labels start inside a pill. */
+  --picker-label-inset: calc(var(--picker-row-inset) + 22px);
   --oc-overlay-distance: 6px;
   --oc-overlay-max-width: min(300px, calc(100dvw - 24px));
   width: var(--oc-overlay-max-width);
@@ -709,17 +717,6 @@ span.new-session-page__select {
   min-height: 0;
 }
 
-div.new-session-page__project-search {
-  --header-search-icon-slot: 15px;
-  --header-search-gap: 6px;
-
-  padding: 8px 10px 8px 12px;
-}
-
-.new-session-page__environment-picker > .header-search {
-  --header-search-icon-slot: 14px;
-}
-
 .new-session-page__environment-picker {
   display: flex;
   flex-direction: column;
@@ -739,10 +736,6 @@ div.new-session-page__project-search {
   min-height: 28px;
   gap: 8px;
   padding: 3px 8px;
-}
-
-.new-session-page__unavailable-status ~ .session-menu__check:empty {
-  display: none;
 }
 
 .new-session-page__device-icon {
@@ -806,6 +799,13 @@ div.new-session-page__project-search {
 .new-session-page__composer.agent-chat__composer-shell {
   margin-top: 0;
   border-radius: var(--radius-md);
+}
+
+.new-session-page__start-shortcuts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .new-session-page__start-submit.new-session-page__start-submit--busy svg {
@@ -1328,23 +1328,7 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__environment-option[aria-disabled="true"] {
-  color: var(--muted);
   cursor: default;
-}
-
-.new-session-page__unavailable-status {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 4px;
-  color: var(--warn);
-  font-size: 11px;
-}
-
-.new-session-page__unavailable-status svg {
-  display: block;
-  width: 13px;
-  height: 13px;
 }
 
 .oc-menu-heading.new-session-page__environment-heading:not(:first-child) {
@@ -1548,33 +1532,34 @@ div.new-session-page__project-search {
   }
 }
 
+/* Bound long names without adding empty space before a short name’s chevron. */
+.new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
+  max-width: 8.5em;
+}
+
 /* Keep catalog arrival inside the space between the fixed footer controls. */
 @container chat-composer (max-width: 560px) {
+  .new-session-page .chat-controls__effort-picker--reserved {
+    display: block;
+    visibility: hidden;
+  }
+
   .new-session-page .agent-chat__composer-controls,
   .new-session-page .chat-composer-model-control,
   .new-session-page .chat-controls__model-picker {
     flex: 1;
   }
 
-  /* The picker holds the whole track, so nothing moves when the catalog
-     arrives; the chip inside it hugs its label and chevron. */
-  .new-session-page .chat-controls__model-trigger {
-    width: fit-content;
-  }
-
-  /* Empty catalogs have no effort chip to fill the track. Keep that status by
-     the actions; loading and model selections retain their stable alignment. */
-  .new-session-page [data-chat-model-empty="true"] {
+  /* The picker holds the track while its chip hugs the label. Anchor the
+     chevron beside the actions so background catalog names do not move it. */
+  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger {
     display: flex;
+    width: fit-content;
     margin-inline-start: auto;
   }
 
   .new-session-page .chat-controls__trigger-provider-icon {
     display: none;
-  }
-
-  .new-session-page .chat-controls__model-trigger--loading .chat-controls__inline-select-chevron {
-    visibility: hidden;
   }
 }
 
@@ -1594,6 +1579,11 @@ div.new-session-page__project-search {
   corner-shape: superellipse(1.5);
 }
 
+/* The tray is secondary: dark themes' small shadow is strong enough to outline it. */
+:root[data-theme-mode="dark"] .new-session-page__context-tray {
+  box-shadow: none;
+}
+
 .new-session-page__composer > .agent-chat__input {
   position: relative;
   z-index: 2;
@@ -1607,7 +1597,7 @@ div.new-session-page__project-search {
   border-color: var(--chat-composer-light-outline);
   box-shadow:
     0 1px 2px -1px var(--chat-composer-light-outline),
-    0 2px 4px rgb(0 0 0 / 4%);
+    0 2px 4px rgb(0 0 0 / 3%);
 }
 
 :root[data-theme-mode="light"]
@@ -1618,7 +1608,7 @@ div.new-session-page__project-search {
   border-color: rgb(0 0 0 / 8%);
   box-shadow:
     0 1px 2px -1px rgb(0 0 0 / 8%),
-    0 2px 4px rgb(0 0 0 / 6%);
+    0 2px 4px rgb(0 0 0 / 4%);
 }
 
 .new-session-page__context-tray .new-session-page__triggers {
@@ -1714,22 +1704,27 @@ div.new-session-page__project-search {
   min-height: 0;
 }
 
+/* The folder view keeps the root list's edges, so opening it moves nothing sideways. */
 .new-session-page__picker-popover .new-session-page__browser-list {
+  gap: var(--menu-item-gap);
   min-height: 0;
+  padding: 0 var(--picker-inset);
 }
 
 .new-session-page__picker-popover .new-session-page__browser-entry {
-  min-height: 30px;
-  padding: 4px 6px;
+  min-height: var(--picker-row-height);
+  padding: 4px var(--picker-row-inset);
 }
 
+/* The field is a filled row: it shares the option pills' edges and its text
+   starts on the icon column, under which headings and rows line up. */
 .new-session-page__picker-popover .header-search {
   position: relative;
   gap: 8px;
-  height: 42px;
-  min-height: 42px;
+  height: auto;
+  min-height: 0;
   margin: 0;
-  padding: 6px 10px;
+  padding: var(--picker-inset) var(--picker-inset) 4px;
   border: 0;
   color: var(--text);
   font-size: 13px;
@@ -1740,14 +1735,20 @@ div.new-session-page__project-search {
   display: none;
 }
 
+/* Centers the clear glyph on the rows' check column. */
+.new-session-page__picker-popover .header-search__clear {
+  margin-inline-end: calc(var(--picker-row-inset) - 5px);
+}
+
 .new-session-page__context-tray .new-session-page__picker-popover input,
 .new-session-page__context-tray .new-session-page__picker-popover input:hover,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
-  height: 28px;
-  padding-inline: 8px;
+  /* A field stands a touch taller than the rows it sits with. */
+  height: calc(var(--picker-row-height) + 2px);
+  padding-inline: var(--picker-row-inset);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--chat-composer-surface) 35%, var(--new-session-tray-surface));
   color: var(--text);
   outline: none;
@@ -1767,8 +1768,9 @@ div.new-session-page__project-search {
 .new-session-page__picker-popover .new-session-page__environment-list {
   flex: 0 1 auto;
   min-height: 0;
-  max-height: 248px;
-  padding: 0 6px 6px;
+  /* A heading and seven and a half rows: the cut row shows there is more. */
+  max-height: 268px;
+  padding: 0 var(--picker-inset) var(--picker-inset);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -1796,13 +1798,13 @@ div.new-session-page__project-search {
 
 .new-session-page__project-popover .new-session-page__picker-root {
   /* Eight option rows plus the section heading. */
-  max-height: calc(8 * 30px + 24px);
+  max-height: calc(8 * 32px + 28px);
   padding-bottom: 0;
 }
 
 .new-session-page__project-popover
   .new-session-page__picker-root:has(> .oc-menu-heading ~ .oc-menu-heading) {
-  max-height: calc(8 * 30px + 2 * 24px + 4px);
+  max-height: calc(8 * 32px + 2 * 28px + 8px);
 }
 
 .new-session-page__picker-popover .new-session-page__environment-picker {
@@ -1816,8 +1818,7 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__picker-popover .oc-menu-heading {
-  min-height: 24px;
-  padding-inline: 6px;
+  padding-inline: var(--picker-row-inset);
 }
 
 .new-session-page__picker-popover .oc-menu-heading__action {
@@ -1825,7 +1826,8 @@ div.new-session-page__project-search {
   place-items: center;
   width: 24px;
   height: 24px;
-  margin-inline-end: -4px;
+  /* Centers the glyph on the rows' check column. */
+  margin-inline-end: -5px;
   padding: 0;
 }
 
@@ -1836,18 +1838,14 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__picker-popover .oc-menu-heading:not(:first-child) {
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
+/* Every picker shares one row height and the menu's row gap, so pills never touch. */
 .new-session-page__picker-popover .session-menu__item {
-  min-height: 30px;
-  padding: 4px 6px;
-  gap: 6px;
-  margin: 0;
-}
-
-.new-session-page__picker-popover .session-menu__item + .session-menu__item {
-  margin-block-start: 0;
+  min-height: var(--picker-row-height);
+  padding: 4px var(--picker-row-inset);
+  gap: 8px;
 }
 
 .new-session-page__picker-popover .session-menu__icon,
@@ -1870,10 +1868,15 @@ div.new-session-page__project-search {
   white-space: nowrap;
 }
 
+/* The label keeps its width first; secondary text takes the room it leaves,
+   down to a floor that still shows a short hint beside a long label. */
 .new-session-page__picker-popover .session-menu__sub {
-  flex: 0 1 auto;
-  max-width: 45%;
-  margin-inline-start: 4px;
+  position: relative;
+  /* Smaller type centers above the label's baseline; settle it back down. */
+  top: 1px;
+  flex: 1 1 0;
+  min-width: 30%;
+  margin-inline-start: 0;
 }
 
 .new-session-page__picker-popover .session-menu__check,
@@ -1893,14 +1896,14 @@ div.new-session-page__project-search {
 
 .new-session-page__picker-foot {
   flex: none;
-  padding: 4px 6px;
+  padding: 6px var(--picker-inset) var(--picker-inset);
 }
 
 .new-session-page__picker-foot::before {
   content: "";
   display: block;
   height: 1px;
-  margin: 0 6px 4px;
+  margin: 0 var(--picker-row-inset) 6px;
   background: var(--border);
 }
 
@@ -1910,44 +1913,32 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__checkout-popover .new-session-page__picker-root {
-  padding: 6px;
+  padding: var(--picker-inset);
   max-height: min(420px, 60vh);
 }
 
-.new-session-page__checkout-popover .oc-menu-heading {
-  min-height: 26px;
-  padding: 4px 8px 6px;
-}
-
-.new-session-page__checkout-popover .oc-menu-heading__label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
 .new-session-page__checkout-popover .session-menu__item {
-  min-height: 30px;
-  padding: 4px 6px;
-  gap: 6px;
   font-size: calc(13px * var(--control-ui-text-scale, 1));
 }
 
-.new-session-page__checkout-popover .session-menu__item + .session-menu__item {
-  margin-top: 2px;
-}
-
+/* One label column sized by the longest label keeps both fields aligned. */
 .new-session-page__checkout-fields {
   display: grid;
-  gap: 8px;
-  padding: 8px 6px 4px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  padding: 8px var(--picker-row-inset) 6px;
+}
+
+/* Worktree details belong to the choice above: they start on its label column. */
+.session-menu__item + .new-session-page__checkout-fields {
+  padding-inline-start: var(--picker-label-inset);
 }
 
 .new-session-page__checkout-popover .new-session-page__menu-field {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  min-height: 0;
   margin: 0;
   padding: 0;
 }
@@ -1957,8 +1948,7 @@ div.new-session-page__project-search {
   .new-session-page__menu-field
   input {
   width: 100%;
-  height: 30px;
-  padding: 0 8px;
+  /* Unfocused fields need their own fill; the search tint only reads while focused. */
   background: var(--surface-hover);
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale, 1));
@@ -1972,7 +1962,8 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__checkout-fields > .new-session-page__menu-note {
-  padding: 0 0 0 52px;
+  grid-column: 2;
+  padding: 0;
 }
 
 .new-session-page__skeletons {
@@ -2020,12 +2011,25 @@ div.new-session-page__project-search {
   padding: 0 calc(var(--new-session-tray-edge) - 8px) 8px;
 }
 
+/* Pending rows hold the loaded rows' pitch and columns, so results land in place. */
+.new-session-page__picker-scroll .new-session-page__skeleton-row {
+  height: calc(var(--picker-row-height) + var(--menu-item-gap));
+  padding-inline: var(--picker-row-inset);
+  gap: 8px;
+}
+
+.new-session-page__picker-scroll .new-session-page__skeleton-icon {
+  width: 14px;
+  height: 14px;
+}
+
 .new-session-page__picker-popover .new-session-page__empty,
 .new-session-page__picker-popover .new-session-page__environment-empty {
-  height: 32px;
-  padding: 0 8px 0 28px;
+  height: var(--picker-row-height);
+  /* Starts on the rows' label column. */
+  padding: 0 var(--picker-row-inset) 0 var(--picker-label-inset);
   font-size: 13px;
-  line-height: 32px;
+  line-height: var(--picker-row-height);
   color: var(--muted);
   text-align: start;
   white-space: nowrap;
@@ -2154,7 +2158,7 @@ div.new-session-page__project-search {
   display: flex;
   align-items: center;
   height: max(var(--menu-item-height), calc(1lh + 12px));
-  padding: 0 8px 0 30px;
+  padding: 0 var(--picker-row-inset) 0 var(--picker-label-inset);
   font-size: 13px;
   white-space: nowrap;
 }
@@ -2168,8 +2172,12 @@ div.new-session-page__project-search {
 .new-session-page__picker-popover .new-session-page__browser-head,
 .new-session-page__picker-popover .new-session-page__browser-actions {
   flex: none;
-  padding: 6px 8px;
+  padding: var(--picker-inset);
   border: 0;
+}
+
+.new-session-page__picker-popover .new-session-page__browser-head {
+  padding-block-end: 6px;
 }
 
 /* Pointer and keyboard navigation share one highlighted row. */

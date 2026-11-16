@@ -88,8 +88,22 @@ export function hasForwardedSource(group: MessageGroup): boolean {
   return Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group);
 }
 
-function messageStartsProjectedTurnBoundary(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.turnBoundary === true;
+export type ProjectedContinuationSource = "exec" | "restart" | "subagent";
+
+/** What woke a row that resumes this session's own work after a hidden wake. */
+export function readProjectedContinuation(
+  message: unknown,
+): ProjectedContinuationSource | undefined {
+  const source = asRecord(asRecord(asRecord(message)?.["__openclaw"])?.continuation)?.source;
+  return source === "exec" || source === "restart" || source === "subagent" ? source : undefined;
+}
+
+/** A continuation keeps the turn it resumes, even where the row also carries `turnBoundary`. */
+export function messageStartsProjectedTurnBoundary(message: unknown): boolean {
+  return (
+    asRecord(asRecord(message)?.["__openclaw"])?.turnBoundary === true &&
+    !readProjectedContinuation(message)
+  );
 }
 
 /** Canonical user-turn boundary shared by insertion, outcome, and collapse projections. */
