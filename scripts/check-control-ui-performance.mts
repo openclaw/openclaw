@@ -65,9 +65,7 @@ const controlUiPerformanceBudgets = {
   // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
   // (+1,215 B over main 97dd78cc) plus 64 B headroom.
   // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
-  // Jacob Tomlinson approved the Skills used cost (#196065, 2026-11-16):
-  // integrated build measures 1,315,039 B plus the existing 64 B headroom.
-  chatBootJsGzipBytes: 1_315_103,
+  chatBootJsGzipBytes: 1_314_350,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
