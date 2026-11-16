@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { matchRootFileOpenFailure, openRootFile } from "../infra/boundary-file-read.js";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -98,6 +99,9 @@ async function validatePackageExtensionEntry(params: {
       rootPath: params.packageDir,
       boundaryLabel: "plugin package directory",
     });
+    if (isEmbeddedStandaloneModule(absolutePath)) {
+      return { ok: true, exists: true };
+    }
     if (!resolved.exists) {
       return params.requireExisting
         ? { ok: false, error: `${params.label} not found: ${params.entry}` }

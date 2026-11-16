@@ -7,6 +7,7 @@ import {
   ENV_SECRET_REF_ID_RE,
   isSecretRef,
   secretRefKey,
+  type SecretInput,
   type SecretRef,
   type SecretRefSource,
 } from "../secrets/ref-contract.js";
@@ -143,6 +144,15 @@ export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaul
 /** Trim a literal secret input string while leaving non-string inputs unresolved. */
 export function normalizeSecretInputString(value: unknown): string | undefined {
   return normalizeOptionalString(value);
+}
+
+/** Requires a current SecretRef or non-blank literal without materializing it. */
+export function normalizeRequiredSecretInput(value: unknown, path: string): SecretInput {
+  const input = parseSecretRef(value) ?? normalizeSecretInputString(value);
+  if (!input) {
+    throw new Error(`invalid ${path}: expected a non-empty SecretInput`);
+  }
+  return input;
 }
 
 /** Error thrown when strict secret reads encounter a configured but unresolved SecretRef. */

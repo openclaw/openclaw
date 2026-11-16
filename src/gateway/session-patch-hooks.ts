@@ -1,7 +1,7 @@
-// Session patch hook dispatcher.
 // Publishes internal mutation notifications after Gateway session patch calls.
 import {
   hasInternalHookListeners,
+  omitHookSessionOperatorSources,
   triggerInternalHook,
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
@@ -17,7 +17,7 @@ export function triggerSessionPatchHook(
   }
 
   const hookContext: SessionPatchHookContext = structuredClone({
-    sessionEntry: params.sessionEntry,
+    sessionEntry: omitHookSessionOperatorSources(params.sessionEntry),
     patch: params.patch,
     cfg: params.cfg,
   });

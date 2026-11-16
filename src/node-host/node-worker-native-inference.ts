@@ -55,16 +55,16 @@ export function snapshotNodeWorkerNativeInference(
         baseUrl: configured.baseUrl ?? provider.baseUrl,
         name: configured.name,
         contextWindow: configured.contextWindow,
-        maxTokens: configured.maxTokens ?? provider.maxTokens,
+        maxTokens: configured.maxTokens,
         reasoning: configured.reasoning,
         thinkingLevelMap: configured.thinkingLevelMap,
         cost: {
-          input: configured.cost?.input ?? 0,
-          output: configured.cost?.output ?? 0,
-          cacheRead: configured.cost?.cacheRead ?? 0,
-          cacheWrite: configured.cost?.cacheWrite ?? 0,
+          input: configured.cost.input,
+          output: configured.cost.output,
+          cacheRead: configured.cost.cacheRead,
+          cacheWrite: configured.cost.cacheWrite,
         },
-        input: configured.input ?? ["text"],
+        input: configured.input,
         headers: Object.keys(headers).length > 0 ? headers : undefined,
       });
       if (!parsed.success) {
@@ -108,7 +108,7 @@ export function projectNodeWorkerNativeInference(
   const workspace = resolveNodeWorkerNativeInferenceWorkspace(snapshot, descriptor);
   return {
     config: {
-      models: [...snapshot.models.values()].map(({ model }) => structuredClone(model)),
+      models: [...snapshot.models.values()].map(({ model }) => model),
       workspace,
     },
     credentials: Object.fromEntries(

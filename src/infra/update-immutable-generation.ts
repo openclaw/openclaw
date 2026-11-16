@@ -53,6 +53,24 @@ export async function readImmutableSchemaContracts(record: ImmutableInstallRecor
 
 type GenerationEntry = { file: string; stat: Stats };
 
+/** Record provenance in the private materialized artifact before its digest and seal. */
+export async function recordImmutableOperatorBuild(
+  root: string,
+  account: { account: string; uid: number; gid: number },
+): Promise<void> {
+  const file = path.join(root, "dist", "build-info.json");
+  const info = asNullableRecord(JSON.parse(await fs.readFile(file, "utf8")));
+  if (!info) {
+    throw new Error("Immutable candidate build-info.json must contain a build descriptor.");
+  }
+  await fs.writeFile(
+    file,
+    `${JSON.stringify({ ...info, immutableBuild: { builtBy: "operator", isolation: "none", account: account.account, uid: account.uid, gid: account.gid } }, null, 2)}\n`,
+  );
+  const { writePackageDistInventory } = await import("../../scripts/lib/package-dist-inventory.js");
+  await writePackageDistInventory(root);
+}
+
 /** Call only after the build cgroup is extinct; the private copy becomes root-owned. */
 export async function copyImmutableGeneration(source: string, destination: string): Promise<void> {
   const parent = await fs.lstat(path.dirname(destination));

@@ -118,7 +118,9 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
     if (isRecord(value)) {
       return value;
     }
-  } catch {}
+  } catch {
+    // Invalid JSON uses the same descriptive metadata rejection as a non-object payload.
+  }
   throw new Error("Codex inference request has invalid native metadata");
 }
 

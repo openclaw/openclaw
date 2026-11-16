@@ -5,7 +5,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
-import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
@@ -105,13 +104,16 @@ export function replaceRemoteNodeSkills(params: {
   const changed =
     !existing ||
     existing.displayName !== displayName ||
-    !areOrderedArraysEqual(
-      existing.skills,
-      nextSkills,
-      (previous, next) =>
-        previous.name === next.name &&
-        previous.description === next.description &&
-        previous.content === next.content,
+    !(
+      existing.skills.length === nextSkills.length &&
+      existing.skills.every((previous, index) => {
+        const next = nextSkills[index]!;
+        return (
+          previous.name === next.name &&
+          previous.description === next.description &&
+          previous.content === next.content
+        );
+      })
     );
   remoteSkillNodes.set(params.nodeId, {
     nodeId: params.nodeId,

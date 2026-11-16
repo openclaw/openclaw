@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createAgentModelActions } from "./model-config.ts";
+import { createAgentConfigActions } from "./agent-config-actions.ts";
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const client = {
@@ -31,11 +31,12 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
 }
 
 function modelActionsFor(runtimeConfig: ReturnType<typeof createRuntimeConfig>) {
-  return createAgentModelActions({
+  return createAgentConfigActions({
     getRuntimeConfig: () => runtimeConfig,
+    getReport: () => null,
     canUpdate: () => true,
     onPrimaryChanged: () => undefined,
-  });
+  }).models;
 }
 
 describe("agent model config", () => {
@@ -47,11 +48,12 @@ describe("agent model config", () => {
     let selected = "main";
     let allowed = true;
     const onPrimaryChanged = vi.fn();
-    const actions = createAgentModelActions({
+    const actions = createAgentConfigActions({
       getRuntimeConfig: () => current,
+      getReport: () => null,
       canUpdate: (agentId) => allowed && agentId === selected,
       onPrimaryChanged,
-    });
+    }).models;
     current = replacement;
     selected = "scout";
     actions.onModelChange("main", "fixture/chat");
@@ -82,6 +84,40 @@ describe("agent model config", () => {
     expect(onPrimaryChanged).toHaveBeenCalledOnce();
     original.dispose();
     replacement.dispose();
+  });
+  it("keeps the agent's own utility fallbacks for every utility choice", async () => {
+    const defaults = { utilityModel: "openai/gpt-5-mini" };
+    const fallbacks = ["local/backup"];
+    const runtimeConfig = createRuntimeConfig({
+      agents: {
+        defaults,
+        entries: { main: { utilityModel: { primary: "anthropic/claude-sonnet-4-6", fallbacks } } },
+      },
+    });
+    await runtimeConfig.ensureLoaded();
+    const utilityModel = () =>
+      (runtimeConfig.state.configForm as { agents: { entries: { main: Record<string, unknown> } } })
+        .agents.entries.main.utilityModel;
+    const actions = modelActionsFor(runtimeConfig);
+    actions.onUtilityModelChange("main", "openai/gpt-5.4");
+    expect(utilityModel()).toEqual({ primary: "openai/gpt-5.4", fallbacks });
+    actions.onUtilityModelChange("main", "");
+    expect(utilityModel()).toEqual({ primary: "", fallbacks });
+    actions.onUtilityModelChange("main", null);
+    expect(utilityModel()).toEqual({ fallbacks });
+    runtimeConfig.dispose();
+  });
+  it("writes a bare utility model and clears it back to inheritance without fallbacks", async () => {
+    const runtimeConfig = createRuntimeConfig({ agents: { entries: { main: {} } } });
+    await runtimeConfig.ensureLoaded();
+    const actions = modelActionsFor(runtimeConfig);
+    actions.onUtilityModelChange("main", "openai/gpt-5.4");
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { entries: { main: { utilityModel: "openai/gpt-5.4" } } },
+    });
+    actions.onUtilityModelChange("main", null);
+    expect(runtimeConfig.state.configForm).toEqual({ agents: { entries: { main: {} } } });
+    runtimeConfig.dispose();
   });
   it("distinguishes an explicit decision disable from inheritance without changing other settings", async () => {
     const defaults = { decisionModel: "typesafe/jev-latest", model: "openai/gpt-5.4" };

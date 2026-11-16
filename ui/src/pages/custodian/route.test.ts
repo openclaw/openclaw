@@ -1,15 +1,15 @@
 /* @vitest-environment jsdom */
 
-import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
-import { renderCustodianRoute } from "./custodian-page.ts";
-import { page, type CustodianRouteData } from "./route.ts";
+import { CustodianRoute } from "./custodian-page.tsx";
+import { page, type CustodianRouteData } from "./route.tsx";
 
 function location(search: string): RouteLocation {
   return { pathname: "/custodian", search, hash: "" };
@@ -19,14 +19,10 @@ function loadRoute(search: string): CustodianRouteData {
   if (!page.loader) {
     throw new Error("custodian route has no loader");
   }
-  return page.loader({} as ApplicationContext, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: location(search),
-    deps: search,
-    cause: "navigation",
-  } satisfies RouteLoaderOptions) as CustodianRouteData;
+  return page.loader(
+    {} as ApplicationContext,
+    createRouteLoaderOptions(location(search), search),
+  ) as CustodianRouteData;
 }
 
 function createContext(): ApplicationContext {
@@ -50,25 +46,24 @@ describe("custodian route", () => {
   });
 
   it("renders mode-specific framing", async () => {
-    const provider = createApplicationContextProvider(createContext());
-    document.body.append(provider);
+    const provider = createSolidApplicationContextProvider(createContext());
 
     const [data, setData] = createSignal<CustodianRouteData>();
-    mountSolid(
+    const { container } = mountSolid(
       () =>
-        createComponent(LitContent, {
-          get value() {
-            return renderCustodianRoute(data());
+        createComponent(CustodianRoute, {
+          get data() {
+            return data();
           },
         }),
-      { container: provider },
+      { wrapper: provider.wrapper },
     );
     flush();
-    expect(provider.querySelector("openclaw-custodian-page")).toBeNull();
+    expect(container.querySelector("openclaw-custodian-page")).toBeNull();
 
     setData({ onboarding: false, intent: null });
     flush();
-    const normalPage = provider.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+    const normalPage = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-custodian-page",
     );
     await normalPage?.updateComplete;
@@ -79,7 +74,7 @@ describe("custodian route", () => {
 
     setData({ onboarding: true, intent: null });
     flush();
-    const onboardingPage = provider.querySelector<
+    const onboardingPage = container.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-custodian-page");
     await onboardingPage?.updateComplete;

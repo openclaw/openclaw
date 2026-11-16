@@ -105,17 +105,12 @@ export function resolveProviderModelRouteAuthRequirement(
   if (authRequirement !== undefined) {
     return authRequirement ?? undefined;
   }
-  switch (mode) {
-    case "api-key":
-    case "api_key":
-    case "aws-sdk":
-      return "api-key";
-    case "oauth":
-    case "token":
-      return "subscription";
-    default:
-      return undefined;
-  }
+  const normalized = resolveProviderModelMaterializationAuthMode(mode);
+  return normalized === undefined
+    ? undefined
+    : normalized === "api_key" || normalized === "aws-sdk"
+      ? "api-key"
+      : "subscription";
 }
 
 export function providerModelRouteAcceptsAuthMode(params: {

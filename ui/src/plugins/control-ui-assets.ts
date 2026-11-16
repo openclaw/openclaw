@@ -2,6 +2,26 @@ import type { PluginControlUiModule } from "../../../packages/gateway-protocol/s
 import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ApplicationConfigCapability } from "../app/config.ts";
 import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { controlUiPluginDistributions } from "./control-ui-distribution.ts";
+
+export function controlUiPluginDistribution(descriptor: PluginControlUiModule) {
+  const owner = descriptor.bundledDistribution;
+  return (
+    owner &&
+    controlUiPluginDistributions.find(
+      (distribution) =>
+        distribution.pluginId === descriptor.pluginId &&
+        distribution.revision === descriptor.revision &&
+        distribution.bundledDistribution?.packageName === owner.packageName &&
+        distribution.bundledDistribution?.packageVersion === owner.packageVersion,
+    )
+  );
+}
+
+export function controlUiPluginDeliveryIdentity(descriptor: PluginControlUiModule): string {
+  const distribution = controlUiPluginDistribution(descriptor);
+  return distribution ? `distribution:${distribution.entry}` : "gateway";
+}
 
 export function controlUiPluginAssetGrantError(
   descriptor: PluginControlUiModule,
@@ -11,12 +31,15 @@ export function controlUiPluginAssetGrantError(
   >,
   basePath: string,
 ): string | null {
+  if (controlUiPluginDistribution(descriptor)) {
+    return null;
+  }
   if (!config.pluginAssetsRequireAuth) {
     return null;
   }
   // Secure asset cookies cannot authenticate requests from non-local HTTP.
   if (!window.isSecureContext) {
-    return "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard.";
+    return "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback address.";
   }
   return config.pluginFrameGrants.some(
     (grant) =>
@@ -29,11 +52,15 @@ export function controlUiPluginAssetGrantError(
 }
 
 export function controlUiPluginAssetUrls(descriptor: PluginControlUiModule, basePath: string) {
+  const distribution = controlUiPluginDistribution(descriptor);
+  if (distribution) {
+    return distribution;
+  }
   const prefix = `${controlUiPluginAssetPrefix(descriptor.pluginId, basePath)}${encodeURIComponent(descriptor.revision)}/`;
   const resolve = (path: string) => {
     const url = new URL(uiDevGatewayResourceUrl(path), window.location.href);
     if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
-      throw new Error("Native plugin assets must be served by this Control UI Gateway.");
+      throw new Error("Native plugin assets must be served by this web app’s Gateway.");
     }
     return url.href;
   };

@@ -21,14 +21,7 @@ export {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "../auto-reply/group-activation.js";
-export {
-  HEARTBEAT_PROMPT,
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPromptCore,
-  stripHeartbeatToken,
-} from "../auto-reply/heartbeat.js";
-export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
-export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
@@ -55,7 +48,7 @@ export type {
 export type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
-} from "../auto-reply/reply/reply-dispatcher.js";
+} from "../auto-reply/reply/reply-dispatcher.types.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type {
   GetReplyOptions,

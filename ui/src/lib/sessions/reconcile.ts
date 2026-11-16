@@ -11,9 +11,9 @@ import {
   isPersistedSessionRow,
   isSessionRowOutsideResultScope,
   matchesExistingSession,
+  parseSessionChangedEvent,
   preserveRosterPresentationMetadata,
-  readSessionChangedEvent,
-  reconcileSessionChangedRow,
+  reconcileParsedSessionChangedRow,
   reconcileSessionRow,
   sessionChangedSnapshots,
   type SessionChangedEventInfo,
@@ -21,6 +21,7 @@ import {
   type SessionChangedRowResult,
   type SessionReconcileOptions,
   type SessionRowObservation,
+  type ParsedSessionChangedEvent,
 } from "./session-row-reconcile.ts";
 import { preserveOmittedThinkingMetadata } from "./session-thinking-metadata.ts";
 
@@ -81,11 +82,7 @@ export function appendSessionResults(
     return true;
   });
   const totalCount = page.totalCount ?? previous.totalCount;
-  const hasMore =
-    page.hasMore ??
-    (typeof totalCount === "number" && Number.isFinite(totalCount)
-      ? sessions.length < totalCount
-      : false);
+  const hasMore = page.hasMore ?? (totalCount !== undefined && sessions.length < totalCount);
   return {
     ...page,
     count: sessions.length,
@@ -142,11 +139,14 @@ export function preserveCurrentSessionRow(
 
 function reconcileSessionChangedSnapshot(
   result: SessionsListResult | null,
-  payload: unknown,
+  parsed: ParsedSessionChangedEvent | null,
   options: SessionReconcileOptions = {},
   project?: SessionChangedRowProjection,
 ): SessionChangedResult {
-  const info = readSessionChangedEvent(payload);
+  if (!parsed) {
+    return { applied: false, result };
+  }
+  const [info] = parsed;
   const selectedGlobalAgentId = info?.agentId ?? options.selectedGlobalAgentId ?? null;
   const existing = info
     ? result?.sessions.find((candidate) =>
@@ -154,7 +154,7 @@ function reconcileSessionChangedSnapshot(
       )
     : undefined;
   const { row, admittedRow, reconciled, eventTs, ownershipChanged, disposition, ...eventResult } =
-    reconcileSessionChangedRow(existing, payload, options, project);
+    reconcileParsedSessionChangedRow(existing, parsed, options, project);
   if (disposition === "outside-scope") {
     // A foreign row cannot advance this query's clock or invalidate its owner facet.
     return { ...eventResult, row: existing, result };
@@ -191,7 +191,8 @@ export function reconcileSessionChanged(
   let primary: SessionChangedResult | undefined;
   const admittedRows: GatewaySessionRow[] = [];
   for (const snapshot of sessionChangedSnapshots(payload)) {
-    const info = readSessionChangedEvent(snapshot);
+    const parsed = parseSessionChangedEvent(snapshot);
+    const info = parsed?.[0];
     if (
       info &&
       (!accepts(info) ||
@@ -204,7 +205,7 @@ export function reconcileSessionChanged(
     ) {
       continue;
     }
-    const changed = reconcileSessionChangedSnapshot(nextResult, snapshot, options, project);
+    const changed = reconcileSessionChangedSnapshot(nextResult, parsed, options, project);
     primary ??= changed;
     nextResult = changed.result;
     if (changed.admittedRow) {

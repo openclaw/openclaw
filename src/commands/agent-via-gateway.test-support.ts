@@ -1,37 +1,6 @@
-import path from "node:path";
 import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
 import type { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayLockOptions } from "../infra/gateway-lock.js";
-
-export function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    exitCode: undefined as NodeJS.Process["exitCode"],
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-    listenerCount(signal: SignalName) {
-      return listeners.get(signal)?.size ?? 0;
-    },
-  };
-}
 
 export async function settleGatewayAgentRequest(params: {
   response: Pick<
@@ -65,23 +34,6 @@ export async function settleGatewayAgentRequest(params: {
   return await result;
 }
 
-export function createLocalGatewayLockOptions(
-  stateDir: string,
-  overrides: Partial<GatewayLockOptions> = {},
-): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    timeoutMs: 100,
-    ...overrides,
-  };
-}
-
 export function createExplicitSystemAgentConfig(
   agentId: string,
   agentIds: string[],
@@ -95,12 +47,9 @@ export function createExplicitSystemAgentConfig(
   };
 }
 
-export function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
+function transportError(message: string) {
+  return Object.assign(new Error(message), {
+    name: "GatewayTransportError",
     connectionDetails: {
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
@@ -109,17 +58,29 @@ export function createGatewayTimeoutError() {
   });
 }
 
+export function createGatewayTimeoutError() {
+  return Object.assign(transportError("gateway timeout after 90000ms"), {
+    kind: "timeout",
+    timeoutMs: 90_000,
+  });
+}
+
 export function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
+  return Object.assign(transportError("gateway closed (1000 normal closure): no close reason"), {
     kind: "closed",
     code: 1000,
     reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
   });
 }
+
+export function gatewaySuccessReply(text: string) {
+  return {
+    runId: "idem-1",
+    status: "ok",
+    result: { payloads: [{ text }], meta: { stub: true } },
+  };
+}
+
+export const remoteGatewayConfig = {
+  gateway: { mode: "remote" as const, remote: { url: "wss://gateway.example" } },
+};

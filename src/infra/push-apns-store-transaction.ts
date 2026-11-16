@@ -44,12 +44,9 @@ export function readApnsRegistrationVersions(db: OpenClawStateDatabase["db"], no
       .select("deleted_at_ms")
       .where("node_id", "=", nodeId),
   );
-  return {
-    currentExists: currentRow !== undefined,
-    previousVersions: [currentRow?.updated_at_ms, tombstone?.deleted_at_ms].filter(
-      (version): version is number => version !== undefined,
-    ),
-  };
+  return [currentRow?.updated_at_ms, tombstone?.deleted_at_ms].filter(
+    (version): version is number => version !== undefined,
+  );
 }
 
 /** Tombstones and deletes one APNs owner inside the caller's shared-state transaction. */
@@ -63,7 +60,24 @@ export function clearApnsRegistrationFromDatabase(
     return false;
   }
   const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
-  const { currentExists, previousVersions } = readApnsRegistrationVersions(db, normalizedNodeId);
+  // The caller's transaction rolls this deletion back if version validation fails.
+  const deleted = executeSqliteQueryTakeFirstSync(
+    db,
+    stateDb
+      .deleteFrom("apns_registrations")
+      .where("node_id", "=", normalizedNodeId)
+      .returning("updated_at_ms"),
+  );
+  const tombstone = executeSqliteQueryTakeFirstSync(
+    db,
+    stateDb
+      .selectFrom("apns_registration_tombstones")
+      .select("deleted_at_ms")
+      .where("node_id", "=", normalizedNodeId),
+  );
+  const previousVersions = [deleted?.updated_at_ms, tombstone?.deleted_at_ms].filter(
+    (version): version is number => version !== undefined,
+  );
   const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions, nowMs);
   // Tombstone even an empty row so a retired source cannot restore ownership.
   executeSqliteQuerySync(
@@ -75,9 +89,5 @@ export function clearApnsRegistrationFromDatabase(
         conflict.column("node_id").doUpdateSet({ deleted_at_ms: deletedAtMs }),
       ),
   );
-  executeSqliteQuerySync(
-    db,
-    stateDb.deleteFrom("apns_registrations").where("node_id", "=", normalizedNodeId),
-  );
-  return currentExists;
+  return deleted !== undefined;
 }

@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult, SessionsPatchResult } from "../api/types.ts";
+import type { SessionPatchOutcome } from "../lib/sessions/patch.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -14,7 +15,7 @@ import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mount(request: Parameters<typeof createTestGatewayClient>[0]) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
@@ -94,7 +95,7 @@ it.each([
     patchReads = 0;
   let hold = false;
   let refresh: Promise<void> | undefined;
-  let readOperation: Promise<SessionsPatchResult | null> | undefined;
+  let readOperation: Promise<SessionPatchOutcome | null> | undefined;
   const { sidebar, provider, sessions, harness } = await mount(async (method, raw) => {
     const params = asOptionalRecord(raw);
     if (method === "sessions.patch") {
@@ -129,6 +130,8 @@ it.each([
       expect(sidebar.sessionData.sessionsLoading).toBe(false);
       expect(keys()).toEqual(initialRows.map((row) => row.key));
     });
+    // Finish the initial filter request before opening the held successor read.
+    await sidebar.sessionData.refreshSidebarSessions();
 
     hold = true;
     refresh = sidebar.sessionData.refreshSidebarSessions();

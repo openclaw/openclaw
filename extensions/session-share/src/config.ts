@@ -8,23 +8,30 @@ function sessionShareConfig(config: SessionShareConfigSnapshot): Record<string, 
   return isRecord(value) ? value : {};
 }
 
-export function sessionShareGroups(config: SessionShareConfigSnapshot): string[] {
+export function sessionShareSelection(
+  config: SessionShareConfigSnapshot,
+): { groups: string[]; involvingProfileId?: string } | undefined {
   const share = sessionShareConfig(config).share;
-  if (!isRecord(share) || !Array.isArray(share.groups)) {
-    return [];
+  if (!isRecord(share)) {
+    return undefined;
   }
-  return share.groups.filter(
-    (group): group is string => typeof group === "string" && group.length > 0,
-  );
+  const { groups, involvingProfileId } = share;
+  if (
+    !Array.isArray(groups) ||
+    groups.length === 0 ||
+    !groups.every((group) => typeof group === "string" && group.length > 0) ||
+    (involvingProfileId !== undefined &&
+      (typeof involvingProfileId !== "string" || !/^\S+$/.test(involvingProfileId)))
+  ) {
+    return undefined;
+  }
+  return {
+    groups,
+    ...(involvingProfileId !== undefined ? { involvingProfileId } : {}),
+  };
 }
 
-export function sessionShareNodeBinding(
-  config: SessionShareConfigSnapshot,
-  nodeId: string,
-): {
-  owner?: string;
-  linkGitHubIdentities: boolean;
-} {
+export function sessionShareNodeBinding(config: SessionShareConfigSnapshot, nodeId: string) {
   const nodes = sessionShareConfig(config).nodes;
   const binding = isRecord(nodes) ? nodes[nodeId] : undefined;
   return {

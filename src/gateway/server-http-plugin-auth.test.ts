@@ -1,5 +1,6 @@
 // Covers plugin gateway auth bypass caching across metadata lifecycle resets.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getCachedPluginGatewayAuthBypassPaths } from "./server-http-plugin-auth.js";
@@ -50,12 +51,8 @@ describe("getCachedPluginGatewayAuthBypassPaths", () => {
 
   it("keeps the fresh generation cached when a stale failed resolution settles late", async () => {
     const config: OpenClawConfig = { channels: { telegram: {} } };
-    let rejectStale: (error: Error) => void = () => {};
-    resolveBypassPaths.mockReturnValueOnce(
-      new Promise<string[]>((_resolve, reject) => {
-        rejectStale = reject;
-      }),
-    );
+    const { promise: staleBypassPaths, reject: rejectStale } = createDeferred<string[]>();
+    resolveBypassPaths.mockReturnValueOnce(staleBypassPaths);
     const stale = getCachedPluginGatewayAuthBypassPaths(config);
 
     clearPluginMetadataLifecycleCaches();

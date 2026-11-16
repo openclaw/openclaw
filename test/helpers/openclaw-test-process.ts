@@ -10,6 +10,7 @@ import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 /** Observable command facts; the custody adapter, not this view, owns termination. */
 export type OpenClawTestProcess = EventEmitter & {
   readonly pid?: number;
+  readonly memoryRootPid?: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   killed: boolean;
@@ -23,6 +24,7 @@ export async function createOpenClawTestProcess(params: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  gracefulShutdownTimeoutMs?: number;
   onError: (error: Error) => void;
   onSpawnCleanup: (cleanup: Promise<ProcessExtinctionResult>) => void;
 }) {
@@ -52,6 +54,7 @@ export async function createOpenClawTestProcess(params: {
   const { adapter, ready } = startup;
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  let shutdownTimer: NodeJS.Timeout | undefined;
   const child: OpenClawTestProcess = Object.assign(new EventEmitter(), {
     pid: adapter.pid,
     exitCode: null as number | null,
@@ -61,16 +64,33 @@ export async function createOpenClawTestProcess(params: {
     stderr,
     kill(signal: NodeJS.Signals = "SIGTERM") {
       child.killed = true;
+      if (signal === "SIGTERM" && params.gracefulShutdownTimeoutMs !== undefined) {
+        if (child.exitCode !== null || child.signalCode !== null || !adapter.pid) {
+          return false;
+        }
+        // Let the Gateway drain its own workers before the custody owner cancels the tree.
+        if (!shutdownTimer) {
+          process.kill(adapter.pid, signal);
+          shutdownTimer = setTimeout(
+            () => adapter.kill("SIGKILL"),
+            params.gracefulShutdownTimeoutMs,
+          );
+        }
+        return true;
+      }
+      clearTimeout(shutdownTimer);
       adapter.kill(signal);
       return true;
     },
   });
-  // Command admission may assign its PID after construction.
+  // Command admission may assign its PID later; sampling retains the separate custody root.
   Object.defineProperty(child, "pid", { get: () => adapter.pid });
+  Object.defineProperty(child, "memoryRootPid", { get: () => adapter.memoryRootPid });
   child.on("error", params.onError);
   adapter.onStdout((chunk) => stdout.write(chunk));
   adapter.onStderr((chunk) => stderr.write(chunk));
   adapter.onExit((code, signal) => {
+    clearTimeout(shutdownTimer);
     child.exitCode = code;
     child.signalCode = signal;
     child.emit("exit", code, signal);
@@ -109,7 +129,11 @@ export async function createOpenClawTestProcess(params: {
         }
         runWithProcessCleanupBudget(
           { deadline: performance.now() + Math.max(0, deadline - Date.now()), warn },
-          () => child.kill("SIGTERM"),
+          () => {
+            clearTimeout(shutdownTimer);
+            child.killed = true;
+            adapter.kill("SIGTERM");
+          },
         );
         const results = await Promise.allSettled([completion, extinction]);
         for (const result of results) {

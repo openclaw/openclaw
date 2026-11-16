@@ -1,6 +1,6 @@
 // OpenClaw-authored rich block subset plus size accounting and the plain-text
 // projection shared by the emitter, splitter, and fallback paths.
-import type { User } from "grammy/types";
+import type { RichTextDateTime, User } from "grammy/types";
 
 export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii" | "nesting-limit";
 
@@ -36,6 +36,12 @@ export type RichText =
       anchor_name: string;
     }
   | {
+      type: "date_time";
+      text: RichText;
+      unix_time: number;
+      date_time_format: RichTextDateTime["date_time_format"];
+    }
+  | {
       type: "mathematical_expression";
       expression: string;
     }
@@ -61,32 +67,6 @@ export type InputRichBlockParagraph = {
   text: RichText;
 };
 
-type InputRichBlockHeading = {
-  type: "heading";
-  text: RichText;
-  size: 1 | 2 | 3 | 4 | 5 | 6;
-};
-
-type InputRichBlockPre = {
-  type: "pre";
-  text: string;
-  language?: string;
-};
-
-type InputRichBlockBlockquote = {
-  type: "blockquote";
-  blocks: InputRichBlock[];
-  credit?: RichText;
-};
-
-type InputRichBlockTable = {
-  type: "table";
-  cells: RichBlockTableCell[][];
-  is_bordered?: true;
-  is_striped?: true;
-  caption?: RichText;
-};
-
 export type RichBlockCaption = {
   text: RichText;
   credit?: RichText;
@@ -104,10 +84,28 @@ type InputMediaUrl<K extends string> = { type: K; media: string };
 
 export type InputRichBlock =
   | InputRichBlockParagraph
-  | InputRichBlockHeading
-  | InputRichBlockPre
-  | InputRichBlockBlockquote
-  | InputRichBlockTable
+  | {
+      type: "heading";
+      text: RichText;
+      size: 1 | 2 | 3 | 4 | 5 | 6;
+    }
+  | {
+      type: "pre";
+      text: string;
+      language?: string;
+    }
+  | {
+      type: "blockquote";
+      blocks: InputRichBlock[];
+      credit?: RichText;
+    }
+  | {
+      type: "table";
+      cells: RichBlockTableCell[][];
+      is_bordered?: true;
+      is_striped?: true;
+      caption?: RichText;
+    }
   | { type: "divider" }
   | { type: "anchor"; name: string }
   | { type: "footer"; text: RichText }

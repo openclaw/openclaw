@@ -1,5 +1,5 @@
 /** Static owner-native cron lifecycle projection for run inspection. */
-import type { DatabaseSync } from "node:sqlite";
+
 import type {
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
@@ -9,7 +9,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE } from "./execution-owner-lifecycle-binding-store.js";
 
@@ -40,7 +41,7 @@ const KNOWN_STATUSES = new Set(["running", "ok", "error", "skipped", "interrupte
 const OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR = "owner lifecycle cursor is no longer retained";
 
 function assertRetainedCursor(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   contextId: string;
   executionId: string;
   after?: OwnerLifecycleCursor;
@@ -75,7 +76,7 @@ function assertRetainedCursor(params: {
 }
 
 function readRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   schema: OwnerLifecycleSchemaFacts;
   contextId: string;
   executionId: string;
@@ -126,7 +127,7 @@ function readRows(params: {
 }
 
 function countRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   schema: OwnerLifecycleSchemaFacts;
   contextId: string;
   executionId?: string;
@@ -208,7 +209,7 @@ function projectReceipt(
 }
 
 export function summarizeOwnerLifecycleReceiptsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     schema: OwnerLifecycleSchemaFacts;
     context: ExecutionIdentityContextV1;
@@ -232,7 +233,7 @@ export function summarizeOwnerLifecycleReceiptsInDatabase(
 }
 
 export function pageOwnerLifecycleReceiptsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     schema: OwnerLifecycleSchemaFacts;
     context: ExecutionIdentityContextV1;
@@ -241,7 +242,7 @@ export function pageOwnerLifecycleReceiptsInDatabase(
     limit: number;
   },
 ): { entries: OwnerLifecycleReceiptEntry[]; nextCursor?: OwnerLifecycleCursor } {
-  const rows = runSqliteDeferredTransactionSync(
+  const rows = runSqliteReadSnapshotSync(
     db,
     () =>
       readRows({

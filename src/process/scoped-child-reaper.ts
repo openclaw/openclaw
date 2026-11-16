@@ -1,80 +1,112 @@
 import type { ChildProcess } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { inspectChildWaitState, isSupported, reapChild } from "@openclaw/proc-safe/reaper";
+import { hasErrnoCode } from "../infra/errno.js";
 
 type TrackedChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
-type GroupMember = { pid: number; ppid: number; state: string };
 
 const scheduledChildren = new WeakSet<TrackedChild>();
-const POLL_INTERVAL_MS = 25;
+const groups = new Map<number, number>();
+const EXIT_DELAY_MS = 25;
+const POLL_INTERVAL_MS = 1_000;
 const CLEANUP_DEADLINE_MS = 30_000;
-function readGroupMembers(groupId: number): GroupMember[] {
-  let entries: string[];
-  try {
-    entries = readdirSync("/proc");
-  } catch {
-    return [];
-  }
-  const members: GroupMember[] = [];
-  for (const entry of entries) {
-    if (!/^\d+$/u.test(entry)) {
-      continue;
-    }
-    let stat: string;
-    try {
-      stat = readFileSync(`/proc/${entry}/stat`, "utf8");
-    } catch {
-      // A process can disappear between the directory listing and this read.
-      continue;
-    }
-    // A comm value may contain spaces or parentheses; fields follow its last ')'.
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    if (Number(fields[2]) === groupId) {
-      members.push({ pid: Number(entry), ppid: Number(fields[1]), state: fields[0]! });
-    }
-  }
-  return members;
-}
+let timer: NodeJS.Timeout | undefined;
+let nextScanAt = 0;
+let scanning = false;
 
-function retainAdoptedCleanup(rootPid: number, cleanupTimeoutMs: number): void {
-  if (!isSupported()) {
+function schedule(delay: number): void {
+  const due = performance.now() + delay;
+  if (timer && nextScanAt <= due) {
     return;
   }
-  const deadline = performance.now() + Math.max(CLEANUP_DEADLINE_MS, cleanupTimeoutMs);
-  let quietScans = 0;
-  const tick = () => {
-    if (performance.now() >= deadline) {
-      return;
-    }
-    let remaining = false;
-    for (const member of readGroupMembers(rootPid)) {
-      // libuv owns the tracked root's status. Only adopted direct-child zombies
-      // in this terminated process group belong to this native wait owner.
-      if (member.pid === rootPid) {
+  clearTimeout(timer);
+  nextScanAt = due;
+  timer = setTimeout(() => void tick(), delay).unref();
+}
+
+function onExit(): void {
+  schedule(EXIT_DELAY_MS);
+}
+
+async function tick(): Promise<void> {
+  timer = undefined;
+  if (scanning) {
+    schedule(EXIT_DELAY_MS);
+    return;
+  }
+  scanning = true;
+  try {
+    for (const [rootPid, deadline] of groups) {
+      if (performance.now() >= deadline) {
+        groups.delete(rootPid);
         continue;
       }
-      if (member.ppid === process.pid && member.state === "Z") {
-        try {
-          if (inspectChildWaitState(member.pid).kind === "exited" && reapChild(member.pid)) {
-            continue;
-          }
-        } catch {
-          // Best-effort cleanup must not interrupt tree termination; retry within its budget.
+      try {
+        process.kill(-rootPid, 0);
+      } catch (error) {
+        // A live intermediate may still hold grandchildren we have not adopted.
+        if (hasErrnoCode(error, "ESRCH")) {
+          groups.delete(rootPid);
         }
       }
-      remaining = true;
     }
-    quietScans = remaining ? 0 : quietScans + 1;
-    if (quietScans < 2) {
-      schedule();
+    if (groups.size === 0) {
+      return;
     }
-  };
-  const schedule = () => {
-    // Live intermediates can adopt children after root exit. Pace that drain
-    // without making cleanup keep an otherwise idle host alive.
-    setTimeout(tick, POLL_INTERVAL_MS).unref();
-  };
-  schedule();
+    // Children can belong to any runtime thread. Enumerate our children once
+    // for all terminating groups, never every process on the host per group.
+    for (const thread of await readdir("/proc/self/task")) {
+      let children: string;
+      try {
+        children = await readFile(`/proc/self/task/${thread}/children`, "utf8");
+      } catch {
+        continue;
+      }
+      for (const entry of children.trim().split(/\s+/u).filter(Boolean)) {
+        const pid = Number(entry);
+        let stat: string;
+        try {
+          stat = await readFile(`/proc/${pid}/stat`, "utf8");
+        } catch {
+          continue;
+        }
+        // A comm value may contain spaces or parentheses; fields follow its last ')'.
+        const [state, ppid, pgid] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        if (
+          !groups.has(Number(pgid)) ||
+          pid === Number(pgid) ||
+          Number(ppid) !== process.pid ||
+          state !== "Z"
+        ) {
+          continue;
+        }
+        try {
+          // Keep native initialization lazy and the final wait observation/reap synchronous.
+          // libuv owns tracked roots; only adopted zombies in retained groups belong here.
+          if (!isSupported()) {
+            groups.clear();
+            return;
+          }
+          if (inspectChildWaitState(pid).kind === "exited") {
+            reapChild(pid);
+          }
+        } catch {
+          // Retry transient native failures within the group's existing cleanup budget.
+        }
+      }
+    }
+  } catch {
+    // Failure to enumerate children is not evidence that the groups are empty.
+  } finally {
+    scanning = false;
+    if (groups.size > 0) {
+      schedule(POLL_INTERVAL_MS);
+    } else {
+      clearTimeout(timer);
+      timer = undefined;
+      process.off("SIGCHLD", onExit);
+    }
+  }
 }
 
 /** Retain only the terminated group's adopted children after libuv consumes root exit. */
@@ -93,7 +125,13 @@ export function scheduleAdoptedChildZombieReapAfterExit(
   }
   const rootPid = child.pid;
   scheduledChildren.add(child);
-  const start = () => retainAdoptedCleanup(rootPid, cleanupTimeoutMs);
+  const start = () => {
+    if (groups.size === 0) {
+      process.on("SIGCHLD", onExit);
+    }
+    groups.set(rootPid, performance.now() + Math.max(CLEANUP_DEADLINE_MS, cleanupTimeoutMs));
+    onExit();
+  };
   if (child.exitCode !== null || child.signalCode !== null) {
     start();
   } else {

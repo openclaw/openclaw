@@ -123,7 +123,7 @@ export class DiscordRealtimeOutput {
         this.startupTimer = undefined;
         this.startPlayback();
       }, DISCORD_CONTINUOUS_START_DEADLINE_MS);
-      this.startupTimer.unref?.();
+      this.startupTimer.unref();
     }
   }
 
@@ -398,7 +398,7 @@ export class DiscordRealtimeOutput {
       },
       Math.max(0, DISCORD_REALTIME_PLAYBACK_IDLE_MS - (performance.now() - this.silentSince)),
     );
-    this.silenceTimer.unref?.();
+    this.silenceTimer.unref();
   }
 
   private clearTimer(timer: "silenceTimer" | "startupTimer" | "watchdog"): void {

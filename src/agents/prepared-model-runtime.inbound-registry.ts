@@ -7,17 +7,17 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  getPluginRuntimeLoadContext,
-  getReusablePluginRuntimeActivation,
-} from "../plugins/runtime/load-context.js";
+import { getReusablePluginRuntimeActivation } from "../plugins/runtime/load-context.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
+import {
+  loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandleAsync,
+} from "./runtime-plugins.js";
 
 type PreparedInboundRegistryInput = Pick<
   PreparedModelRuntimeInput,
@@ -62,7 +62,6 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
 /** Gateway-hosted prepared loads borrow unchanged instances from the live Gateway registry. */
 function resolveLendingGatewayRegistry(
   input: PreparedInboundRegistryInput,
-  metadataSnapshot: PluginMetadataSnapshot,
 ): PluginRegistry | undefined {
   if (input.allowGatewaySubagentBinding !== true || input.env !== undefined) {
     return undefined;
@@ -70,11 +69,9 @@ function resolveLendingGatewayRegistry(
   // Startup and admitted turns carry their Gateway registry through the same scope.
   // A process-active sibling with matching files is not this caller's runtime owner.
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const registry = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
-  return registry &&
-    getPluginRuntimeLoadContext(registry)?.workspaceDir === metadataSnapshot.workspaceDir
-    ? registry
-    : undefined;
+  // The loader checks each borrowed plugin's source, manifest and activation;
+  // global instances can remain identical across workspace registries.
+  return requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
 }
 
 /** Loads generic plugin facts without acquiring model, catalog, or credential state. */
@@ -84,7 +81,7 @@ export function loadPreparedInboundPluginRegistry(
   configuredHarnessRuntimes?: readonly string[],
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
-  const gatewayRegistry = resolveLendingGatewayRegistry(input, metadataSnapshot);
+  const gatewayRegistry = resolveLendingGatewayRegistry(input);
   // Registry-owned facts survive an outer reload cache without allowing stale
   // metadata or changed activation inputs to reuse already-registered callbacks.
   const reusableGatewayRegistry =
@@ -173,7 +170,7 @@ export function prepareWorkspacePluginRegistries(
   basePluginIds?: readonly string[],
   loadRuntimeRegistry:
     | PreparedModelRuntimeBuildResources["load"]
-    | typeof loadAgentRuntimePluginRegistryHandle = loadAgentRuntimePluginRegistryHandle,
+    | typeof loadAgentRuntimePluginRegistryHandleAsync = loadAgentRuntimePluginRegistryHandleAsync,
 ): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
   // Passive reads stay runtime-free; executable probes carry explicit scope.
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
@@ -224,7 +221,7 @@ export function prepareWorkspacePluginRegistries(
             ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
             selections: input.runtimePluginSelections,
             configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
-            borrowRegistry: resolveLendingGatewayRegistry(input, metadataSnapshot),
+            borrowRegistry: resolveLendingGatewayRegistry(input),
           },
           (source) => {
             loadedPrimaryRegistry =

@@ -18,7 +18,6 @@ openclaw-chat-svg-attachment {
   position: absolute;
   inset: 15px;
   background-color: var(--chat-file-icon-accent);
-  -webkit-mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
   mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
 }
 

@@ -77,15 +77,6 @@ function findDiagnosticErrorProperty<T>(
   );
 }
 
-function isHttpStatusCode(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= HTTP_STATUS_MIN &&
-    value <= HTTP_STATUS_MAX
-  );
-}
-
 function normalizeProviderRequestId(value: unknown): string | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -98,31 +89,12 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
   return undefined;
 }
 
-function readDirectProviderRequestId(err: unknown): string | undefined {
-  for (const key of PROVIDER_REQUEST_ID_KEYS) {
-    const normalized = normalizeProviderRequestId(readOwnDataProperty(err, key));
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
-}
-
 function readDirectMessage(err: unknown): string | undefined {
   if (typeof err === "string") {
     return err;
   }
   const message = readOwnDataProperty(err, "message");
   return typeof message === "string" ? message : undefined;
-}
-
-function readDirectCode(err: unknown): string | undefined {
-  const code = readOwnDataProperty(err, "code");
-  return typeof code === "string" ? code : undefined;
-}
-
-function extractProviderRequestIdFromText(text: string | undefined): string | undefined {
-  return normalizeProviderRequestId(text?.match(PROVIDER_REQUEST_ID_TEXT_PATTERN)?.[1]);
 }
 
 /** Returns a low-cardinality error category without trusting mutable `Error.name`. */
@@ -167,7 +139,12 @@ export function diagnosticErrorMessage(err: unknown): string | undefined {
 export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   for (const key of ["status", "statusCode"]) {
     const status = readOwnDataProperty(err, key);
-    if (isHttpStatusCode(status)) {
+    if (
+      typeof status === "number" &&
+      Number.isInteger(status) &&
+      status >= HTTP_STATUS_MIN &&
+      status <= HTTP_STATUS_MAX
+    ) {
       return String(status);
     }
   }
@@ -176,7 +153,12 @@ export function diagnosticHttpStatusCode(err: unknown): string | undefined {
 
 /** Classifies transport-style failures without exposing raw error messages. */
 export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailureKind | undefined {
-  const code = findDiagnosticErrorProperty(err, readDirectCode)?.trim().toUpperCase();
+  const code = findDiagnosticErrorProperty(err, (candidate) => {
+    const value = readOwnDataProperty(candidate, "code");
+    return typeof value === "string" ? value : undefined;
+  })
+    ?.trim()
+    .toUpperCase();
   const kind = code === undefined ? undefined : FAILURE_KIND_BY_CODE.get(code);
   if (kind) {
     return kind;
@@ -192,9 +174,19 @@ export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailure
 /** Extracts and hashes bounded provider request ids so diagnostics never expose raw ids. */
 export function diagnosticProviderRequestIdHash(err: unknown): string | undefined {
   const requestId =
-    findDiagnosticErrorProperty(err, readDirectProviderRequestId) ??
+    findDiagnosticErrorProperty(err, (candidate) => {
+      for (const key of PROVIDER_REQUEST_ID_KEYS) {
+        const normalized = normalizeProviderRequestId(readOwnDataProperty(candidate, key));
+        if (normalized) {
+          return normalized;
+        }
+      }
+      return undefined;
+    }) ??
     findDiagnosticErrorProperty(err, (candidate) =>
-      extractProviderRequestIdFromText(readDirectMessage(candidate)),
+      normalizeProviderRequestId(
+        readDirectMessage(candidate)?.match(PROVIDER_REQUEST_ID_TEXT_PATTERN)?.[1],
+      ),
     );
   return requestId
     ? `sha256:${sha256HexPrefixCore(requestId, REQUEST_ID_HASH_PREFIX_LEN)}`

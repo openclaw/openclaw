@@ -22,20 +22,6 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
-type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
-type MantleAnthropicStream = typeof stream;
-
-/** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
-function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, "");
-  if (trimmed.endsWith("/anthropic")) {
-    return trimmed;
-  }
-  if (trimmed.endsWith("/v1")) {
-    return `${trimmed.slice(0, -"/v1".length)}/anthropic`;
-  }
-  return `${trimmed}/anthropic`;
-}
 
 function isClaudeMythosPreviewModel(model: Model): boolean {
   return [model.id, model.name, model.params?.canonicalModelId]
@@ -78,56 +64,19 @@ function resolveMantleReasoning(
   return mythosPreview && (reasoning === "xhigh" || reasoning === "max") ? "high" : reasoning;
 }
 
-function mapModernClaudeEffort(
-  reasoning: NonNullable<SimpleStreamOptions["reasoning"]>,
-): "low" | "medium" | "high" | "xhigh" | "max" {
-  if (reasoning === "minimal" || reasoning === "low") {
-    return "low";
-  }
-  if (reasoning === "medium" || reasoning === "xhigh" || reasoning === "max") {
-    return reasoning;
-  }
-  return "high";
-}
-
-function buildMantleAnthropicBaseOptions(
-  model: Model,
-  options: SimpleStreamOptions | undefined,
-  apiKey: string,
-) {
-  return copyProviderAcceptanceObserver(options, {
-    ...(requiresClaudeDefaultSampling(model) ? {} : { temperature: options?.temperature }),
-    maxTokens:
-      options?.maxTokens ||
-      (resolveClaudeOpus5ModelIdentity(model) ||
-      resolveClaudeSonnet5ModelIdentity(model) ||
-      resolveClaudeMythos5ModelIdentity(model)
-        ? model.maxTokens
-        : Math.min(model.maxTokens, 32_000)),
-    signal: options?.signal,
-    apiKey,
-    cacheRetention: options?.cacheRetention,
-    sessionId: options?.sessionId,
-    onPayload: options?.onPayload,
-    onResponse: options?.onResponse,
-    maxRetryDelayMs: options?.maxRetryDelayMs,
-    metadata: options?.metadata,
-  });
-}
-
-/** Create the Mantle Anthropic Messages stream function. */
-export function createMantleAnthropicStreamFn(deps?: {
-  createClient?: (options: AnthropicOptions) => Anthropic;
-  stream?: MantleAnthropicStream;
-}): StreamFn {
+export function createMantleAnthropicStreamFn(): StreamFn {
   return (model, context, options) => {
     const apiKey = options?.apiKey ?? "";
-    const createClient = deps?.createClient ?? ((clientOptions) => new Anthropic(clientOptions));
-    const streamFn = deps?.stream ?? stream;
-    const client = createClient({
+    const trimmed = model.baseUrl.replace(/\/+$/, "");
+    const baseURL = trimmed.endsWith("/anthropic")
+      ? trimmed
+      : trimmed.endsWith("/v1")
+        ? `${trimmed.slice(0, -"/v1".length)}/anthropic`
+        : `${trimmed}/anthropic`;
+    const client = new Anthropic({
       apiKey: null,
       authToken: apiKey,
-      baseURL: resolveMantleAnthropicBaseUrl(model.baseUrl),
+      baseURL,
       dangerouslyAllowBrowser: true,
       defaultHeaders: {
         accept: "application/json",
@@ -138,13 +87,30 @@ export function createMantleAnthropicStreamFn(deps?: {
       },
       fetch: buildGuardedModelFetch(model),
     });
-    const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
+    const base = copyProviderAcceptanceObserver(options, {
+      ...(requiresClaudeDefaultSampling(model) ? {} : { temperature: options?.temperature }),
+      maxTokens:
+        options?.maxTokens ||
+        (resolveClaudeOpus5ModelIdentity(model) ||
+        resolveClaudeSonnet5ModelIdentity(model) ||
+        resolveClaudeMythos5ModelIdentity(model)
+          ? model.maxTokens
+          : Math.min(model.maxTokens, 32_000)),
+      signal: options?.signal,
+      apiKey,
+      cacheRetention: options?.cacheRetention,
+      sessionId: options?.sessionId,
+      onPayload: options?.onPayload,
+      onResponse: options?.onResponse,
+      maxRetryDelayMs: options?.maxRetryDelayMs,
+      metadata: options?.metadata,
+    });
     const reasoning = resolveMantleReasoning(model, options);
     const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
     const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
     const mythos5 = resolveClaudeMythos5ModelIdentity(model) !== undefined;
     if (!reasoning || reasoning === "off") {
-      return streamFn(model as Model<"anthropic-messages">, context, {
+      return stream(model as Model<"anthropic-messages">, context, {
         ...base,
         client,
         thinkingEnabled: false,
@@ -152,11 +118,19 @@ export function createMantleAnthropicStreamFn(deps?: {
     }
 
     if (opus5 || sonnet5 || mythos5) {
-      return streamFn(model as Model<"anthropic-messages">, context, {
+      const effort =
+        opus5 || sonnet5
+          ? reasoning === "minimal" || reasoning === "low"
+            ? "low"
+            : reasoning === "medium" || reasoning === "xhigh" || reasoning === "max"
+              ? reasoning
+              : "high"
+          : reasoning;
+      return stream(model as Model<"anthropic-messages">, context, {
         ...base,
         client,
         thinkingEnabled: true,
-        effort: opus5 || sonnet5 ? mapModernClaudeEffort(reasoning) : reasoning,
+        effort,
       });
     }
 
@@ -172,7 +146,7 @@ export function createMantleAnthropicStreamFn(deps?: {
     });
     const adaptiveThinking = isClaudeMythosPreviewModel(model);
     const thinkingEnabled = adaptiveThinking || adjusted.thinkingBudget >= 1024;
-    return streamFn(model as Model<"anthropic-messages">, context, {
+    return stream(model as Model<"anthropic-messages">, context, {
       ...base,
       client,
       maxTokens: adjusted.maxTokens,

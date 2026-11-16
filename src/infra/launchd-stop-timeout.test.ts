@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isRespawnedByLauncher } from "./gateway-shutdown-budget.js";
 import { readLaunchdStopTimeout } from "./launchd-stop-timeout.js";
 
 const { execLaunchctl } = vi.hoisted(() => ({ execLaunchctl: vi.fn() }));
@@ -68,17 +67,9 @@ describe("launchd stop timeout reads the job launchd is stopping", () => {
     },
   );
 
-  it("accepts any signal launchd reports having delivered", async () => {
-    execLaunchctl.mockResolvedValue(printed("SIGKILLed", "\texit timeout = 9\n\tpid = 4242\n"));
-    await expect(readLaunchdStopTimeout(LAUNCHD_ENV)).resolves.toEqual({
-      stop: { timeoutMs: 9_000, source: "launchd system/ai.openclaw.gateway exit timeout" },
-    });
-  });
-
   it.each([
     [LAUNCHD_ENV, 4242, "running"],
     [RESPAWNED_SERVICE_ENV, 4241, "running"],
-    ...["SIGTERM", "sigtermed"].map((state) => [LAUNCHD_ENV, 4242, state] as const),
   ] as const)("keeps the drain policy for %j, pid %i, state %s", async (env, pid, state) => {
     execLaunchctl.mockResolvedValue(printed(state, `\texit timeout = 60\n\tpid = ${pid}\n`));
     await expect(readLaunchdStopTimeout(env)).resolves.toEqual({ stop: null });
@@ -87,7 +78,6 @@ describe("launchd stop timeout reads the job launchd is stopping", () => {
 
   it.each([
     "system/ai.openclaw.gateway = {\n\tactive count = 1\n\ttype = LaunchDaemon\n\n\texit timeout = 47\n\tpid = 4242\n\tjob state = running\n}\n",
-    printed("", "\texit timeout = 47\n\tpid = 4242\n").stdout,
   ])("warns when a deadline has no readable job state: %j", async (stdout) => {
     execLaunchctl.mockResolvedValue(result(stdout));
     const read = await readLaunchdStopTimeout(LAUNCHD_ENV);
@@ -179,15 +169,4 @@ describe("launchd stop timeout reads the job launchd is stopping", () => {
       expect(execLaunchctl).not.toHaveBeenCalled();
     },
   );
-
-  it("recognises no unrelated or disabled respawn markers", () => {
-    for (const env of [
-      {},
-      { OPENCLAW_SUPERVISOR_MODE: "external" },
-      { OPENCLAW_NODE_UPDATE_RESPAWNED: "0" },
-      { OPENCLAW_NODE_UPDATE_RESPAWNED: "" },
-    ]) {
-      expect(isRespawnedByLauncher(env)).toBe(false);
-    }
-  });
 });

@@ -67,6 +67,10 @@ type SessionUsageRollupContribution = {
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
   usageTotals?: CostUsageTotals;
+  /** True when the scan resolved canonical navigation and owns the cursor. */
+  navigated?: boolean;
+  /** This row's own user turn on its canonical path, when navigation named one. */
+  userTimestamp?: number;
 };
 
 function emptyMessageCounts(): SessionMessageCounts {
@@ -222,8 +226,15 @@ export function appendSessionUsageRollupContribution(
     return;
   }
   if (contribution.role === "assistant") {
+    // Latency follows the turn this reply answers: its own canonical user ancestor,
+    // whichever branch it belongs to. A flat transcript and an appended tail have
+    // no navigation to resolve, so they measure from the running cursor.
     const sourceUserTimestamp =
-      contribution.durationMs === undefined ? rollup.lastUserTimestamp : undefined;
+      contribution.durationMs !== undefined
+        ? undefined
+        : contribution.navigated === true
+          ? contribution.userTimestamp
+          : rollup.lastUserTimestamp;
     const latencyMs =
       contribution.durationMs ??
       (sourceUserTimestamp !== undefined
@@ -233,7 +244,9 @@ export function appendSessionUsageRollupContribution(
       addLatencyValue(timedBucket.latency, latencyMs);
     }
   }
-  if (contribution.role === "user") {
+  if (contribution.role === "user" && contribution.navigated !== true) {
+    // Without navigation facts the file order is the branch; a navigated scan
+    // publishes the active path's own cursor once it has read every row.
     rollup.lastUserTimestamp = timedBucket.timestampMs;
   }
 }
@@ -264,7 +277,7 @@ export function mergeSessionUsageRollupBucket(
   );
 }
 
-function computeLatencyStats(
+export function computeLatencyStats(
   aggregate: SessionUsageLatencyAggregate,
 ): SessionLatencyStats | undefined {
   if (aggregate.count === 0) {
@@ -311,9 +324,6 @@ function addQuarterHourTokens(
   target: SessionUtcQuarterHourTokenUsage,
   source: SessionUtcQuarterHourTokenUsage,
 ): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;
@@ -323,9 +333,6 @@ function addQuarterHourTokens(
 }
 
 function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.tokens += source.tokens;
   target.cost += source.cost;
   target.count += source.count;
@@ -585,10 +592,9 @@ export function buildSessionCostSummaryFromRollup(params: {
 
     dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
     quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
-    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport } =
-      bucket.totals;
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
     quarterTokens.add([
-      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport },
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
     ]);
     dailyModels.add(
       bucket.models.map((model) => ({
@@ -598,7 +604,6 @@ export function buildSessionCostSummaryFromRollup(params: {
         tokens: model.totals.totalTokens,
         cost: model.totals.totalCost,
         count: model.count,
-        usageReport: model.totals.usageReport,
       })),
     );
 
@@ -656,7 +661,7 @@ export function addRollupToCostUsageSummary(params: {
   totals: CostUsageTotals;
 }): void {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    const dayKey = params.formatDay(new Date(bucket.timestampMs));
+    const dayKey = params.formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs));
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);

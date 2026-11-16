@@ -1,3 +1,5 @@
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
+
 type BareNullableSqliteDatatype = "INTEGER" | "TEXT";
 
 type LazyAdditiveAgentColumnDefinition = {
@@ -33,3 +35,40 @@ export const FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS = [
   LEGACY_ACP_MIGRATION_COLUMN_DEFINITION,
   CANONICAL_READY_COLUMN_DEFINITION,
 ] as const satisfies readonly LazyAdditiveAgentColumnDefinition[];
+
+// Startup installs these on every existing table before exposing session readers.
+// First-use columns above remain feature-local and are not admission prerequisites.
+export const STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS = [
+  { tableName: "session_pending_inputs", columnName: "consumed_event_id", dataType: "TEXT" },
+  {
+    tableName: "session_transcript_active_events",
+    columnName: "context_eligible",
+    dataType: "INTEGER",
+  },
+  { tableName: "session_nodes", columnName: "project_id", dataType: "TEXT" },
+  { tableName: "session_windows", columnName: "row_transcript_json", dataType: "TEXT" },
+  { tableName: "session_windows", columnName: "row_transcript_updated_at", dataType: "INTEGER" },
+  { tableName: "session_conversations", columnName: "route_context_json", dataType: "TEXT" },
+] as const;
+
+/** Missing feature-local tables stay absent; existing tables must satisfy this build's readers. */
+export function hasPendingAgentStartupColumns(
+  tableSql: ReadonlyMap<string, string | null>,
+): boolean {
+  const columns = new Map<string, ReadonlyMap<string, string>>();
+  return STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS.some(({ tableName, columnName }) => {
+    if (!tableSql.has(tableName)) {
+      return false;
+    }
+    const sql = tableSql.get(tableName);
+    if (!sql) {
+      return true;
+    }
+    let parsed = columns.get(tableName);
+    if (!parsed) {
+      parsed = parseSqliteTableDefinition(sql, tableName).columns;
+      columns.set(tableName, parsed);
+    }
+    return !parsed.has(columnName);
+  });
+}

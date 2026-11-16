@@ -7,6 +7,7 @@ register();
 const { runWithSqliteMutationWorkerCoordination } =
   await import("./session-accessor.sqlite-worker-coordination.ts");
 const { acquireGatewayStateOwner } = await import("../../infra/gateway-state-owner.ts");
+const { readGatewayLockProcessNamespace } = await import("../../infra/gateway-lock-payload.ts");
 const { claimOpenClawAgentDatabaseLease, releaseOpenClawAgentDatabaseLease } =
   await import("../../state/openclaw-agent-db-lease.ts");
 const { closeOpenClawStateDatabase } = await import("../../state/openclaw-state-db.ts");
@@ -22,6 +23,7 @@ const execute = () =>
           databasePath: coordination.databasePath,
           payload: {
             pid: process.pid,
+            processNamespace: readGatewayLockProcessNamespace(),
             createdAt: new Date().toISOString(),
             configPath: path.join(stateDir, "openclaw.json"),
             stateDir,
@@ -35,6 +37,11 @@ const execute = () =>
         } finally {
           owner.release();
         }
+      } else if (workerData.operation === "create-quarantine") {
+        const { ensureOpenClawQuarantineStore } =
+          await import("../../state/openclaw-quarantine-store.ts");
+        ensureOpenClawQuarantineStore(options.env);
+        parentPort.postMessage("created", []);
       } else if (workerData.operation === "cold-quarantine") {
         const { openOpenClawStateDatabase, runOpenClawStateWriteTransaction } =
           await import("../../state/openclaw-state-db.ts");

@@ -5,25 +5,8 @@ import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-path
 
 type CloudWorkerConfigPatch = { patch: Record<string, unknown>; replacePaths: string[] };
 
-export type CloudWorkerProfileDraft = {
-  id: string;
-  backend: string;
-  target: string;
-  machineClass: string;
-  ttl: string;
-  idleTimeout: string;
-  setup: string;
-  setupEnv: string;
-  warmImage: "auto" | "on" | "off";
-  readyWorkers: string;
-  suspendAfter: string;
-  desktop: boolean;
-  binary: string;
-};
-
-export type ConfiguredCloudWorkerProfile = CloudWorkerProfileDraft & {
-  providerId: string;
-};
+export type ConfiguredCloudWorkerProfile = ReturnType<typeof readCloudWorkerProfiles>[number];
+export type CloudWorkerProfileDraft = Omit<ConfiguredCloudWorkerProfile, "providerId">;
 
 export type CloudWorkerDraftError =
   | "profileId"
@@ -59,14 +42,12 @@ function stringSetting(settings: Record<string, unknown>, key: string): string {
   return normalizeOptionalString(settings[key]) ?? "";
 }
 
-export function readCloudWorkerProfiles(
-  config: Readonly<Record<string, unknown>> | null,
-): ConfiguredCloudWorkerProfile[] {
+export function readCloudWorkerProfiles(config: Readonly<Record<string, unknown>> | null) {
   if (!config) {
     return [];
   }
   return Object.entries(profileRecords(config))
-    .flatMap<ConfiguredCloudWorkerProfile>(([id, raw]) => {
+    .flatMap(([id, raw]) => {
       if (!isRecord(raw)) {
         return [];
       }
@@ -83,7 +64,11 @@ export function readCloudWorkerProfiles(
           setup: stringSetting(settings, "setup"),
           setupEnv: Array.isArray(settings.setupEnv) ? settings.setupEnv.join(", ") : "",
           warmImage:
-            settings.warmImage === true ? "on" : settings.warmImage === false ? "off" : "auto",
+            settings.warmImage === true
+              ? ("on" as const)
+              : settings.warmImage === false
+                ? ("off" as const)
+                : ("auto" as const),
           readyWorkers: typeof raw.readyWorkers === "number" ? String(raw.readyWorkers) : "",
           suspendAfter: stringSetting(raw, "suspendAfter"),
           desktop: settings.desktop === true,

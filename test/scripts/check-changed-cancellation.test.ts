@@ -1,30 +1,16 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as waitForReaper } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { hasErrnoCode } from "../../src/infra/errno.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
-
-// The detached implementation/leaf PIDs have no ChildProcess handles in this harness.
-async function waitForRecordedPidsDead(pids: number[], signal: AbortSignal) {
-  for (const pid of pids) {
-    try {
-      while (isProcessAlive(pid)) {
-        await waitForReaper(10, undefined, { signal });
-      }
-    } catch (error) {
-      throw new Error(`process still alive: ${pid}`, { cause: error });
-    }
-  }
-}
 
 describe.skipIf(process.platform === "win32")("check-changed public wrapper cancellation", () => {
   it.for(["resistant", "cooperative"] as const)(
@@ -131,15 +117,12 @@ child.once("message", () => {
           }),
         );
         const readOwnedPids = () =>
-          pidPaths.flatMap((pidPath) => {
-            if (!fs.existsSync(pidPath)) {
-              return [];
-            }
+          pidPaths.filter(fs.existsSync).map((pidPath) => {
             const pid = Number(fs.readFileSync(pidPath, "utf8"));
             if (!Number.isSafeInteger(pid) || pid <= 1) {
               throw new Error(`Invalid fixture pid in ${pidPath}`);
             }
-            return [pid];
+            return pid;
           });
         try {
           // The relay writes readiness only after both leaf signal handlers are installed.
@@ -154,8 +137,7 @@ child.once("message", () => {
           expect(readOwnedPids()).toHaveLength(3);
           expect(wrapper?.kill("SIGTERM")).toBe(true);
           const result = await withinTest(completion, signal);
-          expect(result.error, result.stderr).toBeUndefined();
-          expect(result.status, result.stderr).toBe(143);
+          expect(result, result.stderr).toMatchObject({ error: undefined, status: 143 });
           expect(result.stderr.trim().split("\n").at(-1)).toBe("[check:changed] FAILED (exit 143)");
           expect(fs.readFileSync(commandsPath, "utf8").trim()).toBe(
             JSON.stringify(["check:no-conflict-markers"]),
@@ -174,19 +156,9 @@ child.once("message", () => {
             // A pre-fix wrapper can orphan these exact fixture PIDs. Reap only those
             // recorded by the fixture leaf; never broaden cleanup to process-name scans.
             const pids = [...readOwnedPids(), ...(wrapper?.pid ? [wrapper.pid] : [])];
-            for (const pid of pids) {
-              if (isProcessAlive(pid)) {
-                try {
-                  process.kill(pid, "SIGKILL");
-                } catch (error) {
-                  if (!hasErrnoCode(error, "ESRCH")) {
-                    throw error;
-                  }
-                }
-              }
-            }
+            pids.forEach(killPidIfAlive);
             await completion;
-            await waitForRecordedPidsDead(pids, signal);
+            await Promise.all(pids.map((pid) => waitForDead(pid, signal)));
           });
         }
       });

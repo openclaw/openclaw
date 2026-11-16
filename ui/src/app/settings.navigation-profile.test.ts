@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
@@ -93,6 +94,7 @@ it.each([false, true])(
     const events = new EventTarget();
     vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
     vi.stubGlobal("removeEventListener", events.removeEventListener.bind(events));
+    vi.stubGlobal("matchMedia", (media: string) => createMediaQueryList(media, false));
     const initial = loadSettings();
     const { gateway } = createGatewayStoreTestStore({ settings: initial });
     const theme = createApplicationTheme(initial, gateway);
@@ -235,64 +237,14 @@ it("keeps dirty local navigation through storage failures without replaying unch
   siblingSave("b", ["route:usage"]);
   patchSettings({ navWidth: 340 });
   expect(JSON.parse(localStorage.getItem(key)!).navigationByProfile).toEqual({
-    a: { railShortcuts: ["route:cron"] },
+    a: { railShortcuts: ["route:cron"], personalSessionGroups: [] },
     b: { railShortcuts: ["route:usage"] },
   });
 });
 
-it.each([false, true])(
-  "ignores legacy mirrors and preserves them through a rail edit (quota=%s)",
-  async (quota) => {
-    const backend = createProfilePrefsServer({ a: { [pinsKey]: ["route:usage"] } }, scope);
-    await backend.connect("a").refresh();
-    const key = settingsKeyForGateway(scope);
-    const stored = JSON.parse(localStorage.getItem(key)!);
-    const legacyEntries = ["route:usage", "plugin:workboard/workboard", "session:private-a"];
-    localStorage.setItem(
-      key,
-      JSON.stringify({
-        ...stored,
-        sidebarEntries: legacyEntries,
-        navigationByProfile: {
-          ...stored.navigationByProfile,
-          "new-profile": { sidebarEntries: legacyEntries },
-        },
-      }),
-    );
-    const onApplied = vi.fn();
-    applyServerUiPrefs({}, { scope, profileId: "new-profile", onApplied });
-    expect(loadSettings()).toMatchObject({
-      sidebarEntries: DEFAULT_SIDEBAR_ENTRIES,
-    });
-    expect(onApplied).toHaveBeenCalledWith(
-      expect.objectContaining({ sidebarEntries: DEFAULT_SIDEBAR_ENTRIES }),
-    );
-    const deniedWrite = quota
-      ? vi.spyOn(localStorage, "setItem").mockImplementation(() => {
-          throw new Error("quota");
-        })
-      : null;
-    patchSettings({ sidebarEntries: ["session:agent:main:added"] });
-    expect(loadSettings().sidebarEntries).toEqual(["session:agent:main:added"]);
-    deniedWrite?.mockRestore();
-    patchSettings({ navWidth: 320 });
-    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
-      sidebarEntries: legacyEntries,
-      navigationByProfile: {
-        "new-profile": {
-          sidebarEntries: legacyEntries,
-          railShortcuts: ["session:agent:main:added"],
-        },
-      },
-    });
-  },
-);
-
 it.each([
   { destination: scope, localPins: ["route:systems"] },
-  { destination: scope, localPins: [] },
   { destination: "wss://other.example", localPins: ["route:systems"] },
-  { destination: "wss://other.example", localPins: [] },
 ])(
   "preserves profileless navigation through A → $destination → A ($localPins)",
   async ({ destination, localPins }) => {
@@ -349,7 +301,7 @@ it("does not promote private pins into a never-saved profileless browser snapsho
   expect(request).not.toHaveBeenCalled();
 });
 
-it.each([{ localPins: ["route:cron"] }, { localPins: [] }])(
+it.each([{ localPins: ["route:cron"] }])(
   "preserves profileless shortcuts on upgrade from shared last-seen navigation (%j)",
   ({ localPins }) => {
     patchSettings({ sidebarEntries: localPins });

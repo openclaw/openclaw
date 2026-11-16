@@ -1,5 +1,8 @@
 import type { SkillStatusEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerSkillLibraryEnglish } from "../i18n/locales/en-skill-library.ts";
+
+registerSkillLibraryEnglish();
 
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [

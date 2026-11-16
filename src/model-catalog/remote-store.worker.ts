@@ -9,6 +9,7 @@ import type {
 import {
   readRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_STATE_KEY,
+  PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY,
   LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY,
   type RemoteModelCatalogSnapshot,
   type RemoteModelCatalogWriteResult,
@@ -56,21 +57,23 @@ export const modelCatalogOperations = {
   ): boolean =>
     writeAdmitted(({ db }) => {
       let matched = false;
-      // Reread the legacy slot under the lock; adoption must not overwrite a concurrent refresh.
-      const legacyJson = readConfigMachineStateRowInDatabase(
-        db,
-        LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY,
-      )?.value_json;
-      let legacy: RemoteModelCatalogSnapshot | undefined;
-      if (legacyJson !== undefined) {
-        // SAFETY: Only OpenClaw catalog stores write this key, always as a catalog snapshot.
-        legacy = JSON.parse(legacyJson) as RemoteModelCatalogSnapshot;
-      }
       updateConfigMachineStateInDatabase<RemoteModelCatalogSnapshot>(
         db,
         REMOTE_MODEL_CATALOG_STATE_KEY,
         (stored) => {
-          const current = stored ?? legacy;
+          let current = stored;
+          if (current == null) {
+            // Adopt older snapshots only into this reader generation; keep their original bytes.
+            const legacyJson =
+              readConfigMachineStateRowInDatabase(db, PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY)
+                ?.value_json ??
+              readConfigMachineStateRowInDatabase(db, LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY)
+                ?.value_json;
+            if (legacyJson !== undefined) {
+              // SAFETY: Each catalog generation owns its persisted snapshot shape.
+              current = JSON.parse(legacyJson) as RemoteModelCatalogSnapshot;
+            }
+          }
           if (
             !current ||
             current.source_url !== metadata.expected.source_url ||

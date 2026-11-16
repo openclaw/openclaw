@@ -131,7 +131,6 @@ read_when:
         ownership: "explicit",
         defaults: {
           skills: ["github", "weather"],
-          heartbeat: { agentId: "writer" },
           systemAgent: { agentId: "writer" },
           authInheritance: { agentId: "writer" },
         },
@@ -284,24 +283,26 @@ read_when:
 
   </Accordion>
 
-  <Accordion title="Set up heartbeat (periodic check-ins)">
-    ```json5
-    {
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-            target: "owner",
-          },
-        },
-      },
-    }
+  <a id="set-up-heartbeat-periodic-check-ins" />
+  <Accordion title="Set up periodic check-ins">
+    Periodic check-ins are ordinary jobs in **Automations**. Select the job to
+    edit its schedule, scratch checklist, session, active hours, and delivery.
+    You can also adjust an existing job from the CLI:
+
+    ```bash
+    openclaw cron list --all
+    openclaw cron edit <job-id> --every 30m
+    openclaw cron disable <job-id>
     ```
 
-    - `every`: duration string (`30m`, `2h`). Set `0m` to disable recurring cadence; targeted event-driven wakes can still run one agent turn. Default: `30m`.
-    - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
-    - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
-    - See [Heartbeat](/gateway/heartbeat) for the full guide.
+    For an existing July 2026 or newer heartbeat config, run
+    `openclaw doctor --fix` first. Doctor transfers the settings into ordinary
+    jobs and removes the retired heartbeat blocks. Edit the jobs after that;
+    deleting a job does not cause it to reappear on restart or config reload.
+    Disabling a periodic job leaves event-driven follow-ups available.
+
+    See [Cron jobs](/automation/cron-jobs) to create a job and
+    [Heartbeat migration](/gateway/heartbeat) for the migration details.
 
   </Accordion>
 
@@ -369,7 +370,6 @@ read_when:
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "home" },
           systemAgent: { agentId: "home" },
           authInheritance: { agentId: "home" },
         },

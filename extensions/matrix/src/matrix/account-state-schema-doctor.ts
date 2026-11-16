@@ -1,4 +1,3 @@
-// Matrix plugin module owns Doctor repair of account-scoped SQLite databases.
 import path from "node:path";
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";

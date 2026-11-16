@@ -15,7 +15,9 @@ import type {
 import { listAgentIds } from "./agent-scope-config.js";
 
 function captureCandidates(stores: readonly string[]) {
-  return [...new Set(stores.flatMap(listSqliteTargetCandidatePathsForSessionStorePath))]
+  return [
+    ...new Set(stores.flatMap((store) => listSqliteTargetCandidatePathsForSessionStorePath(store))),
+  ]
     .toSorted()
     .map((pathname) => ({ path: pathname, identity: readDatabasePathIdentitySync(pathname) }));
 }

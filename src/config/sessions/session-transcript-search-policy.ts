@@ -1,3 +1,4 @@
+import type { TextQuery } from "../../infra/database-engine/text-contract.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 
@@ -25,21 +26,28 @@ export function sessionTranscriptSearchTerms(input: string): string[] {
 export function sessionTranscriptSearchFtsQuery(
   query: string,
   match: SessionTranscriptSearchParams["match"],
-): string {
+) {
   // Implicit AND lets FTS5 discard empty phrases using its own tokenizer.
-  return sessionTranscriptSearchTerms(query)
-    .map(
-      (token, index, tokens) =>
-        `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
-    )
-    .join(" ");
+  return {
+    kind: "all",
+    clauses: sessionTranscriptSearchTerms(query).map((text, index, tokens) => ({
+      kind: "phrase",
+      text,
+      prefix: match === "prefix" && index === tokens.length - 1,
+    })),
+  } satisfies TextQuery;
 }
 
 export function sessionTranscriptSearchLimit(limit?: number): number {
   return Math.min(Math.max(1, limit ?? 10), SEARCH_LIMIT_MAX);
 }
 
-export function boundSessionTranscriptSearchSnippet(snippet: string): string {
+export function boundSessionTranscriptSearchSnippet(text: string, substring?: string): string {
+  let snippet = text;
+  if (substring) {
+    const start = Math.max(0, snippet.toLowerCase().indexOf(substring.toLowerCase()) - 160);
+    snippet = `${start > 0 ? "… " : ""}${snippet.slice(start)}`;
+  }
   return snippet.length > SEARCH_SNIPPET_MAX_CHARS
     ? `${truncateUtf16Safe(snippet, SEARCH_SNIPPET_MAX_CHARS)}…`
     : snippet;

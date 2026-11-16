@@ -38,6 +38,15 @@ export async function bootstrapGatewayRun(params: {
   if (!shouldBootstrap) {
     return;
   }
+  if (process.platform === "linux" && process.env.OPENCLAW_SERVICE_KIND === "gateway") {
+    const { prepareSystemdGatewayActivation } = await import("./systemd-activation.js");
+    await startupTrace.measure("gateway-systemd-activation", () =>
+      prepareSystemdGatewayActivation({
+        runtime,
+        beforeStatePreparation: () => beforeStatePreparation?.() ?? Promise.resolve(true),
+      }),
+    );
+  }
   await startupTrace.measure("gateway-run-bootstrap", async () => {
     const { ensureCliExecutionBootstrap } = await import("../command-execution-startup.js");
     await ensureCliExecutionBootstrap({
@@ -106,19 +115,21 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
       const resolved = resolveGatewayRunOptions(opts, command);
       const { withAgentDatabaseStartupAdmission } =
         await import("../../state/agent-database-startup.js");
+      const { withLiveStateReads } = await import("../../state/artifact-preserving-state-reads.js");
       return withAgentDatabaseStartupAdmission(
-        async () => {
-          try {
-            await hooks.beforeRun?.(resolved);
-            const { runGatewayCommand } = await import("./run.js");
-            await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
-          } catch (error) {
-            const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
-            if (!(await handleGatewayStartupMaintenance(error))) {
-              throw error;
+        () =>
+          withLiveStateReads(async () => {
+            try {
+              await hooks.beforeRun?.(resolved);
+              const { runGatewayCommand } = await import("./run.js");
+              await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
+            } catch (error) {
+              const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
+              if (!(await handleGatewayStartupMaintenance(error))) {
+                throw error;
+              }
             }
-          }
-        },
+          }),
         { deferInspections: !resolved.updateCanary },
       );
     });

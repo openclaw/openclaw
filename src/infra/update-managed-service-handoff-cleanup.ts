@@ -4,9 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { ignoreMissingPath } from "./errno.js";
 import type { ManagedHandoffRepairFacts } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
+
+type DiscoveredRepairFacts = ManagedHandoffRepairFacts & {
+  windowsUserSid?: string;
+  drivers?: ManagedHandoffLease["helper"][];
+  /** Other lease keys retired with this handoff. */
+  installationRoots?: string[];
+};
 
 /** v1 shipped in 2026.8.2. This proves cleanup eligibility, never v2 authority. */
 export function canCleanupLegacyManagedHandoff(
@@ -31,50 +39,13 @@ export function canCleanupLegacyManagedHandoff(
 }
 
 export const MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX = "openclaw-update-run-handoff-";
-const MANAGED_SERVICE_UPDATE_HANDOFF_STALE_TTL_MS = 24 * 60 * 60_000;
-
-export async function cleanupStaleManagedServiceUpdateHandoffs(params?: {
-  tmpDir?: string;
-  nowMs?: number;
-  ttlMs?: number;
-}): Promise<number> {
-  const tmpDir = params?.tmpDir ?? os.tmpdir();
-  const nowMs = params?.nowMs ?? Date.now();
-  const ttlMs = params?.ttlMs ?? MANAGED_SERVICE_UPDATE_HANDOFF_STALE_TTL_MS;
-  let entries: Array<{ name: string; isDirectory: () => boolean }>;
-  try {
-    entries = await fs.readdir(tmpDir, { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-
-  let removed = 0;
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (
-      !entry.isDirectory() ||
-      !entry.name.startsWith(MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX)
-    ) {
-      continue;
-    }
-    const dir = path.join(tmpDir, entry.name);
-    try {
-      const stats = await fs.stat(dir);
-      if (nowMs - stats.mtimeMs < ttlMs) {
-        continue;
-      }
-      await fs.rm(dir, { recursive: true, force: true });
-      removed += 1;
-    } catch {
-      // Best effort cleanup only.
-    }
-  }
-  return removed;
-}
 
 export async function inspectManagedHandoffRepairFacts(
   previous: ManagedHandoffLease,
-  discovered: ManagedHandoffRepairFacts,
+  discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
+  familyExited = false,
+  processState?: (identity: ManagedHandoffLease["helper"]) => "live" | "dead" | "unknown",
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
     runIds: [...new Set([...(retained?.runIds ?? []), ...discovered.runIds])],
@@ -82,14 +53,31 @@ export async function inspectManagedHandoffRepairFacts(
     timeoutMs: Math.max(retained?.timeoutMs ?? 0, discovered.timeoutMs ?? 0) || null,
   };
   const grace = Math.max(45 * 60_000, facts.timeoutMs ?? 0);
-  if (Date.now() - previous.updatedAt < grace) {
+  const ownersExited =
+    processState &&
+    [previous.helper, previous.executor, ...(discovered.drivers ?? [])].every(
+      (owner) => processState(owner) === "dead",
+    );
+  if (!familyExited && !ownersExited && Date.now() - previous.updatedAt < grace) {
     throw new Error(
       `Handoff was last recorded at ${new Date(previous.updatedAt).toISOString()}; its recovery grace ends at ${new Date(previous.updatedAt + grace).toISOString()}. Retry openclaw update repair then.`,
     );
   }
   const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
+  // Candidate and child roots are this run's own; installation and service roots are shared.
+  const sharedRoots = [...new Set([previous.key, ...(discovered.installationRoots ?? [])])].filter(
+    (key) => !key.includes("/.openclaw-update-child-"),
+  );
   for (const runId of facts.runIds) {
-    const census = inspectOtherOpenClawProcesses({ runId, artifactPaths: facts.artifactPaths });
+    const census = inspectOtherOpenClawProcesses({
+      runId,
+      artifactPaths: facts.artifactPaths,
+      sharedRoots,
+      familyDeadline: previous.updatedAt + grace,
+      windowsUserSid: discovered.windowsUserSid,
+      drivers: [previous.helper, previous.executor, ...(discovered.drivers ?? [])],
+      familyExited,
+    });
     const pids = [...new Set([...census.matchingPids, ...census.unverifiedPids])];
     if (pids.length || census.error) {
       throw new Error(
@@ -104,19 +92,35 @@ export async function readManagedHandoffRepairFacts(
   lease: ManagedHandoffLease,
   env: NodeJS.ProcessEnv,
   boundRunId?: string,
-): Promise<ManagedHandoffRepairFacts> {
+): Promise<DiscoveredRepairFacts> {
   const { readSecureFile } = await import("./fs-safe.js");
   const { listUpdateRunsAsync } = await import("./update-run-reader.js");
   const { recordedUpdateRunDrivers } = await import("./update-run-activity.js");
   const { sameUpdateRunDriver } = await import("./update-run-driver.js");
-  const { assertUpdateRecoveryAdmission } = await import("./update-run-recovery-admission.js");
+  const { assertUpdateRecoveryAdmission, inspectPluginCohortRecoveryAdmission } =
+    await import("./update-run-recovery-admission.js");
   const { resolveStateDir } = await import("../config/paths.js");
   const { resolveUpdateCaptureRoot } = await import("./update-capture-paths.js");
   const runIds = new Set<string>(boundRunId ? [boundRunId] : []);
   const artifactPaths = new Set<string>();
   let timeoutMs = 0;
-  const root = await fs.realpath(os.tmpdir());
-  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+  const roots = new Set([await fs.realpath(os.tmpdir())]);
+  if (process.platform === "darwin") {
+    // A Gateway-started handoff lives under the service TMPDIR, not this CLI's.
+    const { resolveServiceTmpDir } = await import("../daemon/service-tmp-dir.js");
+    const serviceRoot = await fs
+      .realpath(resolveServiceTmpDir(env, "darwin"))
+      .catch(ignoreMissingPath);
+    if (serviceRoot) {
+      roots.add(serviceRoot);
+    }
+  }
+  const entries = await Promise.all(
+    [...roots].map(async (root) =>
+      (await fs.readdir(root, { withFileTypes: true })).map((entry) => ({ root, entry })),
+    ),
+  );
+  for (const { root, entry } of entries.flat()) {
     if (
       !entry.isDirectory() ||
       !entry.name.startsWith(MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX)
@@ -161,11 +165,7 @@ export async function readManagedHandoffRepairFacts(
       }
     }
     const timeouts = [value.recoveryTimeoutMs, value.parentExitTimeoutMs];
-    const argv =
-      Array.isArray(value.commandArgv) &&
-      value.commandArgv.every((arg): arg is string => typeof arg === "string")
-        ? value.commandArgv
-        : [];
+    const argv = isStringArray(value.commandArgv) ? value.commandArgv : [];
     for (const [index, arg] of argv.entries()) {
       const seconds = arg === "--timeout" ? argv[index + 1] : arg.match(/^--timeout=(.*)$/u)?.[1];
       timeouts.push(positiveSecondsToSafeMilliseconds(seconds?.trim()));
@@ -188,6 +188,8 @@ export async function readManagedHandoffRepairFacts(
   }));
   for (const run of runs) {
     if (
+      // Child leases are owned by their run; adoption drops a dead updater from the drivers.
+      run.runId === lease.owner ||
       recordedUpdateRunDrivers(run).some((driver) =>
         owners.some((owner) => sameUpdateRunDriver(driver, owner)),
       )
@@ -204,7 +206,15 @@ export async function readManagedHandoffRepairFacts(
   if (capture && !capture.restored && !capture.forwardResolution && !capture.retirement) {
     throw new Error(`Update ${runId} retains restoration; run openclaw doctor --fix.`);
   }
-  await assertUpdateRecoveryAdmission({ env });
+  try {
+    await assertUpdateRecoveryAdmission({ env });
+  } catch (error) {
+    // The unique run was proven above from this native lineage. Gathering facts
+    // remains read-only; reclaiming the claim still proves every driver exited.
+    if (!(await inspectPluginCohortRecoveryAdmission({ env }, runId))) {
+      throw error;
+    }
+  }
   if (!capture) {
     const { resolvePublicUpdateStepId } = await import("./update-step-identity.js");
     const { isVerifiedUpdateRollback } = await import("../shared/update-outcome.js");
@@ -252,6 +262,8 @@ export async function readManagedHandoffRepairFacts(
   }
   return {
     runIds: [runId],
+    drivers: [lease.helper, lease.executor, ...recordedUpdateRunDrivers(original)],
+    ...(original.origin.windowsUserSid ? { windowsUserSid: original.origin.windowsUserSid } : {}),
     artifactPaths: artifactPaths.size ? [...artifactPaths] : [lease.key],
     timeoutMs: timeoutMs || null,
   };

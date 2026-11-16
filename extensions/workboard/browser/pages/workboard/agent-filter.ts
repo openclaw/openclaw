@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { AgentsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/types.ts";
 
 export type WorkboardAgentsList = Pick<AgentsListResult, "defaultId" | "agents">;
 type WorkboardAgentRow = AgentsListResult["agents"][number];
@@ -154,7 +154,14 @@ export function buildAssignableAgentPickerOptions(
     })),
     ...(hasCurrent
       ? []
-      : [{ id: currentId, label: t("workboard.agentCurrentUnconfigured", { agent: currentId }) }]),
+      : [
+          {
+            id: currentId,
+            label: agentsList
+              ? t("workboard.agentCurrentUnconfigured", { agent: currentId })
+              : currentId,
+          },
+        ]),
   ].map((option) => {
     const effectiveId = option.id || defaultAgentId;
     const agent = agentsList?.agents.find((entry) => entry.id === effectiveId);

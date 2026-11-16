@@ -3,6 +3,7 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionsListParamsSchema } from "./sessions-list.js";
 import { SessionRowSchema } from "./sessions-row.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Searches explicit agent keys, or the complete visible roster selected by scope. */
 export const SessionsSearchParamsSchema = Object.assign(
@@ -59,7 +60,7 @@ export const SessionsSearchHitSchema = closedObject({
   sessionKey: NonEmptyString,
   sessionId: NonEmptyString,
   messageId: NonEmptyString,
-  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  role: stringLiteralUnion(["user", "assistant"]),
   timestamp: Type.Integer({ minimum: 0 }),
   snippet: Type.String(),
   score: Type.Number(),

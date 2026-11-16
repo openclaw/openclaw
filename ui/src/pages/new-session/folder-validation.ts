@@ -1,5 +1,5 @@
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 
 /** fs.listDir uses INVALID_REQUEST for host filesystem errors; only stable errno markers prove stale input. */

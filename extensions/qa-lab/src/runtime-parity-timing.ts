@@ -1,17 +1,9 @@
 import type { RuntimeId } from "./runtime-id.js";
 
-type QaRuntimeWallClockMetrics = {
-  totalWallClockMs: number | null;
-  p50WallClockMs: number | null;
-  p90WallClockMs: number | null;
-};
-
 type QaRuntimeSpeedComparison = {
   fasterRuntime: RuntimeId | "tie" | null;
   speedupPercent: number | null;
 };
-
-export type QaRuntimeTiming = ReturnType<typeof summarizeRuntimeParityTiming>;
 
 export type QaRuntimeParityCellTiming = ReturnType<typeof measureRuntimeParityCellTiming>;
 
@@ -58,7 +50,7 @@ export function compareRuntimeWallClockMs(
   };
 }
 
-function summarizeRuntimeWallClock(values: number[]): QaRuntimeWallClockMetrics {
+function summarizeRuntimeWallClock(values: number[]) {
   if (values.length === 0) {
     return { totalWallClockMs: null, p50WallClockMs: null, p90WallClockMs: null };
   }

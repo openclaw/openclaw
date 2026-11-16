@@ -1,23 +1,26 @@
 import { BroadcastChannel } from "node:worker_threads";
 import { vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { CronServiceState } from "./state.js";
 
 /** Capture the real actor's wake transport while its owner starts. */
 export async function captureCronSchedulerWakeForTest<T>(
-  start: () => Promise<T>,
-): Promise<{ result: T; wake: (state: CronServiceState) => Promise<void> }> {
+  start: (wakeRegistered: Promise<void>) => Promise<T>,
+): Promise<{ result: T; notify: () => void; wake: (state: CronServiceState) => Promise<void> }> {
   let dispatchWake: (() => void) | undefined;
+  const wakeRegistered = createDeferred();
   const capture = vi
     .spyOn(BroadcastChannel.prototype, "addEventListener")
     .mockImplementation(function (this: BroadcastChannel, type, listener, options) {
-      if (type === "message" && this.name.startsWith("openclaw.cron.")) {
+      if (type === "message" && /^openclaw\.cron\.[^.]+$/u.test(this.name)) {
         dispatchWake = () => this.dispatchEvent(new MessageEvent("message"));
+        wakeRegistered.resolve();
       }
       EventTarget.prototype.addEventListener.call(this, type, listener, options);
     });
   let result: T;
   try {
-    result = await start();
+    result = await start(wakeRegistered.promise);
   } finally {
     capture.mockRestore();
   }
@@ -27,6 +30,7 @@ export async function captureCronSchedulerWakeForTest<T>(
   }
   return {
     result,
+    notify,
     wake(state) {
       const runSchedulerOwned = state.deps.runSchedulerOwned;
       let pending: Promise<unknown> = Promise.resolve();

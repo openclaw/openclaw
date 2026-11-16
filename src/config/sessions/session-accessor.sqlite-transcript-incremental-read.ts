@@ -6,7 +6,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 export function loadTranscriptEventRowsAfterSeqInDatabase(

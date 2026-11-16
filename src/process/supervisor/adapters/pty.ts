@@ -42,12 +42,10 @@ export async function createPtyAdapter(
   if (spawnEnv) {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
-  params.assertCurrent?.();
-  if (params.abortSignal?.aborted) {
-    throw new Error("PTY construction aborted");
-  }
   const pty = await spawnTerminalPty(
     {
+      executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       file: preparedSpawn.command,
       args: preparedSpawn.args,
       cwd: params.cwd,
@@ -151,11 +149,9 @@ export async function createPtyAdapter(
       }
     },
     end: () => {
-      try {
-        stdinEnded = true;
-        const eof = process.platform === "win32" ? "\x1a" : "\x04";
-        pty.write(eof);
-      } catch {}
+      stdinEnded = true;
+      const eof = process.platform === "win32" ? "\x1a" : "\x04";
+      pty.write(eof);
     },
     destroy: () => {
       stdinDestroyed = true;
@@ -172,7 +168,7 @@ export async function createPtyAdapter(
       dataListener = pty.onData(listener) ?? null;
     },
     onStderr: () => {}, // PTY output is unified.
-    wait: async () => await completion.promise,
+    wait: () => completion.promise,
     kill: (signal = "SIGKILL") => {
       signalTerminalPtyTree(pty.pid, signal, (directSignal) => pty.kill(directSignal));
 

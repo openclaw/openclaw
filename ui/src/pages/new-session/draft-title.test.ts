@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 
 beforeEach(() => vi.useFakeTimers());
@@ -8,80 +9,66 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function fixture() {
-  const prepare = vi.fn().mockResolvedValue({ title: "Repair sidebar naming" });
-  return { ...createDraftTitleFixture(prepare), prepare };
+function fixture(pending = false) {
+  const result = createDeferred<{ title: string }>();
+  const prepare = vi.fn().mockResolvedValue({ title: "Prepared" });
+  if (pending) {
+    prepare.mockImplementationOnce(() => result.promise);
+  }
+  const draft = createDraftTitleFixture(prepare);
+  const edit = (message = "repair the sidebar naming") => {
+    draft.flow.setMessage(message);
+    draft.synchronizeTitles();
+  };
+  return { ...draft, prepare, edit, finish: result.resolve };
 }
 
-describe("creation draft title preparation", () => {
-  it("coalesces idle edits and reuses unchanged text without polling", async () => {
-    const { flow, prepare, titles } = fixture();
-    flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(900);
-    flow.setMessage("repair sidebar naming and previews");
-    titles.hostUpdated();
+it.each(["edits", "composition"])("debounces %s without polling", async (change) => {
+  const { edit, prepare, titles } = fixture();
+  edit();
+  await vi.advanceTimersByTimeAsync(900);
+  if (change === "edits") {
+    edit("repair sidebar naming and previews");
     await vi.advanceTimersByTimeAsync(900);
     expect(prepare).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(100);
-    flow.setMessage(" repair sidebar naming and previews ");
-    titles.hostUpdated();
+    edit(" repair sidebar naming and previews ");
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(titles.takePreparedTitle()).toBe("Repair sidebar naming");
-  });
-
-  it("serializes edits behind an active request and discards the stale result", async () => {
-    const { flow, prepare, titles } = fixture();
-    let finish!: (value: { title: string }) => void;
-    prepare.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
+  } else {
+    titles.setComposing(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(prepare).not.toHaveBeenCalled();
+    titles.setComposing(false);
     await vi.advanceTimersByTimeAsync(1_000);
-    flow.setMessage("change the topic to reconnect recovery");
-    titles.hostUpdated();
+  }
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(titles.takePreparedTitle()).toBe("Prepared");
+});
+
+it.each(["edited", "disposed"])("discards a pending title when %s", async (change) => {
+  const { edit, prepare, titles, disposeTitles, finish } = fixture(true);
+  edit();
+  await vi.advanceTimersByTimeAsync(1_000);
+  if (change === "disposed") {
+    disposeTitles();
+  } else {
+    edit("change the topic to reconnect recovery");
     await vi.advanceTimersByTimeAsync(2_000);
     expect(prepare).toHaveBeenCalledOnce();
-    finish({ title: "Old draft" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(titles.takePreparedTitle()).toBe("Repair sidebar naming");
-  });
+  }
+  finish({ title: "Old draft" });
+  await vi.advanceTimersByTimeAsync(change === "disposed" ? 5_000 : 0);
+  expect(prepare).toHaveBeenCalledTimes(change === "disposed" ? 1 : 2);
+  expect(titles.takePreparedTitle()).toBe(change === "disposed" ? undefined : "Prepared");
+});
 
-  it("retires pending results when the draft owner closes", async () => {
-    const { flow, prepare, titles } = fixture();
-    let finish!: (value: { title: string }) => void;
-    prepare.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(1_000);
-    titles.hostDisconnected();
-    finish({ title: "Must not apply" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    titles.hostConnected();
-    expect(titles.takePreparedTitle()).toBeUndefined();
-    expect(prepare).toHaveBeenCalledOnce();
-  });
-
-  it("does not retry failures until the draft changes", async () => {
-    const { flow, prepare, titles } = fixture();
-    prepare.mockRejectedValueOnce(new Error("provider unavailable"));
-    flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(1_000);
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(titles.takePreparedTitle()).toBeUndefined();
-  });
+it("does not retry failures until the draft changes", async () => {
+  const { edit, prepare, titles, synchronizeTitles } = fixture();
+  prepare.mockRejectedValueOnce(new Error("provider unavailable"));
+  edit();
+  await vi.advanceTimersByTimeAsync(1_000);
+  synchronizeTitles();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(titles.takePreparedTitle()).toBeUndefined();
 });

@@ -206,6 +206,7 @@ All sampling and token-cap fields ride the same agent stream-param channel and a
 
 - Token cap: the wire field name is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, `max_tokens` for providers that only accept the legacy name (Mistral, Chutes).
 - `stop` maps to the transport's stop field: `stop` for Chat Completions backends, `stop_sequences` for Anthropic. The OpenAI Responses API has no stop parameter, so `stop` is not applied on Responses-backed models.
+- `seed` is sent as `random_seed` to Mistral. Google models receive `seed` but not `frequency_penalty` or `presence_penalty`.
 - The ChatGPT-based Codex Responses backend uses fixed server-side sampling and strips `temperature`/`top_p` (along with `max_output_tokens`, `metadata`, `prompt_cache_retention`, `service_tier`) before the request reaches that backend.
 
 ### Unsupported variants
@@ -350,7 +351,7 @@ Provider failures use the same error mapping as chat completions: missing provid
 
 If provider cleanup fails, the Gateway logs restart guidance and blocks further embeddings requests for that agent/provider until restart. Other agent/provider scopes remain available.
 
-For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
+For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size. When the memory provider uses the OpenAI-compatible embeddings transport (such as `openai-compatible` or `omlx`), a backend that returns a different vector size fails the request with `400 invalid_request_error` and code `embedding_dimensions_mismatch` instead of returning vectors of the wrong size. The message states the requested and returned sizes; retrying cannot succeed until `dimensions` and `memory.search.outputDimensionality` are omitted or the backend honors them.
 
 ## Related
 

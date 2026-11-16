@@ -71,7 +71,7 @@ extension OnboardingView {
             aiSetup.onConnected = { [self] in
                 // Activation already persisted the resume marker before its RPC.
                 self.configuredGatewayProbe.cancelPendingActivationRecheck()
-                self.finish()
+                self.advanceAfterInference()
             }
         }
     }
@@ -101,7 +101,7 @@ extension OnboardingView {
                   !Task.isCancelled
             else { return }
             self.configuredGatewayProbe.cancelPendingActivationRecheck()
-            self.finish()
+            self.advanceAfterInference()
         }
     }
 
@@ -129,7 +129,7 @@ extension OnboardingView {
             connectionMode: state.connectionMode,
             authIssue: aiSetup.configuredGatewayAuthIssue,
             pageOrder: pageOrder,
-            connectionPageIndex: connectionPageIndex,
+            connectionPageIndex: findPageIndex,
             probeInput: remoteGatewayProbeInput)
         else { return }
         remoteAuthIssue = decision.authIssue

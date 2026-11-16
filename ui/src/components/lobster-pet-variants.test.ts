@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { lobsterPetSeed } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-identity.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 describe("lobster pet variants", () => {

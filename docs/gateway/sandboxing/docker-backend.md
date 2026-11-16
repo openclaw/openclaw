@@ -10,7 +10,18 @@ The default local backend: its restricted defaults, GPU and Docker-out-of-Docker
 
 The Docker backend runs tools locally through the `docker` CLI. Its selection and error behavior are unchanged; it does not check or fall back to Podman.
 
-Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:bookworm-slim`.
+Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
+
+Tmpfs mounts without an explicit `size=` option are capped at 1 GiB for `/tmp`,
+4 GiB for the managed dependency store at `/tmp/openclaw-deps`, and 256 MiB for
+other paths. Existing explicit sizes are preserved. These are capacity limits,
+not reserved memory; writes beyond a mount's limit fail with no space left.
+Keep durable output in the disk-backed workspace. Dependency builders stop after
+setup, releasing their temporary HOME, caches, and pnpm store; prepared
+`node_modules` remains in the workspace template. Runtime containers use the same
+pnpm store path so warm dependencies remain reusable without a reinstall.
+Podman's automatic writable `/tmp`, `/var/tmp`, and `/run` mounts receive these
+same caps, while its nested init mount remains available.
 
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
@@ -25,7 +36,7 @@ the default restricted runtime posture:
         scope: "session",
         workspaceAccess: "ro",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
           network: "none",
@@ -57,6 +68,17 @@ change behavior: a hot container stays running with a recreation notice, while
 a stopped or expired container is replaced. Recreate explicitly to apply those
 options immediately.
 
+After a Gateway restart, Docker and Podman tool containers can be replaced on
+their first use when an upgrade adds Gateway-managed read-only skill or resource
+mounts. Every existing mount must still match; replaced sources do not qualify. The
+old container must have a read-only root, no image volumes, and no retained
+persistent-exec custody; its last successful use must predate this Gateway
+process. Workspace and user bind sources and access modes must still match.
+Workspace files remain on the host, but replacement discards temporary container
+state and untracked background processes. Writable roots, user mount changes,
+restricted dispatch requiring current config, and hot browser containers still
+require explicit recreation.
+
 To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to the selected container engine's Docker-compatible `--gpus` flag and requires compatible host GPU setup. Podman requires version 5.0 or newer for this option.
 
 <Warning>
@@ -82,6 +104,86 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 
 These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized check failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace check failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
 </Warning>
+
+### Idle containers
+
+Docker and Podman tool containers stop after 15 minutes without a new sandbox
+admission, on the Gateway's five-minute housekeeping sweep. Active turns, retained
+background commands, and persistent executions prevent idle stopping. Each pass
+attempts at most 32 idle stops, sequentially; failed attempts count toward the
+limit. Each sweep resumes after the last attempted container, so repeated failures
+cannot starve later containers. Backlogs drain over multiple sweeps. Dependency-builder cleanup can request
+earlier sweeps. Existing age-based removal is separate from this idle-stop limit.
+A long turn becomes eligible for stopping as soon as it finishes.
+Stopping frees tmpfs contents and ends
+untracked background processes; workspace bind mounts and the container's
+writable layer persist. The next turn starts the same container without rerunning
+one-time setup. Prepared dependency templates remain available for warm reuse.
+The existing `sandbox.prune` policy separately removes old containers; disabling
+removal does not disable idle stopping.
+
+Container creation-policy changes are checked on the next use of each sandbox,
+not by recreating the inventory at startup. A cold container may be replaced on
+that first use; its host workspace and prepared dependency templates persist.
+
+Dependency installation that exhausts storage fails preparation with an actionable
+error rather than publishing a partial dependency template. Check free bytes and
+inodes in the workspace and `/tmp/openclaw-deps`. For a full temporary pnpm store,
+the existing `sandbox.docker.env.PNPM_CONFIG_STORE_DIR` setting can place the store
+on a disk-backed path inside the workspace before retrying.
+
+### Container user
+
+When `agents.defaults.sandbox.docker.user` is unset, Docker uses the mounted
+workspace owner's numeric `uid:gid`: the agent workspace for
+`workspaceAccess: "rw"`, otherwise the sandbox workspace. A root-owned workspace can therefore
+run as root; if ownership cannot be read, the image's default user applies.
+Set `docker.user` explicitly to override this. `setupCommand` runs as the same
+container user. See [Podman backend](/gateway/sandboxing/podman-backend) for its
+user-namespace and root-user restrictions.
+
+### Shell environment
+
+Sandboxed `exec` commands default `HOME` to the sandbox workspace root, even when
+`workdir` selects a task subdirectory. Home-based configuration
+therefore persists across commands in that workspace. Explicit `sandbox.docker.env`
+or command `env` values can override `HOME` and XDG paths. The host user's home and
+package stores are not mounted or inherited by this default; separate sandbox
+workspaces keep separate stores.
+
+Managed task workspaces default XDG, npm, pip, uv, and Bun caches to
+`/tmp/openclaw-deps/cache`; pnpm uses `/tmp/openclaw-deps/data/pnpm/store`.
+These share the existing 4 GiB dependency tmpfs limit, not separate quotas.
+Explicit sandbox and command environment settings still override these defaults.
+Cache exhaustion reports no space left; remove disposable cache contents or use
+an explicitly mounted, non-projected disk path through the existing environment
+settings. Increasing a workspace result limit does not fix cache exhaustion.
+
+Workspace capture and transfer omit exact tool-owned cache roots left by older
+sandboxes: `.npm/_cacache`, `.npm/_logs`, `.cache/pip`, `.cache/uv`, `.pnpm-store`,
+`.bun/install/cache`, `.cargo/registry`, `.cargo/git`, and `.gradle/caches`.
+Cargo and Gradle retain their workspace configuration; their cache subdirectories
+use this exclusion policy. Files elsewhere in `.npm`, `.cache`, `.cargo`, and
+`.gradle`, nested project fixtures, and staged inputs remain workspace data.
+Caches already on disk are not deleted. Large user files still hit the result
+size guard; a recognized cache in a nested project names its cache class and the
+environment setting for moving it outside the workspace before recovery.
+
+### Docker daemon
+
+The Docker CLI inherits the Gateway process environment except `MALLOC_CONF` and
+jemalloc entries in `LD_PRELOAD`. Docker and Podman host launches remove those
+Gateway allocator settings so their subprocesses do not inherit background
+threads or profiling; other preload libraries are preserved. Choose the daemon with
+`DOCKER_HOST` or `DOCKER_CONTEXT` (set only one), or the CLI's current context;
+there is no `sandbox.docker` daemon-selection config key. For rootless Docker,
+set `DOCKER_HOST=unix:///run/user/<uid>/docker.sock` in the
+[Gateway service environment](/help/environment), then restart the Gateway.
+This differs from `sandbox.docker.env`, which configures the container environment.
+
+For local Unix sockets, OpenClaw records the endpoint and daemon ID per runtime
+and refuses reuse if the selected daemon changes. Restore the original connection
+or recreate the runtime while its recorded daemon is reachable.
 
 ### Sandboxed browser
 

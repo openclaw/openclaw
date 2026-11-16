@@ -42,7 +42,7 @@ export type PersistedTelegramMessageCacheValue = {
 
 const TELEGRAM_MEDIA_KINDS = new Set<string>(["audio", "document", "image", "sticker", "video"]);
 
-function isTelegramMediaKind(value: unknown): value is TelegramMediaKind {
+export function isTelegramMediaKind(value: unknown): value is TelegramMediaKind {
   return typeof value === "string" && TELEGRAM_MEDIA_KINDS.has(value);
 }
 

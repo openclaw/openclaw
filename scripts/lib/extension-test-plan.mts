@@ -32,12 +32,14 @@ import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-what
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isGitWorktreeRoot } from "../check-file-utils.ts";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { hasExtensionMetadata, listAvailableExtensionIds } from "./changed-extensions.mts";
 import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
+import { splitTestTargetChunks } from "./test-target-chunks.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 import { createCompactSplitTimingGeneration } from "./vitest-shard-metadata.mts";
 
@@ -185,6 +187,9 @@ function isSkippedTrackedTestFile(relativePath: string) {
 
 let trackedRepoTestFiles: string[] | null | undefined;
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
   const result = spawnSync("git", ["ls-files", "-z", "--", ...pathspecs], {
@@ -285,17 +290,7 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
     return [orderedTargets];
   }
 
-  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerChunk);
-  const baseSize = Math.floor(orderedTargets.length / chunkCount);
-  const remainder = orderedTargets.length % chunkCount;
-  const chunks = [];
-  let offset = 0;
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunkSize = baseSize + (index < remainder ? 1 : 0);
-    chunks.push(orderedTargets.slice(offset, offset + chunkSize));
-    offset += chunkSize;
-  }
-  return chunks;
+  return splitTestTargetChunks(orderedTargets, Math.ceil(orderedTargets.length / maxFilesPerChunk));
 }
 
 export const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";

@@ -25,6 +25,8 @@ export function projectActivitySummaryEntry(entry: SessionEntry) {
     heartbeatIsolatedBaseSessionKey: entry.heartbeatIsolatedBaseSessionKey,
     spawnedBy: entry.spawnedBy,
     category: entry.category,
+    owner: entry.owner,
+    createdActor: entry.createdActor,
   };
 }
 

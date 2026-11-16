@@ -1,6 +1,4 @@
-// Msteams tests cover graph members plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { getMemberInfoMSTeams } from "./graph-members.js";
 import { createGraphPageGuard } from "./graph-pagination.test-support.js";
 
@@ -15,25 +13,23 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   return { ...actual, fetchWithSsrFGuard: mockState.fetchWithSsrFGuard };
 });
 
-vi.mock("./graph.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./graph.js")>();
-  return {
-    ...actual,
-    resolveGraphToken: mockState.resolveGraphToken,
-    fetchGraphJson: mockState.fetchGraphJson,
-  };
-});
+vi.mock("./graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./graph.js")>()),
+  resolveGraphToken: mockState.resolveGraphToken,
+  fetchGraphJson: mockState.fetchGraphJson,
+}));
 
-const TOKEN = "test-graph-token";
+const memberInfo = (userId: string, to = "team-1/channel-1", currentRequesterId?: string) =>
+  getMemberInfoMSTeams({ cfg: {}, to, userId, currentRequesterId });
 
 describe("getMemberInfoMSTeams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+    mockState.resolveGraphToken.mockResolvedValue("test-graph-token");
     mockState.fetchWithSsrFGuard.mockImplementation(createGraphPageGuard(mockState.fetchGraphJson));
   });
 
-  it("accepts a normalized match on the final allowed team page", async () => {
+  it.each([true, false])("finds final-page member only when present: %s", async (found) => {
     let page = 0;
     mockState.fetchGraphJson.mockImplementation(async () => {
       page += 1;
@@ -41,36 +37,17 @@ describe("getMemberInfoMSTeams", () => {
         return { membershipType: "standard" };
       }
       return {
-        value: page === 101 ? [{ userId: "aad-final", email: " Alice@Contoso.com " }] : [],
+        value: found && page === 101 ? [{ userId: "aad-final", email: " Alice@Contoso.com " }] : [],
         "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/members?$skip=next",
       };
     });
 
-    await expect(
-      getMemberInfoMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "team-1/channel-1",
-        userId: "teams:Alice@Contoso.com ",
-      }),
-    ).resolves.toMatchObject({ user: { id: "aad-final" } });
-    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(101);
-  });
-
-  it("preserves the exact team pagination-limit failure", async () => {
-    mockState.fetchGraphJson
-      .mockResolvedValueOnce({ membershipType: "standard" })
-      .mockResolvedValue({
-        value: [],
-        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/members?$skip=next",
-      });
-
-    await expect(
-      getMemberInfoMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "team-1/channel-1",
-        userId: "missing",
-      }),
-    ).rejects.toThrow("Microsoft Teams team member pagination limit exceeded");
+    const result = memberInfo(found ? "teams:Alice@Contoso.com " : "missing");
+    if (found) {
+      await expect(result).resolves.toMatchObject({ user: { id: "aad-final" } });
+    } else {
+      await expect(result).rejects.toThrow("Microsoft Teams team member pagination limit exceeded");
+    }
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(101);
   });
 
@@ -79,38 +56,23 @@ describe("getMemberInfoMSTeams", () => {
       .mockResolvedValueOnce({ membershipType: "standard" })
       .mockResolvedValueOnce({ value: [] });
 
-    await expect(
-      getMemberInfoMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "team-1/channel-1",
-        userId: "user-789",
-      }),
-    ).rejects.toThrow("User user-789 is not a member of this conversation");
+    await expect(memberInfo("user-789")).rejects.toThrow(
+      "User user-789 is not a member of this conversation",
+    );
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(2);
   });
 
   it("rejects private channels when the baseline cannot prove channel membership", async () => {
     mockState.fetchGraphJson.mockResolvedValueOnce({ membershipType: "private" });
 
-    await expect(
-      getMemberInfoMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "team-1/channel-private",
-        userId: "user-123",
-      }),
-    ).rejects.toThrow("requires a standard channel");
+    await expect(memberInfo("user-123", "team-1/channel-private")).rejects.toThrow(
+      "requires a standard channel",
+    );
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(1);
   });
 
   it("returns the trusted requester identity in the current chat without Graph reads", async () => {
-    await expect(
-      getMemberInfoMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "user:user-123",
-        userId: "teams:user-123",
-        currentRequesterId: "user-123",
-      }),
-    ).resolves.toMatchObject({
+    await expect(memberInfo("teams:user-123", "user:user-123", "user-123")).resolves.toMatchObject({
       user: {
         id: "user-123",
         displayName: undefined,
@@ -127,12 +89,7 @@ describe("getMemberInfoMSTeams", () => {
 
   it("rejects unrelated profiles in chats before fetching a user", async () => {
     await expect(
-      getMemberInfoMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:chat@thread.v2",
-        userId: "user-456",
-        currentRequesterId: "user-123",
-      }),
+      memberInfo("user-456", "conversation:19:chat@thread.v2", "user-123"),
     ).rejects.toThrow("User user-456 is not a member of this conversation");
     expect(mockState.fetchGraphJson).not.toHaveBeenCalled();
   });

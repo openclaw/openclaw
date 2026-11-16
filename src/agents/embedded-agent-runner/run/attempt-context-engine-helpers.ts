@@ -1,54 +1,9 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage } from "../../../llm/types.js";
-import type { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
-import {
-  isHeartbeatLifecycleRunKind,
-  type BootstrapContextRunKind,
-  type BootstrapMode,
-} from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-
-/**
- * Resolves bootstrap/context files for this attempt and reports whether the
- * caller should persist a completed bootstrap marker. Continuation-skip mode
- * intentionally suppresses reinjection after a full bootstrap turn has already
- * been recorded for the session.
- */
-export async function resolveAttemptBootstrapContext(params: {
-  contextInjectionMode: "always" | "continuation-skip" | "never";
-  bootstrapContextMode?: string;
-  bootstrapContextRunKind?: BootstrapContextRunKind;
-  bootstrapMode?: BootstrapMode;
-  hasCompletedBootstrapTurn: () => Promise<boolean>;
-  resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
-}) {
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
-  const isContinuationTurn =
-    params.bootstrapMode !== "full" &&
-    params.contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRun &&
-    (await params.hasCompletedBootstrapTurn());
-  // Continuation-skip and explicit never both produce an empty injection set,
-  // but only a clean full bootstrap later records a durable completion marker.
-  const shouldSkipBootstrapInjection =
-    params.contextInjectionMode === "never" || isContinuationTurn;
-  const shouldRecordCompletedBootstrapTurn =
-    !shouldSkipBootstrapInjection &&
-    params.bootstrapContextMode !== "lightweight" &&
-    !isHeartbeatLifecycleRun &&
-    params.bootstrapMode === "full";
-
-  return {
-    ...(shouldSkipBootstrapInjection
-      ? { bootstrapFiles: [], contextFiles: [] }
-      : await params.resolveBootstrapContextForRun()),
-    isContinuationTurn,
-    shouldRecordCompletedBootstrapTurn,
-  };
-}
 
 /**
  * Builds the compact prompt-cache metadata stored on an attempt result. Empty

@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import * as nativeExec from "../../daemon/exec-file.js";
 import * as launchctl from "../../daemon/launchd-exec.js";
 import { startLaunchAgent } from "../../daemon/launchd-lifecycle.js";
 import { bootstrapLaunchAgentOrThrow } from "../../daemon/launchd-runtime.js";
@@ -19,9 +18,10 @@ import * as taskRuntime from "../../daemon/schtasks-runtime.js";
 import * as systemdExec from "../../daemon/systemd-exec.js";
 import { startSystemdService } from "../../daemon/systemd-lifecycle.js";
 import * as systemdScope from "../../daemon/systemd-scope.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import * as systemdTransport from "../../daemon/systemd-user-transport.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { useExecutorFixture } from "./update-command-executor.test-support.js";
 
 const nativeSpawn = vi.hoisted(() =>
   vi.fn(() => {
@@ -32,18 +32,14 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: nativeSpawn,
 }));
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = useExecutorFixture("native-start-fence-");
 let root: string;
 let control: string;
 const success = { stdout: "", stderr: "", code: 0, termination: "exit" as const };
 beforeEach(() => {
   nativeSpawn.mockClear();
-  root = fs.realpathSync(dirs.make("native-start-fence-"));
-  control = path.join(root, "control");
-  fs.mkdirSync(control, { mode: 0o700 });
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  ({ root, control } = fixture());
 });
-afterEach(() => vi.restoreAllMocks());
 function revoke() {
   const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
   try {
@@ -55,11 +51,6 @@ function revoke() {
     db.close();
   }
 }
-function owned(operation: (fence: UpdateRecoveryFence) => Promise<void>) {
-  return withUpdateCommandExecutor(randomUUID(), async (executor) =>
-    operation(await executor.enter(root)),
-  );
-}
 function serviceArgs(fence: UpdateRecoveryFence) {
   return {
     stdout: new PassThrough(),
@@ -67,56 +58,62 @@ function serviceArgs(fence: UpdateRecoveryFence) {
     assertCurrent: () => fence.assertCurrent(),
   };
 }
+function owned(operation: (args: ReturnType<typeof serviceArgs>) => Promise<unknown>) {
+  return withUpdateCommandExecutor(randomUUID(), async (executor) =>
+    operation(serviceArgs(await executor.enter(root))),
+  );
+}
+function expectRevoked(operation: Parameters<typeof owned>[0]) {
+  return expect(owned(operation)).rejects.toThrow(/executor|ownership/i);
+}
+function mockLaunchctl(
+  respond: (command: string, calls: string[]) => Promise<typeof success> | typeof success,
+) {
+  const calls: string[] = [];
+  vi.spyOn(launchctl, "execLaunchctl").mockImplementation(async (args) => {
+    calls.push(args[0]!);
+    return respond(args[0]!, calls);
+  });
+  return calls;
+}
 
-it.each(["user", "system"] as const)(
-  "refuses systemd %s start after scope inspection revokes its real executor",
-  async (scope) => {
+it.each(["user", "system", "reset-failed"] as const)(
+  "refuses systemd start after %s revokes its real executor",
+  async (at) => {
     vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockImplementation(async () => {
-      await Promise.resolve();
-      revoke();
+      if (at !== "reset-failed") {
+        await Promise.resolve();
+        revoke();
+      }
       return {
-        scope,
+        scope: at === "system" ? "system" : "user",
         unitName: "openclaw-gateway.service",
         unitPath: path.join(root, "gateway.service"),
       };
     });
-    vi.spyOn(process, "geteuid").mockReturnValue(0);
     vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
     vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
-    const native = vi.spyOn(systemdExec, "execSystemctl").mockResolvedValue(success);
-    const user = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
-    await expect(owned(async (fence) => startSystemdService(serviceArgs(fence)))).rejects.toThrow(
-      /executor|ownership/i,
-    );
-    expect(native).not.toHaveBeenCalled();
-    expect(user).not.toHaveBeenCalled();
+    if (at !== "reset-failed") {
+      vi.spyOn(process, "geteuid").mockReturnValue(0);
+    }
+    vi.spyOn(systemdTransport, "resolveSystemdUserTransport").mockResolvedValue(undefined);
+    const calls: string[] = [];
+    vi.spyOn(nativeExec, "execFileUtf8").mockImplementation(async (command, args) => {
+      expect(command).toBe("systemctl");
+      const action = args.find((arg) => !arg.startsWith("--"))!;
+      calls.push(action);
+      if (action === "reset-failed") {
+        await Promise.resolve();
+        revoke();
+      }
+      return success;
+    });
+    await expectRevoked(startSystemdService);
+    expect(calls).toEqual(at === "reset-failed" ? ["reset-failed"] : []);
   },
 );
 
-it("refuses systemd start after reset-failed revokes its real executor", async () => {
-  vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockResolvedValue({
-    scope: "user",
-    unitName: "openclaw-gateway.service",
-    unitPath: path.join(root, "gateway.service"),
-  });
-  vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
-  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
-  const calls: string[] = [];
-  vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async (_env, args) => {
-    calls.push(args[0]!);
-    if (args[0] === "reset-failed") {
-      await Promise.resolve();
-      revoke();
-    }
-    return success;
-  });
-  await expect(owned(async (fence) => startSystemdService(serviceArgs(fence)))).rejects.toThrow(
-    /executor|ownership/i,
-  );
-  expect(calls).toEqual(["reset-failed"]);
-});
-
-it.each(["inspection", "enable", "not-loaded"])(
+it.each(["inspection", "enable", "not-loaded", "bootstrap"])(
   "refuses launchd start after %s revokes its real executor",
   async (at) => {
     vi.spyOn(launchdSystem, "assertNoSystemLaunchDaemonOwnership").mockImplementation(async () => {
@@ -125,64 +122,43 @@ it.each(["inspection", "enable", "not-loaded"])(
         revoke();
       }
     });
-    const calls: string[] = [];
-    vi.spyOn(launchctl, "execLaunchctl").mockImplementation(async (args) => {
-      calls.push(args[0]!);
+    const calls = mockLaunchctl(async (command) => {
       await Promise.resolve();
-      if (at === "enable" && args[0] === "enable") {
+      if ((at === "enable" || at === "bootstrap") && command === "enable") {
         revoke();
       }
-      if (at === "not-loaded" && args[0] === "kickstart") {
+      if (at === "not-loaded" && command === "kickstart") {
         revoke();
         return { ...success, code: 1, stderr: "Could not find service" };
       }
       return success;
     });
-    await expect(owned(async (fence) => startLaunchAgent(serviceArgs(fence)))).rejects.toThrow(
-      /executor|ownership/i,
+    await expectRevoked(
+      at === "bootstrap"
+        ? ({ assertCurrent }) =>
+            bootstrapLaunchAgentOrThrow({
+              domain: "gui/501",
+              serviceTarget: "gui/501/test",
+              plistPath: path.join(root, "gateway.plist"),
+              actionHint: "test",
+              assertCurrent,
+            })
+        : startLaunchAgent,
     );
     expect(calls).toEqual(
-      at === "inspection" ? [] : at === "enable" ? ["enable"] : ["enable", "kickstart"],
+      at === "inspection" ? [] : at === "not-loaded" ? ["enable", "kickstart"] : ["enable"],
     );
   },
 );
 
-it("refuses bootstrap after enable revokes the real executor", async () => {
-  const calls: string[] = [];
-  vi.spyOn(launchctl, "execLaunchctl").mockImplementation(async (args) => {
-    calls.push(args[0]!);
-    await Promise.resolve();
-    revoke();
-    return success;
-  });
-  await expect(
-    owned(async (fence) => {
-      const args = {
-        domain: "gui/501",
-        serviceTarget: "gui/501/test",
-        plistPath: path.join(root, "gateway.plist"),
-        actionHint: "test",
-        assertCurrent: () => fence.assertCurrent(),
-      };
-      await bootstrapLaunchAgentOrThrow(args);
-    }),
-  ).rejects.toThrow(/executor|ownership/i);
-  expect(calls).toEqual(["enable"]);
-});
-
 it("preserves separately restored launchd enable policy across bootstrap", async () => {
   vi.spyOn(launchdSystem, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue();
-  const calls: string[] = [];
-  vi.spyOn(launchctl, "execLaunchctl").mockImplementation(async (args) => {
-    calls.push(args[0]!);
-    return args[0] === "kickstart" && calls.length === 1
+  const calls = mockLaunchctl((command, history) => {
+    return command === "kickstart" && history.length === 1
       ? { ...success, code: 1, stderr: "Could not find service" }
       : success;
   });
-  await owned(async (fence) => {
-    const args = { ...serviceArgs(fence), preserveAutoStart: true };
-    await startLaunchAgent(args);
-  });
+  await owned((args) => startLaunchAgent({ ...args, preserveAutoStart: true }));
   expect(calls).toEqual(["kickstart", "print-disabled", "bootstrap", "kickstart"]);
 });
 
@@ -195,26 +171,21 @@ it("refuses task start after registration inspection revokes its real executor",
   });
   vi.spyOn(taskRuntime, "readScheduledTaskRuntime").mockResolvedValue({ status: "running" });
   const native = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(success);
-  await expect(owned(async (fence) => startScheduledTask(serviceArgs(fence)))).rejects.toThrow(
-    /executor|ownership/i,
-  );
+  await expectRevoked(startScheduledTask);
   expect(native).not.toHaveBeenCalled();
 });
 
 it("refuses task enable after preparation revokes its real executor", async () => {
   const native = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(success);
-  await expect(
-    owned(async (fence) => {
-      const options = {
-        beforeMutation: async () => {
-          await Promise.resolve();
-          revoke();
-        },
-        assertCurrent: () => fence.assertCurrent(),
-      };
-      await resumeScheduledTaskAutoStartAfterUpdate({ HOME: root }, options);
+  await expectRevoked(({ env, assertCurrent }) =>
+    resumeScheduledTaskAutoStartAfterUpdate(env, {
+      beforeMutation: async () => {
+        await Promise.resolve();
+        revoke();
+      },
+      assertCurrent,
     }),
-  ).rejects.toThrow(/executor|ownership/i);
+  );
   expect(native).not.toHaveBeenCalled();
 });
 
@@ -224,14 +195,9 @@ it("refuses login-item spawn when command inspection revokes the real executor",
     revoke();
     return { programArguments: [process.execPath, "gateway-test.js"] };
   });
-
-  await expect(
-    owned(async (fence) =>
-      taskRuntime.startStartupEntry({ HOME: root }, new PassThrough(), undefined, () =>
-        fence.assertCurrent(),
-      ),
-    ),
-  ).rejects.toThrow(/executor|ownership/i);
+  await expectRevoked(({ env, stdout, assertCurrent }) =>
+    taskRuntime.startStartupEntry(env, stdout, undefined, assertCurrent),
+  );
   expect(nativeSpawn).not.toHaveBeenCalled();
 });
 it("refuses login-item fallback for the captured registered task", async () => {
@@ -241,7 +207,7 @@ it("refuses login-item fallback for the captured registered task", async () => {
   const start = vi.spyOn(taskRuntime, "startStartupEntry").mockResolvedValue();
   const native = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(success);
   await expect(
-    owned(async (fence) => startScheduledTask({ ...serviceArgs(fence), preserveAutoStart: true })),
+    owned((args) => startScheduledTask({ ...args, preserveAutoStart: true })),
   ).rejects.toThrow("Captured Scheduled Task registration");
   expect(start).not.toHaveBeenCalled();
   expect(native).not.toHaveBeenCalled();

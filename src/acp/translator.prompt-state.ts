@@ -42,6 +42,7 @@ type AcpPendingToolCall = {
 
 export type AcpAgentWaitResult = {
   status?: "ok" | "error" | "timeout";
+  stopReason?: string;
   error?: string;
   terminalReply?: AgentRunTerminalReplySnapshot;
 };

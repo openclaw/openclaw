@@ -1,15 +1,14 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
 import {
@@ -20,11 +19,7 @@ import {
 } from "../../gateway/terminal/session-manager.test-helpers.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  openIncognitoTestActor,
-  useIncognitoNoHostSql,
-} from "../../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -43,99 +38,103 @@ vi.mock("../bash-tools.exec-approval-request.js", () => ({
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+const authority = { assertCurrent() {}, authorize() {} };
+let actor: ReturnType<typeof memorySessionActorOwners.get>;
+const actors: Array<Awaited<ReturnType<typeof actor.acquire>>> = [];
+let sql: ReturnType<typeof observeHostDataSql>;
 const managers = new Set<TerminalSessionManager>();
 beforeAll(async () => {
-  actor = await openIncognitoTestActor(
-    { OPENCLAW_STATE_DIR: temporary.make("terminal-tool-incognito-") },
-    authority,
-  );
+  const env = { OPENCLAW_STATE_DIR: temporary.make("terminal-tool-incognito-") };
+  actor = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  });
 });
 afterAll(async () => {
-  await actor.close();
+  for (const handle of actors) {
+    await handle.release();
+  }
+  memorySessionActorOwners.closeDatabase(actor);
 });
 beforeEach(() => {
+  sql = observeHostDataSql();
   approvals.register.mockClear();
   approvals.decide.mockReset().mockResolvedValue("allow-once");
 });
 afterEach(() => {
-  for (const manager of managers) {
-    manager.disposeAll();
-  }
+  managers.forEach((manager) => manager.disposeAll());
   managers.clear();
+  try {
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 });
-useIncognitoNoHostSql();
 
 async function terminal(name: string, permissionMode: "full" | "workspace" = "workspace") {
   const sessionKey = `agent:main:dashboard:incognito-${name}`;
   const entry = { sessionId: name, lifecycleRevision: "original", updatedAt: 1, permissionMode };
-  await actor.sessions.create(authority, { sessionKey, entry });
+  const handle = await actor.acquire(
+    { database: actor.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  const binding = { actor: handle, authority, agentId: actor.agentId, path: actor.path };
+  actors.push(handle);
+  expect(
+    await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
+  ).toMatchObject({ kind: "committed" });
   const owner = agentTerminalOwner(sessionKey, entry.sessionId);
   const backend = makeFakePty();
   const manager = new TerminalSessionManager({ emit() {}, spawn: async () => backend });
   managers.add(manager);
-  const opened = expectTerminalOpen(await manager.open(baseOpenRequest({ owner })));
-  return {
-    entry,
-    owner,
-    backend,
-    manager,
-    terminalId: opened.sessionId,
-    target: { agentId: "main", sessionKey, storePath: actor.path },
-  };
-}
-
-async function invoke<T>(
-  fixture: Awaited<ReturnType<typeof terminal>>,
-  route: "owner" | "bearer-mcp",
-  consume: (tool: ReturnType<typeof createTerminalTool>) => Promise<T>,
-) {
-  const admission = prepareSystemAgentRunAdmission({}, fixture.entry.sessionId, "main", "terminal");
-  try {
-    const admittedRunContext = await admission.admit("embedded");
-    const gateway = { terminalSessions: fixture.manager };
-    bindGatewayContextResolver(admittedRunContext, () => gateway as GatewayRequestContext);
-    const tool = createTerminalTool({
-      agentId: "main",
-      agentSessionKey: fixture.owner.agentSessionKey,
-      sessionId: fixture.entry.sessionId,
-      ...(route === "owner" ? { getGatewayContext: () => gateway } : {}),
+  const { sessionId } = expectTerminalOpen(await manager.open(baseOpenRequest({ owner })));
+  const invoke = <T>(
+    route: "owner" | "bearer-mcp",
+    consume: (
+      input: (data?: string) => ReturnType<ReturnType<typeof createTerminalTool>["execute"]>,
+    ) => Promise<T>,
+  ) =>
+    runWithSessionActorStorage(binding, async () => {
+      const admission = prepareSystemAgentRunAdmission({}, entry.sessionId, "main", "terminal");
+      try {
+        const admittedRunContext = await admission.admit("embedded");
+        const gateway = { terminalSessions: manager };
+        bindGatewayContextResolver(admittedRunContext, () => gateway as GatewayRequestContext);
+        const tool = createTerminalTool({
+          agentId: "main",
+          agentSessionKey: sessionKey,
+          sessionId: entry.sessionId,
+          ...(route === "owner" ? { getGatewayContext: () => gateway } : {}),
+        });
+        return await withGatewayToolCallerIdentity(
+          createAdmittedGatewayToolCallerIdentity({
+            admittedRunContext,
+            agentId: "main",
+            sessionKey,
+            ...(route === "bearer-mcp" ? { receiptAuthority: () => true } : {}),
+          }),
+          () =>
+            consume((data = "pwd\r") =>
+              tool.execute("input", { action: "input", sessionId, data }),
+            ),
+        );
+      } finally {
+        admission.close();
+      }
     });
-    return await withGatewayToolCallerIdentity(
-      createAdmittedGatewayToolCallerIdentity({
-        admittedRunContext,
-        agentId: "main",
-        sessionKey: fixture.owner.agentSessionKey,
-        ...(route === "bearer-mcp" ? { receiptAuthority: () => true } : {}),
-      }),
-      () => consume(tool),
-    );
-  } finally {
-    admission.close();
-  }
+  return { entry, backend, invoke, target: { agentId: "main", sessionKey, storePath: actor.path } };
 }
 
-it.each(["owner", "bearer-mcp"] as const)(
-  "loads actor policy for %s input without prepared execSession",
-  async (route) => {
-    const fixture = await terminal(`input-${route}`, "full");
-    await withIncognitoSessionActor(actor, () =>
-      invoke(fixture, route, async (tool) => {
-        await expect(
-          tool.execute("input", { action: "input", sessionId: fixture.terminalId, data: "pwd\r" }),
-        ).resolves.toMatchObject({ details: { ok: true } });
-      }),
-    );
-    expect(fixture.backend.writes).toEqual(["pwd\r"]);
-    expect(approvals.register).not.toHaveBeenCalled();
-  },
-);
+it.each(["owner", "bearer-mcp"] as const)("reads %s actor policy", async (route) => {
+  const fixture = await terminal(`input-${route}`, "full");
+  await fixture.invoke(route, (input) =>
+    expect(input()).resolves.toMatchObject({ details: { ok: true } }),
+  );
+  expect(fixture.backend.writes).toEqual(["pwd\r"]);
+  expect(approvals.register).not.toHaveBeenCalled();
+});
 
-it.each([
-  { change: "permission revocation", error: "execution policy changed" },
-  { change: "session rebound", error: "generation is no longer current" },
-] as const)("refuses input after $change while approval is pending", async ({ change, error }) => {
+it.each(["permission revocation", "session rebound"])("rejects pending %s", async (change) => {
   const fixture = await terminal(change.replaceAll(" ", "-"));
   const requested = createDeferredCore();
   const decision = createDeferredCore<string>();
@@ -143,46 +142,35 @@ it.each([
     requested.resolve();
     return decision.promise;
   });
-  await withIncognitoSessionActor(actor, () =>
-    invoke(fixture, "bearer-mcp", async (tool) => {
-      const result = tool.execute("input", {
-        action: "input",
-        sessionId: fixture.terminalId,
-        data: "echo stale\r",
-      });
-      try {
-        await awaitGateBeforeSettlement(requested.promise, result, "Input settled before approval");
-        expect(fixture.backend.writes).toEqual([]);
-        if (change === "permission revocation") {
-          await patchSessionEntryCore(fixture.target, () => ({ permissionMode: "read-only" }));
-        } else {
-          await replaceSessionEntry(fixture.target, {
-            ...fixture.entry,
-            sessionId: "replacement",
-            lifecycleRevision: "next",
-          });
-        }
-      } finally {
-        decision.resolve("allow-once");
-        await expect(result).rejects.toThrow(error);
+  await fixture.invoke("bearer-mcp", async (input) => {
+    const result = input("echo stale\r");
+    try {
+      await awaitGateBeforeSettlement(requested.promise, result, "Input settled before approval");
+      expect(fixture.backend.writes).toEqual([]);
+      if (change === "permission revocation") {
+        await patchSessionEntryCore(fixture.target, () => ({ permissionMode: "read-only" }));
+      } else {
+        await replaceSessionEntry(fixture.target, {
+          ...fixture.entry,
+          sessionId: "replacement",
+          lifecycleRevision: "next",
+        });
       }
-    }),
-  );
+    } finally {
+      decision.resolve("allow-once");
+      await expect(result).rejects.toThrow("execution policy changed");
+    }
+  });
   expect(fixture.backend.writes).toEqual([]);
   expect(approvals.register).toHaveBeenCalledOnce();
 });
 
 it("refuses selected actor absence without discovery or approval", async () => {
   const fixture = await terminal("absent");
-  const env = { OPENCLAW_STATE_DIR: temporary.make("terminal-absent-") };
-  await withIncognitoSessionBinding({ kind: "absent", agentId: "main", env, authority }, () =>
-    invoke(fixture, "owner", async (tool) => {
-      await expect(
-        tool.execute("input", { action: "input", sessionId: fixture.terminalId, data: "pwd\r" }),
-      ).rejects.toThrow("Terminal session unavailable");
-    }),
+  actor.closeSession(fixture.target.sessionKey);
+  await fixture.invoke("owner", (input) =>
+    expect(input()).rejects.toThrow("Terminal session unavailable"),
   );
   expect(fixture.backend.writes).toEqual([]);
   expect(approvals.register).not.toHaveBeenCalled();
-  expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
 });

@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingIdentitySchema } from "./sessions-sharing.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SessionReactionTargetParamsSchema = {
   sessionKey: NonEmptyString,
@@ -11,19 +12,7 @@ const SessionReactionTargetParamsSchema = {
 
 const ReactionEmojiSchema = Type.String({ minLength: 1, maxLength: 32 });
 
-const emojiSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
-// Flags, keycaps, subdivision flags, and pictographic ZWJ sequences with modifiers.
-const emojiSequence =
-  /^(?:\p{Regional_Indicator}{2}|[#*0-9]️?⃣|\u{1F3F4}[\u{E0061}-\u{E007A}]+\u{E007F}|\p{Extended_Pictographic}️?\p{Emoji_Modifier}?(?:‍\p{Extended_Pictographic}️?\p{Emoji_Modifier}?)*)$/u;
-
-/** One emoji grapheme: the Gateway's admission rule, shared with pickers for instant feedback. */
-export function isReactionEmoji(emoji: string): boolean {
-  return (
-    Array.from(emoji).length <= 32 &&
-    [...emojiSegmenter.segment(emoji)].length === 1 &&
-    emojiSequence.test(emoji)
-  );
-}
+export { isReactionEmoji } from "../reaction-emoji.js";
 
 export const MessageReactionSummarySchema = closedObject({
   emoji: ReactionEmojiSchema,
@@ -38,7 +27,7 @@ export const MessageReactionSummarySchema = closedObject({
 });
 
 export const SessionReactionMirrorSchema = closedObject({
-  status: Type.Union([Type.Literal("delivered"), Type.Literal("failed"), Type.Literal("skipped")]),
+  status: stringLiteralUnion(["delivered", "failed", "skipped"]),
   reason: Type.Optional(Type.String()),
 });
 
@@ -68,7 +57,7 @@ export const SessionReactionEventSchema = closedObject({
   sessionId: NonEmptyString,
   messageId: NonEmptyString,
   emoji: ReactionEmojiSchema,
-  action: Type.Union([Type.Literal("added"), Type.Literal("removed")]),
+  action: stringLiteralUnion(["added", "removed"]),
   actor: SessionSharingIdentitySchema,
   reactions: Type.Array(MessageReactionSummarySchema),
 });

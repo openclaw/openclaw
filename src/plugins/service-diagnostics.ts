@@ -6,6 +6,8 @@ import {
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 import { onGatewayWorkMetrics } from "../infra/gateway-work-metrics.js";
+import { onGatewayWsMetrics } from "../infra/gateway-ws-metrics.js";
+import { onWorkerRequestMetrics } from "../infra/worker-request-diagnostics.js";
 import {
   recordDiagnosticExporterHealth,
   type DiagnosticExporterHealthUpdate,
@@ -51,6 +53,14 @@ export function createPluginServiceDiagnostics(
     onGatewayWorkMetrics: (listener) => {
       lease.assertActive("gateway work metrics listener");
       return lease.retain(onGatewayWorkMetrics(listener));
+    },
+    onGatewayWsMetrics: (listener) => {
+      lease.assertActive("gateway WebSocket metrics listener");
+      return lease.retain(onGatewayWsMetrics(listener));
+    },
+    onWorkerRequestMetrics: (listener) => {
+      lease.assertActive("worker request metrics listener");
+      return lease.retain(onWorkerRequestMetrics(listener));
     },
     onEvent: (listener, filter, options) => {
       lease.assertActive("internal diagnostic listener");

@@ -1,4 +1,4 @@
-// Precomputed help preserves field selection, snapshots, and stdout semantics.
+// Precomputed help preserves field selection, physical-file snapshots, and stdout bytes.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,41 +41,40 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("precomputed help metadata output", () => {
   it.each([
-    ["outputPrecomputedSecretsHelpText", " secrets \n"],
-    ["outputPrecomputedNodesHelpText", " nodes \n"],
+    ["browser", " browser \n"],
+    ["secrets", " secrets \n"],
+    ["nodes", " nodes \n"],
+    ["config", " config \n"],
+    ["doctor", " doctor \n"],
+    ["gateway", " gateway \n"],
+    ["models", " models \n"],
+    ["plugins", " plugins \n"],
+    ["sessions", " sessions \n"],
   ] as const)("preserves %s bytes", (name, text) => {
-    expect(help[name]()).toBe(true);
+    expect(help.outputPrecomputedCommandHelpText(name)).toBe(true);
     expect(write.mock.calls).toEqual([[text]]);
   });
 
-  it("keeps successful flat and nested field snapshots independent", () => {
+  it("preserves root help bytes", () => {
     expect(help.outputPrecomputedRootHelpText()).toBe(true);
-    expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(true);
-    readMetadata.mockReturnValue(null);
-    expect(help.outputPrecomputedRootHelpText()).toBe(true);
-    expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(true);
-    expect(write.mock.calls).toEqual([[" root \n"], [" config \n"], [" root \n"], [" config \n"]]);
-    expect(readMetadata).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls).toEqual([[" root \n"]]);
   });
 
-  it("retains a help miss when the real reader advances from null to parent metadata", async () => {
+  it("uses the physical reader snapshot across root and nested help", async () => {
     const parentDir = tempDirs.make("openclaw-help-metadata-");
     const moduleDir = path.join(parentDir, "chunks");
     fs.mkdirSync(moduleDir);
-    fs.writeFileSync(path.join(moduleDir, "cli-startup-metadata.json"), "null");
-    fs.writeFileSync(
-      path.join(parentDir, "cli-startup-metadata.json"),
-      JSON.stringify({ browserHelpText: " parent browser \n" }),
-    );
+    const metadataPath = path.join(parentDir, "cli-startup-metadata.json");
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
     const moduleUrl = pathToFileURL(path.join(moduleDir, "root-help-metadata.js")).href;
     const { readCliStartupMetadata } =
       await vi.importActual<typeof import("./startup-metadata.js")>("./startup-metadata.js");
     readMetadata.mockImplementation(() => readCliStartupMetadata(moduleUrl));
 
-    expect(help.outputPrecomputedBrowserHelpText()).toBe(false);
-    expect(readCliStartupMetadata(moduleUrl)).toEqual({ browserHelpText: " parent browser \n" });
-    expect(help.outputPrecomputedBrowserHelpText()).toBe(false);
-    expect(write).not.toHaveBeenCalled();
-    expect(readMetadata).toHaveBeenCalledOnce();
+    expect(help.outputPrecomputedRootHelpText()).toBe(true);
+    fs.writeFileSync(metadataPath, JSON.stringify({ rootHelpText: "changed" }));
+    expect(help.outputPrecomputedCommandHelpText("config")).toBe(true);
+    expect(help.outputPrecomputedRootHelpText()).toBe(true);
+    expect(write.mock.calls).toEqual([[" root \n"], [" config \n"], [" root \n"]]);
   });
 });

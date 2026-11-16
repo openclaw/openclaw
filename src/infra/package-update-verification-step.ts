@@ -157,7 +157,8 @@ export async function deferPackageStateVerification(
   const cause =
     error instanceof Error && error.constructor === Error ? (error.cause ?? error) : error;
   const candidateOwnsVerification =
-    params.migrationRecorded === true && isSqliteSchemaVersionError(cause);
+    (params.migrationRecorded === true || params.restart === false) &&
+    isSqliteSchemaVersionError(cause);
   if (
     !candidateOwnsVerification &&
     (params.restart !== false || !isOpenClawStateWriteContentionError(cause))
@@ -173,8 +174,8 @@ export async function deferPackageStateVerification(
     advisory: {
       kind: "recoverable-maintenance",
       message: candidateOwnsVerification
-        ? "Post-install state verification belongs to the candidate after its recorded candidate migration; this updater cannot reopen the newer schema. Keep the installed candidate and recovery backups, and run openclaw update status to check current Gateway health."
-        : "Post-install state verification deferred: another process holds the state database and --no-restart leaves activation to the operator. Restart the Gateway through its service owner, then run openclaw update status and openclaw doctor. Keep recovery backups until verification completes.",
+        ? "Post-install state verification deferred to the candidate after candidate migration; this updater cannot reopen the newer schema. Keep the installed candidate and recovery backups, and run openclaw update status and openclaw doctor after startup completes."
+        : "Post-install state verification deferred: another process holds the state database. With --no-restart, the package Gateway may restart itself after replacement. Run openclaw update status and openclaw doctor after it is ready. Keep recovery backups until verification completes.",
     },
   };
   params.results?.push(step);

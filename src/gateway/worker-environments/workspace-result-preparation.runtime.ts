@@ -13,12 +13,16 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
   MAX_RECONCILIATION_TOTAL_BYTES,
+  UnsafeWorkspaceManifestPathError,
+  type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { readWorkspaceTreeFile } from "./workspace-reconcile-fs.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
   requireWorkerResultStorageRef,
   STAGED_RESULT_MESSAGE,
+  WorkspaceStageCurrentPathError,
 } from "./workspace-result-inventory.js";
 
 const bufferView = (bytes: Uint8Array) =>
@@ -29,11 +33,12 @@ function stagedResultMessage(params: {
   currentManifestRef: string;
   baseManifestRaw: Uint8Array<ArrayBuffer>;
   currentManifestRaw: Uint8Array<ArrayBuffer>;
+  gitHistory?: WorkerWorkspaceGitHistory;
 }): { chunks: Buffer[]; byteLength: number } {
   const base = bufferView(params.baseManifestRaw);
   const current = bufferView(params.currentManifestRaw);
   const header = Buffer.from(
-    `${STAGED_RESULT_MESSAGE}\nversion 2\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
+    `${STAGED_RESULT_MESSAGE}\nversion ${params.gitHistory ? 3 : 2}\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n${params.gitHistory ? `git-history ${JSON.stringify(params.gitHistory)}\n` : ""}\n`,
   );
   return {
     chunks: [header, base, current],
@@ -75,7 +80,7 @@ async function publicationStageSource(
     size: content.byteLength,
     sha256: sha256(content),
   });
-  const entries = [...inline].map(([pathname, content]) => file(pathname, content));
+  const entries = Array.from(inline, ([pathname, content]) => file(pathname, content));
   const blobs = new Set(
     snapshot.entries.flatMap((entry) => (entry.sha && entry.mode !== "160000" ? [entry.sha] : [])),
   );
@@ -140,23 +145,40 @@ export async function buildWorkspaceStageInput(
               });
             }),
         };
-  const compared = parseChangedWorkspaceResult(
-    parseWorkerWorkspaceManifest(
-      bufferView(source.baseManifestRaw).toString("utf8"),
-      source.baseManifestRef,
-    ),
-    parseWorkerWorkspaceManifest(
+  // A rejected baseline is not recoverable guest output. Only the current path
+  // rejection below can cross the existing worker error-code boundary as such.
+  const base = parseWorkerWorkspaceManifest(
+    bufferView(source.baseManifestRaw).toString("utf8"),
+    source.baseManifestRef,
+    params.buildCacheInputs,
+  );
+  let current: WorkerWorkspaceManifest;
+  try {
+    current = parseWorkerWorkspaceManifest(
       bufferView(source.currentManifestRaw).toString("utf8"),
       source.currentManifestRef,
-    ),
-  );
+      params.buildCacheInputs,
+    );
+  } catch (error) {
+    if (error instanceof UnsafeWorkspaceManifestPathError) {
+      throw new WorkspaceStageCurrentPathError(error.message, { cause: error });
+    }
+    throw error;
+  }
+  const compared = parseChangedWorkspaceResult(base, current);
   // Deletions are represented by the authenticated manifests and need no blob.
   await writeWorkspaceGitInput({
     assertBeforeMutation,
     inputPath: params.inputPath,
     ref: stagedResultRef,
     entries: compared.entries,
-    message: stagedResultMessage(source),
+    existingObjects: "publication" in params ? undefined : new Map(params.existingObjects),
+    message: stagedResultMessage({ ...source, gitHistory: params.gitHistory }),
+    parentCommit:
+      params.parentCommit ??
+      (params.gitHistory?.descendsFromBase && !params.gitHistory.unavailableReason
+        ? params.gitHistory.headCommit
+        : undefined),
     readVerifiedContent: source.readVerifiedContent,
   });
   return null;
@@ -169,6 +191,7 @@ export async function buildWorkspaceTreeInput(
   const source = params.source;
   await writeWorkspaceGitInput({
     ...params,
+    result: "tree",
     assertBeforeMutation,
     readVerifiedContent: async (entry) =>
       source.tree === undefined

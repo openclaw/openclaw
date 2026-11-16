@@ -77,7 +77,6 @@ struct NotificationManager {
         let req = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         do {
             try await LiveNotificationCenter(center: center).add(req)
-            self.logger.debug("notification queued")
             return true
         } catch {
             self.logger.error("notification send failed: \(error.localizedDescription)")

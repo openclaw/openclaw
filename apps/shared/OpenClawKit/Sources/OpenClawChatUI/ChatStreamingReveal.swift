@@ -53,55 +53,32 @@ func step(
     }
 
     let oldCharacterCount = state.text.count
+    let previousWords = Dictionary(uniqueKeysWithValues: state.words
+        .filter { $0.deadline > now }
+        .map { ($0.characterRange.lowerBound, $0) })
     let ranges = chatStreamingWordRanges(in: newText)
-    let rangesByStart = Dictionary(uniqueKeysWithValues: ranges.map { ($0.lowerBound, $0) })
-
-    var words = state.words.compactMap { word -> ChatStreamingRevealState.Word? in
-        guard word.deadline > now,
-              let updatedRange = rangesByStart[word.characterRange.lowerBound]
-        else { return nil }
-        return ChatStreamingRevealState.Word(
-            characterRange: updatedRange,
-            fadeStart: word.fadeStart,
-            deadline: word.deadline)
-    }
-
-    let trackedStarts = Set(words.map(\.characterRange.lowerBound))
-    let appendedRanges = ranges.filter {
-        $0.lowerBound >= oldCharacterCount && !trackedStarts.contains($0.lowerBound)
-    }
-    words.append(contentsOf: appendedRanges.map {
-        ChatStreamingRevealState.Word(
-            characterRange: $0,
-            fadeStart: now,
-            deadline: now + ChatStreamingRevealConstants.fadeDuration)
-    })
-    words.sort { $0.characterRange.lowerBound < $1.characterRange.lowerBound }
-
-    if words.count > ChatStreamingRevealConstants.maximumFadingWords {
-        words.removeFirst(words.count - ChatStreamingRevealConstants.maximumFadingWords)
-    }
+        .filter { previousWords[$0.lowerBound] != nil || $0.lowerBound >= oldCharacterCount }
+        .suffix(ChatStreamingRevealConstants.maximumFadingWords)
 
     let spacing: TimeInterval
-    if words.count > 1 {
+    if ranges.count > 1 {
         let catchUpSpacing =
             (ChatStreamingRevealConstants.maximumCatchUpDuration - ChatStreamingRevealConstants.fadeDuration)
-            / Double(words.count - 1)
+            / Double(ranges.count - 1)
         spacing = min(ChatStreamingRevealConstants.wordInterval, catchUpSpacing)
     } else {
         spacing = 0
     }
 
-    words = words.enumerated().map { index, word in
+    let words = ranges.enumerated().map { index, range in
+        let previous = previousWords[range.lowerBound]
         let scheduledStart = now + Double(index) * spacing
         let scheduledDeadline = scheduledStart + ChatStreamingRevealConstants.fadeDuration
-        let isExistingWord = trackedStarts.contains(word.characterRange.lowerBound)
         return ChatStreamingRevealState.Word(
-            characterRange: word.characterRange,
-            fadeStart: isExistingWord ? word.fadeStart : scheduledStart,
-            // Catch-up may move an existing deadline earlier, never later. That
-            // preserves or increases its current opacity across append steps.
-            deadline: isExistingWord ? min(word.deadline, scheduledDeadline) : scheduledDeadline)
+            characterRange: range,
+            fadeStart: previous?.fadeStart ?? scheduledStart,
+            // Catch-up may shorten an existing fade, never delay it or reset opacity.
+            deadline: previous.map { min($0.deadline, scheduledDeadline) } ?? scheduledDeadline)
     }
 
     return ChatStreamingRevealState(text: newText, words: words)

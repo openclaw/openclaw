@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { validateCronForm } from "./index.ts";
+import { validateCronForm } from "./form.ts";
 
 function userinfoUrl(field: "username" | "password") {
   const url = new URL("https://example.test/hook");

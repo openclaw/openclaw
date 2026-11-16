@@ -57,7 +57,7 @@ function mergeResolveUndoCandidate() {
     }
     throw error;
   }
-  return bases.length === 1 ? [bases[0], ...parentIds] : undefined;
+  return bases.length === 1 ? { commits: [bases[0], ...parentIds], resolution: merge } : undefined;
 }
 
 function singleParentCommits(...args) {
@@ -86,7 +86,10 @@ function rebaseResolveUndoCandidates() {
   return originals.flatMap((commit) =>
     rewrites
       .filter((rewrite) => rewrite.identity === commit.identity)
-      .map((rewrite) => [commit.parent, rewrite.parent, commit.commit]),
+      .map((rewrite) => ({
+        commits: [commit.parent, rewrite.parent, commit.commit],
+        resolution: rewrite.commit,
+      })),
   );
 }
 
@@ -120,6 +123,36 @@ function committedResolveUndo(from, index) {
     }
     return cache.get(key);
   }
+  const renameCache = new Map();
+  function renamedSource(commit, resolution, pathname) {
+    const key = `${commit}\0${resolution}`;
+    if (!renameCache.has(key)) {
+      const changes = records(
+        "diff-tree",
+        "-r",
+        "--no-commit-id",
+        "--name-status",
+        "-z",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        "--diff-filter=R",
+        commit,
+        resolution,
+      );
+      const renames = new Map();
+      for (let offset = 0; offset < changes.length; offset += 3) {
+        const [kind, previous, next] = changes.slice(offset, offset + 3);
+        if (!/^R\d+$/.test(kind ?? "") || !previous || !next) {
+          throw new Error("Invalid transition rename entry");
+        }
+        renames.set(next, renames.has(next) ? null : previous);
+      }
+      renameCache.set(key, renames);
+    }
+    // Ambiguous or heavily rewritten renames that Git cannot detect stay unowned.
+    return renameCache.get(key).get(pathname);
+  }
   const paths = new Map();
   for (const record of undo) {
     const match = /^([0-7]{6}) ([a-f0-9]{40}) ([123])\t([\s\S]+)$/.exec(record);
@@ -135,7 +168,14 @@ function committedResolveUndo(from, index) {
   let rebases;
   for (const [pathname, entries] of paths) {
     const matches = (candidate) =>
-      candidate.every((commit, offset) => entry(commit, pathname) === entries.get(offset + 1));
+      candidate.commits.every((commit, offset) => {
+        const expected = entries.get(offset + 1);
+        if (entry(commit, pathname) === expected) {
+          return true;
+        }
+        const previous = renamedSource(commit, candidate.resolution, pathname);
+        return typeof previous === "string" && entry(commit, previous) === expected;
+      });
     if (
       index.get(pathname) !== from.get(pathname) ||
       !((merge && matches(merge)) || (rebases ??= rebaseResolveUndoCandidates()).some(matches))

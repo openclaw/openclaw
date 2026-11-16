@@ -12,5 +12,6 @@ export const page = definePage({
   // Inventory is refreshed by the mounted controller, not by a second route loader.
   staleTime: Infinity,
   loader: async (context: ApplicationContext) => (await loadModule()).load(context),
-  component: loadModule,
+  component: () =>
+    loadModule().then(({ renderSolid, renderSidebar }) => ({ renderSolid, renderSidebar })),
 });

@@ -40,44 +40,13 @@ export function retainShadowStyles(root: Document | ShadowRoot, styles: readonly
   };
 }
 
-/** Follow a view's containing shadow root without duplicating document CSS imports. */
+/** Refresh shadow styles when the owning view connects or updates. */
 export function bindShadowStyles(element: HTMLElement, styles: readonly string[]) {
-  let ancestors: Node[] = [];
   let root: ShadowRoot | undefined;
   let release: (() => void) | undefined;
-  let disposed = false;
-  const observer = new MutationObserver(sync);
 
   function sync() {
-    if (disposed) {
-      return;
-    }
-    const doc = element.ownerDocument;
-    const view = doc.defaultView;
-    const nextAncestors: Node[] = [];
-    for (let node = element.parentNode; node;) {
-      nextAncestors.push(node);
-      node = view && node instanceof view.ShadowRoot ? node.host : node.parentNode;
-    }
-    // Keep the former attachment chain while detached so its reconnect can be
-    // observed. Explicit view disposal releases these references immediately.
-    if (!element.isConnected) {
-      for (const ancestor of ancestors) {
-        if (!nextAncestors.includes(ancestor)) {
-          nextAncestors.push(ancestor);
-        }
-      }
-    }
-    if (
-      ancestors.length !== nextAncestors.length ||
-      ancestors.some((ancestor, index) => ancestor !== nextAncestors[index])
-    ) {
-      observer.disconnect();
-      ancestors = nextAncestors;
-      for (const ancestor of ancestors) {
-        observer.observe(ancestor, { childList: true });
-      }
-    }
+    const view = element.ownerDocument.defaultView;
     const candidate = element.getRootNode();
     const nextRoot =
       element.isConnected && view && candidate instanceof view.ShadowRoot ? candidate : undefined;
@@ -93,9 +62,6 @@ export function bindShadowStyles(element: HTMLElement, styles: readonly string[]
   return {
     sync,
     dispose() {
-      disposed = true;
-      observer.disconnect();
-      ancestors = [];
       release?.();
       release = undefined;
       root = undefined;

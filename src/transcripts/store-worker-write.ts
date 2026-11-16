@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
@@ -31,7 +31,7 @@ function writeTranscript<T>(
   input: { readOnly?: boolean },
   { open, stateOptions }: WorkerOperationContext,
   operationLabel: string,
-  write: (db: DatabaseSync) => T,
+  write: (db: EngineConnection) => T,
   exportInput?: ExportInput,
 ) {
   const options = { database: open(), ...stateOptions(), readOnly: input.readOnly };

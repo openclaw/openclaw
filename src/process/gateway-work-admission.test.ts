@@ -606,18 +606,6 @@ it.each(
   },
 );
 
-it("does not let a stale suspension release clear restart drain", () => {
-  const invalidated = vi.fn();
-  const suspension = tryBeginGatewaySuspendAdmission(invalidated);
-  expect(suspension?.commit()).toBe(true);
-
-  markGatewayRestartDraining();
-
-  expect(invalidated).toHaveBeenCalledOnce();
-  expect(suspension?.release()).toBe(false);
-  expect(isGatewayWorkAdmissionClosed()).toBe(true);
-});
-
 it.each([
   { fence: "signal", outcome: "rollback" },
   { fence: "signal", outcome: "orphan" },

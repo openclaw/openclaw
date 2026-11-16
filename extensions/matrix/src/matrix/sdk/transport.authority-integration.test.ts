@@ -68,6 +68,7 @@ vi.mock("openclaw/plugin-sdk/runtime-fetch", () => ({
 const url =
   "https://matrix.example/_matrix/client/v3/rooms/%21room%3Aexample/send/m.room.message/txn-1";
 const init = { method: "PUT", body: "{}" };
+const redirect = (location = "/next") => new Response(null, { status: 307, headers: { location } });
 beforeEach(() =>
   Object.assign(boundary, {
     dispatched: [],
@@ -92,15 +93,14 @@ test.each([
   let dns = 0;
   let preparations = 0;
   const revoked = new Error("request owner revoked");
+  const preparationToReject =
+    expected.stage === "effect preparation"
+      ? 1
+      : expected.stage === "redirect effect preparation"
+        ? 2
+        : 0;
   boundary.prepareEffect = async () => {
-    if (
-      ++preparations ===
-      (expected.stage === "effect preparation"
-        ? 1
-        : expected.stage === "redirect effect preparation"
-          ? 2
-          : 0)
-    ) {
+    if (++preparations === preparationToReject) {
       throw revoked;
     }
   };
@@ -116,8 +116,7 @@ test.each([
     }
   };
   if (expected.stage.startsWith("redirect")) {
-    boundary.fetch = async () =>
-      new Response(null, { status: 307, headers: { location: "/next" } });
+    boundary.fetch = async () => redirect();
   }
   const fetch = createMatrixGuardedFetch({
     captureRequestAuthority: () => () => {
@@ -153,8 +152,7 @@ test.each([
 test("redirect rechecks original transaction through the canonical registry", async () => {
   const guards = new MatrixMessageWireDispatchGuards();
   const observed: MatrixMessageWireDispatch[] = [];
-  boundary.fetch = async () =>
-    new Response(null, { status: 307, headers: { location: "https://matrix.example/redirected" } });
+  boundary.fetch = async () => redirect("https://matrix.example/redirected");
   const fetch = createMatrixGuardedFetch({
     beforeRequest: (resource, request) => guards.beforeRequest(resource, request),
   });
@@ -181,17 +179,17 @@ test("redirect rechecks original transaction through the canonical registry", as
   assert.equal(await guards.beforeRequest(url, init), undefined);
 });
 
-test.each([true])("preserves transport failure identity after redirect=%s", async (redirect) => {
+test("preserves transport failure identity after redirect", async () => {
   const failure = new Error("transport disconnected");
   let requests = 0;
   boundary.fetch = async () => {
-    if (redirect && ++requests === 1) {
-      return new Response(null, { status: 307, headers: { location: "/next" } });
+    if (++requests === 1) {
+      return redirect();
     }
     throw failure;
   };
   await assert.rejects(createMatrixGuardedFetch({})(url, init), (error) => error === failure);
-  assert.equal(boundary.dispatched.length, redirect ? 2 : 1);
+  assert.equal(boundary.dispatched.length, 2);
 });
 
 test("per-request abort remains effective with a client signal", async () => {
@@ -234,11 +232,7 @@ test("abort during DNS does not stamp persistent dispatch", async () => {
 
 test("a redirect rejection cannot erase an earlier dispatch", async () => {
   let guards = 0;
-  boundary.fetch = async () =>
-    new Response(null, {
-      status: 307,
-      headers: { location: "/redirected" },
-    });
+  boundary.fetch = async () => redirect("/redirected");
   const send = createMatrixGuardedFetch({
     beforeRequest: async () => {
       if (++guards === 2) {

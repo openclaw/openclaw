@@ -3,33 +3,11 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import {
-  TuiChoicePrompt,
-  createTuiChoiceSelector,
-  type TuiChoiceSelector,
-} from "./components/choice-prompt.js";
+import { TuiChoicePrompt, createTuiChoiceSelector } from "./components/choice-prompt.js";
 import { tuiTheme as theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
-
-type TaskSuggestionControllerDeps = {
-  client: Pick<
-    TuiBackend,
-    | "getTaskSuggestionActionCapabilities"
-    | "listTaskSuggestions"
-    | "acceptTaskSuggestion"
-    | "dismissTaskSuggestion"
-  >;
-  chatLog: { addSystem: (line: string) => void };
-  getAgentId: () => string;
-  getSessionKey: () => string;
-  openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle: OverlayHandle) => void;
-  requestRender: () => void;
-  onAccepted: (sessionKey: string) => Promise<void> | void;
-  createSelector?: (items: SelectItem[]) => TuiChoiceSelector;
-};
 
 const TASK_BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 type TaskAction = SelectItem & { value: "accept" | "dismiss" };
@@ -81,8 +59,22 @@ function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
   };
 }
 
-export function createTuiTaskSuggestionController(deps: TaskSuggestionControllerDeps) {
-  const createSelector = deps.createSelector ?? createTuiChoiceSelector;
+export function createTuiTaskSuggestionController(deps: {
+  client: Pick<
+    TuiBackend,
+    | "getTaskSuggestionActionCapabilities"
+    | "listTaskSuggestions"
+    | "acceptTaskSuggestion"
+    | "dismissTaskSuggestion"
+  >;
+  chatLog: { addSystem: (line: string) => void };
+  getAgentId: () => string;
+  getSessionKey: () => string;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle: OverlayHandle) => void;
+  requestRender: () => void;
+  onAccepted: (sessionKey: string) => Promise<void> | void;
+}) {
   const suggestions = new Map<string, TaskSuggestion>();
   const hiddenIds = new Set<string>();
   const resolvingIds = new Set<string>();
@@ -141,7 +133,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       return;
     }
 
-    const selector = createSelector(actions);
+    const selector = createTuiChoiceSelector(actions);
     const presentation: Presentation = { id: suggestion.id, actionKey };
     active = presentation;
     const dismissIndex = actions.findIndex((action) => action.value === "dismiss");

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
-import { expandHomePrefix, resolveRequiredHomeDir, resolveUserPath } from "../../infra/home-dir.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -62,7 +62,7 @@ export function resolveSessionTranscriptsDirForAgent(
 }
 
 export function resolveDefaultSessionStorePath(agentId: string): string {
-  return path.join(resolveSessionTranscriptsDirForAgent(agentId), "sessions.json");
+  return `${resolveSessionTranscriptsDirForAgent(agentId)}${path.sep}sessions.json`;
 }
 
 /** Store selectors and explicit databases share the owning agent's session artifact directory. */
@@ -125,9 +125,8 @@ function resolvePathFromAgentSessionsDir(
 ): string | undefined {
   const agentBase =
     safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
-  const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
-  const relative = path.relative(agentBase, realCandidate);
-  // Realpath both sides when possible so symlinked session dirs still enforce containment.
+  const relative = path.relative(agentBase, candidateAbsPath);
+  // The caller already resolved the candidate; resolve this fallback root for containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return resolveRerootedSessionPath(agentBase, candidateAbsPath);
   }
@@ -358,23 +357,13 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  return resolveSessionStorePathWithContext(store, opts, { cwd: resolveUserPath(".") });
-}
-
-/** Internal async readers capture their relative-path base before yielding. */
-export function resolveSessionStorePathWithContext(
-  store: string | undefined,
-  opts: { agentId?: string; env?: NodeJS.ProcessEnv } | undefined,
-  context: { cwd: string },
-) {
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
     if (!opts?.agentId?.trim()) {
       throw new SessionStoreAgentIdRequiredError();
     }
-    const agentId = normalizeAgentId(opts.agentId);
-    return path.join(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "sessions.json");
+    return `${resolveSessionTranscriptsDirForAgent(opts.agentId, env, homedir)}${path.sep}sessions.json`;
   }
   let expandedStore = store;
   if (expandedStore.includes("{agentId}")) {
@@ -385,16 +374,16 @@ export function resolveSessionStorePathWithContext(
     expandedStore = expandedStore.replaceAll("{agentId}", agentId);
   }
   if (expandedStore.startsWith("~")) {
-    return path.resolve(
-      context.cwd,
-      expandHomePrefix(expandedStore, {
-        home: resolveRequiredHomeDir(env, homedir),
-        env,
-        homedir,
-      }),
-    );
+    expandedStore = expandHomePrefix(expandedStore, {
+      home: resolveRequiredHomeDir(env, homedir),
+      env,
+      homedir,
+    });
   }
-  return path.resolve(context.cwd, expandedStore);
+  // Service working directories vary; configuration must select the same store after a restart.
+  return path.isAbsolute(expandedStore)
+    ? path.resolve(expandedStore)
+    : path.resolve(resolveStateDir(env, homedir), expandedStore);
 }
 
 export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {

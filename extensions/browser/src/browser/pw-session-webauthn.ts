@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, BrowserContext, CDPSession } from "playwright-core";
 import { redactCdpErrorText } from "./cdp.helpers.js";
-import { processCommandUsesHeadlessChrome } from "./chrome.js";
+import { processCommandUsesHeadlessChrome } from "./chrome.executables.js";
 
 const log = createSubsystemLogger("browser").child("webauthn");
 

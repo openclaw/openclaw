@@ -4,25 +4,22 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isErrno } from "../../infra/errno.js";
 import {
   assertDatabasePathIdentity,
-  readDatabasePathIdentitySync,
+  readDatabasePathIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry-listing.js";
-import { listAgentEntries, resolveAgentDir } from "../agent-scope.js";
-import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constants.js";
+import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { resolveEffectiveAgentDir } from "../agent-scope-config.js";
+import { listAgentEntries } from "../agent-scope.js";
+import { AUTH_STORE_VERSION } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import {
-  loadPersistedAuthProfileStoreAtDatabasePath,
-  mergePersistedAuthProfileState,
-} from "./persisted.js";
+import { mergePersistedAuthProfileState } from "./persisted.js";
 import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
-import { invalidateRuntimeAuthProfileStoreSnapshotsForOwner } from "./runtime-snapshots.js";
-import { closeAuthProfileReadPool } from "./sqlite-read-pool.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
@@ -37,8 +34,10 @@ import { coerceAuthProfileState } from "./state.js";
 import { saveAuthProfileStoreWithPreparedOwner } from "./store-runtime.js";
 import type { SaveAuthProfileStoreOptions } from "./store-save.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
-import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
-import { runAuthProfileStoreUpdate } from "./store-update.js";
+import {
+  createAuthProfileStoreUpdatePublisher,
+  runAuthProfileStoreUpdate,
+} from "./store-update.js";
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
@@ -58,10 +57,6 @@ type CandidateSource = {
   databasePath: string;
   configured: boolean;
 };
-
-function canonicalizeDatabasePath(databasePath: string): string {
-  return resolvePathViaExistingAncestorSync(path.resolve(databasePath));
-}
 
 async function collectStateRootCandidates(env: NodeJS.ProcessEnv): Promise<CandidateSource[]> {
   const agentsRoot = path.join(resolveStateDir(env), "agents");
@@ -105,7 +100,7 @@ export async function listCandidateAuthProfileStores(params: {
       continue;
     }
     const agentId = normalizeAgentId(id);
-    const agentDir = path.resolve(resolveAgentDir(params.cfg, agentId, env));
+    const agentDir = path.resolve(resolveEffectiveAgentDir(params.cfg, agentId, { env }));
     sources.push({
       agentId,
       agentDir,
@@ -114,7 +109,7 @@ export async function listCandidateAuthProfileStores(params: {
     });
   }
   sources.push(...(await collectStateRootCandidates(env)));
-  for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
+  for (const registered of await listOpenClawRegisteredAgentDatabasesAsync({ env })) {
     const agentId = normalizeAgentId(registered.agentId);
     sources.push({
       agentId,
@@ -125,7 +120,8 @@ export async function listCandidateAuthProfileStores(params: {
 
   const candidates = new Map<string, CandidateAuthProfileStore>();
   for (const source of sources) {
-    const databasePath = canonicalizeDatabasePath(source.databasePath);
+    const databaseIdentity = await readDatabasePathIdentity(source.databasePath);
+    const databasePath = databaseIdentity.canonicalPath;
     const agentDir = source.agentDir ?? path.dirname(databasePath);
     const existing = candidates.get(databasePath);
     if (!existing) {
@@ -133,7 +129,7 @@ export async function listCandidateAuthProfileStores(params: {
         agentId: source.agentId,
         agentDir,
         databasePath,
-        databaseIdentity: readDatabasePathIdentitySync(databasePath),
+        databaseIdentity,
         configured: source.configured,
         env,
       });
@@ -146,17 +142,10 @@ export async function listCandidateAuthProfileStores(params: {
   );
 }
 
-/** Read an already-discovered candidate without creating a missing database. */
-export function loadCandidateAuthProfileStore(
-  candidate: CandidateAuthProfileStore,
-): AuthProfileStore | null {
-  try {
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
-    return loadPersistedAuthProfileStoreAtDatabasePath(candidate.databasePath, "agent");
-  } finally {
-    if (!candidate.configured) {
-      closeAuthProfileReadPool({ kind: "database", databasePath: candidate.databasePath });
-    }
+async function adoptCandidateDatabaseIdentity(candidate: CandidateAuthProfileStore): Promise<void> {
+  if (candidate.databaseIdentity.key.startsWith("path:")) {
+    // Discovery captured no file; startup or another operation may create it before first use.
+    candidate.databaseIdentity = await readDatabasePathIdentity(candidate.databasePath);
   }
 }
 
@@ -164,29 +153,67 @@ export function loadCandidateAuthProfileStore(
 export async function loadCandidateAuthProfileStoreAsync(
   candidate: CandidateAuthProfileStore,
 ): Promise<AuthProfileStore | null> {
-  assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
-  const reader = prepareAgentAuthProfileRowsRead(candidate);
+  await adoptCandidateDatabaseIdentity(candidate);
+  const reader = await prepareAgentAuthProfileRowsRead(candidate);
   try {
     const rows = await reader.read();
     reader.assertCurrent();
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
     return loadPersistedAuthProfileStoreFromRows(rows, candidate.databasePath);
   } finally {
     await reader.dispose();
   }
 }
 
+/** Keep the owner's current credential facts available at a later write boundary. */
+export async function prepareCandidateAuthProfileCredentialRead(
+  candidate: CandidateAuthProfileStore,
+  profileId: string,
+): Promise<
+  Pick<
+    ReturnType<typeof captureAuthProfileCredentialAuthority>,
+    "readCurrentCredential" | "waitUntilCurrent"
+  >
+> {
+  // Key the authority by the adopted file identity that later writes publish under.
+  await adoptCandidateDatabaseIdentity(candidate);
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ env: candidate.env }),
+    {
+      identity: `${candidate.databaseIdentity.key}:${candidate.databaseIdentity.birthtime ?? ""}`,
+      databasePath: candidate.databasePath,
+    },
+    profileId,
+  );
+  const store = await loadCandidateAuthProfileStoreAsync(candidate);
+  authority.observe(store?.profiles[profileId]);
+  await authority.waitUntilCurrent();
+  return authority;
+}
+
 type CandidateAuthProfileUpdate = {
+  assertCurrent?: () => void;
   candidate: CandidateAuthProfileStore;
   preserveProfileState?: boolean;
   profileId: string;
   updater: (store: AuthProfileStore) => boolean;
 };
 
-/** The writer can skip unrelated generations without opening a write transaction. */
+/** Skip unrelated generations before write admission; possible matches still use the writer. */
 export async function fenceCandidateAuthProfileStore(
   params: CandidateAuthProfileUpdate & { generation: OAuthCredential },
 ): Promise<void> {
+  const store = await loadCandidateAuthProfileStoreAsync(params.candidate);
+  const credential = store?.profiles[params.profileId];
+  if (
+    credential?.type !== "oauth" ||
+    !isSameOAuthRefreshGeneration({
+      profileId: params.profileId,
+      left: credential,
+      right: params.generation,
+    })
+  ) {
+    return;
+  }
   await runCandidateAuthProfileUpdate(params, {
     profileId: params.profileId,
     generation: params.generation,
@@ -209,6 +236,7 @@ async function runCandidateAuthProfileUpdate(
   peerGeneration?: AuthStoreUpdateInput["peerGeneration"],
 ): Promise<{ changed: boolean; store: AuthProfileStore } | undefined> {
   const { candidate } = params;
+  await adoptCandidateDatabaseIdentity(candidate);
   const saveOptions = {
     filterExternalAuthProfiles: false,
     syncExternalCli: false,
@@ -224,6 +252,7 @@ async function runCandidateAuthProfileUpdate(
     const assertCurrent = () => {
       workerWrites.assertOwner(candidate.env);
       assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+      params.assertCurrent?.();
     };
     return runAuthProfileUsage(() =>
       workerWrites.run(() => {
@@ -297,12 +326,12 @@ async function runCandidateAuthProfileUpdate(
       agentId: candidate.agentId,
       path: candidate.databasePath,
       env: candidate.env,
+      identity: candidate.databaseIdentity,
     },
     envOnly: false,
     peerGeneration,
     options: { env: candidate.env },
-    assertCurrent: () =>
-      assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity),
+    assertCurrent: params.assertCurrent,
     update(prepared) {
       const store = prepared.store;
       const changed = params.updater(store);
@@ -316,25 +345,9 @@ async function runCandidateAuthProfileUpdate(
           }
         : { save: false };
     },
-    async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-      if (committed) {
-        try {
-          await publishAuthProfileStoreUpdate(
-            owner,
-            committed,
-            assertCurrent,
-            nativeCommits,
-            committedIsCurrent,
-          );
-        } catch (error) {
-          invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
-          reportCommittedInlineAuthFailure(
-            "Auth candidate committed before publication failed",
-            error,
-          );
-        }
-      }
-    },
+    publish: createAuthProfileStoreUpdatePublisher(
+      "Auth candidate committed before publication failed",
+    ),
   });
   return result;
 }

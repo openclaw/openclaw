@@ -10,18 +10,14 @@ import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-call
 /** Watch effects retain their original stores; the durable wake keeps its ordinary handoff rules. */
 export function createRequesterSettleReceiptAdmission(params: {
   requester: { canonicalKey: string; agentId?: string; storePath?: string };
-  identity: { sessionId: string; lifecycleRevision?: string };
   storeSessionKey: string;
   storeAgentId?: string;
   storePaths(): readonly (string | null | undefined)[];
-  isRecoveryCurrent(): boolean;
   readCurrent(): SessionEntryCurrentFacts | undefined;
   isStoreCurrent(): boolean;
 }) {
-  const isEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) =>
-    entry?.sessionId === params.identity.sessionId &&
-    entry.lifecycleRevision === params.identity.lifecycleRevision &&
-    params.isRecoveryCurrent();
+  // The session key is the address: a reset or a compaction successor stays current.
+  const isEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) => entry !== undefined;
   const admission: GatewayToolCallerReceiptAdmission = {
     async prepare() {
       const storeCurrent = captureSystemEventStoreCurrentCheck(

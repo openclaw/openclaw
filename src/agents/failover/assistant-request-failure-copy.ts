@@ -3,6 +3,7 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -11,6 +12,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -25,7 +27,7 @@ import type { FailoverReason } from "./signal.js";
 export const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
-  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.";
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
   /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 const PROVIDER_CACHE_CONTROL_LIMIT_RE =
@@ -41,9 +43,13 @@ type AssistantRequestFailureCopyFacts = {
 };
 
 export const ERROR_DETAILS_HINT =
-  "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+  "For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
+  "storage-worker-memory":
+    "OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem.",
+  unavailable:
+    "The database connection was lost. This operation was rolled back; nothing from it was saved. Please retry.",
   SQLITE_BUSY:
     "OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again.",
   SQLITE_LOCKED:
@@ -56,9 +62,15 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
+  session_actor_reconciliation:
+    "OpenClaw couldn't confirm the last update to this conversation. Some work may have been saved. Wait for current work to finish, then reopen the conversation and check its history before trying again. If it still fails, restart OpenClaw.",
+  "57014":
+    "PostgreSQL canceled a database operation or its statement timed out. Check the conversation for completed work before trying again. If it happens again, ask the operator to check PostgreSQL timeouts and server activity.",
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  child_completion_delivery_failed:
+    "The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
   codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
   node_runner_update_required:
     "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
@@ -66,24 +78,31 @@ const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> =
     "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
+export const API_KEY_EXPIRED_ERROR_CODE = "api_key_expired";
+const API_KEY_EXPIRED_USER_TEXT =
+  "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
+const ITEM_CONFLICT_USER_TEXT =
+  "⚠️ The AI service could not recover saved conversation state (item_conflict). Retry this turn. If it still fails, run /compact or choose another model, and share the Gateway logs with the operator.";
+
 const ASSISTANT_REQUEST_FAILURE_COPY = {
-  auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  auth: "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   auth_permanent:
-    "The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    "The AI service isn't accepting your login. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
   rate_limit: "The AI service needs a short break. Please try again in a few minutes.",
   overloaded: "The AI service is busy. Please try again in a moment, or choose another model.",
   billing:
     "The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
   server_error: "The AI service is having trouble. Please try again in a moment.",
+  route_unavailable: "The provider cannot serve this model right now. Choose another model.",
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
   context_overflow: CONTEXT_OVERFLOW_ERROR_MESSAGE,
   model_not_found:
-    "This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+    "This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.",
   session_expired:
-    "Your AI session expired. Start a new conversation with /new. If it happens again, sign in under Models in the Control UI.",
+    "Your AI session expired. Start a new conversation with /new. If it happens again, sign in under Models in the OpenClaw app.",
   empty_response: "The AI service returned an empty reply. Please try again.",
   no_error_details: "",
   unclassified: "",
@@ -104,6 +123,12 @@ export function renderAssistantRequestFailureCopy(
   if (facts.storageFailure) {
     return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
   }
+  if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
+    return `⚠️ ${API_KEY_EXPIRED_USER_TEXT}`;
+  }
+  if (facts.code === "item_conflict") {
+    return ITEM_CONFLICT_USER_TEXT;
+  }
   if (facts.code === "incomplete_tool_call") {
     return "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.";
   }
@@ -116,7 +141,7 @@ export function renderAssistantRequestFailureCopy(
     return `⚠️ ${copy}`;
   }
   const hasStatus =
-    typeof facts.status === "number" &&
+    facts.status !== undefined &&
     Number.isInteger(facts.status) &&
     facts.status >= 100 &&
     facts.status <= 599;
@@ -132,8 +157,13 @@ export function renderRuntimeCoordinationFailureCopy(code: string | undefined): 
   return copy ? `⚠️ ${copy}` : undefined;
 }
 
+type FailureCopyOptions = {
+  /** Include a diagnostic excerpt when no specialized format guidance matches. */
+  includeRawFormatDetails?: boolean;
+};
+
 /** Preserve the rejection diagnostic without publishing the surrounding response body. */
-export function renderFormatErrorCopy(raw: string): string {
+export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions): string {
   const trimmed = raw.trim();
   const normalized =
     extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
@@ -160,7 +190,7 @@ export function renderFormatErrorCopy(raw: string): string {
     return `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
   }
   if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
-    return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
+    return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the OpenClaw app.";
   }
   if (isUnsupportedReasoningEffortParameterError(candidate)) {
     return "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
@@ -180,6 +210,9 @@ export function renderFormatErrorCopy(raw: string): string {
         }
       }
     }
+    if (options?.includeRawFormatDetails === false) {
+      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    }
     // Redact before truncation so a clipped credential cannot escape matching.
     const detail = redactSensitiveText(candidate, { mode: "tools" })
       .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
@@ -190,14 +223,23 @@ export function renderFormatErrorCopy(raw: string): string {
     const bounded = detail.length > 600 ? `${truncateUtf16Safe(detail, 600)}…` : detail;
     return `LLM request rejected: ${escapeMarkdownText(bounded)}`;
   }
-  return "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
+  return "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.";
 }
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
 export function renderAssistantFormatFailureCopy(
-  message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
+  message: {
+    errorMessage?: unknown;
+    errorBody?: unknown;
+    errorType?: unknown;
+    errorCode?: unknown;
+  },
   reason?: FailoverReason | null,
+  options?: FailureCopyOptions,
 ): string | undefined {
+  if (message.errorCode === "item_conflict" || message.errorMessage === ITEM_CONFLICT_USER_TEXT) {
+    return ITEM_CONFLICT_USER_TEXT;
+  }
   for (const [isBody, raw] of [
     [true, message.errorBody],
     [false, message.errorMessage],
@@ -206,6 +248,14 @@ export function renderAssistantFormatFailureCopy(
       continue;
     }
     const info = parseApiErrorInfo(raw);
+    if (
+      info?.code === "item_conflict" ||
+      /^(?:LLM request rejected: )?An input item conflicts with an existing record\.$/u.test(
+        info?.message ?? raw.trim(),
+      )
+    ) {
+      return ITEM_CONFLICT_USER_TEXT;
+    }
     if (isBody && !info?.message) {
       continue;
     }
@@ -222,7 +272,7 @@ export function renderAssistantFormatFailureCopy(
     ) {
       continue;
     }
-    const copy = renderFormatErrorCopy(raw);
+    const copy = renderFormatErrorCopy(raw, options);
     if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
       return copy;
     }
@@ -257,13 +307,16 @@ export function renderModelLoadFailureCopy(message: {
 }
 
 /** Classify saved error facts without loading providers or publishing their raw diagnostics. */
-export function renderRecordedAssistantFailureCopy(message: {
-  model?: unknown;
-  errorMessage?: unknown;
-  errorBody?: unknown;
-  errorCode?: unknown;
-  errorType?: unknown;
-}): string | undefined {
+export function renderRecordedAssistantFailureCopy(
+  message: {
+    model?: unknown;
+    errorMessage?: unknown;
+    errorBody?: unknown;
+    errorCode?: unknown;
+    errorType?: unknown;
+  },
+  options?: FailureCopyOptions,
+): string | undefined {
   const modelLoadCopy = renderModelLoadFailureCopy(message);
   if (modelLoadCopy) {
     return modelLoadCopy;
@@ -275,6 +328,16 @@ export function renderRecordedAssistantFailureCopy(message: {
     return `⚠️ ${approvalMessage}`;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+  // Terminal lifecycle errors can already contain our safe copy without the original failure facts.
+  for (const copy of [
+    MODEL_REQUEST_POLICY_DENIED_TEXT,
+    API_KEY_EXPIRED_USER_TEXT,
+    ...Object.values(ASSISTANT_REQUEST_FAILURE_COPY),
+  ]) {
+    if (copy && (raw === copy || raw === `⚠️ ${copy}`)) {
+      return `⚠️ ${copy}`;
+    }
+  }
   if (raw === "Worker inference result exceeds the transcript message limit.") {
     return "The worker could not save the model response because it exceeded the message size limit. Retry with a smaller response or continue on the Gateway. Earlier actions may have completed; verify their results before continuing.";
   }
@@ -307,12 +370,13 @@ export function renderRecordedAssistantFailureCopy(message: {
   }
   const formatCopy =
     !classification?.reason || classification.reason === "format"
-      ? renderAssistantFormatFailureCopy(message, classification?.reason)
+      ? renderAssistantFormatFailureCopy(message, classification?.reason, options)
       : undefined;
   if (formatCopy) {
     return formatCopy;
   }
   const classifiedCopy = renderAssistantRequestFailureCopy({
+    storageFailure: classifyGatewayStorageFailure(message),
     code,
     status,
     // The legacy timeout retry bucket also includes explicit server failures.

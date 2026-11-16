@@ -26,25 +26,18 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         self.sessionKey = sessionKey
         self.anchorProvider = anchorProvider
 
-        canvasWindowLogger.debug("CanvasWindowController init start session=\(sessionKey, privacy: .public)")
         let safeSessionKey = CanvasWindowController.sanitizeSessionKey(sessionKey)
-        canvasWindowLogger.debug("CanvasWindowController init sanitized session=\(safeSessionKey, privacy: .public)")
         self.sessionDir = root.appendingPathComponent(safeSessionKey, isDirectory: true)
         try FileManager().createDirectory(at: self.sessionDir, withIntermediateDirectories: true)
-        canvasWindowLogger.debug("CanvasWindowController init session dir ready")
 
         self.schemeHandler = CanvasSchemeHandler(root: root)
-        canvasWindowLogger.debug("CanvasWindowController init scheme handler ready")
 
         let config = WKWebViewConfiguration()
         config.userContentController = WKUserContentController()
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.tabFocusesLinks = true
-        canvasWindowLogger.debug("CanvasWindowController init config ready")
         config.setURLSchemeHandler(self.schemeHandler, forURLScheme: CanvasScheme.scheme)
-        canvasWindowLogger.debug("CanvasWindowController init scheme handler installed")
 
-        canvasWindowLogger.debug("CanvasWindowController init creating WKWebView")
         self.webView = WKWebView(frame: .zero, configuration: config)
         // Presented documents render against an opaque surface.
         self.webView.setValue(true, forKey: "drawsBackground")
@@ -75,7 +68,6 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
         self.container = HoverChromeContainerView(containing: self.webView)
         let window = Self.makePanel(contentView: self.container)
-        canvasWindowLogger.debug("CanvasWindowController init makeWindow done")
         super.init(window: window)
 
         self.webView.navigationDelegate = self
@@ -88,7 +80,6 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         // Keep event delivery active while hidden so file changes are not lost.
         // The recursive polling fallback is enabled only for visible local Canvas content.
         self.watcher.startEventStream()
-        canvasWindowLogger.debug("CanvasWindowController init done")
     }
 
     @available(*, unavailable)
@@ -118,13 +109,10 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
             if scheme == CanvasScheme.scheme {
-                canvasWindowLogger.debug("canvas load app-local URL")
                 self.webView.load(URLRequest(url: url))
                 return
             }
             if scheme == "https" || scheme == "http" {
-                canvasWindowLogger.debug(
-                    "canvas load web scheme=\(scheme, privacy: .public) host=\(url.host ?? "-", privacy: .public)")
                 self.webView.load(URLRequest(url: url))
                 return
             }
@@ -139,7 +127,6 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
                     "invalid canvas url session=\(self.sessionKey, privacy: .public)")
             return
         }
-        canvasWindowLogger.debug("canvas load local canvas")
         self.webView.load(URLRequest(url: url))
     }
 

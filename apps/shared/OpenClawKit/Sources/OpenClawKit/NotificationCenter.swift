@@ -1,6 +1,16 @@
 import Foundation
 import UserNotifications
 
+extension OpenClawNotificationPriority {
+    public var interruptionLevel: UNNotificationInterruptionLevel {
+        switch self {
+        case .passive: .passive
+        case .active: .active
+        case .timeSensitive: .timeSensitive
+        }
+    }
+}
+
 public struct NotificationSnapshot: @unchecked Sendable {
     public let identifier: String
     public let userInfo: [AnyHashable: Any]
@@ -80,15 +90,10 @@ public struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable
     }
 
     public func deliveredNotifications() async -> [NotificationSnapshot] {
-        await withCheckedContinuation { continuation in
-            self.center.getDeliveredNotifications { notifications in
-                continuation.resume(
-                    returning: notifications.map { notification in
-                        NotificationSnapshot(
-                            identifier: notification.request.identifier,
-                            userInfo: notification.request.content.userInfo)
-                    })
-            }
+        await self.center.deliveredNotifications().map { notification in
+            NotificationSnapshot(
+                identifier: notification.request.identifier,
+                userInfo: notification.request.content.userInfo)
         }
     }
 }

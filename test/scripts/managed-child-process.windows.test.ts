@@ -6,15 +6,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import {
   inspectManagedProcessGroup,
-  loadManagedChildSpawner,
   runManagedCommand,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
 import type { ManagedWindowsJob } from "../../scripts/lib/managed-windows-job.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { testing } from "../helpers/openclaw-test-instance.js";
 import { waitForFile } from "../helpers/process-wait.js";
-import { createDeferred } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const fault = vi.hoisted(() => {
@@ -39,7 +37,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.runIf(process.platform === "win32")(
-  "retains the benchmark termination receipt on the original Windows child",
+  "retains the benchmark receipt on the original child",
   async ({ signal }) => {
     const child = spawnChild(
       process.execPath,
@@ -58,34 +56,6 @@ it.runIf(process.platform === "win32")(
         terminateManagedChild(child, "SIGKILL");
       }
       await closed;
-    }
-  },
-);
-
-it.runIf(process.platform === "win32")(
-  "releases an already-exited Gateway's native Job through the Gateway helper",
-  async ({ signal }) => {
-    const spawn = await loadManagedChildSpawner();
-    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const closed = once(child, "close", { signal });
-    child.stdout.resume();
-    child.stderr.resume();
-    const job = fault.job;
-    if (!job) {
-      throw new Error("Windows Job launcher was not created");
-    }
-    const close = vi.spyOn(job, "close");
-    try {
-      await closed;
-      await expect(
-        testing.stopWindowsGatewayProcess(child, Date.now() + 5_000, 2_000),
-      ).resolves.toBe(true);
-      expect(close).toHaveBeenCalledOnce();
-      expect(() => job.inspect()).toThrow("Windows command Job is closed");
-    } finally {
-      job.close();
     }
   },
 );
@@ -144,12 +114,11 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
     });
     const outcome = command.catch((error: unknown) => error);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         waitForFile(ready, signal),
-        outcome.then((error) => {
-          throw new Error("command completed before descendant readiness", { cause: error });
-        }),
-      ]);
+        outcome,
+        "completed before readiness",
+      );
       const pids = (await fs.readFile(ready, "utf8")).trim().split(/\s+/u).map(Number);
       const descendantPid = pids[1] ?? 0;
       commandPid = pids[0] ?? 0;
@@ -166,14 +135,11 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
         }
         fault.child.stdin.end("exit\n");
       }
-      const observation = await Promise.race([
+      const observation = await awaitGateBeforeSettlement(
         warning.promise,
-        outcome.then((error) => {
-          throw new Error("cleanup settled before recording the surviving descendant", {
-            cause: error,
-          });
-        }),
-      ]);
+        outcome,
+        "cleanup settled before warning",
+      );
       await leaderClosed;
       expect(fault.child.stdout?.closed && fault.child.stderr?.closed).toBe(true);
       expect(fault.job?.stop).toHaveBeenCalled();
@@ -193,11 +159,10 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
       }
       await outcome;
     }
-    if (mode === "abort") {
-      expect(await outcome).toMatchObject({ code: "ABORT_ERR" });
-    } else {
-      expect(await outcome).toBe(0);
-    }
+    expect(await outcome).toEqual(
+      mode === "abort" ? expect.objectContaining({ code: "ABORT_ERR" }) : 0,
+    );
     owner.assertReleased();
+    expect(() => fault.job?.inspect()).toThrow("Windows command Job is closed");
   },
 );

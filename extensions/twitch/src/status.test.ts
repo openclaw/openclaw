@@ -1,105 +1,73 @@
 import { describe, expect, it } from "vitest";
-import { collectTwitchStatusIssues } from "./status.js";
+import { twitchPlugin } from "./plugin.js";
 import type { ChannelAccountSnapshot } from "./types.js";
 
-function createSnapshot(overrides: Partial<ChannelAccountSnapshot> = {}): ChannelAccountSnapshot {
-  return {
-    accountId: "default",
-    configured: true,
-    enabled: true,
-    running: false,
-    ...overrides,
-  };
+const collectTwitchStatusIssues = twitchPlugin.status!.collectStatusIssues!;
+
+function collect(overrides: Partial<ChannelAccountSnapshot>) {
+  return collectTwitchStatusIssues([
+    {
+      accountId: "default",
+      configured: true,
+      enabled: true,
+      running: false,
+      ...overrides,
+    },
+  ]);
 }
 
-function expectSingleIssue(
-  issues: ReturnType<typeof collectTwitchStatusIssues>,
-  expected: ReturnType<typeof collectTwitchStatusIssues>[number],
-): void {
-  expect(issues).toEqual([expected]);
-}
+type Issue = ReturnType<typeof collectTwitchStatusIssues>[number];
+const issue = (
+  kind: Issue["kind"],
+  message: string,
+  fix: string,
+  accountId = "default",
+): Issue => ({ channel: "twitch", accountId, kind, message, fix });
 
 describe("status", () => {
-  describe("collectTwitchStatusIssues", () => {
-    it("should detect disabled accounts", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ enabled: false })];
+  it("should detect disabled accounts", () => {
+    expect(collect({ enabled: false })).toEqual([
+      issue(
+        "config",
+        "Twitch account is disabled",
+        "Set enabled: true in your account configuration to enable this account",
+      ),
+    ]);
+  });
 
-      const issues = collectTwitchStatusIssues(snapshots);
+  it("should detect runtime errors", () => {
+    expect(collect({ lastError: "Connection timeout" })).toEqual([
+      issue(
+        "runtime",
+        "Last error: Connection timeout",
+        "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
+      ),
+      issue(
+        "runtime",
+        "Account has never connected successfully",
+        "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
+      ),
+    ]);
+  });
 
-      expectSingleIssue(issues, {
-        channel: "twitch",
-        accountId: "default",
-        kind: "config",
-        message: "Twitch account is disabled",
-        fix: "Set enabled: true in your account configuration to enable this account",
-      });
-    });
+  it("should detect long-running connections", () => {
+    expect(collect({ running: true, lastStartAt: Date.now() - 8 * 24 * 60 * 60 * 1000 })).toEqual([
+      issue(
+        "runtime",
+        "Connection has been running for 8 days",
+        "Consider restarting the connection periodically to refresh the connection. Twitch tokens may expire after long periods.",
+      ),
+    ]);
+  });
 
-    it("should detect runtime errors", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        createSnapshot({ lastError: "Connection timeout" }),
-      ];
-
-      const issues = collectTwitchStatusIssues(snapshots);
-
-      expect(issues).toEqual([
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "runtime",
-          message: "Last error: Connection timeout",
-          fix: "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
-        },
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "runtime",
-          message: "Account has never connected successfully",
-          fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
-        },
-      ] satisfies ReturnType<typeof collectTwitchStatusIssues>);
-    });
-
-    it("should detect long-running connections", () => {
-      const oldDate = Date.now() - 8 * 24 * 60 * 60 * 1000; // 8 days ago
-
-      const snapshots: ChannelAccountSnapshot[] = [
-        createSnapshot({
-          running: true,
-          lastStartAt: oldDate,
-        }),
-      ];
-
-      const issues = collectTwitchStatusIssues(snapshots);
-
-      expectSingleIssue(issues, {
-        channel: "twitch",
-        accountId: "default",
-        kind: "runtime",
-        message: "Connection has been running for 8 days",
-        fix: "Consider restarting the connection periodically to refresh the connection. Twitch tokens may expire after long periods.",
-      });
-    });
-
-    it("reports an unconfigured account by its account ID", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "unknown",
-          configured: false,
-          enabled: true,
-          running: false,
-        },
-      ];
-
-      const issues = collectTwitchStatusIssues(snapshots);
-
-      expectSingleIssue(issues, {
-        channel: "twitch",
-        accountId: "unknown",
-        kind: "config",
-        message: "Twitch account is not properly configured",
-        fix: "Add required fields: username, accessToken, and clientId to your account configuration",
-      });
-    });
+  it("reports an unconfigured account by its account ID", () => {
+    expect(collect({ accountId: "unknown", configured: false })).toEqual([
+      issue(
+        "config",
+        "Twitch account is not properly configured",
+        "Add required fields: username, accessToken, and clientId to your account configuration",
+        "unknown",
+      ),
+    ]);
   });
 });

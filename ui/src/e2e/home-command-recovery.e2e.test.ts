@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import {
   controlUiSessionUrl,
@@ -14,7 +13,6 @@ import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Home command recovery across presentations",
-  trackBrowserContexts: true,
 });
 
 suite.define(() => {
@@ -25,19 +23,15 @@ suite.define(() => {
   ])(
     "recovers a rejected command without replacing newer input (handoff=$handoff, newer=$newerDraft)",
     async ({ handoff, newerDraft }) => {
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const pageErrors: string[] = [];
-      page.on("pageerror", (error) => pageErrors.push(error.message));
-      const homeKey = "agent:main:main";
-      const command = "/steer QA recovery message";
-      const newer = "QA newer draft stays here";
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
-        sessionKey: homeKey,
-        sessions: [{ key: homeKey, kind: "direct", label: "Main", updatedAt: 1 }],
-      });
-      try {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const homeKey = "agent:main:main";
+        const command = "/steer QA recovery message";
+        const newer = "QA newer draft stays here";
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
+          sessionKey: homeKey,
+          sessions: [{ key: homeKey, kind: "direct", label: "Main", updatedAt: 1 }],
+        });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
         const composer = page.locator("openclaw-chat-page .agent-chat__composer-combobox textarea");
         await composer.waitFor({ state: "visible" });
@@ -51,35 +45,29 @@ suite.define(() => {
           queueMode: "steer",
         });
         await expect.poll(() => composer.inputValue()).toBe("");
-        await page.screenshot({ path: `${suite.artifactDir}/command-pending.png`, fullPage: true });
 
         const dockComposer = page.locator(
           "openclaw-assistant-panel .agent-chat__composer-combobox textarea",
         );
         if (handoff) {
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Agents", exact: true }).click();
-          await page.waitForURL((url) => url.pathname.endsWith("/agents"));
-          await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
+          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
+          await page.locator("openclaw-sessions-page").waitFor();
           await page.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
           await dockComposer.waitFor({ state: "visible" });
-          expect(new URL(page.url()).pathname).toBe("/agents");
+          expect(new URL(page.url()).pathname).toBe("/sessions");
           expect(await composer.isVisible()).toBe(false);
           await expect.poll(() => dockComposer.inputValue()).toBe("");
           if (newerDraft) {
             await dockComposer.fill(newer);
           }
-          await page.screenshot({
-            path: `${suite.artifactDir}/dock-before-failure.png`,
-            fullPage: true,
-          });
         }
 
         await gateway.rejectDeferred("chat.send", {
           code: "UNAVAILABLE",
           message: "QA synthetic command rejection",
         });
-        const dockDraftBeforeReturn = handoff ? await dockComposer.inputValue() : null;
         if (handoff) {
           // The rail Home action toggles the dock; full-page navigation belongs to its header.
           await page
@@ -93,36 +81,9 @@ suite.define(() => {
         await page
           .locator("openclaw-chat-page .chat-error", { hasText: "QA synthetic command rejection" })
           .waitFor({ state: "visible" });
-        const failureObservation = {
-          sourceDraft: await composer.inputValue(),
-          dockDraft: dockDraftBeforeReturn,
-          errors: await page.locator(".chat-error").allTextContents(),
-        };
-        await page.screenshot({
-          path: `${suite.artifactDir}/command-rejected.png`,
-          fullPage: true,
-        });
-        const receipt = {
-          handoff,
-          newerDraft,
-          failureObservation,
-          returnedDraft: await composer.inputValue(),
-          pageErrors,
-          requests: await gateway.getRequests("chat.send"),
-        };
-        await writeFile(`${suite.artifactDir}/recovery.json`, JSON.stringify(receipt, null, 2));
-        await page.screenshot({ path: `${suite.artifactDir}/returned-home.png`, fullPage: true });
-        console.log(JSON.stringify({ artifactDir: suite.artifactDir, ...receipt }));
-        expect(receipt.requests).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         await expect.poll(() => composer.inputValue()).toBe(newerDraft ? newer : command);
-        await page.screenshot({
-          path: `${suite.artifactDir}/returned-home-verified.png`,
-          fullPage: true,
-          animations: "disabled",
-        });
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 });

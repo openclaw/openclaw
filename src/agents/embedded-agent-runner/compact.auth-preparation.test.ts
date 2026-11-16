@@ -3,6 +3,7 @@ import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
@@ -247,6 +248,7 @@ it("compacts through the configured fallback when the primary profile is cooling
       },
     },
   };
+  prepareSharedAuthStoreOwnershipForNative();
   setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
   onTestFinished(() => {
     clearRuntimeAuthProfileStoreSnapshotCore(agentDir);

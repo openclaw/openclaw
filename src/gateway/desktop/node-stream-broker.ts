@@ -146,15 +146,12 @@ function readAttachedStream(
 }
 
 /** Owns one-time node stream tickets and pairs authenticated desktop or portal duplexes. */
-export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () => number } = {}) {
-  const ttlMs = deps.ttlMs ?? DEFAULT_TICKET_TTL_MS;
-  const now = deps.now ?? Date.now;
+export function createNodeDesktopStreamBroker() {
   // Redemption keeps the attachment pending through authorization and metadata;
   // its ticket timer must still reject or cancel that in-flight handoff.
   const pending = new Map<string, TicketEntry>();
   const tickets = createOneTimeTicketStore<TicketEntry>({
-    ttlMs,
-    now,
+    ttlMs: DEFAULT_TICKET_TTL_MS,
     onExpire: (entry, ticket) =>
       rejectTicket(ticket, new Error(`node ${entry.kind} stream ticket expired`)),
   });
@@ -200,13 +197,13 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     kind: NodeStreamKind,
     attach: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => T,
   ) {
-    const nowMs = now();
+    const nowMs = Date.now();
     const attached = createDeferredCore<T>();
     void attached.promise.catch(() => undefined);
     const entry: TicketEntry = {
       kind,
       binding,
-      expiresAtMs: nowMs + ttlMs,
+      expiresAtMs: nowMs + DEFAULT_TICKET_TTL_MS,
       resolve(stream, metadata) {
         try {
           attached.resolve(attach(stream, metadata));
@@ -276,7 +273,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     }
     const ticket = (resource.searchParams.get("ticket") ?? "").trim();
     const entry = pending.get(ticket);
-    if (!entry || entry.kind !== kind || entry.redeemed || entry.expiresAtMs <= now()) {
+    if (!entry || entry.kind !== kind || entry.redeemed || entry.expiresAtMs <= Date.now()) {
       rejectWebSocketUpgrade(socket, { status: 401 });
       if (entry && entry.kind === kind && !entry.redeemed) {
         rejectTicket(ticket, new Error(`node ${kind} stream ticket expired`));

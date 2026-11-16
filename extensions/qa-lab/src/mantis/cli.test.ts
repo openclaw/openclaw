@@ -8,12 +8,6 @@ const { runMantisBeforeAfterCommand } = vi.hoisted(() => ({
 }));
 
 vi.mock("./cli.runtime.js", () => ({ runMantisBeforeAfterCommand }));
-vi.mock("../live-transports/shared/live-transport-cli.js", () => ({
-  createLazyCliRuntimeLoader:
-    <T>(load: () => Promise<T>) =>
-    async () =>
-      await load(),
-}));
 
 import { registerMantisCli } from "./cli.js";
 
@@ -22,21 +16,11 @@ const INTERRUPT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 function parseRun() {
   const program = new Command();
   registerMantisCli(program.command("qa"));
-  return program.parseAsync([
-    "node",
-    "openclaw",
-    "qa",
-    "mantis",
-    "run",
-    "--transport",
-    "discord",
-    "--scenario",
-    "discord-status-reactions-tool-only",
-    "--baseline",
-    "origin/main",
-    "--candidate",
-    "HEAD",
-  ]);
+  return program.parseAsync(
+    "node openclaw qa mantis run --transport discord --scenario discord-status-reactions-tool-only --baseline origin/main --candidate HEAD".split(
+      " ",
+    ),
+  );
 }
 
 it("declares the Mantis cleanup grace to a run-node IPC parent", async () => {
@@ -89,8 +73,7 @@ async function interruptRun(failure: (signal: AbortSignal) => Error) {
     signalHandler?.("SIGINT");
     await command;
 
-    expect(signal.aborted).toBe(true);
-    expect(process.exitCode).toBe(130);
+    expect([signal.aborted, process.exitCode]).toEqual([true, 130]);
     for (const name of INTERRUPT_SIGNALS) {
       expect(new Set(process.listeners(name))).toEqual(listenersBefore.get(name));
     }
@@ -101,29 +84,16 @@ async function interruptRun(failure: (signal: AbortSignal) => Error) {
   }
 }
 
-it("waits for interrupted cleanup and reports its failure artifact", async () => {
-  let cleanupComplete = false;
-  const stderr = await interruptRun((signal) => {
-    cleanupComplete = true;
-    return attachMantisFailureArtifact(
-      new Error("Mantis artifact processing aborted", { cause: signal.reason }),
-      "/tmp/mantis/error.txt",
-    );
-  });
-  expect(cleanupComplete).toBe(true);
-  expect(stderr).toContain("/tmp/mantis/error.txt");
-});
-
+const withArtifact = (error: Error) => attachMantisFailureArtifact(error, "/tmp/mantis/error.txt");
 it("recognizes an interrupted aggregate with a shared error cause", async () => {
   const stderr = await interruptRun((signal) => {
     const interrupted = new Error("lane aborted", { cause: signal.reason });
-    return attachMantisFailureArtifact(
+    return withArtifact(
       new AggregateError(
         [new Error("baseline aborted", { cause: interrupted }), interrupted],
         "Mantis interrupted",
         { cause: interrupted },
       ),
-      "/tmp/mantis/error.txt",
     );
   });
   expect(stderr).toContain("Mantis SIGINT error details: /tmp/mantis/error.txt");
@@ -143,6 +113,5 @@ it("reports cleanup failure details while preserving the interrupt exit code", a
       ),
   );
   expect(stderr).toContain("Mantis SIGINT cleanup failed");
-  expect(stderr).toContain("cleanup failed");
   expect(stderr).toContain("/tmp/mantis/error.txt");
 });

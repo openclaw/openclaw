@@ -3,30 +3,25 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "./update-managed-service-handoff-database.js";
+import * as leases from "./update-managed-service-handoff-database.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.for([false, true])(
-  "settles competing installation writes before pinning a reader (existing identity: %s)",
-  async (existing, { signal }) => {
+it.for(["initial", "existing", "timeout"])(
+  "serializes writers or diagnoses contention (%s)",
+  async (mode, { signal }) => {
+    const existing = mode !== "initial";
     const root = fs.realpathSync(dirs.make("handoff-writer-contention-"));
     const databasePath = path.join(root, "managed-update-handoffs.sqlite");
-    createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-    const identity = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
-    const moduleUrl = pathToFileURL(
-      path.resolve("src/infra/update-managed-service-handoff-database.ts"),
-    ).href;
-    const lockModuleUrl = pathToFileURL(path.resolve("src/infra/file-lock-sync.ts")).href;
+    leases.createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
+    const identity = leases.captureManagedUpdateLeaseDatabaseIdentity(databasePath);
+    const moduleUrl = new URL("./update-managed-service-handoff-database.ts", import.meta.url).href;
+    const lockModuleUrl = new URL("./file-lock-sync.ts", import.meta.url).href;
     const source = `
       import fs from "node:fs";
       import path from "node:path";
@@ -53,7 +48,6 @@ it.for([false, true])(
         }
         return result;
       };
-      try {
         const insert = db => db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, '{}', 1, NULL)")
           .run(kind + "-installation", kind);
         if (kind === "holder") {
@@ -71,27 +65,15 @@ it.for([false, true])(
             release();
           }
         } else {
-          owner(true, db => owner.transact(db, () => insert(db), {}));
+          try { owner(true, db => owner.transact(db, () => insert(db), {})); }
+          catch (error) { send({ code: error.code, phase: error.phase, holder: error.holder, message: error.message }); process.exitCode = 1; }
         }
-        send({ phase: "committed" });
-      } catch (error) {
-        send({ phase: "failed", message: error.message });
-        process.exitCode = 1;
-      }
     `;
+    const runner = ["--import", path.resolve("scripts/tsx.mjs"), "--input-type=module", "--eval"];
     const launch = (kind: string, otherPid?: number) => {
       const child = spawn(
         process.execPath,
-        [
-          "--import",
-          path.resolve("scripts/tsx.mjs"),
-          "--input-type=module",
-          "--eval",
-          source,
-          kind,
-          JSON.stringify(identity),
-          String(otherPid ?? 0),
-        ],
+        [...runner, source, kind, JSON.stringify(identity), String(otherPid ?? 0)],
         { stdio: ["pipe", "pipe", "pipe"] },
       );
       const output = createBoundedChildOutput();
@@ -104,39 +86,49 @@ it.for([false, true])(
         awaitGateBeforeSettlement(once(lines, "line"), closed, "Writer exited before admission"),
         signal,
       );
-      return { child, closed, ready, output: () => output.text() };
+      return {
+        child,
+        closed,
+        ready,
+        output: () => output.text(),
+        async [Symbol.asyncDispose]() {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+          }
+          await closed;
+        },
+      };
     };
-    const holder = launch("holder");
-    let waiter: ReturnType<typeof launch> | undefined;
-    try {
-      expect(JSON.parse((await holder.ready)[0]), holder.output()).toEqual({ phase: "holding" });
-      waiter = launch("waiter", holder.child.pid);
-      const observation = JSON.parse((await waiter.ready)[0]);
-      holder.child.stdin.end("x");
-      const results = await withinTest(Promise.all([holder.closed, waiter.closed]), signal);
-      expect(results, `holder: ${holder.output()}\nwaiter: ${waiter.output()}`).toEqual([
-        [0, null],
-        [0, null],
-      ]);
-      expect(observation).toEqual({ phase: "contended" });
-      const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(
-          database.prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner").all(),
-        ).toEqual([{ owner: "holder" }, { owner: "waiter" }]);
-      } finally {
-        database.close();
-      }
-    } finally {
-      for (const writer of [holder, waiter]) {
-        if (!writer) {
-          continue;
-        }
-        if (writer.child.exitCode === null && writer.child.signalCode === null) {
-          writer.child.kill("SIGKILL");
-        }
-        await writer.closed;
-      }
+    await using holder = launch("holder");
+    expect(JSON.parse((await holder.ready)[0]), holder.output()).toEqual({ phase: "holding" });
+    await using waiter = launch("waiter", holder.child.pid);
+    const observation = JSON.parse((await waiter.ready)[0]);
+    if (mode === "timeout") {
+      expect(await withinTest(waiter.closed, signal), waiter.output()).toEqual([1, null]);
+      const diagnostic = JSON.parse(waiter.output().trim().split("\n").at(-1)!);
+      expect(diagnostic).toMatchObject({
+        code: "file_lock_timeout",
+        phase: "managed-handoff:writer-admission",
+        holder: { pid: holder.child.pid, alive: true },
+      });
+      expect(diagnostic.message).toContain(databasePath + ".lock");
+      expect(diagnostic.message).toMatch(/timeout \d+ ms/);
+      expect(JSON.parse(fs.readFileSync(databasePath + ".lock", "utf8")).pid).toBe(
+        holder.child.pid,
+      );
     }
+    holder.child.stdin.end("x");
+    const results = await withinTest(Promise.all([holder.closed, waiter.closed]), signal);
+    expect(results, `holder: ${holder.output()}\nwaiter: ${waiter.output()}`).toEqual([
+      [0, null],
+      [mode === "timeout" ? 1 : 0, null],
+    ]);
+    expect(observation).toEqual({ phase: "contended" });
+    using database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(
+      database.prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner").all(),
+    ).toEqual(
+      mode === "timeout" ? [{ owner: "holder" }] : [{ owner: "holder" }, { owner: "waiter" }],
+    );
   },
 );

@@ -23,7 +23,10 @@ export function summarizeWorkerEnvironment(
   now = Date.now(),
   options: { includePreparedDetails?: boolean } = {},
 ): EnvironmentSummary {
-  const cleanupPending = record.destroyRequestedAtMs !== null && record.state !== "destroyed";
+  const cleanupPending =
+    record.destroyRequestedAtMs !== null &&
+    record.state !== "destroyed" &&
+    !(record.state === "failed" && record.leaseId === null);
   const error =
     record.state === "failed" || record.state === "orphaned" || cleanupPending
       ? record.error
@@ -31,7 +34,7 @@ export function summarizeWorkerEnvironment(
   return {
     id: record.environmentId,
     type: "worker",
-    status: error ? "error" : WORKER_STATUS[record.state],
+    status: error ? "error" : cleanupPending ? "stopping" : WORKER_STATUS[record.state],
     ...(record.sharedHost === null
       ? {}
       : { trust: record.sharedHost ? "persistent" : "disposable" }),

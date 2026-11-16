@@ -73,7 +73,7 @@ export function parseCameraSnapPayload(value: unknown, opts: { expectedHost?: st
     validateCameraPayloadUrl(url, requireNodeRemoteIp(opts.expectedHost));
   }
   if (base64) {
-    validateCameraPayloadBase64(base64, MAX_CAMERA_BASE64_BYTES);
+    validateCameraPayloadBase64(base64);
   }
   return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), width, height };
 }
@@ -101,6 +101,34 @@ export function cameraTempPath(opts: {
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   const facingPart = opts.facing ? `-${opts.facing}` : "";
   return path.join(tmpDir, `${CLI_NAME}-camera-${opts.kind}${facingPart}-${id}${ext}`);
+}
+
+/**
+ * Own generated batch paths until the complete result is published.
+ *
+ * A fresh directory proves these destinations were not preexisting files.
+ * Rollback names only the batch's paths; never sweep other directory entries.
+ */
+export async function withCameraArtifactBatch<T>(
+  generatedPaths: string[],
+  publish: (ownedPaths: string[]) => Promise<T>,
+): Promise<T> {
+  const firstPath = generatedPaths[0];
+  if (firstPath === undefined) {
+    return await publish([]);
+  }
+  const directory = await fs.mkdtemp(path.join(path.dirname(firstPath), ".openclaw-camera-batch-"));
+  const ownedPaths = generatedPaths.map((filePath) =>
+    path.join(directory, path.basename(filePath)),
+  );
+  try {
+    return await publish(ownedPaths);
+  } catch (error) {
+    await Promise.allSettled(ownedPaths.map((filePath) => fs.rm(filePath, { force: true })));
+    // A foreign entry or a failed unlink keeps the directory; the primary error wins.
+    await fs.rmdir(directory).catch(() => {});
+    throw error;
+  }
 }
 
 function validateCameraPayloadUrl(url: string, expectedNodeHost: string): string {
@@ -210,13 +238,11 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
   } finally {
     await release();
   }
-
-  return { path: filePath, bytes };
 }
 
-function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
-  if (estimateBase64DecodedBytes(base64) > maxBytes) {
-    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
+function validateCameraPayloadBase64(base64: string): string {
+  if (estimateBase64DecodedBytes(base64) > MAX_CAMERA_BASE64_BYTES) {
+    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${MAX_CAMERA_BASE64_BYTES}`);
   }
   const canonicalBase64 = canonicalizeBase64(base64);
   if (!canonicalBase64) {
@@ -226,16 +252,13 @@ function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
 }
 
 /** Decode a base64 media payload to disk with preflight and post-decode size checks. */
-export async function writeBase64ToFile(
-  filePath: string,
-  base64: string,
-  opts: { maxBytes?: number } = {},
-) {
-  const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
-  const canonicalBase64 = validateCameraPayloadBase64(base64, maxBytes);
+export async function writeBase64ToFile(filePath: string, base64: string) {
+  const canonicalBase64 = validateCameraPayloadBase64(base64);
   const buf = Buffer.from(canonicalBase64, "base64");
-  if (buf.length > maxBytes) {
-    throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
+  if (buf.length > MAX_CAMERA_BASE64_BYTES) {
+    throw new Error(
+      `writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${MAX_CAMERA_BASE64_BYTES}`,
+    );
   }
   await fs.stat(path.dirname(filePath));
   await publishOutputFileAtomically({
@@ -244,7 +267,7 @@ export async function writeBase64ToFile(
       await fs.writeFile(tempPath, buf, { flag: "wx" });
     },
   });
-  return { path: filePath, bytes: buf.length };
+  return { path: filePath };
 }
 
 function requireNodeRemoteIp(remoteIp?: string): string {
@@ -277,16 +300,12 @@ export async function writeCameraPayloadToFile(params: {
 export async function writeCameraClipPayloadToFile(params: {
   payload: ReturnType<typeof parseCameraClipPayload>;
   facing: CameraArtifactFacing;
-  tmpDir?: string;
-  id?: string;
   expectedHost?: string;
 }): Promise<string> {
   const filePath = cameraTempPath({
     kind: "clip",
     facing: params.facing,
     ext: params.payload.format,
-    tmpDir: params.tmpDir,
-    id: params.id,
   });
   await writeCameraPayloadToFile({
     filePath,

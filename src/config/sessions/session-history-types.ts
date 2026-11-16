@@ -36,13 +36,13 @@ import type {
 } from "./session-transcript-accounting.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
-  ReadRecentSessionConversationTextOptions,
-  SessionRecentConversationText,
+  ReadRecentSessionConversationTurnOptions,
+  SessionRecentConversationTurn,
 } from "./transcript-recent-text.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
-export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
-  messages: Messages;
+export type ChatHistoryResponsePage = {
+  messages: unknown[];
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
@@ -71,7 +71,11 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 };
 
 export type ChatHistoryPage = {
-  encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
+  encodedResponse?: Omit<ChatHistoryResponsePage, "messages" | "activity"> & {
+    messages: Uint8Array<ArrayBuffer>;
+    activity?: Uint8Array<ArrayBuffer>;
+  };
+  encodedMessagesDeflate?: Uint8Array<ArrayBuffer>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
@@ -90,7 +94,11 @@ export type ChatHistoryPage = {
 };
 
 export type ChatHistoryPageParams = {
+  /** Keep scoped channel user rows plain until the Gateway's viewer display pass. */
+  deferChannelUserDisplay?: boolean;
   encodeResponse?: boolean;
+  deflateResponse?: boolean;
+  includePluginSteering?: boolean;
   compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
@@ -107,13 +115,21 @@ export type ChatHistoryPageParams = {
   messageId: string | undefined;
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
-  cliHistoryHomeDir?: string;
+  cliHistoryProjectsDir?: string;
 };
+
+/** A hidden wake that resumes work this session started: a background command, a restart, or a child. */
+type ProjectedContinuationSource = "exec" | "restart" | "subagent";
+
+/** Hidden input's meaning for the next visible row: `true` starts a turn, a source continues one. */
+export type PendingTurnBoundary = boolean | ProjectedContinuationSource;
 
 type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
   seq?: number;
   turnBoundary?: boolean;
+  continuation?: { source: ProjectedContinuationSource };
+  pluginSteering?: { pluginId: string; pluginName?: string; displayText?: string };
 };
 
 export type SessionHistoryMessage = Record<string, unknown> & {
@@ -131,7 +147,7 @@ export type PaginatedSessionHistory = {
 export type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
   assistantErrorPending: boolean;
   transcriptPath?: string;
 };
@@ -200,7 +216,7 @@ export type SessionHistoryWorkerRequest =
       kind: "recent-text";
       params: {
         target: SessionTranscriptReadScope;
-        options: ReadRecentSessionConversationTextOptions;
+        options: ReadRecentSessionConversationTurnOptions;
       };
     }
   | {
@@ -296,7 +312,7 @@ export type SessionHistoryWorkerRequest =
 export type SessionHistoryWorkerResult =
   | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
   | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
-  | { kind: "recent-text"; result: SessionRecentConversationText[] }
+  | { kind: "recent-text"; result: SessionRecentConversationTurn[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }

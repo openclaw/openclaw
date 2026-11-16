@@ -67,7 +67,7 @@ or blank, it keeps the base TTS voice.
     providers: {
       "fish-audio": {
         apiKey: "${FISH_API_KEY}",
-        model: "s2.1-pro", // Or "drama-3-preview" for expressive voice direction.
+        model: "s2.1-pro", // Or "drama-3" for expressive voice direction.
         speakerVoiceId: "802e3bc2b27e49c2995d23ef70e6ac89",
         latency: "balanced",
       },

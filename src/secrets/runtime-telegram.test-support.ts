@@ -1,28 +1,13 @@
 /** Test bootstrap shim for Telegram runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { loadChannelSecretContractApi } from "./channel-contract-api.js";
+import { createRuntimeChannelSecretRegistry } from "./runtime-channel-secret.test-support.js";
 
 /** Test-only bootstrap registry mock for Telegram secret surface tests. */
-const telegramSecrets = loadChannelSecretContractApi({ channelId: "telegram", config: {} });
-if (!telegramSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Telegram secret contract api");
-}
-const telegramAssignments = telegramSecrets.collectRuntimeConfigAssignments;
+const telegramRegistry = createRuntimeChannelSecretRegistry("telegram", "Telegram");
 
-// Use the real bundled Telegram secret contract while avoiding plugin bootstrap.
+// Keep the hoisted mock lazy while loading the real contract during module initialization.
+// mock-isolation: Use the real channel secret contract without loading plugin bootstrap state.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: (id: string) =>
-    id === "telegram"
-      ? {
-          secrets: {
-            collectRuntimeConfigAssignments: telegramAssignments,
-          },
-        }
-      : undefined,
-  getBootstrapChannelSecrets: (id: string) =>
-    id === "telegram"
-      ? {
-          collectRuntimeConfigAssignments: telegramAssignments,
-        }
-      : undefined,
+  getBootstrapChannelPlugin: (id: string) => telegramRegistry.getBootstrapChannelPlugin(id),
+  getBootstrapChannelSecrets: (id: string) => telegramRegistry.getBootstrapChannelSecrets(id),
 }));

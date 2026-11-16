@@ -1,20 +1,16 @@
+import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
 }));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
-}));
 const greetingMocks = vi.hoisted(() => ({
+  createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(),
   loadSystemAgentGreetingFacts: vi.fn(),
@@ -22,34 +18,12 @@ const greetingMocks = vi.hoisted(() => ({
 }));
 const onboardingWelcomeMocks = vi.hoisted(() => ({ buildOnboardingWelcome: vi.fn() }));
 
-vi.mock("../../system-agent/inference-fallback.js", () => ({
-  verifySystemAgentInferenceWithFallback:
-    inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
-}));
-// mock-isolation: Keep transcript effects local while checking welcome delivery and acknowledgement ordering.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
-}));
+// mock-isolation: Welcome-policy tests control inference outcomes without contacting a provider.
+vi.mock("../../system-agent/inference-fallback.js", () => inferenceFallbackMocks);
 // mock-isolation: Use deterministic caretaker facts and avoid provider inference in welcome-policy tests.
-vi.mock("../../system-agent/greeting.js", () => ({
-  createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
-  acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
-  buildSystemAgentGreetingQuestion: greetingMocks.buildSystemAgentGreetingQuestion,
-  loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
-  resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,
-}));
-vi.mock("../../system-agent/onboarding-welcome.js", () => ({
-  buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
-}));
+vi.mock("../../system-agent/greeting.js", () => greetingMocks);
+// mock-isolation: Welcome-policy tests supply onboarding output without initializing its runtime.
+vi.mock("../../system-agent/onboarding-welcome.js", () => onboardingWelcomeMocks);
 
 type FakeEngine = ReturnType<typeof makeEngine>;
 
@@ -91,23 +65,21 @@ const defaultClient = {
   connect: { device: { id: "device-test" } },
 } as GatewayClient;
 
-function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequestContext {
-  return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
-}
+let sessions: Map<string, SystemAgentChatSession>;
+let context: GatewayRequestContext;
+const chatHandler = expectDefined(systemAgentHandlers["openclaw.chat"], "openclaw.chat handler");
 
 async function callChat(
-  context: GatewayRequestContext,
   params: Record<string, unknown>,
   client: GatewayClient = defaultClient,
+  deliver?: () => void,
 ): Promise<RespondCall> {
   const calls: RespondCall[] = [];
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
+    deliver?.();
     calls.push({ ok, payload, error });
   };
-  await expectDefined(
-    systemAgentHandlers["openclaw.chat"],
-    'systemAgentHandlers["openclaw.chat"] test invariant',
-  )({ params, respond, context, client } as never);
+  await chatHandler({ params, respond, context, client } as never);
   return expectDefined(calls[0], "system-agent response");
 }
 
@@ -123,6 +95,8 @@ const quickActions = {
 };
 
 beforeEach(() => {
+  sessions = new Map();
+  context = { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
   createdEngines.length = 0;
   transcriptStoreMocks.appendTurn.mockReset();
   transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
@@ -136,10 +110,7 @@ beforeEach(() => {
     recentExternalEdit: false,
     auditSequence: 0,
   });
-  greetingMocks.resolveSystemAgentGreeting.mockResolvedValue({
-    text: "I'm OpenClaw. All systems nominal.",
-    source: "model",
-  });
+  greetingMocks.resolveSystemAgentGreeting.mockResolvedValue("I'm OpenClaw. All systems nominal.");
   greetingMocks.buildSystemAgentGreetingQuestion.mockReturnValue(quickActions);
   onboardingWelcomeMocks.buildOnboardingWelcome.mockImplementation(
     async ({ engine }: { engine: { noteAssistantMessage: (text: string) => void } }) => {
@@ -163,17 +134,15 @@ describe("openclaw.chat caretaker welcome", () => {
       transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([
         { role: "user", text: "Earlier conversation", at: 1 },
       ]);
-      const sessions = new Map<string, SystemAgentChatSession>();
-      const context = makeContext(sessions);
-      const initial = await callChat(context, {
+      const initial = await callChat({
         sessionId: "retained",
         ...(welcomeVariant ? { welcomeVariant } : {}),
       });
       const session = expectDefined(sessions.get("retained"), "retained session");
       const originalHistory = session.engine.historySince(0);
       const [creation, overlapping] = await Promise.all([
-        callChat(context, { sessionId: "retained", welcomeVariant: "new-agent" }),
-        callChat(context, { sessionId: "retained", welcomeVariant: "new-agent" }),
+        callChat({ sessionId: "retained", welcomeVariant: "new-agent" }),
+        callChat({ sessionId: "retained", welcomeVariant: "new-agent" }),
       ]);
 
       expect(creation.ok).toBe(true);
@@ -190,13 +159,10 @@ describe("openclaw.chat caretaker welcome", () => {
         1,
       );
 
-      const retry = await callChat(context, {
-        sessionId: "retained",
-        welcomeVariant: "new-agent",
-      });
+      const retry = await callChat({ sessionId: "retained", welcomeVariant: "new-agent" });
       expect(retry).toEqual(creation);
       expect(session.engine.historySince(0)).toEqual(history);
-      expect(await callChat(context, { sessionId: "retained" })).toEqual(initial);
+      expect(await callChat({ sessionId: "retained" })).toEqual(initial);
       expect(sessions.get("retained")).toBe(session);
       expect(createdEngines).toHaveLength(1);
       expect(session.engine.dispose).not.toHaveBeenCalled();
@@ -208,9 +174,7 @@ describe("openclaw.chat caretaker welcome", () => {
   it.each(["wizard", "question", "proposal", "approval"] as const)(
     "keeps an active %s ahead of the creation entry",
     async (pending) => {
-      const sessions = new Map<string, SystemAgentChatSession>();
-      const context = makeContext(sessions);
-      await callChat(context, { sessionId: "busy" });
+      await callChat({ sessionId: "busy" });
       const session = expectDefined(sessions.get("busy"), "busy session");
       const history = session.engine.historySince(0);
       const liveQuestion = {
@@ -245,11 +209,8 @@ describe("openclaw.chat caretaker welcome", () => {
       }
       const proposal = session.engine.getPendingOperatorProposal();
       const approval = session.pendingApproval;
-      const before = await callChat(context, { sessionId: "busy" });
-      const creation = await callChat(context, {
-        sessionId: "busy",
-        welcomeVariant: "new-agent",
-      });
+      const before = await callChat({ sessionId: "busy" });
+      const creation = await callChat({ sessionId: "busy", welcomeVariant: "new-agent" });
       expect(creation).toEqual(before);
       expect(session.engine.historySince(0)).toEqual(history);
       expect(session.engine.getPendingOperatorProposal()).toBe(proposal);
@@ -261,41 +222,24 @@ describe("openclaw.chat caretaker welcome", () => {
       vi.spyOn(session.engine, "decorateRejoinReply").mockImplementation((reply) => reply);
       vi.spyOn(session.engine, "getPendingOperatorProposal").mockReturnValue(null);
       delete session.pendingApproval;
-      const available = await callChat(context, {
-        sessionId: "busy",
-        welcomeVariant: "new-agent",
-      });
+      const available = await callChat({ sessionId: "busy", welcomeVariant: "new-agent" });
       expect(available.payload).toMatchObject({
         reply: expect.stringContaining("Let's create an agent."),
       });
     },
   );
 
-  it.each([
-    { label: "caretaker", welcomeVariant: undefined },
-    { label: "onboarding", welcomeVariant: "onboarding" },
-    { label: "new-agent", welcomeVariant: "new-agent" },
-  ])(
-    "does not replay an earlier passive $label welcome on reconnect",
-    async ({ welcomeVariant }) => {
-      const transcript: Array<{ role: "user" | "assistant"; text: string; at: number }> = [];
-      transcriptStoreMocks.appendTurn.mockImplementation(
-        (turn: { role: "user" | "assistant"; text: string; at: number }) => {
-          transcript.push(turn);
-        },
-      );
-      transcriptStoreMocks.readTranscriptTailAsync.mockImplementation(async () =>
-        transcript.slice(),
-      );
-      const context = makeContext(new Map());
+  it.each([undefined, "onboarding", "new-agent"])(
+    "does not replay an earlier passive %s welcome on reconnect",
+    async (welcomeVariant) => {
       const variant = welcomeVariant ? { welcomeVariant } : {};
 
-      const first = await callChat(context, { sessionId: "first-welcome", ...variant });
-      const second = await callChat(context, { sessionId: "second-welcome", ...variant });
+      const first = await callChat({ sessionId: "first-welcome", ...variant });
+      const second = await callChat({ sessionId: "second-welcome", ...variant });
 
       expect(first.ok).toBe(true);
       expect(first.payload).toMatchObject({ optionalWelcome: welcomeVariant === undefined });
-      const rejoin = await callChat(context, { sessionId: "first-welcome", ...variant });
+      const rejoin = await callChat({ sessionId: "first-welcome", ...variant });
       expect(rejoin.payload).toMatchObject({ optionalWelcome: welcomeVariant === undefined });
       expect(second.payload).toMatchObject({
         reply: expectDefined(first.payload as { reply?: string }, "first welcome").reply,
@@ -303,22 +247,16 @@ describe("openclaw.chat caretaker welcome", () => {
       expect(
         expectDefined(createdEngines[1], "second welcome engine").seedHistory,
       ).toHaveBeenCalledWith([]);
-      expect(transcript).toEqual([]);
+      expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
     },
   );
 
   it("does not plan a greeting when a fresh session is created with a message", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>();
-    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({
-      text: "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
-      source: "template",
-    });
+    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce(
+      "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
+    );
 
-    const context = makeContext(sessions);
-    const call = await callChat(context, {
-      sessionId: "fresh-with-message",
-      message: "status",
-    });
+    const call = await callChat({ sessionId: "fresh-with-message", message: "status" });
 
     expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
     expect(greetingMocks.resolveSystemAgentGreeting).toHaveBeenCalledWith(
@@ -328,7 +266,7 @@ describe("openclaw.chat caretaker welcome", () => {
     expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
 
     expect(sessions.get("fresh-with-message")?.welcomeAuditSequence).toBe(0);
-    const welcome = await callChat(context, { sessionId: "fresh-with-message" });
+    const welcome = await callChat({ sessionId: "fresh-with-message" });
     expect(welcome.payload).toMatchObject({
       reply: "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
     });
@@ -341,8 +279,6 @@ describe("openclaw.chat caretaker welcome", () => {
   it.each([false, true])(
     "persists audit greetings before acknowledgement (delivery fails=%s)",
     async (fails) => {
-      const sessions = new Map<string, SystemAgentChatSession>();
-      const context = makeContext(sessions);
       const text = "I'm healthy. An update is ready, and I noticed a manual config edit.";
       greetingMocks.loadSystemAgentGreetingFacts.mockReturnValueOnce({
         updateAvailable: "2026.7.20",
@@ -350,25 +286,17 @@ describe("openclaw.chat caretaker welcome", () => {
         recentExternalEdit: true,
         auditSequence: 42,
       });
-      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({ text, source: "model" });
+      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce(text);
       if (fails) {
         await expect(
-          expectDefined(
-            systemAgentHandlers["openclaw.chat"],
-            "openclaw.chat",
-          )({
-            params: { sessionId: "audit-welcome" },
-            respond: () => {
-              throw new Error("socket closed");
-            },
-            context,
-            client: defaultClient,
-          } as never),
+          callChat({ sessionId: "audit-welcome" }, defaultClient, () => {
+            throw new Error("socket closed");
+          }),
         ).rejects.toThrow("socket closed");
         expect(transcriptStoreMocks.appendTurn).toHaveBeenCalled();
         expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
         expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBe(42);
-        const creation = await callChat(context, {
+        const creation = await callChat({
           sessionId: "audit-welcome",
           welcomeVariant: "new-agent",
         });
@@ -378,7 +306,7 @@ describe("openclaw.chat caretaker welcome", () => {
         expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
         expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBe(42);
       }
-      const call = await callChat(context, { sessionId: "audit-welcome" });
+      const call = await callChat({ sessionId: "audit-welcome" });
       expect(call.payload).toMatchObject({
         reply: text,
         optionalWelcome: false,
@@ -419,7 +347,6 @@ describe("openclaw.chat caretaker welcome", () => {
       }),
     );
     const call = await callChat(
-      makeContext(new Map()),
       { sessionId: "localized-onboarding", welcomeVariant: "onboarding" },
       { ...defaultClient, connect: { ...defaultClient.connect, locale: "zh-TW" } },
     );

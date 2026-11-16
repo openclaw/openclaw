@@ -15,10 +15,12 @@ import {
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { updateStandaloneSourceModuleUrlChunks } from "./lib/standalone-source-module-urls.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -182,7 +184,7 @@ function resolveStableRootRuntimeAliasCandidate(
       (target) =>
         target !== candidate &&
         source.includes(`"./${target}"`) &&
-        !source.includes("\n//#region "),
+        bundledModuleRegions(source).next().done,
     ),
   );
   return wrappers.length === 1 ? (wrappers[0]?.candidate ?? null) : null;
@@ -388,6 +390,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   );
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const moduleUrlRewrites: { filename: string; original: string; rewritten: string }[] = [];
   using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
@@ -428,8 +431,19 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
     } else if (ownership) {
       delete ownership.chunks[aliasFileName];
     }
+    const original = fsImpl.existsSync(aliasPath)
+      ? fsImpl.readFileSync(aliasPath, "utf8")
+      : undefined;
     writeTextFileIfChanged(aliasPath, source);
+    if (original !== undefined && original !== source) {
+      moduleUrlRewrites.push({ filename: aliasPath, original, rewritten: source });
+    }
   }
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: distDir,
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
@@ -462,6 +476,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   }
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const moduleUrlRewrites: { filename: string; original: string; rewritten: string }[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
@@ -496,8 +511,14 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
         owner.sha256 = createHash("sha256").update(rewritten).digest("hex");
       }
       writeTextFileIfChanged(filePath, rewritten);
+      moduleUrlRewrites.push({ filename: filePath, original: source, rewritten });
     }
   }
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: distDir,
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 

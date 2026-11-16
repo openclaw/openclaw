@@ -9,6 +9,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { isSessionDeferredPatch } from "./sessions/patch.ts";
 
 type SessionAccessRow = Pick<GatewaySessionRow, "sharingRole">;
 
@@ -27,7 +28,11 @@ export type SessionMethodAccessRequest = {
   requiredScope?: OperatorScope;
   /** Only callers exposing a scoped action opt into the Gateway's narrow alternative. */
   sessionScope?: boolean;
+  /** Opt into the explicit desired-state mutation allowlist. */
+  allowDeferred?: boolean;
   session?: SessionAccessRow;
+  /** A read proved no session row exists yet; the Gateway binds the first turn to the caller. */
+  sessionAbsent?: boolean;
 };
 
 export function sessionAccessRowForBatch(rows: readonly SessionAccessRow[]) {
@@ -92,12 +97,21 @@ export function readSessionMethodScopeAccess(
     isRecord(patch) &&
     (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
     !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
+  // Parentless creation, and the first turn of a session proven absent, have no existing
+  // row whose ownership must be checked: the Gateway records the caller as its creator.
+  const createsWithoutParent =
+    (request.method === "sessions.create" &&
+      !(
+        isRecord(request.params) &&
+        typeof request.params.parentSessionKey === "string" &&
+        request.params.parentSessionKey.trim()
+      )) ||
+    (request.method === "chat.send" && request.sessionAbsent === true && !request.session);
   if (
     (patchNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&
         !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
-        // Creation assigns its owner on the Gateway before a canonical row exists.
-        request.method !== "sessions.create")) &&
+        !createsWithoutParent)) &&
     request.session?.sharingRole !== "owner" &&
     request.session?.sharingRole !== "admin"
   ) {
@@ -106,13 +120,29 @@ export function readSessionMethodScopeAccess(
   return { allowed: true, requiredScope };
 }
 
-/** Combines scoped action access with the live connection and advertised method catalog. */
+/** Combines action access with live dispatch or explicit same-identity deferred admission. */
 export function readSessionMethodAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   request: SessionMethodAccessRequest,
 ): SessionMethodAccess {
   const access = readSessionMethodScopeAccess(snapshot?.hello?.auth, request);
-  if (snapshot?.phase !== "connected" || !snapshot.client) {
+  const deferredMutation =
+    request.allowDeferred &&
+    isRecord(request.params) &&
+    ((request.method === "sessions.patch" &&
+      isSessionDeferredPatch(
+        Object.fromEntries(
+          Object.entries(request.params).filter(
+            ([key]) => key !== "key" && key !== "agentId" && key !== "expectedSessionId",
+          ),
+        ),
+      )) ||
+      request.method === "sessions.delete") &&
+    snapshot?.hello &&
+    snapshot.client &&
+    snapshot.phase !== "stopped" &&
+    !snapshot.client.offlineRecoveryRetired;
+  if ((!deferredMutation && snapshot?.phase !== "connected") || !snapshot?.client) {
     return deniedAccess(access.requiredScope, "disconnected");
   }
   if (isGatewayMethodAdvertised(snapshot, request.method) !== true) {

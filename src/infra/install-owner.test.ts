@@ -24,36 +24,51 @@ const owner = {
   updateHint: "Update OpenClaw.app to update this Gateway.",
 };
 
-it("discovers host ownership before any Git, package manager, or registry probe", async () => {
-  const root = tempDirs.make("openclaw-install-owner-");
-  await fs.writeFile(path.join(root, "openclaw-install-owner.json"), JSON.stringify(owner));
-  const command = vi
-    .spyOn(processExec, "runCommandWithTimeout")
-    .mockRejectedValue(new Error("unexpected subprocess"));
-  const fetch = vi.fn().mockRejectedValue(new Error("unexpected registry request"));
-  vi.stubGlobal("fetch", fetch);
-  try {
-    expect(await resolveUpdateInstallKind(root)).toBe("host");
-    expect(await resolveUpdateInstallIdentity({ root })).toMatchObject({
-      installKind: "host",
-      installOwner: owner,
-    });
-    expect(await checkUpdateStatus({ root, fetchGit: true, includeRegistry: true })).toEqual({
-      root,
-      installKind: "host",
-      installOwner: owner,
-      packageManager: "unknown",
-    });
-    expect(command).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
+it.each([
+  owner,
+  {
+    ...owner,
+    owner: "desktop-app",
+    displayName: "OpenClaw desktop",
+    updateHint: "Rebuild or update the desktop app to update this Gateway.",
+  },
+])(
+  "discovers $owner ownership before any Git, package manager, or registry probe",
+  async (installOwner) => {
+    const root = tempDirs.make("openclaw-install-owner-");
+    await fs.writeFile(
+      path.join(root, "openclaw-install-owner.json"),
+      JSON.stringify(installOwner),
+    );
+    const command = vi
+      .spyOn(processExec, "runCommandWithTimeout")
+      .mockRejectedValue(new Error("unexpected subprocess"));
+    const fetch = vi.fn().mockRejectedValue(new Error("unexpected registry request"));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      expect(await resolveUpdateInstallKind(root)).toBe("host");
+      expect(await resolveUpdateInstallIdentity({ root })).toMatchObject({
+        installKind: "host",
+        installOwner,
+      });
+      expect(await checkUpdateStatus({ root, fetchGit: true, includeRegistry: true })).toEqual({
+        root,
+        installKind: "host",
+        installOwner,
+        packageManager: "unknown",
+      });
+      expect(command).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each([
   ["malformed JSON", "{"],
   ["unknown schema", JSON.stringify({ ...owner, schemaVersion: 2 })],
+  ["unknown owner", JSON.stringify({ ...owner, owner: "unknown-app" })],
   ["null", "null"],
   ["absent marker", undefined],
 ])("ignores %s, warning only for invalid markers", async (_label, content) => {

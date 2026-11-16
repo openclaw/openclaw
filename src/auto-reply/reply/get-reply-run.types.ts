@@ -33,6 +33,7 @@ export type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: "always" | "mention";
   resolvedThinkLevel: ThinkLevel | undefined;
+  thinkingExplicit?: boolean;
   resolvedFastMode?: FastMode;
   resolvedFastModeAutoOnSeconds?: number;
   resolvedFastModeOverride?: boolean;

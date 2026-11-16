@@ -9,16 +9,17 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
-import {
-  resolveSessionStorePathCore,
-  resolveSessionStorePathWithContext,
-} from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnlyResultInScope } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import {
-  sessionCreatorProfileId,
+  sessionIsolationProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { SessionEntryChangedDuringReadError } from "../../config/sessions/session-entry-read-errors.js";
@@ -40,10 +41,6 @@ import type {
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
-import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
 } from "../../config/sessions/session-store-read-candidates.js";
@@ -55,9 +52,11 @@ import {
 } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { shellEscapeBackslash as shellEscapeSingleArg } from "../../shared/shell-quote.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxRuntimeSettings } from "./config.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
@@ -117,6 +116,23 @@ export function resolvePreparedSandboxRuntimeStatus(
   params: SandboxRuntimeStatusParams & { preparedSessionEntry: SandboxSessionEntry | null },
 ) {
   return resolveSandboxRuntimeStatusForClassification(params);
+}
+
+/** Projection topology already owns this physical row, including unqualified legacy keys. */
+export function resolveOwnedSessionSandboxRuntimeStatus(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  preparedSessionEntry: SandboxSessionEntry;
+}) {
+  return resolveSandboxRuntimeStatusForClassification(
+    params,
+    resolveOwnedSandboxClassification({
+      ...params,
+      classificationAgentId: params.agentId,
+      classificationSessionKey: params.sessionKey,
+    }),
+  );
 }
 
 export function resolveSandboxRuntimeStatusAsync(params: SandboxRuntimeStatusParams) {
@@ -185,16 +201,38 @@ export async function withSandboxRuntimeStatusInWorker<T>(
       source.readSource?.path ??
       (reader && !params.cfg?.session?.store?.trim()
         ? reader.database.path
-        : resolveSessionStorePathWithContext(
-            params.cfg?.session?.store,
-            {
-              agentId: classification.classificationAgentId,
-              env: source.env,
-            },
-            { cwd: source.cwd },
-          )),
+        : resolveSessionStorePathCore(params.cfg?.session?.store, {
+            agentId: classification.classificationAgentId,
+            env: source.env,
+          })),
     env: source.env,
   };
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize() {},
+  });
+  if (memory) {
+    const entry = readCapturedSessionActorEntry(memory, sessionKey);
+    source.assertEntryCurrent?.(entry);
+    const sandbox = resolveSandboxRuntimeStatusForClassification(
+      { ...params, preparedSessionEntry: entry ?? null },
+      classification,
+    );
+    const result = await consume(sandbox);
+    assertCurrent();
+    const currentEntry = readCapturedSessionActorEntry(memory, sessionKey);
+    source.assertEntryCurrent?.(currentEntry);
+    const current = resolveSandboxRuntimeStatusForClassification(
+      { ...params, preparedSessionEntry: currentEntry ?? null },
+      classification,
+    );
+    // Policy preparation can await approval; apply its result only under the current policy.
+    if (!isDeepStrictEqual(current, sandbox)) {
+      throw new SessionEntryChangedDuringReadError();
+    }
+    source.prepareEntryConsumer?.(result)?.(currentEntry);
+    return result;
+  }
   if (reader) {
     const key = assertSessionEntryCohortScope(reader, scope);
     const withClassification = <R>(
@@ -269,7 +307,7 @@ export async function withSandboxRuntimeStatusInWorker<T>(
   );
 }
 
-/** Compare policies only after every original source has entered the same ordered read. */
+/** Read current memory policy when the durable sources reach their ordered publication. */
 export function withSandboxRuntimeStatusesInWorker<T>(
   requests: readonly Omit<SandboxRuntimeStatusParams, "preparedSessionEntry">[],
   source: { env: NodeJS.ProcessEnv; cwd: string; assertCurrent: () => void },
@@ -277,7 +315,6 @@ export function withSandboxRuntimeStatusesInWorker<T>(
 ): Promise<T> {
   source.assertCurrent();
   const inputs: Array<SessionEntryWorkerRead & { sessionKeys: string[] }> = [];
-  const privateReads: Array<(next: () => Promise<T>) => Promise<T>> = [];
   const projections = requests.map((params) => {
     const classification = resolveSandboxClassification(params);
     const project = (entry: SessionEntry | undefined) =>
@@ -288,14 +325,10 @@ export function withSandboxRuntimeStatusesInWorker<T>(
     if (!classification.classificationSessionKey) {
       return () => project(undefined);
     }
-    const storePath = resolveSessionStorePathWithContext(
-      params.cfg?.session?.store,
-      {
-        agentId: classification.classificationAgentId,
-        env: source.env,
-      },
-      { cwd: source.cwd },
-    );
+    const storePath = resolveSessionStorePathCore(params.cfg?.session?.store, {
+      agentId: classification.classificationAgentId,
+      env: source.env,
+    });
     const target = {
       agentId: classification.classificationAgentId,
       sessionKey: resolveSqliteSessionKey(
@@ -305,26 +338,12 @@ export function withSandboxRuntimeStatusesInWorker<T>(
       storePath,
       env: source.env,
     };
-    const privateSource = captureIncognitoSessionSource(target);
+    const privateSource = captureSessionActorStorageOwner(target, {
+      assertCurrent: source.assertCurrent,
+      authorize() {},
+    });
     if (privateSource) {
-      let entry: SessionEntry | undefined;
-      let assertCurrent = source.assertCurrent;
-      privateReads.push((next) =>
-        withIncognitoSessionEntry(
-          privateSource,
-          target.sessionKey,
-          source.assertCurrent,
-          async (current, assertReadCurrent) => {
-            entry = current;
-            assertCurrent = assertReadCurrent;
-            return next();
-          },
-        ),
-      );
-      return () => {
-        assertCurrent();
-        return project(entry);
-      };
+      return () => project(readCapturedSessionActorEntry(privateSource, target.sessionKey));
     }
     const { scope } = captureSessionEntryReadScope({
       agentId: classification.classificationAgentId,
@@ -378,40 +397,36 @@ export function withSandboxRuntimeStatusesInWorker<T>(
     const candidates = captureSessionStoreReadCandidates(input.storePath);
     return { input, candidates, identities: captureSessionStoreCandidateIdentities(candidates) };
   });
-  const readDurable = () =>
-    withSessionEntriesFromStoresInWorker(
-      inputs,
-      (reads) => {
-        source.assertCurrent();
-        const statuses = projections.map((project) => project(reads));
-        source.assertCurrent();
-        const result = consume(statuses);
-        source.assertCurrent();
-        for (const read of reads) {
-          read.assertCurrent();
+  return withSessionEntriesFromStoresInWorker(
+    inputs,
+    (reads) => {
+      source.assertCurrent();
+      const statuses = projections.map((project) => project(reads));
+      source.assertCurrent();
+      const result = consume(statuses);
+      source.assertCurrent();
+      for (const read of reads) {
+        read.assertCurrent();
+      }
+      return result;
+    },
+    {
+      ordered: true,
+      prepareSource(input, database, identity) {
+        const captured = captures.find((capture) => capture.input === input)!;
+        const expected = captured.identities.get(
+          assertSessionStoreReadCandidate(database.path, captured.candidates),
+        );
+        if (
+          !expected ||
+          expected.key !== identity.key ||
+          expected.birthtime !== identity.birthtime
+        ) {
+          throw new Error("Sandbox classification source changed during batch preparation");
         }
-        return result;
       },
-      {
-        ordered: true,
-        prepareSource(input, database, identity) {
-          const captured = captures.find((capture) => capture.input === input)!;
-          const expected = captured.identities.get(
-            assertSessionStoreReadCandidate(database.path, captured.candidates),
-          );
-          if (
-            !expected ||
-            expected.key !== identity.key ||
-            expected.birthtime !== identity.birthtime
-          ) {
-            throw new Error("Sandbox classification source changed during batch preparation");
-          }
-        },
-      },
-    );
-  const enter = (index: number): Promise<T> =>
-    privateReads[index]?.(() => enter(index + 1)) ?? readDurable();
-  return enter(0);
+    },
+  );
 }
 
 /** Classifies durable canonical keys without admitting the same store once per session. */
@@ -474,8 +489,27 @@ function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
     // Reuse the owner only for this session; independent targets still need their own identity.
     fallbackAgentId: classificationSessionKey === sessionKey ? agentId : undefined,
   });
-  const cfg = params.cfg;
-  const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
+  return resolveOwnedSandboxClassification({
+    cfg: params.cfg,
+    sessionKey,
+    agentId,
+    classificationSessionKey,
+    classificationAgentId,
+  });
+}
+
+function resolveOwnedSandboxClassification(params: {
+  cfg?: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  classificationSessionKey: string;
+  classificationAgentId: string;
+}) {
+  const { cfg, sessionKey, agentId, classificationSessionKey, classificationAgentId } = params;
+  const sandboxCfg = resolveSandboxRuntimeSettings(
+    cfg?.agents?.defaults?.sandbox,
+    cfg ? resolveAgentConfig(cfg, classificationAgentId)?.sandbox : undefined,
+  );
   const mainSessionKey =
     cfg?.session?.scope === "global"
       ? "global"
@@ -530,22 +564,22 @@ function resolveSandboxRuntimeStatusForClassification(
   } = classification;
   const privateSource =
     params.preparedSessionEntry === undefined && classificationSessionKey
-      ? captureIncognitoSessionSource({
-          agentId: classificationAgentId,
-          sessionKey: comparableSessionKey,
-          storePath: cfg?.session?.store
-            ? resolveSessionStorePathCore(cfg.session.store, { agentId: classificationAgentId })
-            : undefined,
-        })
+      ? captureSessionActorStorageOwner(
+          {
+            agentId: classificationAgentId,
+            sessionKey: comparableSessionKey,
+            storePath: cfg?.session?.store
+              ? resolveSessionStorePathCore(cfg.session.store, { agentId: classificationAgentId })
+              : undefined,
+          },
+          { assertCurrent() {}, authorize() {} },
+        )
       : undefined;
-  // Explicit actor selection consumes its live policy receipt, including acknowledged absence.
+  // Memory policy comes from the selected owner, including acknowledged absence.
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
   const session = privateSource
     ? {
-        existing:
-          "kind" in privateSource
-            ? undefined
-            : privateSource.actor.sessions.readPolicy(comparableSessionKey),
+        existing: readCapturedSessionActorEntry(privateSource, comparableSessionKey),
         normalizedKey: comparableSessionKey,
       }
     : params.preparedSessionEntry !== undefined
@@ -563,7 +597,7 @@ function resolveSandboxRuntimeStatusForClassification(
           }
         : undefined;
   const sandboxRequired = session?.existing?.sandbox === "required";
-  const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
+  const profileId = sessionIsolationProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
     ? {
         sandboxRequired: true,
@@ -602,10 +636,6 @@ function redactSessionKey(value: string): string {
     return "(redacted)";
   }
   return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
-}
-
-function shellEscapeSingleArg(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 export function formatSandboxToolPolicyBlockedMessage(params: {

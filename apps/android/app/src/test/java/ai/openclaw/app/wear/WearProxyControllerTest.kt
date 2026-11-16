@@ -1066,6 +1066,7 @@ class WearProxyControllerTest {
           .single()
           .jsonObject
       assertEquals("wear-history-run", message.getValue("idempotencyKey").jsonPrimitive.content)
+      assertEquals("9", message.getValue("timestamp").jsonPrimitive.content)
       val content =
         message
           .getValue("content")
@@ -1193,6 +1194,66 @@ class WearProxyControllerTest {
         .content
         .toBoolean(),
     )
+  }
+
+  @Test
+  fun anonymousFinalEmissionTimeDoesNotBecomeTranscriptIdentity() {
+    val payload =
+      checkNotNull(
+        projectWearChatEvent(
+          json.parseToJsonElement(
+            """{"runId":"run-1","sessionKey":"main","state":"final","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"timestamp":1791927975662}}""",
+          ),
+        ),
+      )
+
+    val message = payload.getValue("message").jsonObject
+    assertFalse("Anonymous final time is the broadcast time, not the stored reply identity", "timestamp" in message)
+    assertEquals("run-1", payload.getValue("runId").jsonPrimitive.content)
+    assertEquals(
+      "Done",
+      message
+        .getValue("content")
+        .jsonArray
+        .single()
+        .jsonObject
+        .getValue("text")
+        .jsonPrimitive.content,
+    )
+  }
+
+  @Test
+  fun identifiedFinalAndNonFinalMessageTimestampsRemainIntact() {
+    val variants = listOf("final" to "id", "final" to "entryId", "final" to "idempotencyKey", "delta" to null, "aborted" to null)
+    for ((state, identity) in variants) {
+      val payload =
+        checkNotNull(
+          projectWearChatEvent(
+            buildJsonObject {
+              put("runId", "run-1")
+              put("state", state)
+              put(
+                "message",
+                buildJsonObject {
+                  put("role", "assistant")
+                  put("content", "Done")
+                  put("timestamp", 7)
+                  identity?.let {
+                    if (it == "entryId") {
+                      put("__openclaw", buildJsonObject { put("id", "canonical-identity") })
+                    } else {
+                      put(it, "canonical-identity")
+                    }
+                  }
+                },
+              )
+            },
+          ),
+        )
+      val message = payload.getValue("message").jsonObject
+      assertEquals("$state/$identity retains its timestamp", "7", message.getValue("timestamp").jsonPrimitive.content)
+      identity?.let { assertEquals("canonical-identity", message.getValue(it).jsonPrimitive.content) }
+    }
   }
 
   @Test

@@ -4,7 +4,7 @@ import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -43,10 +43,6 @@ type NodeInvokeFailure =
       nodeCommandDispatched?: boolean;
       requestSent?: boolean;
     };
-
-type NodeSystemRunInvokeResult =
-  | { ok: true; raw: unknown }
-  | { ok: false; failure: NodeInvokeFailure };
 
 /** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
 function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
@@ -184,6 +180,7 @@ export function formatNodeInvokeFailureToolResult(params: {
       durationMs: Date.now() - params.startedAt,
       aggregated: text,
       cwd: params.cwd,
+      ...(params.warnings?.length ? { warningText: params.warnings.join("\n") } : {}),
     },
   };
 }
@@ -195,7 +192,7 @@ export async function invokeNodeSystemRun(params: {
   signal?: AbortSignal;
   scopes?: OperatorScope[];
   source?: SessionSourceAssertion;
-}): Promise<NodeSystemRunInvokeResult> {
+}): Promise<{ ok: true; raw: unknown } | { ok: false; failure: NodeInvokeFailure }> {
   try {
     const callOptions: Parameters<typeof callGatewayTool>[3] =
       params.scopes || params.signal || params.source

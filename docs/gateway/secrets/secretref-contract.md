@@ -217,7 +217,7 @@ but are not displayed because resolver output can contain credential material.
 </Accordion>
 
 <Accordion title="Store provider">
-- Reads values from OpenClaw's shared state SQLite database.
+- Reads values from OpenClaw's shared state database, using the configured `database.families.state` engine (SQLite or PostgreSQL). CLI commands that authenticate to a local Gateway read store-backed `gateway.auth.*` refs from that same engine.
 - The provider has no connection settings. `secrets.defaults.store` selects its default alias.
 - Only team scope is resolved. Identity scope is not supported yet.
 

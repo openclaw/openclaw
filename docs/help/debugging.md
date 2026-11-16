@@ -87,7 +87,8 @@ changes keep their existing recovery and rebuild behavior. Windows retains its
 existing termination and restart behavior because its signal emulation does not
 make the same distinction.
 
-The UI dev wrapper acknowledges a requested stop only after its child returns
+The UI dev wrapper allows up to five seconds for its child tree to settle after
+forwarding a requested stop. It acknowledges the stop only after its child returns
 normally and the captured child tree has stopped. A signaled child or forced
 cleanup retains a signal outcome instead of reporting an acknowledged stop.
 
@@ -232,6 +233,16 @@ OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
 ```
 
 `pnpm gateway:watch` leaves this flag disabled by default for the watched Gateway child. Set `OPENCLAW_TRACE_SYNC_IO=1` when you want sync I/O trace output in watch mode too.
+
+For Gateway startup phase timings, set `OPENCLAW_GATEWAY_STARTUP_TRACE=1`.
+Per-plugin `plugins.gateway-load.plugin.<id>` details separate config validation
+(`configValidationMs`), artifact selection and entry-path checks
+(`artifactPreparationMs`), source capture and module evaluation (`loadMs`), and
+registration (`registerMs`). `loadAndRegisterMs` covers loading and registration;
+it excludes config validation and artifact preparation. These details are emitted
+for attempted module loads, including load or registration failures.
+`plugins.gateway-bootstrap-import` reports the lazy host-module import before
+individual plugin loading begins.
 
 ## Plugin lifecycle trace
 

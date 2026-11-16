@@ -86,29 +86,58 @@ final class ComputerWindowActionExecutor {
     private let windows: WindowManagementService
     private let menu: MenuService
     private let observationService: DesktopObservationService
-    private let snapshotManager: InMemorySnapshotManager
+    private let artifactDirectory: URL
     private var lifecycleGeneration: UInt64?
     private var appRefs: [String: ServiceApplicationInfo] = [:]
     private var windowRefs: [String: WindowTarget] = [:]
     private var observation: ObservationState?
     private var executionAuthority: ComputerActionExecutionAuthority?
 
-    init() {
-        let snapshotManager = InMemorySnapshotManager()
+    /// Owned window snapshots carry a capture file; the manager deletes it with
+    /// the snapshot instead of leaving it in the temporary directory.
+    static var snapshotManagerOptions: InMemorySnapshotManager.Options {
+        InMemorySnapshotManager.Options(deleteArtifactsOnCleanup: true)
+    }
+
+    convenience init() {
+        let snapshotManager = InMemorySnapshotManager(options: Self.snapshotManagerOptions)
         let automation = UIAutomationService(snapshotManager: snapshotManager)
         let applications = ApplicationService()
         let menu = MenuService(applicationService: applications)
+        self.init(
+            automation: automation,
+            applications: applications,
+            menu: menu,
+            observationService: DesktopObservationService(
+                screenCapture: ScreenCaptureService(loggingService: LoggingService()),
+                automation: automation,
+                applications: applications,
+                menu: menu,
+                snapshotManager: snapshotManager))
+    }
+
+    /// `automation` and `observationService` must share one snapshot manager so
+    /// element actions resolve the snapshots that observations publish.
+    /// Captures go into `artifactDirectory`, by default a directory of this
+    /// executor below the per-process directory.
+    init(
+        automation: UIAutomationService,
+        applications: ApplicationService,
+        menu: MenuService,
+        observationService: DesktopObservationService,
+        artifactDirectory: URL? = nil)
+    {
         self.automation = automation
         self.applications = applications
         self.windows = WindowManagementService(applicationService: applications)
         self.menu = menu
-        self.snapshotManager = snapshotManager
-        self.observationService = DesktopObservationService(
-            screenCapture: ScreenCaptureService(loggingService: LoggingService()),
-            automation: automation,
-            applications: applications,
-            menu: menu,
-            snapshotManager: snapshotManager)
+        if let artifactDirectory {
+            self.artifactDirectory = artifactDirectory
+        } else {
+            self.artifactDirectory = WindowObservationArtifacts.processDirectory
+                .appendingPathComponent(self.executionID, isDirectory: true)
+        }
+        self.observationService = observationService
     }
 
     func perform(
@@ -210,6 +239,7 @@ final class ComputerWindowActionExecutor {
             where app.windowCount > 0 || app.windowIDs?.isEmpty == false
         {
             do {
+                try Self.checkExternalProcess(app.processIdentifier)
                 let output = try await self.withExecutionAuthority {
                     try await self.applications.listWindows(
                         for: "PID:\(app.processIdentifier)",
@@ -242,9 +272,17 @@ final class ComputerWindowActionExecutor {
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
         let limits = try Self.observationLimits(params)
-        let context: WindowContext? = try params.windowRef.map { ref in
-            let target = try self.resolveWindow(ref)
-            return Self.windowContext(target, limits: limits)
+        let context: WindowContext
+        if let ref = params.windowRef {
+            context = try Self.windowContext(self.resolveWindow(ref), limits: limits)
+        } else {
+            let app = try await self.withExecutionAuthority {
+                try await self.applications.getFrontmostApplication()
+            }
+            try Self.checkExternalProcess(app.processIdentifier)
+            context = WindowContext(
+                applicationProcessId: app.processIdentifier,
+                applicationProcessStartIdentity: app.processStartIdentity)
         }
         let result = try await self.withExecutionAuthority {
             try await self.automation.inspectAccessibilityTree(windowContext: context)
@@ -287,21 +325,31 @@ final class ComputerWindowActionExecutor {
         guard let windowID = CGWindowID(exactly: target.window.windowID) else {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
+        // A detection-only observation returns a transient UUID that the snapshot
+        // manager rejects as a snapshot reference. Saving the snapshot lets
+        // Peekaboo reserve, store, and publish an owned `ps1_` reference instead;
+        // its capture file goes into the executor-owned directory.
         let request = DesktopObservationRequest(
-            target: .windowID(windowID),
+            target: .pid(target.app.processIdentifier, window: .id(windowID)),
             capture: DesktopCaptureOptions(focus: .background),
             detection: DesktopDetectionOptions(
                 mode: .accessibility,
-                traversalBudget: limits))
-        let result = try await self.withExecutionAuthority {
-            try await self.observationService.observe(request)
-        }
-        if let elements = result.elements {
-            try await self.withExecutionAuthority {
-                try await self.snapshotManager.storeDetectionResult(
-                    snapshotId: elements.snapshotId,
-                    result: elements)
+                traversalBudget: limits),
+            output: DesktopObservationOutputOptions(
+                path: self.artifactDirectory.path + "/",
+                saveSnapshot: true))
+        try WindowObservationArtifacts.prepare(self.artifactDirectory)
+        let observationStartedAt = Date()
+        let result: DesktopObservationResult
+        do {
+            result = try await self.withExecutionAuthority {
+                try await self.observationService.observe(request)
             }
+        } catch {
+            WindowObservationArtifacts.discardArtifacts(
+                writtenSince: observationStartedAt,
+                in: self.artifactDirectory)
+            throw error
         }
         let observedWindow = result.capture.metadata.windowInfo ?? target.window
         guard observedWindow.windowID == target.window.windowID else {
@@ -399,17 +447,7 @@ final class ComputerWindowActionExecutor {
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
         let target = try self.requiredWindow(params)
-        try await self.focus(target)
-        let focused = try await self.withExecutionAuthority {
-            try await self.windows.getFocusedWindow()
-        }
-        let confirmed = focused?.windowID == target.window.windowID
-        return OpenClawComputerActResult(
-            ok: confirmed,
-            effect: confirmed ? .confirmed : .suspectedNoop,
-            escalation: confirmed ? nil : OpenClawComputerEscalation(
-                recommended: "desktop",
-                reasonCode: "foreground_ineffective"))
+        return try await Self.result(from: self.focus(target), background: false)
     }
 
     // MARK: - Input
@@ -606,7 +644,16 @@ final class ComputerWindowActionExecutor {
         guard let target = self.windowRefs[ref] else {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
+        try Self.checkExternalProcess(target.app.processIdentifier)
         return target
+    }
+
+    private static func checkExternalProcess(_ processIdentifier: pid_t) throws {
+        // Same-process AX callbacks run on Peekaboo's detached queue and trap in AppKit's main-actor accessors.
+        guard processIdentifier != getpid() else {
+            throw ComputerActionService.ComputerActionError.refused(
+                "Peekaboo cannot inspect OpenClaw's own windows; use the CUA provider to target OpenClaw")
+        }
     }
 
     /// Only the newest observation may authorize element work, so issuing one
@@ -735,13 +782,15 @@ final class ComputerWindowActionExecutor {
         return Self.result(from: result.outcome, background: true)
     }
 
-    private func focus(_ target: WindowTarget) async throws {
-        try await self.withExecutionAuthority {
-            try await self.applications.activateApplication(request: ApplicationActivationRequest(
-                application: target.app))
+    @discardableResult
+    private func focus(_ target: WindowTarget) async throws -> DesktopActionOutcome? {
+        guard let identity = target.window.mutationIdentity else {
+            throw ComputerActionService.ComputerActionError.staleObservation
         }
-        try await self.withExecutionAuthority {
-            try await self.windows.focusWindow(target: .windowId(target.window.windowID))
+        return try await self.withExecutionAuthority {
+            try await self.windows.focusWindowActionResult(
+                target: .windowId(target.window.windowID),
+                expectedIdentity: identity).outcome
         }
     }
 }
@@ -756,7 +805,7 @@ extension ComputerWindowActionExecutor {
         guard let outcome else {
             return OpenClawComputerActResult(ok: true, effect: .unverifiable)
         }
-        if outcome.effect == .refused {
+        if outcome.effect == .refused || (!background && outcome.effect == .suspectedNoop) {
             return background
                 ? self.backgroundEscalation(reason: outcome.refusalReason?.rawValue ?? "action_refused")
                 : OpenClawComputerActResult(

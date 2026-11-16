@@ -2,7 +2,6 @@ import {
   normalizeStringEntries as normalizeAllowList,
   normalizeStringEntriesLower as normalizeAllowListLower,
 } from "openclaw/plugin-sdk/string-normalization-runtime";
-// Slack tests cover allow list plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   normalizeSlackSlug,
@@ -20,40 +19,22 @@ describe("slack/allow-list", () => {
   });
 
   it("matches wildcard and id candidates by default", () => {
-    expect(resolveSlackAllowListMatch({ allowList: ["*"], id: "u1", name: "alice" })).toEqual({
+    const match = (allowList: string[], id = "u1", allowNameMatching?: boolean) =>
+      resolveSlackAllowListMatch({ allowList, id, name: "alice", allowNameMatching });
+    expect(match(["*"])).toEqual({
       allowed: true,
       matchKey: "*",
       matchSource: "wildcard",
     });
 
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["u1"],
-        id: "u1",
-        name: "alice",
-      }),
-    ).toEqual({
+    expect(match(["u1"])).toEqual({
       allowed: true,
       matchKey: "u1",
       matchSource: "id",
     });
 
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["slack:alice"],
-        id: "u2",
-        name: "alice",
-      }),
-    ).toEqual({ allowed: false });
-
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["slack:alice"],
-        id: "u2",
-        name: "alice",
-        allowNameMatching: true,
-      }),
-    ).toEqual({
+    expect(match(["slack:alice"], "u2")).toEqual({ allowed: false });
+    expect(match(["slack:alice"], "u2", true)).toEqual({
       allowed: true,
       matchKey: "slack:alice",
       matchSource: "prefixed-name",
@@ -69,32 +50,19 @@ describe("slack/allow-list", () => {
 
   it("matches a workspace-qualified user only in that workspace", () => {
     const allowList = ["team:t11111111:user:u01234567"];
-
-    expect(
-      resolveSlackAllowListMatch({
-        allowList,
-        teamId: "T11111111",
-        id: "U01234567",
-      }),
-    ).toEqual({
+    const match = (teamId: string, entries = allowList) =>
+      resolveSlackAllowListMatch({ allowList: entries, teamId, id: "U01234567" });
+    expect(match("T11111111")).toEqual({
       allowed: true,
       matchKey: "team:t11111111:user:u01234567",
       matchSource: "workspace-id",
     });
-    expect(
-      resolveSlackAllowListMatch({
-        allowList,
-        teamId: "T22222222",
-        id: "U01234567",
-      }),
-    ).toEqual({ allowed: false });
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["u01234567"],
-        teamId: "T22222222",
-        id: "U01234567",
-      }),
-    ).toEqual({ allowed: true, matchKey: "u01234567", matchSource: "id" });
+    expect(match("T22222222")).toEqual({ allowed: false });
+    expect(match("T22222222", ["u01234567"])).toEqual({
+      allowed: true,
+      matchKey: "u01234567",
+      matchSource: "id",
+    });
   });
 
   it("preserves org-wide IDs and workspace-qualified user identities", () => {

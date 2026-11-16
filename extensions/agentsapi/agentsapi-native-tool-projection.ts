@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   formatNativeToolOutput,
   formatNativeToolSummary,
@@ -10,11 +9,11 @@ import {
 import {
   formatToolProgressOutput,
   projectAgentToolActivity,
-  sanitizeToolResult,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
 import {
@@ -196,7 +195,7 @@ export class AgentsApiNativeToolProjection {
       return;
     }
     const id = this.identity(state.turnId, state.item.id);
-    const delta = sanitizeToolResult(event.delta);
+    const delta = event.delta;
     this.output.append(id, delta);
     if (
       state.commandOutputChars < TOOL_PROGRESS_OUTPUT_MAX_CHARS &&
@@ -378,10 +377,8 @@ export class AgentsApiNativeToolProjection {
     const commandFacts = commandBearing
       ? {
           title: typeof args.command === "string" ? args.command : "Command output",
-          ...(!savedItemUnavailable && typeof item.exit_code === "number"
-            ? { exitCode: item.exit_code }
-            : {}),
-          ...(!savedItemUnavailable && typeof item.duration_ms === "number"
+          ...(!savedItemUnavailable && item.exit_code != null ? { exitCode: item.exit_code } : {}),
+          ...(!savedItemUnavailable && item.duration_ms != null
             ? { durationMs: item.duration_ms }
             : {}),
           ...(typeof args.cwd === "string" ? { cwd: args.cwd } : {}),
@@ -425,11 +422,13 @@ export class AgentsApiNativeToolProjection {
       : undefined;
     // The bounded digest detects changed projected facts without retaining a
     // second payload. Canonical enrichment replaces the same terminal item.
-    const projectionHash = nativeTerminalProjectionHash({
-      tool: toolSnapshot,
-      item: itemSnapshot,
-      command: commandSnapshot,
-    });
+    const projectionHash = hashText(
+      JSON.stringify({
+        tool: toolSnapshot,
+        item: itemSnapshot,
+        command: commandSnapshot,
+      }),
+    );
     if (state.terminalProjectionHash === projectionHash) {
       return;
     }
@@ -462,9 +461,8 @@ export class AgentsApiNativeToolProjection {
       return;
     }
     const remaining = TOOL_PROGRESS_OUTPUT_MAX_CHARS - state.outputProgressChars;
-    const sanitized = sanitizeToolResult(output);
-    const truncated = sanitized.length > remaining;
-    const text = truncateUtf16Safe(sanitized, remaining);
+    const truncated = output.length > remaining;
+    const text = truncateUtf16Safe(output, remaining);
     state.outputProgressChars += text.length;
     state.outputProgressMessages += 1;
     await this.emitToolProgress(
@@ -530,8 +528,4 @@ export class AgentsApiNativeToolProjection {
   private identity(turnId: string, itemId: string): string {
     return `agentsapi:${this.remoteSessionId}:${turnId}:${itemId}`;
   }
-}
-
-function nativeTerminalProjectionHash(snapshot: Record<string, unknown>): string {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }

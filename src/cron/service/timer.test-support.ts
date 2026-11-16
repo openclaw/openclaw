@@ -11,7 +11,12 @@ import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronSchedulerResult } from "../store/scheduler-actor.types.js";
-import { adoptCronRunRequests, drainCronRunQueue } from "./run-queue.js";
+import { locked } from "./locked.js";
+import {
+  adoptCronRunRequests,
+  getCronRunQueueRequests,
+  launchCronRunQueueResult,
+} from "./run-queue.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import { runCronSchedulerMaintenance } from "./scheduler-maintenance.js";
@@ -80,6 +85,7 @@ async function runScheduler(state: CronServiceState, startup?: StartupOptions): 
         monotonicMs: performance.now(),
         skipJobIds: startup?.skipJobIds ? [...startup.skipJobIds] : undefined,
         deferAgentWork: startup?.deferAgentWork ?? false,
+        requests: getCronRunQueueRequests(state),
       },
     });
     const scheduled = startup
@@ -88,6 +94,7 @@ async function runScheduler(state: CronServiceState, startup?: StartupOptions): 
           type: "cron.schedulerTick",
           input: {
             storeKey,
+            requests: getCronRunQueueRequests(state),
             snapshot: await captureCronSchedulerSnapshot(state),
             nowMs: state.deps.nowMs(),
             monotonicMs: performance.now(),
@@ -97,7 +104,7 @@ async function runScheduler(state: CronServiceState, startup?: StartupOptions): 
       source: startup ? "startup" : "scheduled",
     });
     await publish(state, scheduled);
-    await drainCronRunQueue(state);
+    await locked(state, () => launchCronRunQueueResult(state, scheduled));
     const completed = await Promise.allSettled(requests.map((request) => request.completion));
     const failed = completed.find((completion) => completion.status === "rejected");
     if (failed?.status === "rejected") {

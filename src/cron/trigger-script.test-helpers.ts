@@ -1,5 +1,6 @@
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
 import { createCronScriptRuntime } from "./trigger-script.js";
 import type { CronStoredJob } from "./types.js";
@@ -44,6 +45,7 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
   return {
     evaluateTrigger: (params: ScriptFixture) =>
       runtime.evaluateTrigger({
+        occurrence: TEST_SCHEDULED_OCCURRENCE,
         deliveryAttemptFence: params.deliveryAttemptFence ?? null,
         job: job(params, { kind: "agentTurn", message: "condition payload" }),
         script: params.script,
@@ -54,6 +56,7 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
       }),
     executePayload: (params: ScriptFixture) =>
       runtime.executePayload({
+        occurrence: TEST_SCHEDULED_OCCURRENCE,
         deliveryAttemptFence: params.deliveryAttemptFence ?? null,
         job: job(params, {
           kind: "script",

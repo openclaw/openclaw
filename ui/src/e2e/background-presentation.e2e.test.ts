@@ -4,6 +4,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Background presentation and live preview" });
@@ -50,23 +51,15 @@ suite.define(() => {
               "users.background.get",
             ],
             historyMessages: [
-              {
-                role: "user",
-                content: [{ type: "text", text: "Keep the writing surface solid." }],
-              },
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: Array.from(
-                      { length: 18 },
-                      (_, index) =>
-                        `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
-                    ).join("\n\n"),
-                  },
-                ],
-              },
+              chatMessage("user", "Keep the writing surface solid."),
+              chatMessage(
+                "assistant",
+                Array.from(
+                  { length: 18 },
+                  (_, index) =>
+                    `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
+                ).join("\n\n"),
+              ),
             ],
             methodResponses: {
               "config.get": configResponse({ themeMode: mode }, "presentation"),
@@ -110,8 +103,8 @@ suite.define(() => {
               return {
                 left: b.left,
                 right: b.right,
-                canvasLeft: c.left,
-                canvasRight: c.right,
+                canvasLeft: c.left + canvas.clientLeft,
+                canvasRight: c.left + canvas.clientLeft + canvas.clientWidth,
                 fade:
                   Number.parseFloat(
                     background.style.getPropertyValue("--session-background-fade-end"),
@@ -127,6 +120,12 @@ suite.define(() => {
                 bodyWidth: document.body.scrollWidth,
               };
             });
+          };
+          const readWritingSurface = async () => {
+            await page.locator(".chat-group.assistant").waitFor();
+            await page.locator(".chat-thread").hover({ position: { x: 16, y: 16 } });
+            await page.mouse.wheel(0, -1_000_000);
+            await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
           };
           await page.goto(suite.server.baseUrl + "new");
           await expect.poll(async () => (await newPageGeometry()).fade).toBeGreaterThan(0);
@@ -147,8 +146,8 @@ suite.define(() => {
             expect(g.mask).not.toBe("none");
             expect(g.composerBackground).toMatch(/^rgb\(/);
             if (viewport.width === 390) {
-              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(20, 0);
-              expect(g.canvasRight - g.composerRight).toBeCloseTo(20, 0);
+              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(16, 0);
+              expect(g.canvasRight - g.composerRight).toBeCloseTo(16, 0);
             }
             expect(g.bodyWidth).toBeLessThanOrEqual(g.width);
           }
@@ -164,7 +163,6 @@ suite.define(() => {
           await editor.fill("");
           await page.goto(suite.server.baseUrl + "settings/appearance");
           const section = page.locator("#settings-appearance-background");
-          await section.scrollIntoViewIfNeeded();
           const writes = (await gateway.getRequests("users.prefs.set")).length;
           await section.locator('[data-test-id="background-presentation-full-bleed"]').click();
           const change = await gateway.waitForRequest("users.prefs.set", { after: writes });
@@ -181,9 +179,11 @@ suite.define(() => {
           await peek.waitFor();
           await page.locator("[data-background-preview-canvas] img").waitFor({ state: "visible" });
           const preview = await page.locator("[data-background-preview-canvas]").boundingBox();
-          const canvasBounds = await page.locator(".content").boundingBox();
+          const canvasBounds = await page.locator(".content").evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return { x: bounds.left + element.clientLeft, y: bounds.top + element.clientTop };
+          });
           expect(preview).not.toBeNull();
-          expect(canvasBounds).not.toBeNull();
           expect(Math.abs(preview!.x - canvasBounds!.x)).toBeLessThan(1);
           expect(Math.abs(preview!.y - canvasBounds!.y)).toBeLessThan(1);
           expect(await slider.evaluate((element) => element === document.activeElement)).toBe(true);
@@ -204,7 +204,7 @@ suite.define(() => {
             await page
               .locator(".sidebar-region__background openclaw-session-background img")
               .waitFor({ state: "visible" });
-            await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+            await readWritingSurface();
             const surfaces = await page.evaluate(() => {
               const bg = document
                 .querySelector(".sidebar-region__background")!
@@ -311,7 +311,7 @@ suite.define(() => {
           preference = { ...preference, showInSessions: false };
           await sync();
           await page.goto(suite.server.baseUrl + "chat");
-          await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+          await readWritingSurface();
           expect(await page.locator(".sidebar-region__background img").count()).toBe(0);
           expect(
             await page

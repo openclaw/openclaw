@@ -4,13 +4,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { runConfigOperations } from "./config-cli-runner.js";
 
-// Exercise the real ordered runner, path mutators, roster projection and reference
-// restorer. Snapshot loading, schema/policy checks and persistence are boundaries;
-// this suite does not claim writer/topology or registered CLI acceptance.
+// Real runner, path/roster mutators and reference restoration; mocked snapshot,
+// validation and persistence boundaries do not prove writer/topology or CLI acceptance.
 const state = vi.hoisted(() => ({
   snapshot: {} as Record<string, unknown>,
   prepare: vi.fn(),
   replace: vi.fn(),
+  unexpected: (operation: string): never => {
+    throw new Error(`Unexpected ${operation}`);
+  },
 }));
 vi.mock("../config/config.js", () => ({ replaceConfigFile: state.replace }));
 vi.mock("./config-cli-validation.js", () => ({
@@ -18,32 +20,27 @@ vi.mock("./config-cli-validation.js", () => ({
   validateConfigMutation: async () => ({ kind: "write" }),
   assertStrictConfigForMutation: vi.fn(),
 }));
-vi.mock("../config/io.write-prepare.js", () => ({
-  prepareConfigWriteValues: state.prepare,
-}));
+// mock-isolation: Observe supplied write intent without preparing filesystem writes.
+vi.mock("../config/io.write-prepare.js", () => ({ prepareConfigWriteValues: state.prepare }));
+// mock-isolation: Fail if a real write unexpectedly enters the dry-run topology path.
 vi.mock("../config/io.write-topology.js", () => ({
-  prepareConfigWriteTopology: () => {
-    throw new Error("Unexpected dry-run topology");
-  },
+  prepareConfigWriteTopology: () => state.unexpected("dry-run topology"),
 }));
+// mock-isolation: Fail if the runner unexpectedly requests dry-run unset expansion.
 vi.mock("../config/config-path-mutation.js", () => ({
-  resolveManagedUnsetPathsForWrite: () => {
-    throw new Error("Unexpected dry-run unsets");
-  },
+  resolveManagedUnsetPathsForWrite: () => state.unexpected("dry-run unsets"),
 }));
 vi.mock("../config/io.meta.js", () => ({ AUTO_MANAGED_CONFIG_META_PATHS: [] }));
-vi.mock("../config/io.read-helpers.js", () => ({
-  coerceConfig: (value: unknown) => value,
-}));
+// mock-isolation: Keep the supplied synthetic snapshot intact at the reader boundary.
+vi.mock("../config/io.read-helpers.js", () => ({ coerceConfig: (value: unknown) => value }));
 vi.mock("../config/paths.js", () => ({
   resolveConfigPath: () => "/test/openclaw.json",
   resolveStateDir: vi.fn(),
 }));
+// mock-isolation: Reject unexpected redacted input without loading secret discovery.
 vi.mock("../config/redact-snapshot.js", () => ({
   REDACTED_SENTINEL: "__OPENCLAW_REDACTED__",
-  restoreRedactedValues: () => {
-    throw new Error("Unexpected redacted input");
-  },
+  restoreRedactedValues: () => state.unexpected("redacted input"),
 }));
 vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: async () => undefined,
@@ -73,8 +70,7 @@ vi.mock("./config-set-dryrun.js", () => ({
 }));
 vi.mock("./one-shot-exit.js", () => ({ exitCliAfterOutput: vi.fn() }));
 vi.mock("./command-format.js", () => ({ formatCliCommand: (s: string) => s }));
-// This public predecessor keeps roster functions in agent-scope-config.
-// Leave that implementation real and isolate only its workspace services.
+// Keep roster functions real, isolating only their workspace services.
 vi.mock("../config/legacy.default-agent-owner-state.js", () => ({
   getRetainedLegacyDefaultAgentId: vi.fn(),
 }));
@@ -102,33 +98,37 @@ vi.mock("../utils.js", async () => ({
 
 const modelsPath = ["models", "providers", "example", "models"];
 const modelPath = (index: number, ...tail: string[]) => [...modelsPath, String(index), ...tail];
+const pathSegments = (path: string | string[]) =>
+  typeof path === "string" ? path.split(".") : path;
+const namedEntries = (...names: string[]) =>
+  Object.fromEntries(names.map((name, i) => [String(i), { name }]));
 const modelConfig = (rows: { id: string; name: string }[]) => ({
   models: { providers: { example: { models: rows } } },
 });
-const rows = [
+const referenceRows = (edited: string, untouched: string) => [
   { id: "drop", name: "drop" },
-  { id: "edited", name: "${ALIAS}" },
-  { id: "untouched", name: "${OTHER_ALIAS}" },
+  { id: "edited", name: edited },
+  { id: "untouched", name: untouched },
 ];
-const resolvedRows = [
-  { id: "drop", name: "drop" },
-  { id: "edited", name: "${TARGET}" },
-  { id: "untouched", name: "${OTHER_TARGET}" },
-];
+const rows = referenceRows("${ALIAS}", "${OTHER_ALIAS}");
+const resolvedRows = referenceRows("${TARGET}", "${OTHER_TARGET}");
 function op(
   mutation: ConfigSetOperation["mutation"],
-  path: string[],
+  path: string | string[],
   value?: unknown,
 ): ConfigSetOperation {
   // Each command input is independently parsed JSON, not a shared fixture object.
+  const segments = pathSegments(path);
   return {
     mutation,
-    setPath: path,
-    requestedPath: path,
+    setPath: segments,
+    requestedPath: segments,
     value: structuredClone(value),
     inputMode: "json",
   };
 }
+const editModelName = (index: number, name: string) => op("set", modelPath(index, "name"), name);
+const deleteModel = (index: number) => op("delete", modelPath(index));
 function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
   state.snapshot = {
     path: "/test/openclaw.json",
@@ -139,6 +139,13 @@ function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
     authoredConfig: structuredClone(authored),
   };
 }
+const run = (operations: ConfigSetOperation[], successMode: "set" | "patch" = "patch") =>
+  runConfigOperations({
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    operations,
+    options: {},
+    successMode,
+  });
 
 async function apply(
   resolved: unknown,
@@ -146,12 +153,7 @@ async function apply(
   authored: unknown = resolved,
 ) {
   loadSnapshot(resolved, authored);
-  await runConfigOperations({
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    operations,
-    options: {},
-    successMode: "patch",
-  });
+  await run(operations);
   expect(state.prepare).toHaveBeenCalled();
   expect(state.replace).toHaveBeenCalledTimes(1);
   const prepared = state.prepare.mock.calls.find(([params]) => params.explicitSetPaths)?.[0];
@@ -184,10 +186,7 @@ describe("ordered runner supplied intent after deletion", () => {
     async (deleted) => {
       const result = await apply(
         modelConfig(resolvedRows),
-        [
-          op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]),
-          op("delete", modelPath(deleted)),
-        ],
+        [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), deleteModel(deleted)],
         modelConfig(rows),
       );
       expect(result.config.models?.providers?.example?.models).toEqual([
@@ -199,90 +198,71 @@ describe("ordered runner supplied intent after deletion", () => {
     },
   );
 
-  it.each([
-    {
-      name: "successive splices",
-      config: modelConfig(["a", "b", "c", "d"].map((id) => ({ id, name: id }))),
-      operations: [
-        op("set", modelPath(3, "name"), "edited"),
-        op("delete", modelPath(1)),
-        op("delete", modelPath(0)),
+  it.each<[string, unknown, ConfigSetOperation[], (string | string[])[]]>([
+    [
+      "successive splices",
+      modelConfig(["a", "b", "c", "d"].map((id) => ({ id, name: id }))),
+      [editModelName(3, "edited"), deleteModel(1), deleteModel(0)],
+      [modelPath(1, "name")],
+    ],
+    [
+      "earlier indices and unrelated arrays",
+      { ...modelConfig(resolvedRows), other: [{ name: "first" }, { name: "second" }] },
+      [editModelName(0, "edited"), op("set", "other.1.name", "other edited"), deleteModel(2)],
+      [modelPath(0, "name"), "other.1.name"],
+    ],
+    [
+      "ancestor replacement",
+      modelConfig(resolvedRows),
+      [op("replace", modelsPath, resolvedRows), deleteModel(0)],
+      [modelsPath],
+    ],
+    [
+      "numeric object keys",
+      { channels: { custom: { accounts: namedEntries("zero", "one") } } },
+      [
+        op("set", "channels.custom.accounts.0.name", "removed"),
+        op("set", "channels.custom.accounts.1.name", "survivor"),
+        op("delete", "channels.custom.accounts.0"),
       ],
-      paths: [modelPath(1, "name")],
-    },
-    {
-      name: "earlier indices and unrelated arrays",
-      config: { ...modelConfig(resolvedRows), other: [{ name: "first" }, { name: "second" }] },
-      operations: [
-        op("set", modelPath(0, "name"), "edited"),
-        op("set", ["other", "1", "name"], "other edited"),
-        op("delete", modelPath(2)),
+      ["channels.custom.accounts.1.name"],
+    ],
+    [
+      "nested array below a canonical agent ID",
+      { agents: { entries: { "1": { tools: { allow: ["first", "second", "third"] } } } } },
+      [
+        op("set", "agents.list.0.tools.allow.2", "edited"),
+        op("delete", "agents.list.0.tools.allow.0"),
       ],
-      paths: [modelPath(0, "name"), ["other", "1", "name"]],
-    },
-    {
-      name: "ancestor replacement",
-      config: modelConfig(resolvedRows),
-      operations: [op("replace", modelsPath, resolvedRows), op("delete", modelPath(0))],
-      paths: [modelsPath],
-    },
-    {
-      name: "numeric object keys",
-      config: {
-        channels: { custom: { accounts: { "0": { name: "zero" }, "1": { name: "one" } } } },
-      },
-      operations: [
-        op("set", ["channels", "custom", "accounts", "0", "name"], "removed"),
-        op("set", ["channels", "custom", "accounts", "1", "name"], "survivor"),
-        op("delete", ["channels", "custom", "accounts", "0"]),
-      ],
-      paths: [["channels", "custom", "accounts", "1", "name"]],
-    },
-    {
-      name: "nested array below a canonical agent ID",
-      config: { agents: { entries: { "1": { tools: { allow: ["first", "second", "third"] } } } } },
-      operations: [
-        op("set", ["agents", "list", "0", "tools", "allow", "2"], "edited"),
-        op("delete", ["agents", "list", "0", "tools", "allow", "0"]),
-      ],
-      paths: [["agents", "entries", "1", "tools", "allow", "1"]],
-    },
-    {
-      name: "recreated item",
-      config: modelConfig(["a", "b", "c"].map((id) => ({ id, name: id }))),
-      operations: [
-        op("set", modelPath(1, "name"), "removed"),
-        op("delete", modelPath(1)),
+      ["agents.entries.1.tools.allow.1"],
+    ],
+    [
+      "recreated item",
+      modelConfig(["a", "b", "c"].map((id) => ({ id, name: id }))),
+      [
+        editModelName(1, "removed"),
+        deleteModel(1),
         op("replace", modelPath(1), { id: "fresh", name: "fresh" }),
       ],
-      paths: [modelPath(1)],
-    },
-    {
-      name: "missing deletion",
-      config: modelConfig(resolvedRows),
-      operations: [op("set", modelPath(1, "name"), "edited"), op("delete", modelPath(8))],
-      paths: [modelPath(1, "name")],
-    },
-  ])("preserves supplied intent for $name", async ({ config, operations, paths }) => {
-    expect((await apply(config, operations)).paths).toEqual(paths);
+      [modelPath(1)],
+    ],
+    [
+      "missing deletion",
+      modelConfig(resolvedRows),
+      [editModelName(1, "edited"), deleteModel(8)],
+      [modelPath(1, "name")],
+    ],
+  ])("preserves supplied intent for %s", async (_name, config, operations, paths) => {
+    expect((await apply(config, operations)).paths).toEqual(paths.map(pathSegments));
   });
 
   it("drops deleted canonical agent intent without moving surviving IDs", async () => {
     const result = await apply(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            "0": { name: "zero" },
-            "1": { name: "one" },
-            "2": { name: "two" },
-          },
-        },
-      },
+      { agents: { ownership: "explicit", entries: namedEntries("zero", "one", "two") } },
       [
-        op("set", ["agents", "list", "0", "name"], "removed"),
-        op("set", ["agents", "list", "1", "name"], "survivor"),
-        op("delete", ["agents", "list", "0"]),
+        op("set", "agents.list.0.name", "removed"),
+        op("set", "agents.list.1.name", "survivor"),
+        op("delete", "agents.list.0"),
       ],
     );
     expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
@@ -293,39 +273,19 @@ describe("ordered runner supplied intent after deletion", () => {
   });
 });
 
-describe("replacement guard advice per subcommand", () => {
-  async function refusal(successMode: "set" | "patch"): Promise<string> {
+// Advice must name registered flags: config patch has --replace-path, not --merge/--replace.
+it.each([
+  ["patch", "Use --replace-path models.providers.example.models to replace intentionally."],
+  ["set", "Use --merge to merge by id or --replace to replace intentionally."],
+] as const)(
+  "refuses a %s model list replacement naming its own flags",
+  async (successMode, advice) => {
     loadSnapshot(modelConfig(resolvedRows));
-    try {
-      await runConfigOperations({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        operations: [op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])],
-        options: {},
-        successMode,
-      });
-    } catch (err) {
-      return (err as Error).message;
-    }
-    throw new Error("expected the replacement guard to refuse");
-  }
-
-  // The advice has to name flags the running subcommand registers: `config patch` accepts
-  // neither --merge nor --replace, only --replace-path.
-  it.each([
-    {
-      successMode: "patch" as const,
-      advice: "Use --replace-path models.providers.example.models to replace intentionally.",
-    },
-    {
-      successMode: "set" as const,
-      advice: "Use --merge to merge by id or --replace to replace intentionally.",
-    },
-  ])(
-    "refuses a $successMode model list replacement naming its own flags",
-    async ({ successMode, advice }) => {
-      expect(await refusal(successMode)).toBe(
-        `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
-      );
-    },
-  );
-});
+    await expect(
+      run([op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])], successMode),
+    ).rejects.toHaveProperty(
+      "message",
+      `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
+    );
+  },
+);

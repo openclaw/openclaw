@@ -1,4 +1,8 @@
 import { deserialize } from "node:v8";
+import {
+  prepareSessionSourceEffect,
+  type PreparedSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import type {
   FsSafeCopyRead,
   FsSafeCopyReply,
@@ -11,7 +15,10 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { prepareSandboxStateOwnerPath } from "../sandbox/state-owner-path.js";
+import { validateWorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
 import { setWorktreePreparationTemplate } from "./preparation-timing.js";
@@ -78,24 +85,47 @@ async function read(
   return reply;
 }
 
+export async function prepareWorktreeFilesystemMutation(
+  options: WorktreeFilesystemOptions,
+  source: PreparedSessionSourceEffect,
+): Promise<void> {
+  for (const evidence of new Set([
+    ...(options.workerAuthority?.workspaceEvidence ?? []),
+    ...(source.workspaceEvidence ?? []),
+  ])) {
+    await validateWorkspaceFilesystemEvidence(evidence);
+  }
+  if (options.workerAuthority?.stateOwnerPath) {
+    await prepareSandboxStateOwnerPath(options.workerAuthority.stateOwnerPath);
+  }
+  options.signal?.throwIfAborted();
+  source.assertCurrent();
+}
+
 async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOptions): Promise<void> {
   assertActive(options);
+  const source = await prepareSessionSourceEffect(options.commitGuard);
+  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
   // A process owns its descriptor table. Never terminate a JS worker while
   // fs-safe's native task still borrows descriptors opened by that worker.
-  const result = await runCommandBuffersWithTimeout(
-    [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())],
-    {
+  const result = await withChildProcessOperation("worktree.filesystem", () =>
+    runCommandBuffersWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())], {
       input: JSON.stringify(command),
-      beforeInput: () => assertActive(options),
+      prepareInput: () => prepareWorktreeFilesystemMutation(options, source),
+      beforeInput: () => {
+        options.signal?.throwIfAborted();
+        source.assertCurrent();
+      },
       signal: options.signal,
       timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
       killGraceMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
       killProcessTree: true,
       requireProcessTreeExtinction: true,
       maxOutputBytes: 64 * 1024,
-    },
+    }),
   );
-  assertActive(options);
+  options.signal?.throwIfAborted();
+  source.assertCurrent();
   if (result.code !== 0 || result.termination !== "exit") {
     throw new Error(`Native worktree ${command.type} failed: ${result.termination}`);
   }
@@ -139,6 +169,9 @@ export const nativeWorktreeFilesystem = {
   },
   createSource(this: void, destination: string, options: WorktreeFilesystemOptions) {
     return write({ type: "create", destination }, options);
+  },
+  remove(this: void, destination: string, options: WorktreeFilesystemOptions) {
+    return write({ type: "remove", destination }, options);
   },
   copy(this: void, source: string, destination: string, options: WorktreeFilesystemOptions) {
     return write({ type: "copy", source, destination }, options);

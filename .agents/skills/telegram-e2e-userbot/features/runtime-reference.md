@@ -66,6 +66,8 @@ replay uncertain fixture/update mutations without reconciling the owned state.
 `--dm` targets the selected SUT directly.
 Select a forum explicitly with `--chat`; scenario sends use `forumTopicId` to
 choose a topic within it. The default group comes from the credential's `groupId`.
+For topics inside the bot's direct chat, use the [DM-topic recipe](dm-topics.md)
+and `--dm --create-dm-topic`; group forum readiness is not a DM-topic check.
 
 Prefer DMs for isolated turns. A shared group records unrelated traffic and all
 privacy-disabled pool bots can see its messages. Use a group only when its
@@ -315,10 +317,11 @@ node "$TELEGRAM_E2E_SKILL_DIR/scripts/telegram-test-recover.mjs" \
   "$TELEGRAM_RETAINED_LEASE_DIR" status
 ```
 
-`status` leaves the lease held. `cleanup` removes confirmed run-owned forums,
-groups, and credential state before releasing it. `release` handles a retained
-broker receipt only after credential state is gone. A rejected revalidation is
-a real authority stop; never use the saved session directly after it.
+`status` leaves the lease held. `cleanup` deletes recorded DM topics, switches
+Threaded Mode off, and removes confirmed run-owned forums, groups, and credential
+state before releasing it. `release` handles a retained broker receipt only after
+credential state is gone. A rejected revalidation is a real authority stop; never
+use the saved session directly after it.
 
 These commands are conveniences, not the limit of agent recovery. Adapt the
 harness under the revalidated lease when more inspection is needed. For an

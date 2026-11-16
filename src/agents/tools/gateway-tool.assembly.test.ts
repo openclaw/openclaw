@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { expectOwnerGated } from "../agent-tools.turn-authority.test-support.js";
 import "../test-helpers/fast-coding-tools.js";
 import type { AnyAgentTool } from "./common.js";
 
@@ -35,16 +36,12 @@ function createTools(config: OpenClawConfig, options: AssemblyOptions = {}) {
   });
 }
 
-function requireGateway(tools: AnyAgentTool[]) {
+function gatewayParameters(tools: AnyAgentTool[]) {
   const tool = tools.find((candidate) => candidate.name === "gateway");
   if (!tool) {
     throw new Error("Expected gateway tool in the assembled profile");
   }
-  return tool;
-}
-
-function gatewayParameters(tools: AnyAgentTool[]) {
-  return requireGateway(tools).parameters as {
+  return tool.parameters as {
     properties: { action: { enum: string[] } };
   };
 }
@@ -53,23 +50,22 @@ function gatewayActions(tools: AnyAgentTool[]) {
   return gatewayParameters(tools).properties.action.enum;
 }
 
+const updateActions = ["update.run", "restart", "update.cleanup"];
+
 describe("assembled Gateway update capability", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(["coding"] as const)(
-    "makes the existing update action available in the %s profile without config reads",
-    (profile) => {
-      const tools = createTools({ tools: { profile } });
-
-      expect(gatewayActions(tools)).toEqual(["update.run"]);
-      expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
-        "action",
-        "note",
-      ]);
-    },
-  );
+  it("makes update actions available in the coding profile without config reads", () => {
+    const tools = createTools({ tools: { profile: "coding" } });
+    expect(gatewayActions(tools)).toEqual(updateActions);
+    expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
+      "action",
+      "dryRun",
+      "note",
+    ]);
+  });
 
   it.each([undefined, "full"] as const)(
     "retains existing config read authority with profile %s",
@@ -77,7 +73,7 @@ describe("assembled Gateway update capability", () => {
       expect(gatewayActions(createTools({ tools: { profile } }))).toEqual([
         "config.get",
         "config.schema.lookup",
-        "update.run",
+        ...updateActions,
       ]);
     },
   );
@@ -91,22 +87,23 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each([{ alsoAllow: ["session_status"] }])(
-    "does not widen config reads from alsoAllow $alsoAllow",
-    ({ alsoAllow }) => {
-      expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
-        "update.run",
-      ]);
-    },
-  );
+  it("does not widen config reads from unrelated alsoAllow", () => {
+    expect(
+      gatewayActions(
+        createTools({
+          tools: { profile: "coding", alsoAllow: ["session_status"] },
+        }),
+      ),
+    ).toEqual(updateActions);
+  });
 
   it.each([
-    { mainGrant: true, providerGrant: false, configRead: false },
-    { mainGrant: false, providerGrant: true, configRead: false },
-    { mainGrant: true, providerGrant: true, configRead: true },
+    [true, false, false],
+    [false, true, false],
+    [true, true, true],
   ])(
-    "requires config read grants in both limited profiles: main=$mainGrant provider=$providerGrant",
-    ({ mainGrant, providerGrant, configRead }) => {
+    "requires config read grants in both limited profiles: main=%s provider=%s",
+    (mainGrant, providerGrant, configRead) => {
       const actions = gatewayActions(
         createTools({
           tools: {
@@ -127,34 +124,31 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each(["coding"] as const)(
-    "uses the %s policy agent's authority rather than the execution agent's",
-    (policyProfile) => {
-      const actions = gatewayActions(
-        createTools(
-          {
-            session: { scope: "global" },
-            agents: {
-              ownership: "explicit",
-              entries: {
-                main: { tools: { profile: policyProfile } },
-                execution: { tools: { profile: "full" } },
-              },
+  it("uses the policy agent's authority rather than the execution agent's", () => {
+    const actions = gatewayActions(
+      createTools(
+        {
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { tools: { profile: "coding" } },
+              execution: { tools: { profile: "full" } },
             },
           },
-          {
-            agentId: "execution",
-            policyAgentId: "main",
-            sessionKey: "global",
-            runSessionKey: "agent:execution:main",
-          },
-        ),
-      );
+        },
+        {
+          agentId: "execution",
+          policyAgentId: "main",
+          sessionKey: "global",
+          runSessionKey: "agent:execution:main",
+        },
+      ),
+    );
 
-      expect(actions).toContain("update.run");
-      expect(actions).not.toContain("config.get");
-    },
-  );
+    expect(actions).toContain("update.run");
+    expect(actions).not.toContain("config.get");
+  });
 
   it.each([
     { name: "explicit deny", tools: { deny: ["gateway"] } },
@@ -180,9 +174,11 @@ describe("assembled Gateway update capability", () => {
       name: "runtime allowlist",
       options: { runtimeToolAllowlist: ["session_status"], inheritRuntimeToolAllowlist: true },
     },
-  ])("preserves the $name boundary", ({ options }) => {
-    expect(
-      createTools({ tools: { profile: "coding" } }, options).map((tool) => tool.name),
-    ).not.toContain("gateway");
+  ])("preserves the $name boundary", async ({ options }) => {
+    const tools = createTools({ tools: { profile: "coding" } }, options);
+    // A non-owner turn keeps the stable definition and is gated when it calls the tool.
+    const nonOwner = "senderIsOwner" in options && options.senderIsOwner === false;
+    expect(tools.some((tool) => tool.name === "gateway")).toBe(nonOwner);
+    await expectOwnerGated(tools, "gateway");
   });
 });

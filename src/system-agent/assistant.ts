@@ -8,14 +8,14 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
+  SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
   buildSystemAgentAssistantUserPrompt,
   buildSystemAgentGreetingUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
-  type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
-import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
@@ -24,10 +24,10 @@ import {
   systemAgentTerminalFailureGuidance,
 } from "./inference-run-errors.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { isLocalSystemAgentRoute } from "./route-locality.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 export {
@@ -36,14 +36,6 @@ export {
   type SystemAgentAssistantPlan,
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
-
-export type SystemAgentAssistantPlanner = (params: {
-  input: string;
-  overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-}) => Promise<SystemAgentAssistantPlan | null>;
 
 const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
@@ -59,10 +51,7 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentAssistantPlan | null> {
   const input = params.input.trim();
   if (!input) {
@@ -71,15 +60,12 @@ export async function planSystemAgentCommand(params: {
   const prompt = buildSystemAgentAssistantUserPrompt({
     input,
     overview: params.overview,
-    ...(params.history ? { history: params.history } : {}),
-    ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
   const result = await runConfiguredSystemAgentText({
     prompt,
     systemPrompt: SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
     runIdPrefix: "openclaw-planner",
     verifiedInference: params.verifiedInference,
-    deps: params.deps,
     responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
   });
   const parsed = parseSystemAgentAssistantPlanText(result?.text);
@@ -91,7 +77,6 @@ export async function planSystemAgentGreetingWithConfiguredModel(params: {
   overview: SystemAgentOverview;
   facts: SystemAgentGreetingFacts;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentVerifiedInferenceDeps;
   timeoutMs: number;
 }): Promise<SystemAgentGreetingPlan | null> {
   const result = await runConfiguredSystemAgentText({
@@ -99,7 +84,6 @@ export async function planSystemAgentGreetingWithConfiguredModel(params: {
     systemPrompt: SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
     runIdPrefix: "openclaw-greeting",
     verifiedInference: params.verifiedInference,
-    deps: params.deps,
     timeoutMs: params.timeoutMs,
   });
   return result ? { text: result.text, modelRef: result.modelLabel } : null;
@@ -110,15 +94,10 @@ async function runConfiguredSystemAgentText(params: {
   systemPrompt: string;
   runIdPrefix: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentVerifiedInferenceDeps;
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireSystemAgentInferenceRoute(
-    params.verifiedInference,
-    params.deps,
-    "planner",
-  );
+  const route = await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -137,7 +116,11 @@ async function runConfiguredSystemAgentText(params: {
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
-    const timeoutMs = params.timeoutMs ?? resolveSystemAgentAssistantTimeoutMs(route);
+    const timeoutMs =
+      params.timeoutMs ??
+      (isLocalSystemAgentRoute(route)
+        ? SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS
+        : SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS);
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,
@@ -146,7 +129,6 @@ async function runConfiguredSystemAgentText(params: {
     );
     const shared = {
       sessionId: `${runId}-session`,
-      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
       agentId: route.agentId,
       trigger: "manual" as const,
       sessionFile: `in-memory:${runId}`,
@@ -167,6 +149,7 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
+      bootstrapContextMode: "lightweight" as const,
       ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
@@ -219,6 +202,6 @@ async function runConfiguredSystemAgentText(params: {
   }
   // Cleanup is the final suspension before callers can display model text, so
   // authority must still match after cleanup completes.
-  await requireSystemAgentInferenceRoute(params.verifiedInference, params.deps, "planner");
+  await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   return { text, modelLabel: route.modelLabel };
 }

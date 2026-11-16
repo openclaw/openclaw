@@ -1,5 +1,6 @@
 // Policy automatic repairs apply only deterministic narrowing config changes.
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import type {
   HealthFinding,
   HealthRepairContext,
@@ -61,11 +62,8 @@ export function repairPolicyAutomaticNarrower(
   }
   if (
     findings.length === 0 ||
-    findings.some(
-      (finding) =>
-        finding.checkId !== checkId ||
-        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "automatic",
-    )
+    POLICY_FIX_METADATA_BY_CHECK_ID.get(checkId)?.fixClass !== "automatic" ||
+    findings.some((finding) => finding.checkId !== checkId)
   ) {
     return Promise.resolve({
       status: "skipped",
@@ -249,7 +247,7 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
     return false;
   }
   const deny = existing ?? [];
-  if (deny.some((value) => typeof value === "string" && value === entry)) {
+  if (deny.includes(entry)) {
     return false;
   }
   current.deny = [...deny, entry];
@@ -394,16 +392,4 @@ function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean
     hasScopedPolicyRequirement([finding]) &&
     finding.ocPath?.startsWith("oc://openclaw.config/channels/defaults/") === true
   );
-}
-
-function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
-  const current = parent[key];
-  if (isRecord(current)) {
-    const copy = { ...current };
-    parent[key] = copy;
-    return copy;
-  }
-  const next: ConfigRecord = {};
-  parent[key] = next;
-  return next;
 }

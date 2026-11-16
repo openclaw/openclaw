@@ -85,7 +85,7 @@ jobs:
           path: .cache/published-driver-install/${{ steps.driver.outputs.version }}/driver.tar
           key: published-driver-update-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/e2e/Dockerfile') }}-${{ steps.driver.outputs.version }}
       - name: Download candidate package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 2
         with:
           artifact-ids: ${{ inputs.candidate_artifact_id }}
@@ -96,6 +96,7 @@ jobs:
         env:
           CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
           DRIVER_VERSION: ${{ steps.driver.outputs.version }}
+          OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE: "1"
         run: |
           set -euo pipefail
           package=.artifacts/published-driver-package/openclaw-candidate.tgz
@@ -125,10 +126,19 @@ jobs:
             exit 1
           fi
           exit "$cell_exit"
+      - name: Update published baseline under native systemd
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          # The native planner defaults to the published 2026.10.9 regression
+          # baseline. Reuse the exact candidate already checksum-verified above.
+          sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/native-systemd.mjs \
+            "$PWD/.artifacts/published-driver-package/openclaw-candidate.tgz" \
+            "$PWD/.artifacts/published-driver-update/native-systemd"
       - name: Preserve synthetic update diagnostics
         if: always()
         timeout-minutes: 1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: published-driver-update
           path: .artifacts/published-driver-update

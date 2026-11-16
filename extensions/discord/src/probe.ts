@@ -212,12 +212,8 @@ export function parseApplicationIdFromToken(token: string): string | undefined {
   if (firstDot <= 0) {
     return undefined;
   }
-  try {
-    const decoded = Buffer.from(normalized.slice(0, firstDot), "base64").toString("utf-8");
-    return /^\d+$/.test(decoded) ? decoded : undefined;
-  } catch {
-    return undefined;
-  }
+  const decoded = Buffer.from(normalized.slice(0, firstDot), "base64").toString("utf-8");
+  return /^\d+$/.test(decoded) ? decoded : undefined;
 }
 
 export async function probeDiscordApplicationId(

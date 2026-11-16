@@ -1,3 +1,4 @@
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -14,64 +15,26 @@ import {
   waitForAgentRunReply,
 } from "../run-wait.js";
 import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../subagents/completion/subagent-completion-instructions.js";
-import { runAgentStep, type AgentStepSession } from "./agent-step.js";
+import { runAgentStep } from "./agent-step.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
-import type { SessionDeliveryTarget } from "./sessions-send-helpers.js";
-import { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
+import {
+  resolveSessionsSendReply,
+  SESSIONS_SEND_TRUNCATION_NOTE,
+} from "./sessions-send-helpers.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
-
-async function deliverSourceReply(params: {
-  deliveryTarget: SessionDeliveryTarget;
-  callGateway: AgentToolGatewayRequestCaller;
-  message: string;
-  runId: string;
-  targetAgentId: string;
-  sessionGeneration: SessionDeliveryGeneration;
-}) {
-  // Gateway sends need the selected owner for text routing and media roots;
-  // carry the admitted target instead of relying on an implicit default.
-  const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(params.message.trim());
-  if (!message && !mediaUrls?.length) {
-    return;
-  }
-  try {
-    await params.callGateway({
-      method: "send",
-      params: bindInProcessSessionDeliveryGeneration(
-        {
-          to: params.deliveryTarget.to,
-          message,
-          ...(mediaUrls?.length ? { mediaUrls } : {}),
-          agentId: params.targetAgentId,
-          ...(audioAsVoice ? { asVoice: true } : {}),
-          channel: params.deliveryTarget.channel,
-          accountId: params.deliveryTarget.accountId,
-          threadId: params.deliveryTarget.threadId,
-          idempotencyKey: `sessions-send:${params.runId}`,
-        },
-        params.sessionGeneration,
-      ),
-      timeoutMs: 10_000,
-    });
-  } catch (err) {
-    log.warn("sessions_send source reply delivery failed", {
-      runId: params.runId,
-      channel: params.deliveryTarget.channel,
-      to: params.deliveryTarget.to,
-      error: formatErrorMessage(err),
-    });
-  }
-}
 
 export async function runSessionsSendA2AFlow(params: {
   callGateway?: AgentToolGatewayRequestCaller;
   targetSessionKey: string;
   targetAgentId: string;
+  targetSession?: AgentStepSession;
+  replyAdmission?: Parameters<typeof runAgentStep>[0]["replyAdmission"];
   displayKey: string;
   runId: string;
   replyTimeoutMs: number;
@@ -81,6 +44,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSession?: AgentStepSession;
   requesterDeliveryGeneration?: SessionDeliveryGeneration;
   requesterOrigin?: DeliveryContext;
+  requester?: Parameters<typeof runAgentStep>[0]["requester"];
   requesterChannel?: string;
   reply?: AgentWaitResult & { replyText?: string };
   notifyRequesterOnWaitFailure?: boolean;
@@ -93,9 +57,13 @@ export async function runSessionsSendA2AFlow(params: {
   const requesterStepContext = {
     agentId: params.requesterAgentId,
     deliveryContext: params.requesterOrigin,
+    requester: params.requester,
     expectedSession: params.requesterSession,
+    expectedSourceSession: params.targetSession,
+    replyAdmission: params.replyAdmission,
     timeoutMs: params.replyTimeoutMs,
     sourceSessionKey: params.targetSessionKey,
+    ...(child ? {} : { sourceAgentId: params.targetAgentId }),
     callGateway: gatewayCall,
     sourceTool: child ? "subagent_announce" : "sessions_send",
     ...(child ? { sourceRole: "subagent" as const } : {}),
@@ -117,8 +85,7 @@ export async function runSessionsSendA2AFlow(params: {
         ((wait.status === "error" && !wait.retryableTransportError) ||
           isTerminalAgentWaitTimeout(wait))
       ) {
-        const error =
-          typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
+        const error = wait.error?.trim() ? `: ${wait.error.trim()}` : "";
         await deliverRequesterReply({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,
@@ -132,8 +99,16 @@ export async function runSessionsSendA2AFlow(params: {
       }
       return;
     }
-    const reply = wait.replyText;
-    if (!reply?.trim() || isNonDeliverableSessionsReply(reply)) {
+    if (wait.terminalReply?.disposition !== "visible") {
+      return;
+    }
+    const { replyText: reply, replyTruncated } = await resolveSessionsSendReply(wait, {
+      runId: params.runId,
+      sessionKey: params.targetSessionKey,
+      agentId: params.targetAgentId,
+      callGateway: gatewayCall,
+    });
+    if (!reply?.trim() || reply.trim() === HEARTBEAT_TOKEN) {
       return;
     }
 
@@ -187,14 +162,39 @@ export async function runSessionsSendA2AFlow(params: {
           );
           return;
         }
-        await deliverSourceReply({
-          deliveryTarget,
-          callGateway: gatewayCall,
-          message: reply,
-          runId: params.runId,
-          targetAgentId: params.targetAgentId,
-          sessionGeneration: params.requesterDeliveryGeneration,
-        });
+        // Gateway sends need the selected owner for text routing and media roots;
+        // carry the admitted target instead of relying on an implicit default.
+        const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(reply.trim());
+        if (!message && !mediaUrls?.length) {
+          return;
+        }
+        try {
+          await gatewayCall({
+            method: "send",
+            params: bindInProcessSessionDeliveryGeneration(
+              {
+                to: deliveryTarget.to,
+                message,
+                ...(mediaUrls?.length ? { mediaUrls } : {}),
+                agentId: params.targetAgentId,
+                ...(audioAsVoice ? { asVoice: true } : {}),
+                channel: deliveryTarget.channel,
+                accountId: deliveryTarget.accountId,
+                threadId: deliveryTarget.threadId,
+                idempotencyKey: `sessions-send:${params.runId}`,
+              },
+              params.requesterDeliveryGeneration,
+            ),
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          log.warn("sessions_send source reply delivery failed", {
+            runId: params.runId,
+            channel: deliveryTarget.channel,
+            to: deliveryTarget.to,
+            error: formatErrorMessage(err),
+          });
+        }
       }
       return;
     }
@@ -204,7 +204,7 @@ export async function runSessionsSendA2AFlow(params: {
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
         message: reply,
-        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.`,
+        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.${replyTruncated ? ` ${SESSIONS_SEND_TRUNCATION_NOTE}` : ""}`,
         sourceAgentId: params.targetAgentId,
       });
     }

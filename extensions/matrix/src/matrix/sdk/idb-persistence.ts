@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { IDBFactory, indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixIdbSnapshotJson,
+  pruneMatrixIdbSnapshotChunks,
   type MatrixSnapshotStateRuntime,
   writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
@@ -48,9 +50,7 @@ function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["ind
   const candidate = asOptionalObjectRecord(value);
   return (
     typeof candidate?.name === "string" &&
-    (typeof candidate.keyPath === "string" ||
-      (Array.isArray(candidate.keyPath) &&
-        candidate.keyPath.every((entry) => typeof entry === "string"))) &&
+    (typeof candidate.keyPath === "string" || isStringArray(candidate.keyPath)) &&
     typeof candidate.multiEntry === "boolean" &&
     typeof candidate.unique === "boolean"
   );
@@ -64,10 +64,7 @@ function isValidIdbRecordSnapshot(value: unknown): value is IdbStoreSnapshot["re
 function isValidIdbStoreSnapshot(value: unknown): value is IdbStoreSnapshot {
   const candidate = asOptionalObjectRecord(value);
   const keyPath = candidate?.keyPath;
-  const validKeyPath =
-    keyPath === null ||
-    typeof keyPath === "string" ||
-    (Array.isArray(keyPath) && keyPath.every((entry) => typeof entry === "string"));
+  const validKeyPath = keyPath === null || typeof keyPath === "string" || isStringArray(keyPath);
   return (
     typeof candidate?.name === "string" &&
     validKeyPath &&
@@ -267,7 +264,7 @@ async function preflightIndexedDatabases(
 async function readCanonicalSnapshot(
   snapshotPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
-): Promise<IdbDatabaseSnapshot[] | null> {
+): Promise<{ snapshot: IdbDatabaseSnapshot[]; snapshotJson: string } | null> {
   throwIfLegacySnapshotNeedsDoctor(snapshotPath);
   const snapshotJson = await readMatrixIdbSnapshotJson(path.dirname(snapshotPath), stateRuntime);
   if (snapshotJson === null) {
@@ -277,7 +274,7 @@ async function readCanonicalSnapshot(
   if (!snapshot) {
     throw new Error("Malformed IndexedDB snapshot payload");
   }
-  return snapshot;
+  return { snapshot, snapshotJson };
 }
 
 // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
@@ -293,11 +290,12 @@ export async function restoreIdbFromDisk(
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
-      const snapshot = await readCanonicalSnapshot(resolvedPath, snapshotStateRuntime);
-      if (snapshot === null) {
+      const canonical = await readCanonicalSnapshot(resolvedPath, snapshotStateRuntime);
+      if (canonical === null) {
         await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
+      const { snapshot } = canonical;
       await preflightIndexedDatabases(snapshot, databasePrefix);
       await clearAccountIndexedDatabases(databasePrefix);
       await restoreIndexedDatabases(snapshot, fakeIndexedDB);
@@ -333,34 +331,27 @@ export async function persistIdbToDisk(params?: {
     const stateRuntime = params?.stateRuntime ?? getMatrixRuntime().state;
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
-    const persistedCount = await withFileLock(
-      snapshotPath,
-      MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
-      async () => {
-        callbackStarted = true;
-        const storageRootDir = path.dirname(snapshotPath);
-        await readCanonicalSnapshot(snapshotPath, stateRuntime);
-        const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
-        if (params?.abortSignal?.aborted || snapshot.length === 0) {
-          return 0;
-        }
-        // Once publication begins, finish every row and cleanup before releasing the lock.
-        await writeMatrixIdbSnapshotJson({
-          storageRootDir,
-          snapshotJson: JSON.stringify(snapshot),
-          databaseCount: snapshot.length,
-          stateRuntime,
-        });
-        return snapshot.length;
-      },
-    );
-    if (persistedCount === 0) {
-      return;
-    }
-    LogService.debug(
-      "IdbPersistence",
-      `Persisted ${persistedCount} IndexedDB database(s) to Matrix SQLite state`,
-    );
+    await withFileLock(snapshotPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
+      callbackStarted = true;
+      const storageRootDir = path.dirname(snapshotPath);
+      const previousJson = (await readCanonicalSnapshot(snapshotPath, stateRuntime))?.snapshotJson;
+      const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+      if (params?.abortSignal?.aborted || snapshot.length === 0) {
+        return;
+      }
+      const snapshotJson = JSON.stringify(snapshot);
+      if (previousJson === snapshotJson) {
+        await pruneMatrixIdbSnapshotChunks(storageRootDir, stateRuntime);
+        return;
+      }
+      // Once publication begins, finish every row and cleanup before releasing the lock.
+      await writeMatrixIdbSnapshotJson({
+        storageRootDir,
+        snapshotJson,
+        databaseCount: snapshot.length,
+        stateRuntime,
+      });
+    });
   } catch (err) {
     if (err instanceof MatrixIdbSnapshotMigrationRequiredError) {
       throw err;

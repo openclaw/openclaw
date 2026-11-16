@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ImageContent } from "../agents/command/types.js";
 import { extractImageContentFromSource, type InputImageSource } from "../media/input-files.js";
-import type { ResolvedOpenAiChatCompletionsLimits } from "./openai-compatible-input-limits.js";
+import type { resolveOpenAiChatCompletionsLimits } from "./openai-compatible-input-limits.js";
 
 function resolveImageUrlPart(part: unknown): string | undefined {
   const imageUrl = asOptionalObjectRecord(part)?.image_url;
@@ -65,7 +65,7 @@ function parseImageUrlToSource(url: string): InputImageSource {
 
 export async function resolveImagesForRequest(
   activeTurnContext: { imageUrls: ExtractedImageUrls },
-  limits: ResolvedOpenAiChatCompletionsLimits,
+  limits: ReturnType<typeof resolveOpenAiChatCompletionsLimits>,
   signal: AbortSignal,
   assertCurrent: () => void,
 ): Promise<ImageContent[]> {

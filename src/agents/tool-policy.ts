@@ -85,7 +85,7 @@ export function expandShippedCoreToolPolicyNames(list: string[] | undefined): st
 
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
-  if (!Array.isArray(policy?.allow)) {
+  if (!policy?.allow) {
     return false;
   }
   const restrictions = readToolAllowlistIntersection(policy.allow);
@@ -114,9 +114,7 @@ export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
   const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
   return restrictions
     ? restrictions.some((allow) => allow.length === 0 || toolPolicyRestrictsTools({ allow }))
-    : Array.isArray(policy.allow) &&
-        policy.allow.length > 0 &&
-        !expandToolGroups(policy.allow).includes("*");
+    : Boolean(policy.allow?.length) && !expandToolGroups(policy.allow).includes("*");
 }
 
 /** Replaces an allowlist with the normalized names of an effective tool array. */
@@ -137,9 +135,6 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
       continue;
     }
     for (const value of readToolAllowlistIntersection(policy.allow)?.flat() ?? policy.allow) {
-      if (typeof value !== "string") {
-        continue;
-      }
       const trimmed = value.trim();
       if (trimmed === "*" && policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
         // alsoAllow implicitly injects "*" for sandbox compatibility; do not
@@ -306,7 +301,7 @@ export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
   policy: TPolicy | undefined,
   alsoAllow?: string[],
 ): TPolicy | undefined {
-  if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
+  if (!policy?.allow || !alsoAllow?.length) {
     return policy;
   }
   return { ...policy, allow: uniqueStrings([...policy.allow, ...alsoAllow]) };

@@ -1,32 +1,30 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { persistPendingFinalDeliveryMarker } from "./pending-final-delivery-marker.js";
+import {
+  advancePendingFinalDeliveryCompletion,
+  persistPendingFinalDeliveryMarker,
+} from "./pending-final-delivery-marker.js";
 
 const state = vi.hoisted(() => ({ applySessionEntryReplacements: vi.fn() }));
 
+// mock-isolation: Apply the replacement callback to the fixture entry without opening a session store.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  applySessionEntryReplacements: (...args: unknown[]) =>
-    state.applySessionEntryReplacements(...args),
+  applySessionEntryReplacements: state.applySessionEntryReplacements,
 }));
 
-describe("persistPendingFinalDeliveryMarker", () => {
-  beforeEach(() => {
-    state.applySessionEntryReplacements.mockReset();
-  });
-
-  it("owns a multi-payload command delivery as one durable batch", async () => {
+it.each(["matching", "wrong-intent", "wrong-delivery", "wrong-predecessor"])(
+  "captures a durable batch and fences its compaction locator (%s)",
+  async (mode) => {
     const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-    state.applySessionEntryReplacements.mockImplementation(
-      async (
-        params: Parameters<
-          typeof import("../config/sessions/session-accessor.js").applySessionEntryReplacements
-        >[0],
-      ) => (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
+    state.applySessionEntryReplacements.mockImplementationOnce(
+      async (params: Parameters<typeof applySessionEntryReplacements>[0]) =>
+        (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
     );
     const payloads = [
       { text: "first" },
-      { text: "internal reasoning", isReasoning: true },
+      { text: "reasoning", isReasoning: true },
       { text: "second" },
     ];
 
@@ -35,7 +33,6 @@ describe("persistPendingFinalDeliveryMarker", () => {
       deliver: true,
       sessionStore: { main: entry },
       sessionKey: "main",
-      sessionEntry: entry,
       storePath: "/tmp/sessions.json",
       suppressVisibleSessionEffects: false,
       sessionReboundDuringRun: false,
@@ -44,18 +41,39 @@ describe("persistPendingFinalDeliveryMarker", () => {
       runOwnedSessionId: "session-1",
     });
 
-    expect(result.sessionEntry?.pendingFinalDelivery).toMatchObject({
-      kind: "replayable",
-      text: "first\n\nsecond",
-    });
-    expect(result.sessionEntry?.pendingFinalDelivery?.deliveries).toEqual([
-      { id: expect.any(String), state: "prepared" },
-    ]);
-    const deliveryId = result.sessionEntry?.pendingFinalDelivery?.deliveries?.[0]?.id;
+    const marker = result.sessionEntry?.pendingFinalDelivery;
+    expect(marker).toMatchObject({ kind: "transport-only" });
+    expect(marker).not.toHaveProperty("text");
+    expect(marker?.deliveries).toEqual([{ id: expect.any(String), state: "prepared" }]);
+    const deliveryId = marker?.deliveries?.[0]?.id;
     expect(
       payloads.map(
         (payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion?.deliveryId,
       ),
     ).toEqual([deliveryId, undefined, deliveryId]);
-  });
-});
+    const completion = getReplyPayloadMetadata(payloads[0]!)?.pendingFinalDeliveryCompletion;
+    const current = { sessionId: "compacted", lifecycleRevision: "next" };
+    advancePendingFinalDeliveryCompletion({
+      payloads,
+      intentId: mode === "wrong-intent" ? "other" : marker!.intentId,
+      transition: {
+        previous: { sessionId: mode === "wrong-predecessor" ? "other" : entry.sessionId },
+        current,
+      },
+      entry: {
+        ...result.sessionEntry!,
+        ...current,
+        pendingFinalDelivery: {
+          ...marker!,
+          deliveries: [
+            { id: mode === "wrong-delivery" ? "other" : deliveryId!, state: "prepared" },
+          ],
+        },
+      },
+    });
+    expect(getReplyPayloadMetadata(payloads[0]!)?.pendingFinalDeliveryCompletion).toEqual({
+      ...completion,
+      sessionId: mode === "matching" ? current.sessionId : entry.sessionId,
+    });
+  },
+);

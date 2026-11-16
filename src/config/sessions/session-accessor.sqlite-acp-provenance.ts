@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import {
   executeSqliteQuerySync,
@@ -10,6 +9,7 @@ import {
   legacyAcpMigrationSourceSchema,
   type LegacyAcpMigrationSource,
 } from "../../infra/legacy-acp-migration-source.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -27,7 +27,7 @@ import type { SessionEntry } from "./types.js";
 
 const sourcesSchema = z.array(legacyAcpMigrationSourceSchema);
 
-function readSources(database: DatabaseSync, sessionKey: string): LegacyAcpMigrationSource[] {
+function readSources(database: EngineConnection, sessionKey: string): LegacyAcpMigrationSource[] {
   if (!hasLegacyAcpMigrationProvenanceColumn(database)) {
     return [];
   }
@@ -56,6 +56,7 @@ export function readLegacyAcpMigrationContextInDatabase(
   };
 }
 
+/** Native ACP maintenance and offline import; runtime reads use the source worker. */
 export function readLegacyAcpMigrationContext(scope: SessionEntryReadScope) {
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -66,7 +67,7 @@ export function readLegacyAcpMigrationContext(scope: SessionEntryReadScope) {
 }
 
 function writeSources(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   sources: LegacyAcpMigrationSource[],
 ): void {
@@ -82,7 +83,7 @@ function writeSources(
 
 /** Repair retries may carry the same source again, but cannot restamp its consumed identity. */
 export function recordLegacyAcpMigrationSources(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   sources: readonly LegacyAcpMigrationSource[],
 ): void {

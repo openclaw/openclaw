@@ -1,9 +1,16 @@
-import { parseOperatorModelPolicyWildcardRef } from "../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../config/model-policy-ref.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import {
+  freezeJsonSnapshot,
+  freezeTrustedJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
-import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { normalizeProviderId } from "./model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
@@ -35,15 +42,19 @@ export function restoreOperatorModelPolicySnapshot(
 ): PreparedOperatorModelPolicy {
   const prepare = (refs: OperatorModelPolicySnapshot["allowed"]) => ({
     exact: new Set(refs.exact),
-    patterns: compileGlobPatterns({ raw: refs.wildcards, normalize: (raw) => raw }),
+    wildcards: refs.wildcards,
   });
   const captured = freezeJsonSnapshot(structuredClone(snapshot));
   const allowed = prepare(captured.allowed);
   const denied = prepare(captured.denied);
-  const policy = Object.freeze({
-    models: captured.models,
-    allows: (ref: ModelRef) => matches(allowed, ref) && !matches(denied, ref),
-  });
+  return recordPreparedPolicy(captured, (ref) => matches(allowed, ref) && !matches(denied, ref));
+}
+
+function recordPreparedPolicy(
+  captured: OperatorModelPolicySnapshot,
+  allows: PreparedOperatorModelPolicy["allows"],
+): PreparedOperatorModelPolicy {
+  const policy = Object.freeze({ models: captured.models, allows });
   modelPolicySnapshots.set(policy, {
     snapshot: captured,
     membership: JSON.stringify([
@@ -76,7 +87,9 @@ export function resolveOperatorModelDefault(
   if (!params.policy || params.policy.allows(params.model)) {
     return params.model;
   }
-  const automatic = new Set(prepareAgentModels(params).models.map(identity));
+  const automatic = new Set(
+    prepareAgentModels(params, preparedConfigModels(params)).models.map(identity),
+  );
   return params.policy.models.find((ref) => automatic.has(identity(ref)) || params.allows(ref));
 }
 
@@ -84,9 +97,64 @@ function identity(ref: ModelRef): string {
   return JSON.stringify([normalizeProviderId(ref.provider), ref.model]);
 }
 
+type PreparedAgentModels = {
+  models: ModelRef[];
+  resolve: (raw: string) => ModelRef | undefined;
+};
+type ModelPolicy = NonNullable<GatewayOperatorRoleDefinition["modelPolicy"]>;
+type PreparedConfigModels = {
+  byAgent: Map<string | undefined, PreparedAgentModels>;
+  byPolicy: WeakMap<ModelPolicy, PreparedOperatorModelPolicy | undefined>;
+};
+const modelsByConfig = new WeakMap<
+  OpenClawConfig,
+  {
+    publication: object | undefined;
+    byMetadata: WeakMap<object, PreparedConfigModels>;
+  }
+>();
+
+function preparedConfigModels({
+  cfg,
+  manifestPlugins,
+}: { cfg: OpenClawConfig } & ModelManifestNormalizationContext): PreparedConfigModels | undefined {
+  // Owned metadata and published/frozen config identify stable selection facts.
+  // Caller-owned manifest arrays and unbound mutable configs remain live inputs.
+  if (manifestPlugins && "owners" in manifestPlugins) {
+    const current = runtimeConfigPublication.current;
+    const publication = current?.config === cfg ? current.revision : undefined;
+    if (publication || isDeeplyFrozenPlainData(cfg)) {
+      let cached = modelsByConfig.get(cfg);
+      if (!cached || cached.publication !== publication) {
+        cached = { publication, byMetadata: new WeakMap() };
+        modelsByConfig.set(cfg, cached);
+      }
+      let prepared = cached.byMetadata.get(manifestPlugins);
+      if (!prepared) {
+        prepared = { byAgent: new Map(), byPolicy: new WeakMap() };
+        // Only config-owned role objects share this publication's lifetime.
+        for (const { modelPolicy } of Object.values(cfg.gateway?.roles?.definitions ?? {})) {
+          if (modelPolicy) {
+            prepared.byPolicy.set(modelPolicy, undefined);
+          }
+        }
+        cached.byMetadata.set(manifestPlugins, prepared);
+      }
+      return prepared;
+    }
+  }
+  return undefined;
+}
+
 function prepareAgentModels(
   params: { cfg: OpenClawConfig; agentId?: string } & ModelManifestNormalizationContext,
-) {
+  cached: PreparedConfigModels | undefined,
+): PreparedAgentModels {
+  const { agentId } = params;
+  const prepared = cached?.byAgent.get(agentId);
+  if (prepared) {
+    return prepared;
+  }
   const normalization = {
     cfg: params.cfg,
     agentId: params.agentId,
@@ -105,14 +173,16 @@ function prepareAgentModels(
       models.push(ref);
     }
   }
-  return { models, resolve };
+  const result = { models, resolve };
+  cached?.byAgent.set(agentId, result);
+  return result;
 }
 
 function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef | undefined) {
   const exact = new Map<string, ModelRef>();
   const wildcards = new Set<string>();
   for (const raw of refs) {
-    const wildcard = parseOperatorModelPolicyWildcardRef(raw);
+    const wildcard = parseModelPolicyWildcardRef(raw);
     if (wildcard) {
       wildcards.add(wildcard.key);
     } else {
@@ -125,20 +195,20 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
   return {
     exact,
     wildcards: [...wildcards].toSorted(),
-    patterns: compileGlobPatterns({ raw: [...wildcards], normalize: (raw) => raw }),
   };
 }
 
 function matches(
   prepared: {
     exact: ReadonlySet<string> | ReadonlyMap<string, ModelRef>;
-    patterns: ReturnType<typeof compileGlobPatterns>;
+    wildcards: readonly string[];
   },
   ref: ModelRef,
 ) {
+  const key = `${normalizeProviderId(ref.provider)}/${ref.model}`;
   return (
     prepared.exact.has(identity(ref)) ||
-    matchesAnyGlobPattern(`${normalizeProviderId(ref.provider)}/${ref.model}`, prepared.patterns)
+    prepared.wildcards.some((wildcard) => modelPolicyWildcardMatches(wildcard, key))
   );
 }
 
@@ -153,21 +223,24 @@ export function prepareOperatorModelPolicy(
   if (!policy) {
     return undefined;
   }
+  const cached = preparedConfigModels(params);
+  const prepared = cached?.byPolicy.get(policy);
+  if (prepared) {
+    return prepared;
+  }
   const agentId = resolveConfiguredAgentId(
     cfg,
     resolveAmbientOwnerAgentId(cfg, policy.sourceAgent),
   );
-  const { models: sourceModels, resolve } = prepareAgentModels({
-    cfg,
-    agentId,
-    manifestPlugins: params.manifestPlugins,
-  });
+  const { models: sourceModels, resolve } = prepareAgentModels(
+    { cfg, agentId, manifestPlugins: params.manifestPlugins },
+    cached,
+  );
   const allowed =
     policy.allow === undefined
       ? {
           exact: new Map(sourceModels.map((ref) => [identity(ref), ref])),
           wildcards: [],
-          patterns: [],
         }
       : prepareRefs(policy.allow, resolve);
   const denied = prepareRefs(policy.deny ?? [], resolve);
@@ -177,9 +250,16 @@ export function prepareOperatorModelPolicy(
       [...sourceModels, ...allowed.exact.values()].map((ref) => [identity(ref), ref]),
     ).values(),
   ].filter(allows);
-  return restoreOperatorModelPolicySnapshot({
-    models,
-    allowed: { exact: [...allowed.exact.keys()].toSorted(), wildcards: allowed.wildcards },
-    denied: { exact: [...denied.exact.keys()].toSorted(), wildcards: denied.wildcards },
-  });
+  const result = recordPreparedPolicy(
+    freezeTrustedJsonSnapshot({
+      models,
+      allowed: { exact: [...allowed.exact.keys()].toSorted(), wildcards: allowed.wildcards },
+      denied: { exact: [...denied.exact.keys()].toSorted(), wildcards: denied.wildcards },
+    }),
+    allows,
+  );
+  if (cached?.byPolicy.has(policy)) {
+    cached.byPolicy.set(policy, result);
+  }
+  return result;
 }

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import * as runtimeBackends from "../plugins/cli-backends.runtime.js";
 import * as setupRegistry from "../plugins/setup-registry.js";
 
@@ -7,6 +8,39 @@ type CliBackendsDeps = {
   resolvePluginSetupRegistry: typeof import("../plugins/setup-registry.js").resolvePluginSetupRegistry;
   resolveRuntimeCliBackends: typeof import("../plugins/cli-backends.runtime.js").resolveRuntimeCliBackends;
 };
+
+export function createClaudeMcpCliBackend(): CliBackendPlugin & { pluginId: string } {
+  return {
+    id: "claude-cli",
+    pluginId: "anthropic",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
+    resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+    config: {
+      command: "claude",
+      args: ["--print"],
+      output: "jsonl",
+      jsonlDialect: "claude-stream-json",
+      input: "stdin",
+      sessionMode: "existing",
+    },
+  };
+}
+
+export function createClaudeCliBackends(): ReturnType<
+  CliBackendsDeps["resolveRuntimeCliBackends"]
+> {
+  return [
+    {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      pluginId: "anthropic",
+      config: { command: "claude" },
+    },
+  ];
+}
 
 const restoreMocks: Array<() => void> = [];
 

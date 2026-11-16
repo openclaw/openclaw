@@ -53,6 +53,7 @@ export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];
+    isKnownInlineModel?: (raw: string) => boolean;
     allowStatusDirective?: boolean;
     command?: { kind: "native" | "text"; name: ReplyDirectiveCommand };
   },
@@ -100,6 +101,7 @@ export function parseInlineSessionDirectives(
   const model = parseScopedDirective("model", (value) =>
     extractModelDirective(value, {
       aliases: options?.modelAliases,
+      isKnownInlineModel: options?.isKnownInlineModel,
     }),
   );
   const queue = parseScopedDirective("queue", extractQueueDirective);

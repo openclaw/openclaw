@@ -39,8 +39,8 @@ impl GatewaySnapshot {
     pub(crate) fn remote_opening() -> Self {
         Self::unavailable(
             "remoteOpening",
-            "Opening remote dashboard",
-            "Gateway authentication and readiness are shown in the dashboard.",
+            "Opening remote Gateway",
+            "Gateway authentication and readiness are shown in OpenClaw.",
         )
     }
 
@@ -150,6 +150,9 @@ struct DashboardResponse {
 }
 
 pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::status(cli);
+    }
     let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
@@ -228,7 +231,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     })
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {
@@ -264,6 +267,9 @@ fn wait_until_reachable(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
 }
 
 pub fn act(cli: &OpenClawCli, action: GatewayAction) -> Result<GatewaySnapshot, String> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::action(cli, action);
+    }
     run_service_command(cli, action.command())?;
     if matches!(action, GatewayAction::Stop) {
         return status(cli);
@@ -292,10 +298,10 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
         // legacy URL's shared credential and must never consume that grant.
         let shared_auth_url = response
             .url
-            .ok_or_else(|| "Dashboard response did not include a URL.".to_string())?;
+            .ok_or_else(|| "The Gateway did not return a URL.".to_string())?;
         let ws_url = response
             .ws_url
-            .ok_or_else(|| "Dashboard response did not include a WebSocket URL.".to_string())?;
+            .ok_or_else(|| "The Gateway did not return a WebSocket URL.".to_string())?;
         let token = dashboard_token(&shared_auth_url)?;
         return Ok(ReadyGateway {
             snapshot,
@@ -313,7 +319,7 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
     }
     Err(response
         .reason
-        .unwrap_or_else(|| "Dashboard is not ready.".to_string()))
+        .unwrap_or_else(|| "OpenClaw is not ready.".to_string()))
 }
 
 fn unsupported_dashboard_integration() -> String {
@@ -325,13 +331,13 @@ fn unsupported_dashboard_integration() -> String {
 
 fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {
     let parsed = tauri::Url::parse(dashboard_url)
-        .map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
+        .map_err(|_| "The Gateway returned an invalid URL.".to_string())?;
     let Some(fragment) = parsed.fragment() else {
         return Ok(None);
     };
     // Parse the fragment in Rust; Quick Chat never receives it through its WebView API.
     let fragment_url = tauri::Url::parse(&format!("http://localhost/?{fragment}"))
-        .map_err(|_| "Dashboard returned an invalid authentication fragment.".to_string())?;
+        .map_err(|_| "The Gateway returned an invalid authentication fragment.".to_string())?;
     Ok(fragment_url
         .query_pairs()
         .find(|(key, _)| key == "token")

@@ -295,10 +295,12 @@ extension GatewayIngressControllerTests {
                     ingressAuthorization: authorization)
             }
             model.applyGatewayConnectConfig(config(authorization))
-            try await waitForIngress {
-                model.gatewayConnected && ShareGatewayRelaySettings.loadConfig()?.requiresForegroundSignIn == true
+            // The connection callback saves Share metadata in the same MainActor turn.
+            try await TestWait.observed("managed native gateway connection") {
+                model.gatewayConnected
             }
             let managed = try #require(ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth())
+            try #require(managed.requiresForegroundSignIn == true)
             #expect(managed.gatewayStableID == fixture.stableID)
             #expect(managed.token == nil)
             #expect(managed.password == nil)
@@ -330,10 +332,11 @@ extension GatewayIngressControllerTests {
             #expect(ordinary == nil)
             let before = server.requests.count
             model.applyGatewayConnectConfig(config(ordinary))
-            try await waitForIngress {
-                model.gatewayConnected && ShareGatewayRelaySettings.loadConfig()?.requiresForegroundSignIn == false
+            try await TestWait.observed("ordinary native gateway reconnection") {
+                model.gatewayConnected
             }
             let restored = try #require(ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth())
+            try #require(restored.requiresForegroundSignIn == false)
             #expect(restored.gatewayStableID == fixture.stableID)
             #expect(restored.gatewayURLString == server.url().absoluteString)
             #expect(restored.token == "share-pairing-token")
@@ -360,6 +363,7 @@ extension GatewayIngressControllerTests {
         defer { state.restore() }
         let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
         defer { server.stop() }
+        var connections = server.connectRoles.makeAsyncIterator()
         let fixture = try IngressWireFixture(server: server)
         let model = NodeAppModel()
         let fleet = GatewayOperatorFleet()
@@ -376,9 +380,11 @@ extension GatewayIngressControllerTests {
             let config = fixture.config(authorization)
             model.applyGatewayConnectConfig(config)
             fleet.reconcile(desiredStableIDs: [config.stableID], configs: [config])
-            try await waitForIngress {
-                server.roles.contains("node") && server.roles.filter { $0 == "operator" }.count == 2
+            // Synchronize on decoded connect frames after the fixture captures their auth.
+            for _ in 0..<3 {
+                _ = try #require(await connections.next())
             }
+            try #require(server.roles.contains("node") && server.roles.filter { $0 == "operator" }.count == 2)
             let loader = fixture.loader(config)
             let loaded = try await loader.load(
                 response: IngressWireFixture.media, kind: .image, expectedGatewayID: config.effectiveStableID)

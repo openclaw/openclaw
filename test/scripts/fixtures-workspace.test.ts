@@ -1,4 +1,3 @@
-// Fixtures Workspace tests cover shared E2E workspace fixture assertions.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -8,71 +7,58 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const FIXTURE_SCRIPT = "scripts/e2e/lib/fixture.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runAgentsDeleteAssert(
-  root: string,
-  outputPath: string,
-  agentsPath: string,
-  env: Record<string, string> = {},
-) {
-  return spawnSync(
-    process.execPath,
-    [FIXTURE_SCRIPT, "agents-delete-assert", outputPath, agentsPath],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        SHARED_WORKSPACE: path.join(root, "workspace"),
-        ...env,
-      },
-    },
-  );
-}
-
-function runOpenWebUiWorkspace(workspaceDir: string) {
-  return spawnSync(process.execPath, [FIXTURE_SCRIPT, "openwebui-workspace"], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    },
-  });
-}
-
-function runSharedWorkspaceDelete(transport: string | undefined) {
+function runDelete(transport?: string, maxBytes?: string) {
   const root = tempDirs.make("openclaw-fixture-workspace-");
   const workspace = path.join(root, "workspace");
   const outputPath = path.join(root, "agents-delete.json");
   const agentsPath = path.join(root, "agents.json");
-  mkdirSync(workspace, { recursive: true });
+  mkdirSync(workspace);
+  writeFileSync(agentsPath, JSON.stringify([{ id: "alpha", workspace }]) + "\n");
   writeFileSync(
     outputPath,
-    JSON.stringify({
-      agentId: "ops",
-      workspace,
-      workspaceRetained: true,
-      workspaceRetainedReason: "shared",
-      workspaceSharedWith: ["alpha"],
-      transport,
-    }) + "\n",
+    maxBytes
+      ? `DO_NOT_DUMP_OLD${"x".repeat(70 * 1024)}\nrecent diagnostic tail`
+      : JSON.stringify({
+          agentId: "ops",
+          workspace,
+          workspaceRetained: true,
+          workspaceRetainedReason: "shared",
+          workspaceSharedWith: ["alpha"],
+          transport,
+        }) + "\n",
   );
-  writeFileSync(agentsPath, JSON.stringify([{ id: "alpha", workspace }]) + "\n");
-  return runAgentsDeleteAssert(root, outputPath, agentsPath);
+  return {
+    outputPath,
+    ...spawnSync(
+      process.execPath,
+      [FIXTURE_SCRIPT, "agents-delete-assert", outputPath, agentsPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          SHARED_WORKSPACE: workspace,
+          ...(maxBytes ? { OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES: maxBytes } : {}),
+        },
+      },
+    ),
+  };
 }
 
 describe("workspace fixture assertions", () => {
   it("requires gateway deletion and retains the shared surviving agent", () => {
-    const result = runSharedWorkspaceDelete("gateway");
+    const result = runDelete("gateway");
     expect(result.status).toBe(0);
   });
 
   it("prepares Open WebUI without retired workspace setup state", () => {
-    const root = tempDirs.make("openclaw-fixture-workspace-");
-    const workspaceDir = path.join(root, "workspace");
+    const workspaceDir = tempDirs.make("openclaw-fixture-workspace-");
     const rootStatePath = path.join(workspaceDir, "openclaw-workspace-state.json");
-    mkdirSync(workspaceDir, { recursive: true });
     writeFileSync(rootStatePath, "{}\n");
-    const result = runOpenWebUiWorkspace(workspaceDir);
+    const result = spawnSync(process.execPath, [FIXTURE_SCRIPT, "openwebui-workspace"], {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_WORKSPACE_DIR: workspaceDir },
+    });
 
     expect(result.status).toBe(0);
     expect(readFileSync(path.join(workspaceDir, "IDENTITY.md"), "utf8")).toContain(
@@ -81,52 +67,22 @@ describe("workspace fixture assertions", () => {
     expect(existsSync(rootStatePath)).toBe(false);
   });
 
-  it("rejects oversized agents delete output before parsing it", () => {
-    const root = tempDirs.make("openclaw-fixture-workspace-");
-    const outputPath = path.join(root, "agents-delete.json");
-    const agentsPath = path.join(root, "agents.json");
-    mkdirSync(root, { recursive: true });
-    writeFileSync(
-      outputPath,
-      `DO_NOT_DUMP_OLD_AGENTS_DELETE${"x".repeat(70 * 1024)}\nrecent agents delete tail`,
-      "utf8",
-    );
-
-    const result = runAgentsDeleteAssert(root, outputPath, agentsPath, {
-      OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES: "1024",
-    });
-
+  it.each([
+    ["1024", "output exceeded 1024 bytes"],
+    ["131072", "did not emit valid JSON"],
+  ])("bounds agents-delete diagnostics with a %s byte limit", (limit, error) => {
+    const result = runDelete(undefined, limit);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("agents delete --json output exceeded 1024 bytes");
-    expect(result.stderr).toContain("recent agents delete tail");
-    expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_AGENTS_DELETE");
-  });
-
-  it("bounds invalid agents delete JSON diagnostics", () => {
-    const root = tempDirs.make("openclaw-fixture-workspace-");
-    const outputPath = path.join(root, "agents-delete.json");
-    const agentsPath = path.join(root, "agents.json");
-    mkdirSync(root, { recursive: true });
-    writeFileSync(
-      outputPath,
-      `DO_NOT_DUMP_OLD_INVALID_JSON${"x".repeat(70 * 1024)}\nrecent invalid json tail`,
-      "utf8",
-    );
-
-    const result = runAgentsDeleteAssert(root, outputPath, agentsPath, {
-      OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES: "131072",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("agents delete --json did not emit valid JSON");
-    expect(result.stderr).toContain("recent invalid json tail");
-    // Node can quote only a short input prefix, while Bun includes more of the same marker.
+    expect(result.stderr).toContain("recent diagnostic tail");
     expect(result.stderr).not.toContain("DO_NOT_");
-    expect(result.stderr).toContain(outputPath);
+    expect(result.stderr).toContain(`agents delete --json ${error}`);
+    if (limit === "131072") {
+      expect(result.stderr).toContain(result.outputPath);
+    }
   });
 
   it.each(["local", undefined])("rejects deletion output with transport %s", (transport) => {
-    const result = runSharedWorkspaceDelete(transport);
+    const result = runDelete(transport);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("transport mismatch");
   });

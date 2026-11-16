@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
 import path from "node:path";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 
 const MAX_CHILD_PROCESSES = 8;
 const MAX_COMMAND_LENGTH = 64;
@@ -52,12 +53,7 @@ export function inspectUpdateFinalizationChildren() {
     }
     return [{ pid: Number(pid), parentPid: Number(parentPid), command }];
   });
-  const childrenByParent = new Map<number, typeof processes>();
-  for (const child of processes) {
-    const children = childrenByParent.get(child.parentPid) ?? [];
-    children.push(child);
-    childrenByParent.set(child.parentPid, children);
-  }
+  const childrenByParent = groupRecords(processes, (child) => child.parentPid);
   const parents = new Set([process.pid]);
   const childProcesses: typeof processes = [];
   // Follow ancestry, including native grandchildren that are outside the command runner.

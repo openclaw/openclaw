@@ -323,13 +323,13 @@ export function createModelAccountConnectService(options: {
   };
 
   return {
-    /** @deprecated Await listLinksAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await listLinksAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     listLinks(action: ModelAccountConnectAction): UsersListAuthLinksResult {
       warnModelAccountConnectDeprecation("listLinks");
       assertRunning(action);
       return { links: nativeAccounts.listUserProfileAuthLinks(action.owner) };
     },
-    /** @deprecated Await linkAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await linkAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     link(action: ModelAccountConnectAction, authProfileId: string): UsersLinkAuthProfileResult {
       warnModelAccountConnectDeprecation("link");
       assertRunning(action);
@@ -340,7 +340,7 @@ export function createModelAccountConnectService(options: {
         : resolveSharedAuthProfileProvider(options.getConfig(), authProfileId);
       return setLinkNative(action, requireLinkableProvider(provider, authProfileId), authProfileId);
     },
-    /** @deprecated Await unlinkAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await unlinkAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     unlink(action: ModelAccountConnectAction, provider: string): UsersUnlinkAuthProfileResult {
       warnModelAccountConnectDeprecation("unlink");
       assertRunning(action);
@@ -353,7 +353,7 @@ export function createModelAccountConnectService(options: {
       options.onChanged?.();
       return { links };
     },
-    /** @deprecated Await listAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await listAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     list(action: ModelAccountConnectAction, cursor?: string): UsersListModelAccountsResult {
       warnModelAccountConnectDeprecation("list");
       assertRunning(action);
@@ -363,7 +363,7 @@ export function createModelAccountConnectService(options: {
         links: nativeAccounts.listUserProfileAuthLinks(action.owner),
       };
     },
-    /** @deprecated Await selectAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await selectAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     select(
       action: ModelAccountConnectAction,
       authProfileId: string,
@@ -378,13 +378,13 @@ export function createModelAccountConnectService(options: {
         authProfileId,
       );
     },
-    /** @deprecated Await statusAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await statusAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     status(action: ModelAccountConnectAction, connectId: string): UsersAuthConnectStatusResult {
       warnModelAccountConnectDeprecation("status");
       const operation = findOperation(action, connectId);
       return operation ? projectResult(action, operation) : { status: "expired" };
     },
-    /** @deprecated Await cancelAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await cancelAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     cancel(action: ModelAccountConnectAction, connectId: string): UsersAuthConnectStatusResult {
       warnModelAccountConnectDeprecation("cancel");
       const operation = cancelOperation(action, connectId);

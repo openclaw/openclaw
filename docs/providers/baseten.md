@@ -108,6 +108,61 @@ The same thinking controls apply to agent turns and standalone model completions
 Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API. Current DeepSeek V4.1 Flash and V4 Pro 0813 retain their documented controls when otherwise populated catalog rows omit the corresponding feature flags.
 </Note>
 
+## Decision models
+
+The plugin also supports Base Labs' **joey-1 (2B)**, **elephant-1 (9B)**, and **mammoth-1 (27B)**
+through Baseten's native [System One API](https://docs.baseten.co/reference/inference-api/system-one).
+These are decision-only models, not chat completions. Select them in the
+**Decision** picker or set the separate model role:
+
+```json5
+{
+  agents: {
+    defaults: {
+      decisionModel: "baseten/decision-models/baseten-joey-2b-latest",
+    },
+  },
+}
+```
+
+| Model           | Decision model reference                             |
+| --------------- | ---------------------------------------------------- |
+| joey-1 (2B)     | `baseten/decision-models/baseten-joey-2b-latest`     |
+| elephant-1 (9B) | `baseten/decision-models/baseten-elephant-9b-latest` |
+| mammoth-1 (27B) | `baseten/decision-models/baseten-mammoth-27b-latest` |
+
+They reuse your Baseten API key and support Boolean probabilities, multiple-choice
+questions, and ordered rubric scores. Text is sent directly; structured JSON
+state and rubric entries are serialized to text. Image input, sorting, tags,
+bounding boxes, and reasoning toggles are not supported by this adapter.
+Your primary chat model and the Baseten onboarding default are unchanged.
+
+Requests use `POST /v1/systemone`, not `/chat/completions`. The response preserves
+the backend model identity (which may differ from the public slug), per-option
+probabilities, fractional scores, and reported token usage. Baseten reports one
+output token per question. Its confidence field measures distribution concentration,
+not the probability that an answer is correct; use the selected option's
+probability when applying a probability threshold.
+
+Baseten's [hosted Decision models](https://docs.baseten.co/inference/model-apis/decision-models)
+have a **16,384-token context limit per question**, including shared state,
+instructions, criteria, and prompt formatting. Oversized requests are rejected,
+not truncated. Dedicated deployments can have different limits; this catalog
+describes Model APIs.
+
+As checked on October 30, 2026, the [joey-1 model card](https://huggingface.co/baselabs/joey-1)
+lists Model API pricing at **$0.01 per million input tokens**. The earlier
+launch promotion has ended. OpenClaw preserves reported usage rather than
+assuming these aliases are free or manufacturing a billing estimate. Check
+[current pricing](https://www.baseten.co/pricing) before use; prices and the
+`latest` aliases can change independently of OpenClaw. Probabilities and confidence
+are model estimates, not safety guarantees or permission to take an action.
+
+Selecting a decision model authorizes supported evaluation consumers to send their
+supplied evidence to Baseten; it does not start background work. This integration
+requires a host/plugin release containing the prepared Decision V2 interface.
+See [Decision models](/concepts/decision-models) for the role and evaluation tool.
+
 ## Prompt caching
 
 For the native `https://inference.baseten.co/v1` endpoint, OpenClaw sends a stable

@@ -15,8 +15,9 @@ import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
+import { connectChatGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
 import {
   createWaitClockInstance,
   startWaitClockProvider,
@@ -31,6 +32,7 @@ import {
 // The exact same assertions run against baseline and candidate asset roots.
 const uiRoot = path.resolve(process.env.OPENCLAW_UI_E2E_WAIT_CLOCK_UI_ROOT || "dist/control-ui");
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let provider: Awaited<ReturnType<typeof startWaitClockProvider>>;
 let artifactDir: string;
 const screenshots: string[] = [];
@@ -45,8 +47,16 @@ const proof: Record<string, unknown> = {
 const saveProof = () =>
   fs.writeFile(path.join(artifactDir, "proof.json"), JSON.stringify(proof, null, 2) + "\n");
 const suite = createControlUiE2eSuite({
-  name: "Wait clocks through a real Gateway",
+  name: "Child handoff status through a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     artifactDir = createControlUiE2eArtifactDir("wait-clock-" + path.basename(uiRoot));
     // No implicit runtime build, Vite server or Gateway substitution.
@@ -83,18 +93,10 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function runCli(args: string[]) {
-  const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
-  return result.stdout;
-}
-async function call(method: string, params: Record<string, unknown>) {
-  return JSON.parse(
-    await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-  );
-}
+const call = <T = Record<string, unknown>>(method: string, params: Record<string, unknown>) =>
+  client.request<T>(method, params);
 async function rows() {
-  const result: SessionsListResult = await call("sessions.list", { agentId: "main", limit: 50 });
+  const result = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
   const parent = result.sessions.find((row) => row.key === fixture.key);
   const childKey = provider.receipts.find((receipt) => receipt.tool === "sessions_spawn")?.result
     .childSessionKey;
@@ -113,7 +115,7 @@ function lifecycle(row: GatewaySessionRow) {
     hasActiveSubagentRun: row.hasActiveSubagentRun,
   };
 }
-function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow) {
+function assertChildContinues(parent: GatewaySessionRow, child: GatewaySessionRow) {
   expect(parent.startedAt).toBeGreaterThan(0);
   expect(parent.endedAt).toBeGreaterThanOrEqual(parent.startedAt!);
   expect(parent.hasActiveSubagentRun).toBe(true);
@@ -125,44 +127,55 @@ function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow
 async function clocks(parent: Locator) {
   return parent.locator(".chat-working-indicator__elapsed").evaluateAll((elements) =>
     elements.map((element) => ({
-      startMs: (element as HTMLElementTagNameMap["openclaw-elapsed-time"]).startMs,
+      sampledAt: Date.now(),
       text: element.textContent?.trim() ?? "",
       source: "transcript",
     })),
   );
 }
-function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: number) {
-  expect(measured.length).toBeGreaterThan(0);
-  for (const clock of measured) {
-    expect(clock.startMs, clock.source + " must use the persisted latest parent end").toBe(endedAt);
-    expect(clock.text).not.toBe("");
-    expect(clock.text).not.toMatch(/\d{4,}|[dh]/u);
-    expect(Date.now() - clock.startMs!).toBeLessThan(120_000);
-  }
+async function resumedContinuation(parent: Locator) {
+  const rule = parent.locator(".chat-handoff-resume__rule").filter({ hasText: "Agent finished" });
+  await expect.poll(() => rule.count()).toBe(1);
+  await rule.waitFor();
+  const label = ((await rule.textContent()) ?? "").replace(/\s+/gu, " ").trim();
+  expect(label).toMatch(/^Resumed · \d+[ms](?: \d+s)? later · Agent finished$/u);
+  // An interrupted yield is not a new confirmed handoff with a child list.
+  expect(await parent.locator(".chat-handoff-sessions").count()).toBe(0);
+  return label;
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
-  for (const secret of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.homeDir,
-    instance.stateDir,
-    "synthetic-wait-fixture-key",
-  ]) {
-    expect(text.includes(secret), "capture contains private fixture data").toBe(false);
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+  const visibleText = await page.locator("body").innerText();
+  for (const [category, secret] of [
+    ["gatewayToken", instance.gatewayToken],
+    ["hookToken", instance.hookToken],
+    ["homeDir", instance.homeDir],
+    ["stateDir", instance.stateDir],
+    ["fixtureKey", "synthetic-wait-fixture-key"],
+  ] as const) {
+    expect(
+      text.includes(secret),
+      `${category}: visible-text-match=${visibleText.includes(secret)}`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
-  const frame = await takeControlUiScreenshotFrame(page, parent, content, {
-    animations: "disabled",
-  });
-  await fs.writeFile(path.join(artifactDir, name + ".png"), frame.png);
-  screenshots.push(name + ".png");
-  await saveProof();
+  await pauseVirtualClock(page);
+  try {
+    const frame = await takeControlUiScreenshotFrame(page, parent, content, {
+      animations: "disabled",
+    });
+    await fs.writeFile(path.join(artifactDir, name + ".png"), frame.png);
+    screenshots.push(name + ".png");
+    await saveProof();
+  } finally {
+    await page.clock.resume();
+  }
 }
 
 suite.define(() => {
-  it("uses the latest settled parent clock across update and reload until its visible child completes", async (test) => {
+  it("keeps child activity through a settled parent update and reload without retaining its handoff wait", async (test) => {
     const started = performance.now();
     await suite.runScenario(test, {
       retainedState: () => instance.stateDir,
@@ -179,6 +192,7 @@ suite.define(() => {
           );
         });
         const page = await context.newPage();
+        await page.clock.install();
         const wire = observeBackgroundWorkRpc(page, signal);
         try {
           proof.stage = "create parent and pair browser";
@@ -187,7 +201,7 @@ suite.define(() => {
             agentId: "main",
             label: fixture.label,
           });
-          await pairControlUiPage(page, runCli);
+          await pairControlUiPage(page, (args) => runGatewayCli(instance, args));
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
           await waitForControlUiGatewayReady(page);
           const parent = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
@@ -220,11 +234,16 @@ suite.define(() => {
           await expect.poll(() => provider.requests.length).toBeGreaterThan(0);
           await provider.waitForChild(signal);
           await expect.poll(async () => (await rows()).parent.endedAt ?? 0).toBeGreaterThan(0);
-          await waiting.waitFor();
+          await waiting.getByText("Wait for subagents", { exact: true }).waitFor();
+          expect(await waiting.count()).toBe(1);
+          expect(await clocks(parent)).toEqual([]);
+          expect(
+            await parent.getByRole("paragraph").filter({ hasText: fixture.acknowledgment }).count(),
+          ).toBe(1);
           expect(await parent.locator(".agent-chat__composer-run-status").count()).toBe(0);
           const initial = await rows();
-          assertWaitLifecycle(initial.parent, initial.child);
-          const initialHistory: ChatHistoryResult = await call("chat.history", {
+          assertChildContinues(initial.parent, initial.child);
+          const initialHistory = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
           });
@@ -237,14 +256,18 @@ suite.define(() => {
 
           proof.stage = "parent update while original child continues";
           await send(fixture.updatePrompt);
-          await parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }).waitFor();
           await expect
             .poll(async () => (await rows()).parent.endedAt ?? 0)
             .toBeGreaterThan(initial.parent.endedAt!);
-          await waiting.waitFor();
+          const updateReply = parent
+            .getByRole("paragraph")
+            .filter({ hasText: fixture.updateReply });
+          await expect.poll(() => updateReply.count()).toBe(1);
+          await updateReply.waitFor();
+          await waiting.waitFor({ state: "hidden" });
           await provider.check();
           const updated = await rows();
-          assertWaitLifecycle(updated.parent, updated.child);
+          assertChildContinues(updated.parent, updated.child);
           expect(updated.parent.startedAt).toBeGreaterThan(initial.parent.endedAt!);
           expect(updated.parent.endedAt).toBeGreaterThan(initial.parent.endedAt!);
           expect(wire.completed.filter((rpc) => rpc.request.method === "chat.send")).toHaveLength(
@@ -252,54 +275,60 @@ suite.define(() => {
           );
           expect(updated.child.startedAt).toBe(initial.child.startedAt);
           const updatedClocks = await clocks(parent);
+          expect(updatedClocks).toEqual([]);
+          // The user update starts its own request, not a resume of the original handoff.
+          expect(await parent.locator(".chat-handoff-resume").count()).toBe(0);
           proof.updated = {
             parent: lifecycle(updated.parent),
             child: lifecycle(updated.child),
             clocks: updatedClocks,
           };
           proof.toolReceipts = provider.receipts;
-          await capture(page, parent, "after-parent-update", [
-            waiting,
-            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
-          ]);
+          await capture(page, parent, "after-parent-update", [updateReply]);
 
-          proof.stage = "reload persisted parent wait";
+          proof.stage = "reload settled parent with child continuing";
           await page.reload();
           await waitForControlUiGatewayReady(page);
-          await waiting.waitFor();
+          await expect.poll(() => updateReply.count()).toBe(1);
+          await updateReply.waitFor();
+          await waiting.waitFor({ state: "hidden" });
           // Reload can hydrate with chat.history.delta; use a fresh public history RPC
-          // to independently bind the displayed clock to the persisted session row.
-          const history: ChatHistoryResult = await call("chat.history", {
+          // to independently bind the settled parent to its persisted lifecycle.
+          const history = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
           });
           const reloaded = await rows();
-          assertWaitLifecycle(reloaded.parent, reloaded.child);
+          assertChildContinues(reloaded.parent, reloaded.child);
           expect(reloaded.parent.startedAt).toBe(updated.parent.startedAt);
           expect(reloaded.parent.endedAt).toBe(updated.parent.endedAt);
           expect(reloaded.child.startedAt).toBe(initial.child.startedAt);
           expect(history.sessionInfo).toBeDefined();
           expect(history.sessionInfo!.endedAt).toBe(updated.parent.endedAt);
           const reloadedClocks = await clocks(parent);
+          expect(reloadedClocks).toEqual([]);
+          expect(await parent.locator(".chat-handoff-resume").count()).toBe(0);
+          expect(JSON.stringify(history.messages)).toContain(fixture.acknowledgment);
+          expect(JSON.stringify(history.messages)).toContain("already_pending");
           proof.reloaded = {
             parent: lifecycle(reloaded.parent),
             child: lifecycle(reloaded.child),
             clocks: reloadedClocks,
             historySessionInfo: history.sessionInfo ? lifecycle(history.sessionInfo) : null,
           };
-          await capture(page, parent, "after-reload", [
-            waiting,
-            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
-          ]);
-          assertClocks(updatedClocks, updated.parent.endedAt!);
-          assertClocks(reloadedClocks, updated.parent.endedAt!);
-          expect(reloadedClocks.map((clock) => clock.startMs)).toEqual(
-            updatedClocks.map((clock) => clock.startMs),
-          );
+          await capture(page, parent, "after-reload", [updateReply]);
 
           proof.stage = "actual child completion and parent resume";
+          const completionReleasedAt = Date.now();
           provider.releaseChild();
-          await parent.getByRole("paragraph").filter({ hasText: fixture.resumedReply }).waitFor();
+          await expect
+            .poll(async () => (await rows()).parent.endedAt ?? 0)
+            .toBeGreaterThan(updated.parent.endedAt!);
+          const resumedReply = parent
+            .getByRole("paragraph")
+            .filter({ hasText: fixture.resumedReply });
+          await expect.poll(() => resumedReply.count()).toBe(1);
+          await resumedReply.waitFor();
           await waiting.waitFor({ state: "hidden" });
           const completed = await rows();
           expect(completed.parent.hasActiveSubagentRun ?? false).toBe(false);
@@ -307,12 +336,30 @@ suite.define(() => {
           expect(completed.parent.endedAt).toBeGreaterThanOrEqual(completed.parent.startedAt!);
           expect(completed.child.endedAt).toBeGreaterThanOrEqual(initial.child.startedAt!);
           expect(await clocks(parent)).toEqual([]);
+          const completedResume = await resumedContinuation(parent);
+          const duration = /Resumed · (.*?) later/u.exec(completedResume)![1]!;
+          const displayedMs = [...duration.matchAll(/(\d+)([ms])/gu)].reduce(
+            (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
+            0,
+          );
+          expect(displayedMs).toBeGreaterThanOrEqual(
+            Math.max(1_000, completionReleasedAt - updated.parent.endedAt!) - 2_000,
+          );
+          expect(displayedMs).toBeLessThanOrEqual(Date.now() - updated.parent.endedAt! + 1_000);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await expect.poll(() => resumedReply.count()).toBe(1);
+          await resumedReply.waitFor();
+          const persistedResume = await resumedContinuation(parent);
+          expect(persistedResume).toBe(completedResume);
+          await waiting.waitFor({ state: "hidden" });
           expect(provider.parentRequests()).toBe(5);
           await provider.check();
           proof.completed = {
             parent: lifecycle(completed.parent),
             child: lifecycle(completed.child),
             parentRequests: provider.parentRequests(),
+            resumed: persistedResume,
           };
           proof.complete = true;
           proof.stage = "complete";

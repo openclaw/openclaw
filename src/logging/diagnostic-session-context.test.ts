@@ -1,23 +1,23 @@
-// Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import {
-  appendTranscriptMessageSync,
-  readLatestTranscriptAssistantText,
+  appendTranscriptMessage,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as sessionReads from "../config/sessions/session-entry-diagnostic-read.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -39,21 +39,29 @@ let tempDir: string | undefined;
 let testState: OpenClawTestState | undefined;
 let diagnosticsEnabled: boolean;
 
-async function seedSessionTranscript(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  messages: unknown[];
-  incognito?: boolean;
-}) {
-  const { agentId, sessionId, sessionKey, messages, incognito } = params;
+async function seedSessionTranscript(
+  agentId: string,
+  sessionId: string,
+  sessionKey: string,
+  content: string,
+  incognito = false,
+) {
   await replaceSessionEntry(
     { agentId, sessionKey },
     { sessionId, updatedAt: 1, ...(incognito ? { incognito: true } : {}) },
   );
-  for (const message of messages) {
-    appendTranscriptMessageSync({ agentId, sessionId, sessionKey }, { message });
-  }
+  await appendTranscriptMessage(
+    { agentId, sessionId, sessionKey },
+    { message: { role: "assistant", content } },
+  );
+}
+
+async function assistantText(agentId: string, sessionId: string, sessionKey: string) {
+  return (await readLatestTranscriptAssistantTextAsync({ agentId, sessionId, sessionKey }))?.text;
+}
+
+function databasePath(agentId: string) {
+  return path.join(tempDir!, "agents", agentId, "agent", "openclaw-agent.sqlite");
 }
 
 describe("diagnostic session context", () => {
@@ -75,6 +83,15 @@ describe("diagnostic session context", () => {
   afterEach(() => vi.restoreAllMocks());
 
   afterAll(async () => {
+    if (testState) {
+      memorySessionActorOwners.closeDatabase({
+        agentId: "incognito-agent",
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: "incognito-agent",
+          env: testState.env,
+        }),
+      });
+    }
     await testState?.cleanup();
     clearRuntimeConfigSnapshot();
     setDiagnosticsEnabledForProcess(diagnosticsEnabled);
@@ -90,124 +107,34 @@ describe("diagnostic session context", () => {
     ).toBe("cronJobId=unlisted-job cronRunId=unlisted-run");
   });
 
-  it("formats cron job and last assistant context for stalled session logs", async () => {
+  it("formats cron provenance without copying assistant content into stalled session logs", async () => {
     const stateDir = tempDir!;
     await saveCronStore(path.join(stateDir, "cron", "jobs.json"), {
       version: 1,
       jobs: [
-        {
+        makeCronJob({
           id: "job-123",
           name: `${"a".repeat(136)}😀${"b".repeat(140)}`,
-          enabled: true,
-          createdAtMs: 1_700_000_000_000,
-          updatedAtMs: 1_700_000_000_000,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "tick" },
-          state: {},
-        },
+        }),
       ],
     });
     const sessionKey = "agent:clawblocker:cron:job-123:run:run-456";
-    await seedSessionTranscript({
-      agentId: "clawblocker",
-      sessionId: "run-456",
+    await seedSessionTranscript(
+      "clawblocker",
+      "run-456",
       sessionKey,
-      messages: [
-        { role: "user", content: "run" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "There are 40\ncached mentions ready." }],
-        },
-      ],
-    });
+      "There are 40\ncached mentions ready.",
+    );
 
-    const message = await captureSessionLog({
-      sessionKey,
-      activeSessionId: "run-456",
-    });
-
+    const message = await captureSessionLog({ sessionKey });
     expect(message).toContain("cronJobId=job-123");
     expect(message).toContain("cronRunId=run-456");
     expect(message).toContain(`cronJob="${"a".repeat(136)}..."`);
-    expect(message).toContain('lastAssistant="There are 40 cached mentions ready."');
-    expect(await captureSessionLog({ sessionKey, cronNameLabel: "stopped" })).toContain(
-      `stopped="${"a".repeat(136)}..."`,
+    expect(message).not.toContain("cached mentions");
+    expect(message).not.toContain("lastAssistant=");
+    expect(await assistantText("clawblocker", "run-456", sessionKey)).toBe(
+      "There are 40\ncached mentions ready.",
     );
-  });
-
-  it.each([
-    { label: "short", reply: "latest visible reply", expected: "latest visible reply" },
-    {
-      label: "unicode",
-      reply: "a".repeat(136) + "😀" + "b".repeat(200),
-      expected: "a".repeat(136) + "...",
-    },
-  ])(
-    "reads bounded visible app-agent assistant text from SQLite ($label)",
-    async ({ label, reply, expected }) => {
-      const sessionKey = `agent:oauth-agent:${label}`;
-      await seedSessionTranscript({
-        agentId: "oauth-agent",
-        sessionId: `oauth-${label}`,
-        sessionKey,
-        messages: [
-          { role: "assistant", content: "older reply" },
-          { role: "user", content: "later user" },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "internal reasoning",
-                textSignature: JSON.stringify({ v: 1, id: "reasoning", phase: "commentary" }),
-              },
-              {
-                type: "text",
-                text: reply,
-                textSignature: JSON.stringify({ v: 1, id: "reply", phase: "final_answer" }),
-              },
-            ],
-          },
-        ],
-      });
-
-      const message = await captureSessionLog({
-        sessionKey,
-        activeSessionId: `oauth-${label}`,
-      });
-
-      expect(message).toBe(`lastAssistant="${expected}"`);
-    },
-  );
-
-  it("discards queued enrichment when its session is replaced", async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:main" };
-    await seedSessionTranscript({
-      ...scope,
-      sessionId: "previous",
-      messages: [{ role: "assistant", content: "previous private reply" }],
-    });
-    const ready = createDeferred();
-    const resume = createDeferred();
-    const read = sessionReads.withSessionDiagnosticTextInWorker;
-    vi.spyOn(sessionReads, "withSessionDiagnosticTextInWorker").mockImplementation(
-      async (...args) => {
-        ready.resolve();
-        await resume.promise;
-        await read(...args);
-      },
-    );
-    const message = captureSessionLog({ ...scope, activeSessionId: "previous" });
-    try {
-      await ready.promise;
-      await replaceSessionEntry(scope, { sessionId: "replacement", updatedAt: 2 });
-    } finally {
-      resume.resolve();
-      await message;
-    }
-    expect(await message).toBe("");
   });
 
   it.each(["dashboard", "subagent", "internal-session-effects"])(
@@ -216,111 +143,25 @@ describe("diagnostic session context", () => {
       const sessionKey = `agent:incognito-agent:${sessionSurface}:incognito-private`;
       const sessionId = `incognito-${sessionSurface}`;
       const privateReply = `memory-only ${sessionSurface} reply`;
-      await seedSessionTranscript({
-        agentId: "incognito-agent",
-        incognito: true,
-        sessionId,
-        sessionKey,
-        messages: [{ role: "assistant", content: privateReply }],
-      });
+      await seedSessionTranscript("incognito-agent", sessionId, sessionKey, privateReply, true);
 
-      expect(
-        readLatestTranscriptAssistantText({ agentId: "incognito-agent", sessionId, sessionKey })
-          ?.text,
-      ).toBe(privateReply);
-      expect(await captureSessionLog({ sessionKey, activeSessionId: sessionId })).toBe("");
-      expect(
-        fs.existsSync(
-          path.join(tempDir!, "agents", "incognito-agent", "agent", "openclaw-agent.sqlite"),
-        ),
-      ).toBe(false);
+      expect(await assistantText("incognito-agent", sessionId, sessionKey)).toBe(privateReply);
+      expect(await captureSessionLog({ sessionKey })).toBe("");
+      expect(fs.existsSync(databasePath("incognito-agent"))).toBe(false);
     },
   );
 
-  it("requires the authoritative current session id before reading transcript text", async () => {
-    const sessionKey = "agent:oauth-agent:main";
-    await seedSessionTranscript({
-      agentId: "oauth-agent",
-      sessionId: "current-session",
-      sessionKey,
-      messages: [{ role: "assistant", content: "current private reply" }],
-    });
-
-    expect(await captureSessionLog({ sessionKey, activeSessionId: "rotated-session" })).toBe("");
+  it.each([
+    ["malformed agent ids", "agent:../main:main"],
+    ["channel-owned cron segments", "agent:oauth-agent:slack:cron:job-123:run:run-456"],
+  ])("omits context for %s", async (_label, sessionKey) => {
     expect(await captureSessionLog({ sessionKey })).toBe("");
   });
 
-  it("keeps identical session ids isolated to their owning agents", async () => {
-    await seedSessionTranscript({
-      agentId: "main",
-      sessionId: "shared-session-id",
-      sessionKey: "agent:main:main",
-      messages: [{ role: "assistant", content: "main private reply" }],
-    });
-    await seedSessionTranscript({
-      agentId: "oauth-agent",
-      sessionId: "shared-session-id",
-      sessionKey: "agent:oauth-agent:main",
-      messages: [{ role: "assistant", content: "oauth private reply" }],
-    });
-
-    expect(
-      await captureSessionLog({
-        sessionKey: "agent:oauth-agent:main",
-        activeSessionId: "shared-session-id",
-      }),
-    ).toBe('lastAssistant="oauth private reply"');
-  });
-
-  it("rejects malformed agent ids before resolving a default agent transcript", async () => {
-    await seedSessionTranscript({
-      agentId: "main",
-      sessionId: "main-session",
-      sessionKey: "agent:main:main",
-      messages: [{ role: "assistant", content: "main private reply" }],
-    });
-
-    expect(
-      await captureSessionLog({
-        sessionKey: "agent:../main:main",
-        activeSessionId: "main-session",
-      }),
-    ).toBe("");
-  });
-
-  it("does not treat channel-owned cron segments as cron metadata", async () => {
-    const sessionKey = "agent:oauth-agent:slack:cron:job-123:run:run-456";
-    await seedSessionTranscript({
-      agentId: "oauth-agent",
-      sessionId: "slack-session",
-      sessionKey,
-      messages: [{ role: "assistant", content: "channel reply" }],
-    });
-
-    const message = await captureSessionLog({
-      sessionKey,
-      activeSessionId: "slack-session",
-    });
-
-    expect(message).toBe('lastAssistant="channel reply"');
-  });
-
   it("does not create an agent database when its session store is missing", async () => {
-    const databasePath = path.join(
-      tempDir!,
-      "agents",
-      "missing-agent",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    expect(fs.existsSync(databasePath)).toBe(false);
-
-    expect(
-      await captureSessionLog({
-        sessionKey: "agent:missing-agent:main",
-        activeSessionId: "missing",
-      }),
-    ).toBe("");
-    expect(fs.existsSync(databasePath)).toBe(false);
+    const file = databasePath("missing-agent");
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await captureSessionLog({ sessionKey: "agent:missing-agent:main" })).toBe("");
+    expect(fs.existsSync(file)).toBe(false);
   });
 });

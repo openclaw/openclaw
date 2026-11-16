@@ -2,20 +2,12 @@ import type { BigIntStats } from "node:fs";
 import { availableParallelism } from "node:os";
 import { Worker } from "node:worker_threads";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PackageFileHashJob, HashResult } from "./package-update-integrity-hasher.types.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 
-type FileIdentity = Pick<
-  BigIntStats,
-  "dev" | "ino" | "mode" | "uid" | "gid" | "nlink" | "size" | "mtimeNs" | "ctimeNs"
->;
-type PackageFileHashJob = FileIdentity & { file: string };
-type HashError = {
-  message: string;
-  code?: string;
-  errno?: number;
-  syscall?: string;
-  path?: string;
-};
-type HashResult = { digest: string } | { error: HashError } | { cancelled: true };
+declare const SEALED_RUNTIME_BUILD: boolean;
+
 export type PackageFileHasher = {
   hash: (file: string, stat: BigIntStats) => Promise<string>;
   flush: () => void;
@@ -23,67 +15,6 @@ export type PackageFileHasher = {
 };
 
 const log = createSubsystemLogger("update/package-integrity");
-// The sealed recovery.mjs has no adjacent worker module. Inline CommonJS uses only
-// Node builtins in Node/Bun, the installed CLI, and recovery. WorkerTaskPool forbids
-// eval and can terminate a blocking syscall before its descriptor's finally runs.
-const workerSource = String.raw`
-const fs = require("node:fs");
-const { createHash } = require("node:crypto");
-const { parentPort, workerData: { cancel } } = require("node:worker_threads");
-const buffer = Buffer.allocUnsafe(64 * 1024);
-const fields = ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"];
-const unchanged = (job, stat) => job.ino !== 0n && fields.every(key => job[key] === stat[key]);
-const cancelled = Symbol("cancelled");
-// The owner sets cancellation when its deadline expires; start no further I/O.
-const admit = () => {
-  if (Atomics.load(cancel, 0)) throw cancelled;
-};
-function hash(job) {
-  admit();
-  const fd = fs.openSync(job.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-  try {
-    admit();
-    if (!unchanged(job, fs.fstatSync(fd, { bigint: true }))) {
-      throw new Error("Package rollback file changed before reading");
-    }
-    const digest = createHash("sha256");
-    const size = Number(job.size);
-    let position = 0;
-    while (position < size) {
-      admit();
-      const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - position), position);
-      if (count === 0) {
-        throw new Error("Package rollback file changed while reading");
-      }
-      position += count;
-      digest.update(buffer.subarray(0, count));
-    }
-    admit();
-    if (!unchanged(job, fs.fstatSync(fd, { bigint: true }))) {
-      throw new Error("Package rollback file changed while reading");
-    }
-    return { digest: digest.digest("hex") };
-  } finally {
-    try { fs.closeSync(fd); } catch {}
-  }
-}
-parentPort.on("message", jobs => {
-  if (jobs === "close") {
-    parentPort.close();
-    return;
-  }
-  const results = jobs.map(job => {
-    try {
-      return hash(job);
-    } catch (error) {
-      if (error === cancelled) return { cancelled: true };
-      const { message, code, errno, syscall, path } = error;
-      return { error: { message, code, errno, syscall, path } };
-    }
-  });
-  parentPort.postMessage(results);
-});
-`;
 
 type Task = {
   job: PackageFileHashJob;
@@ -102,7 +33,9 @@ export function createPackageFileHasher(fallback: PackageFileHasher["hash"]): Pa
   const queued: Task[] = [];
   let closed = false;
   let flushing = false;
-  let inProcess = false;
+  // The independently sealed recovery helper has no sibling modules. Its existing
+  // in-process path keeps hashing inside the recorded recovery artifact.
+  let inProcess = typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD;
   let fallbackRunning = 0;
 
   function retire(slot: Slot) {
@@ -168,9 +101,9 @@ export function createPackageFileHasher(fallback: PackageFileHasher["hash"]): Pa
     let slot = slots.find((candidate) => !candidate.tasks.length);
     if (!slot && slots.length < width) {
       try {
-        const worker = new Worker(workerSource, {
-          eval: true,
-          execArgv: [],
+        const url = resolveRuntimeProcessEntrypointUrl("packageIntegrityHasher");
+        const worker = new Worker(url, {
+          execArgv: resolveRuntimeWorkerThreadExecArgv(url),
           // Builtin-only reads need no ambient preload or compile-cache writes.
           env: {},
           workerData: { cancel },

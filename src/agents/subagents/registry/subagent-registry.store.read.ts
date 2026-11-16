@@ -4,10 +4,7 @@ import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { immutableSubagentRun } from "./subagent-registry-memory.js";
-import {
-  isCanonicalSubagentRunRecord,
-  rememberSubagentRunVersion,
-} from "./subagent-registry.store.codec.js";
+import { isCanonicalSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Restore publishes only after the streamed snapshot and its reader have settled. */
@@ -31,13 +28,11 @@ export async function readAllSubagentRunsInWorker(
           if (
             !isRecord(item) ||
             !isCanonicalSubagentRunRecord(item.entry) ||
-            typeof item.version !== "string" ||
             typeof item.createdAt !== "number"
           ) {
             throw new Error("Subagent restore returned an invalid registry row");
           }
           const entry = item.entry;
-          rememberSubagentRunVersion(entry, item.version);
           runs.set(entry.runId, immutableSubagentRun(entry));
           order.push([entry.runId, item.createdAt]);
         }

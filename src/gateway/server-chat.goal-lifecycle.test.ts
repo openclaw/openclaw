@@ -16,17 +16,18 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
-vi.mock("./session-utils.js", () => {
-  const load = vi.fn();
-  return { loadSessionEntry: load, loadGatewaySessionEntryReadOnly: load };
-});
+// mock-isolation: The fixture supplies its persisted session entry to the lifecycle worker adapter.
+const loadSessionEntryAsync = vi.hoisted(() =>
+  vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
+);
 vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async () => loadSessionEntry("session-terminal-error"),
+  loadGatewaySessionEntryReadOnlyInWorker: async () =>
+    await loadSessionEntryAsync("session-terminal-error"),
 }));
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
@@ -34,7 +35,7 @@ const loadGatewaySessionRow = vi.fn();
 
 beforeEach(() => {
   resetAgentEventsForTest({ preserveListeners: true });
-  vi.mocked(loadSessionEntry).mockReset();
+  vi.mocked(loadSessionEntryAsync).mockReset();
   persistGatewaySessionLifecycleEventMock.mockReset();
   loadGatewaySessionRow.mockReset();
 });
@@ -98,19 +99,12 @@ describe("agent event goal lifecycle", () => {
         sessionId: "session-terminal",
         updatedAt: 1_000,
         startedAt: 1_000,
-        goal: {
-          schemaVersion: 1,
-          id: "terminal-goal",
-          objective: "Finish the requested work",
-          status: "active",
+        goal: createSessionGoalFixture("terminal-goal", "Finish the requested work", {
           createdAt: 1_000,
           updatedAt: 1_000,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
+        }),
       });
-      vi.mocked(loadSessionEntry).mockImplementation(() => ({
+      vi.mocked(loadSessionEntryAsync).mockImplementation(async () => ({
         cfg: {},
         agentId: "main",
         storePath,

@@ -1,13 +1,21 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
+  /** Prepared source invoked by the full `isCurrent` check, not a replacement for it. */
+  sourceAssertion?: SessionSourceAssertion;
   recoveryReference?: CommandOwnerReference;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** The requester's own live check for work that outlives this source occurrence. */
+  successor?: CommandOwnerAuthority;
 }>;
-export type CommandOwnerAssertion = (() => void) & {
+export type CommandOwnerAssertion = SessionSourceAssertion & {
   readonly recoveryReference?: CommandOwnerReference | null;
 };
 
@@ -24,7 +32,9 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
   const capability = {
     recoveryReference,
     operatorAuthority,
-    isCurrent: () => checkCurrent(),
+    successor: authority.successor,
+    isCurrent: checkCurrent,
+    sourceAssertion: authority.sourceAssertion,
   };
   Object.setPrototypeOf(capability, null);
   Object.freeze(capability);
@@ -37,20 +47,44 @@ export function getCommandOwnerAuthority(context: object): CommandOwnerAuthority
   return typeof value === "object" && value !== null ? capabilities.get(value) : undefined;
 }
 
+/**
+ * Moves inherited owner authority into a successor that outlives its source occurrence.
+ * Only a source-provided requester check transfers; otherwise the successor holds none.
+ */
+export function transferCommandOwnerAuthorityToSuccessor(
+  context: object,
+): "transferred" | "removed" | "none" {
+  const authority = getCommandOwnerAuthority(context);
+  if (!authority) {
+    return "none";
+  }
+  Reflect.deleteProperty(context, COMMAND_OWNER_AUTHORITY);
+  if (!authority.successor) {
+    return "removed";
+  }
+  bindCommandOwnerAuthority(context, authority.successor);
+  return "transferred";
+}
+
 /** Fence a turn that admitted owner tools against later identity or role revocation. */
 export function captureCommandOwnerAssertion(context: object): CommandOwnerAssertion | undefined {
   const authority = getCommandOwnerAuthority(context);
   if (!authority) {
     return undefined;
   }
-  return Object.assign(
-    () => {
-      if (!authority.isCurrent()) {
-        throw new CommandOwnerRevokedError(
-          "Channel operator authority changed; send a new request.",
-        );
-      }
-    },
-    { recoveryReference: authority.recoveryReference ?? null },
-  );
+  const assertCurrent = () => {
+    if (!authority.isCurrent()) {
+      throw new CommandOwnerRevokedError("Channel operator authority changed; send a new request.");
+    }
+  };
+  return Object.assign(assertCurrent, {
+    recoveryReference: authority.recoveryReference ?? null,
+    prepareSessionSourceEffect: composeSessionSourceAssertion(
+      [authority.sourceAssertion],
+      (assertSource) => {
+        assertSource();
+        assertCurrent();
+      },
+    ).prepareSessionSourceEffect,
+  });
 }

@@ -18,6 +18,7 @@ const CONTROL_UI_RESOURCE_ROUTES = {
   channelAvatar: { prefix: "/__openclaw__/channel-avatar", suffix: "" },
   linkFavicon: { prefix: "/__openclaw__/link-favicon", suffix: "" },
   pluginIcon: { prefix: "/__openclaw__/plugin-icon", suffix: "" },
+  providerIcon: { prefix: "/__openclaw__/provider-icon", suffix: "" },
   pluginActivityIcon: { prefix: "/__openclaw__/plugin-activity-icon", suffix: "" },
   pluginThemeArt: { prefix: "/__openclaw__/plugin-theme-art", suffix: "" },
   userAvatar: {
@@ -85,6 +86,20 @@ export function parseControlUiUserAvatarPath(
     : parseControlUiResourcePath("userAvatar", pathname, basePath);
 }
 
+/** Keeps the accepted path's escape spelling while removing its optional mount. */
+export function canonicalizeControlUiUserAvatarPath(
+  pathname: string,
+  basePath: string,
+): string | undefined {
+  const parsed = parseControlUiUserAvatarPath(pathname, basePath);
+  if (!parsed.matched || !parsed.value) {
+    return undefined;
+  }
+  return pathname.startsWith(CONTROL_UI_USER_AVATAR_PATH_PREFIX)
+    ? pathname
+    : pathname.slice(normalizeControlUiBasePath(basePath).length);
+}
+
 /** Builds the authenticated conversation-avatar URL for a session. */
 export function buildControlUiChannelAvatarUrl(
   basePath: string,
@@ -97,18 +112,12 @@ export function buildControlUiChannelAvatarUrl(
   return `${path}?v=${encodeURIComponent(revision)}`;
 }
 
-type ControlUiResourceUrlMatch = {
-  value: string;
-  search: string;
-  hash: string;
-};
-
 /** Matches an exact root-relative same-origin resource URL without parser reinterpretation. */
 export function matchControlUiResourceUrl(
   route: ControlUiResourceRoute,
   value: string,
   basePath?: string | null,
-): ControlUiResourceUrlMatch | undefined {
+): { value: string; search: string; hash: string } | undefined {
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
     return undefined;
   }

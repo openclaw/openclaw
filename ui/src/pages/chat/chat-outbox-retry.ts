@@ -1,5 +1,6 @@
 import { computeBackoff } from "@openclaw/retry";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
 type RetryTimer = {

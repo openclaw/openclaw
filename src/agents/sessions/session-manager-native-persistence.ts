@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
@@ -6,7 +5,8 @@ import type { PreparedTranscriptMessageAppend } from "../../config/sessions/sess
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   assertSessionTranscriptInitialWriter,
@@ -15,7 +15,9 @@ import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -41,7 +43,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
     this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+      (prefix) => prefix.anchorIds.length,
     );
   }
 
@@ -97,7 +99,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     );
   }
 
-  /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await persistAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
     prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);
@@ -122,11 +124,11 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     const isCurrentView = () =>
       this.sessionId === sessionId &&
       sameSessionTranscriptTargetBinding(scope, this.persistenceTarget);
-    const onPendingTransaction = (database: DatabaseSync) => {
+    const onPendingTransaction = (database: EngineConnection) => {
       if (!isCurrentView()) {
         return;
       }
-      const previous = this.captureTranscriptView(true);
+      const previous = cloneTranscriptView(this.captureTranscriptView());
       stageSqliteTransactionState(database, {
         stage: () => {},
         commit: () => {},
@@ -263,6 +265,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     }
     const appendOptions = {
       cwd: this.cwd,
+      mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
       eventId: entry.id,
       ...(options?.beforeFreshMessageCommit
         ? { beforeFreshMessageCommit: options.beforeFreshMessageCommit }

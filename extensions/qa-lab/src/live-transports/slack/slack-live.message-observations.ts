@@ -24,7 +24,6 @@ type SlackScenarioObservationContext = {
   matchText: string;
   observedMessages: SlackObservedMessage[];
   observationScenarioId: string;
-  observationScenarioTitle: string;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
 };
@@ -48,10 +47,7 @@ function recordSlackScenarioMessage(
     observedKeys?.add(observedKey);
     recordSlackObservedMessage({
       ...params,
-      matchedScenario,
       message,
-      scenarioId: params.observationScenarioId,
-      scenarioTitle: params.observationScenarioTitle,
     });
   }
   return matchedScenario ? message : undefined;
@@ -162,9 +158,7 @@ export async function waitForSlackNoReply(
 ) {
   const startedAt = Date.now();
   const observedKeys = new Set(
-    params.observedMessages
-      .map((message) => `${message.channelId ?? params.channelId}:${message.ts ?? ""}`)
-      .filter((key) => !key.endsWith(":")),
+    params.observedMessages.map((message) => `${message.channelId}:${message.ts}`),
   );
   let elapsedMs = Date.now() - startedAt;
   while (elapsedMs < params.timeoutMs) {

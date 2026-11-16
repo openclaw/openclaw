@@ -3,6 +3,11 @@ import {
   isSqliteNativeOpenFailure,
   markSqliteNativeOpenFailure,
 } from "../infra/sqlite-error-diagnostics.js";
+import {
+  hasSqliteWorkerErrorCode,
+  retainSqliteWorkerErrorCode,
+  SqliteWorkerError,
+} from "../infra/sqlite-worker-error.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
@@ -57,6 +62,10 @@ function isNativeErrorCode(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0x7fff_ffff;
 }
 
+function isWorkerOutcomeCode(value: unknown): value is "outcome-unknown" | "unavailable" {
+  return value === "outcome-unknown" || value === "unavailable";
+}
+
 export function encodeOpenClawStateWorkerError(
   error: unknown,
   options: ErrorGraphOptions = {},
@@ -95,7 +104,10 @@ export function encodeOpenClawStateWorkerError(
       if (
         Object.entries(identity).some(([key, value]) => {
           const fields =
-            key === "owner" || key === "blockedByRun" || key === "refusal"
+            key === "owner" ||
+            key === "blockedByRun" ||
+            key === "refusal" ||
+            (key === "leaseLoss" && value !== undefined)
               ? Object.values(value)
               : key === "missingTables" && Array.isArray(value)
                 ? value
@@ -106,9 +118,13 @@ export function encodeOpenClawStateWorkerError(
         return undefined;
       }
       const nativeOpen = isSqliteNativeOpenFailure(current);
+      const workerOutcome =
+        hasSqliteWorkerErrorCode(current, "outcome-unknown") ||
+        hasSqliteWorkerErrorCode(current, "unavailable");
       const stateDatabasePath = readOpenClawStateDatabaseFailurePath(current);
       const errcode = "errcode" in current ? current.errcode : undefined;
       canonical ||=
+        workerOutcome ||
         stateDatabasePath !== undefined ||
         nativeOpen ||
         isNativeErrorCode(errcode) ||
@@ -119,7 +135,12 @@ export function encodeOpenClawStateWorkerError(
       const errno = "errno" in current ? current.errno : undefined;
       nodes.push({
         ...identity,
-        name,
+        // The reserved pair may only originate from the canonical worker error.
+        name: workerOutcome
+          ? "SqliteWorkerError"
+          : name === "SqliteWorkerError" && isWorkerOutcomeCode(code)
+            ? "Error"
+            : name,
         message,
         ...(typeof code === "string" || (typeof code === "number" && Number.isFinite(code))
           ? { code }
@@ -158,6 +179,7 @@ function decodeErrorGraph(
         (node) =>
           node.stateDatabasePath !== undefined ||
           node.nativeOpen === true ||
+          (node.name === "SqliteWorkerError" && isWorkerOutcomeCode(node.code)) ||
           isNativeErrorCode(node.errcode) ||
           isSqliteLockError(node) ||
           (node.type === "aggregate" &&
@@ -167,7 +189,15 @@ function decodeErrorGraph(
     ) {
       return undefined;
     }
-    const errors = nodes.map(createError);
+    const errors = nodes.map((node) => {
+      if (node.name === "SqliteWorkerError" && isWorkerOutcomeCode(node.code)) {
+        const canonical = new SqliteWorkerError(node.message, node.code);
+        return node.type === "error"
+          ? canonical
+          : retainSqliteWorkerErrorCode(createError(node), canonical);
+      }
+      return createError(node);
+    });
     const decodeValue = (entry: ErrorValue): unknown =>
       "ref" in entry ? errors[entry.ref] : "value" in entry ? entry.value : undefined;
     for (const [index, node] of nodes.entries()) {

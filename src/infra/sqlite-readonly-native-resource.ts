@@ -5,8 +5,10 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import type {
   SqliteNativeOwnerRequest,
   SqliteNativeOwnerReply,
@@ -123,7 +125,6 @@ export function createNativeWorkerResource(
     }
     owned.removed = true;
     await announce(directory, owned);
-    await notifyOwner("removed", directory);
     directories.delete(directory);
   };
   const send = (message: SqliteNativeReply) => {
@@ -185,7 +186,8 @@ export function createNativeWorkerResource(
       return await runSqliteReadOnlyWorkerOnce(
         request.pathname,
         {
-          mode: request.mode,
+          // The surviving token session owns this directory; the killable child fills only payload.
+          mode: request.mode === "sync" ? "staged-sync" : "staged-async",
           stagingRoot: request.stagingRoot,
           expectedSourceIdentity: request.expectedSourceIdentity,
           signal: controller.signal,

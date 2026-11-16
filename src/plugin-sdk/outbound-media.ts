@@ -6,7 +6,10 @@ import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../medi
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";
 
-export { resolveOutboundMediaAccess } from "../media/load-options.js";
+export {
+  resolveOutboundMediaAccess,
+  resolveOutboundMediaAccessForConfig,
+} from "../media/load-options.js";
 
 /** Media loading policy used before plugin media is handed to channel delivery. */
 export type OutboundMediaLoadOptions = {
@@ -211,8 +214,7 @@ async function deleteHostedOutboundMediaRows(
   knownChunkCount?: number,
 ): Promise<void> {
   const metaKey = buildHostedOutboundMediaMetaKey(id);
-  const meta = await metadataStore.lookup(metaKey);
-  const chunkCount = meta?.chunkCount ?? knownChunkCount;
+  const chunkCount = knownChunkCount ?? (await metadataStore.lookup(metaKey))?.chunkCount;
   if (chunkCount != null) {
     for (let index = 0; index < chunkCount; index += 1) {
       await chunkStore.delete(buildHostedOutboundMediaChunkKey(id, index));
@@ -339,12 +341,7 @@ export function createHostedOutboundMediaStore(
     // Register before the first await so deletion observes pending SQLite readers
     // without serializing concurrent capability authentication.
     activeReaders.set(id, (activeReaders.get(id) ?? 0) + 1);
-    let closed = false;
     const close = async () => {
-      if (closed) {
-        return;
-      }
-      closed = true;
       const remaining = (activeReaders.get(id) ?? 1) - 1;
       if (remaining > 0) {
         activeReaders.set(id, remaining);

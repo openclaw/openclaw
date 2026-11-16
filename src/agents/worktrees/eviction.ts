@@ -22,6 +22,7 @@ import {
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeRegistryPredicate,
@@ -37,7 +38,6 @@ export async function evictManagedWorktree(params: {
   reason: WorktreeEvictionReason;
   guard: WorktreeAllocationGuard;
   getConfig: () => OpenClawConfig;
-  now: () => number;
 }): Promise<WorktreeEvictionReason | "dirty-purged"> {
   return withWorktreeRunEnd(params.env, async () => {
     const { env, record, guard } = params;
@@ -132,7 +132,7 @@ export async function evictManagedWorktree(params: {
                       "--no-commit-id",
                       "--name-only",
                       "-r",
-                      `${snapshotRef}^`,
+                      worktreeSnapshotBase(snapshotRef, snapshotRef),
                       snapshotRef,
                     ],
                     { signal, beforeRun },
@@ -144,7 +144,8 @@ export async function evictManagedWorktree(params: {
                     ["rev-parse", `${snapshotRef}^{commit}`],
                     { signal, beforeRun },
                   );
-                  await accepted.prepareArchive?.(snapshotCommit);
+                  const archive = await accepted.prepareArchive?.();
+                  await archive?.(snapshotCommit);
                 }
               },
             );
@@ -229,7 +230,7 @@ export async function evictManagedWorktree(params: {
             ),
           );
           settleGuard();
-          const removedAt = params.now();
+          const removedAt = Date.now();
           await updateRegistryWorktree(
             env,
             record.id,

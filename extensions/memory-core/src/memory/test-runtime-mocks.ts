@@ -15,6 +15,15 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => {
   };
 });
 
+// Keep controlled observation in-process; native transport has separate coverage.
+vi.mock("./local-file-watcher.js", async (original) => {
+  const watcher = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: watcher.MemoryFileWatcher,
+  };
+});
+
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
 });

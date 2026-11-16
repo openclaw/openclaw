@@ -24,7 +24,7 @@ final class DeviceMicrophoneTestModel {
     }
 
     func start() {
-        guard !self.isActive, voiceWakeSupported else { return }
+        guard !self.isActive else { return }
         self.isActive = true
         MicRefreshSupport.startObserver(self.micObserver) { [weak self] in
             guard let self, self.isActive else { return }
@@ -183,29 +183,24 @@ struct DeviceMicrophoneTestView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if voiceWakeSupported {
-                HStack {
-                    Text("Live level")
-                    Spacer()
-                    MicLevelBar(level: self.model.meterLevel)
-                    Text(verbatim: String(format: "%.0f dB", (self.model.meterLevel * 50) - 50))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 60, alignment: .trailing)
-                }
-                if let meterError = self.model.meterError {
-                    Text(verbatim: meterError)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                VoiceWakeTestCard(
-                    testState: self.$model.testState,
-                    isTesting: self.$model.isTesting,
-                    onToggle: self.model.toggleTest)
-            } else {
-                Text("Voice Wake requires macOS 26 or newer")
+            HStack {
+                Text("Live level")
+                Spacer()
+                MicLevelBar(level: self.model.meterLevel)
+                Text(verbatim: String(format: "%.0f dB", (self.model.meterLevel * 50) - 50))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 60, alignment: .trailing)
+            }
+            if let meterError = self.model.meterError {
+                Text(verbatim: meterError)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            VoiceWakeTestCard(
+                testState: self.$model.testState,
+                isTesting: self.$model.isTesting,
+                onToggle: self.model.toggleTest)
         }
     }
 }

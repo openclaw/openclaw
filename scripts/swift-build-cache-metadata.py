@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Carry verified input mtimes in the macOS CI Swift build-cache artifact."""
+"""Carry verified input mtimes in Apple CI Swift build-cache artifacts."""
 from contextlib import contextmanager
 import hashlib
 import json
@@ -25,6 +25,22 @@ INPUT_FILES = (
     "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayTLSStoreFixture.swift",
 )
 CACHE_DIRECTORY = "apps/macos/.build"
+IOS_INPUT_TREES = (
+    "apps/ios/Sources", "apps/ios/Tests", "apps/ios/ShareExtension",
+    "apps/ios/ActivityWidget", "apps/ios/WatchApp/Sources",
+    "apps/shared/OpenClawKit/Sources", "apps/shared/OpenClawKit/Plugins", "apps/swabble/Sources",
+)
+IOS_INPUT_FILES = (
+    "apps/shared/OpenClawKit/Package.swift", "apps/swabble/Package.swift",
+    "apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift",
+    "apps/macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift",
+    "apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift",
+    "apps/macos/Tests/OpenClawIPCTests/TestWait.swift",
+    "apps/shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift",
+    "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift",
+    "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatSelectableTextViewTests.swift",
+    "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift",
+)
 METADATA_NAME = "ci-input-metadata.json"
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -48,8 +64,8 @@ def open_path(root_fd, relative, flags):
         os.close(parent_fd)
 
 
-def input_files(root_fd):
-    for tree in INPUT_TREES:
+def input_files(root_fd, trees=INPUT_TREES, files=INPUT_FILES):
+    for tree in trees:
         try:
             with open_path(root_fd, tree, DIRECTORY_FLAGS) as tree_fd:
                 for directory, _, names, directory_fd in os.fwalk(
@@ -67,7 +83,7 @@ def input_files(root_fd):
                             os.close(fd)
         except (FileNotFoundError, NotADirectoryError):
             continue
-    for relative in INPUT_FILES:
+    for relative in files:
         try:
             with open_path(root_fd, relative, FILE_FLAGS) as fd:
                 yield relative, fd
@@ -103,17 +119,20 @@ def valid_entry(entry):
             and type(entry.get("mtime_ns")) is int and 0 <= entry["mtime_ns"] < 2**63)
 
 
-def run(mode):
+def run(mode, profile="macos"):
+    trees, inputs, cache = (IOS_INPUT_TREES, IOS_INPUT_FILES, "apps/ios/build") if profile == "ios" else (
+        INPUT_TREES, INPUT_FILES, CACHE_DIRECTORY,
+    )
     root_fd = os.open(Path.cwd().resolve(), DIRECTORY_FLAGS)
     try:
-        with open_path(root_fd, CACHE_DIRECTORY, DIRECTORY_FLAGS) as cache_fd:
+        with open_path(root_fd, cache, DIRECTORY_FLAGS) as cache_fd:
             recorded = read_metadata(cache_fd) if mode == "restore" else {}
             if mode == "restore" and not recorded:
                 print("[swift-build-cache] restore: no valid input metadata")
                 return
             files = {}
             restored = 0
-            for relative, fd in input_files(root_fd):
+            for relative, fd in input_files(root_fd, trees, inputs):
                 expected = recorded.get(relative)
                 if mode == "restore" and not valid_entry(expected):
                     continue
@@ -163,6 +182,7 @@ def run(mode):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("record", "restore"):
-        raise SystemExit("Usage: swift-build-cache-metadata.py <record|restore>")
-    run(sys.argv[1])
+    if (len(sys.argv) not in (2, 3) or sys.argv[1] not in ("record", "restore")
+            or (len(sys.argv) == 3 and sys.argv[2] not in ("macos", "ios"))):
+        raise SystemExit("Usage: swift-build-cache-metadata.py <record|restore> [macos|ios]")
+    run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "macos")

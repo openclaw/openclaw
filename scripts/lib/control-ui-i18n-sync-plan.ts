@@ -4,11 +4,6 @@ import type controlUiLocaleEntries from "./control-ui-i18n-config.json";
 export type { TranslationMap };
 export type LocaleEntry = (typeof controlUiLocaleEntries)[number];
 
-export type GlossaryEntry = {
-  source: string;
-  target: string;
-};
-
 export type TranslationMemoryEntry = {
   cache_key: string;
   segment_id: string;
@@ -69,12 +64,14 @@ export function createControlUiLocaleSyncPlan(input: {
   cacheKeyFor: (key: string, textHash: string) => string;
   entry: LocaleEntry;
   existingFlat: ReadonlyMap<string, string>;
+  authoredFlat?: ReadonlyMap<string, string>;
   force: boolean;
   refreshKeys?: ReadonlySet<string>;
   hashText: (text: string) => string;
   previousMeta: LocaleMeta | null;
   sourceFlat: ReadonlyMap<string, string>;
   sourceHash: string;
+  sourcePath: string;
   translationMemory: ReadonlyMap<string, TranslationMemoryEntry>;
 }) {
   for (const key of input.refreshKeys ?? []) {
@@ -102,6 +99,13 @@ export function createControlUiLocaleSyncPlan(input: {
   const fallbackKeys: string[] = [];
 
   for (const [key, text] of input.sourceFlat.entries()) {
+    // Authored plugin copy has no implied TM provenance. Even force/refresh
+    // must preserve it; only absent keys belong to the translation worker.
+    const authored = input.authoredFlat?.get(key);
+    if (authored !== undefined) {
+      nextFlat.set(key, authored);
+      continue;
+    }
     const textHash = input.hashText(text);
     const segmentCacheKey = input.cacheKeyFor(key, textHash);
     if ((input.force || input.refreshKeys?.has(key)) && input.allowTranslate) {
@@ -141,7 +145,7 @@ export function createControlUiLocaleSyncPlan(input: {
         ...cachedTranslation,
         cache_key: segmentCacheKey,
         segment_id: key,
-        source_path: `ui/src/i18n/locales/${input.entry.fileName}`,
+        source_path: input.sourcePath,
       });
       continue;
     }
@@ -177,7 +181,7 @@ export function createControlUiLocaleSyncPlan(input: {
         translationMemory.set(item.cacheKey, {
           cache_key: item.cacheKey,
           segment_id: item.key,
-          source_path: `ui/src/i18n/locales/${input.entry.fileName}`,
+          source_path: input.sourcePath,
           src_lang: metadata.sourceLocale,
           text: item.text,
           text_hash: item.textHash,
@@ -187,12 +191,7 @@ export function createControlUiLocaleSyncPlan(input: {
         });
       }
     },
-    render(options: {
-      defaultGlossary: readonly GlossaryEntry[];
-      generatedAt: string;
-      glossary: readonly GlossaryEntry[];
-      workflow: number;
-    }) {
+    render(options: { generatedAt: string; workflow: number }) {
       for (const item of pending) {
         if (nextFlat.has(item.key)) {
           continue;
@@ -233,9 +232,6 @@ export function createControlUiLocaleSyncPlan(input: {
       };
       return {
         fallbackCount: sortedFallbackKeys.length,
-        glossary: renderJson(
-          options.glossary.length === 0 ? options.defaultGlossary : options.glossary,
-        ),
         meta: renderJson(nextMeta),
         nextFlat,
         translationMemory: renderTranslationMemory(
@@ -244,6 +240,7 @@ export function createControlUiLocaleSyncPlan(input: {
           nextFlat,
           input.hashText,
           input.cacheKeyFor,
+          input.authoredFlat,
         ),
       };
     },
@@ -260,6 +257,7 @@ function renderTranslationMemory(
   translatedFlat: ReadonlyMap<string, string>,
   hashText: (text: string) => string,
   cacheKeyFor: (key: string, textHash: string) => string,
+  authoredFlat?: ReadonlyMap<string, string>,
 ): string {
   const bySegment = new Map(
     [...entries.values()].flatMap((entry) =>
@@ -280,13 +278,20 @@ function renderTranslationMemory(
       continue;
     }
     const textHash = hashText(text);
+    const direct = bySegment.get(key);
+    if (
+      authoredFlat?.has(key) &&
+      (direct?.text_hash !== textHash || direct.translated !== translated)
+    ) {
+      // Matching another key's text does not verify this authored translation.
+      continue;
+    }
     const groupKey = JSON.stringify([textHash, translated]);
     const existing = canonical.get(groupKey);
     if (existing) {
       (existing.segment_ids ??= []).push(key);
       continue;
     }
-    const direct = bySegment.get(key);
     const source =
       direct?.text_hash === textHash && direct.translated === translated
         ? direct

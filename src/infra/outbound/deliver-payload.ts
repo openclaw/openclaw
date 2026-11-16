@@ -5,6 +5,7 @@ import { hasReplyPayloadContent, type ReplyPayloadDeliveryPin } from "../../inte
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
 import { formatErrorMessage } from "../errors.js";
 import type {
   ChannelHandler,
@@ -117,13 +118,7 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
     return stripInternalRuntimeScaffolding(value);
   }
   if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((entry) => {
-      const stripped = stripInternalRuntimeScaffoldingFromValue(entry);
-      changed ||= stripped !== entry;
-      return stripped;
-    });
-    return changed ? next : value;
+    return mapArrayIfChanged(value, stripInternalRuntimeScaffoldingFromValue);
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -162,7 +157,7 @@ export function resolveOutboundMediaAccessForSend(
   }
   return resolveAgentScopedOutboundMediaAccess({
     cfg: params.cfg,
-    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    agentId: params.session?.agentId,
     mediaSources,
     mediaAccess: params.mediaAccess,
     sessionKey: params.session?.policyKey ?? params.session?.key,

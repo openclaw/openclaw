@@ -108,7 +108,7 @@ Human desktop: prefer WebVNC when resolved provider supports it. Do not change
 providers only to gain desktop support.
 
 ```sh
-"$CRABBOX" warmup --desktop --browser --keep
+"$CRABBOX" warmup --desktop --browser --ttl 2h --idle-timeout 30m --keep
 "$CRABBOX" desktop launch --id <id> \
   --browser --url https://example.com --webvnc --open --take-control
 "$CRABBOX" desktop doctor --id <id>
@@ -125,6 +125,8 @@ Before handoff, prove CLI/app from neutral `~`:
 
 - Visible desktop alone proves nothing. Browser windowed unless capture task.
 - Never commit proof assets to product repo.
+- Desktop activity does not extend total TTL. Save artifacts before the effective
+  deadline; `--keep` is not persistence. Follow the lifetime policy in the skill.
 
 ## Direct AWS
 
@@ -148,7 +150,9 @@ Focused:
 
 - Stale sync: retry `--full-resync` once; still bad: fresh lease.
 - One-shot should stop itself. After failure/interruption: verify
-  `"$CRABBOX" list --provider aws`.
+  `"$CRABBOX" list --provider aws`. Use `--retained` when looking for kept
+  terminal resources with unconfirmed cleanup, then inspect and stop the exact
+  owned ID. A missing live-list row is not proof of deletion.
 
 Broker auth, not cloud keys:
 

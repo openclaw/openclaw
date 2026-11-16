@@ -66,6 +66,22 @@ describe("resolveResetPreservedSelection", () => {
     ).toEqual({ modelOverrideSource: "default" });
   });
 
+  it("preserves a person-linked account pin with its link provenance", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "linked",
+          updatedAt: 1,
+          authProfileOverride: "openai:alice",
+          authProfileOverrideSource: "user-link",
+        },
+      }),
+    ).toEqual({
+      authProfileOverride: "openai:alice",
+      authProfileOverrideSource: "user-link",
+    });
+  });
+
   it("preserves legacy user auth pins while dropping legacy automatic pins", () => {
     expect(
       resolveResetPreservedSelection({

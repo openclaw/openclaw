@@ -19,6 +19,8 @@ vi.mock(
   () => import("./pw-session-cdp-transport.test-support.js"),
 );
 
+export { UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.test-support.js";
+
 export type BrowserMockBundle = {
   browser: import("playwright-core").Browser;
   browserClose: ReturnType<typeof vi.fn>;

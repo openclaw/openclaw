@@ -1,12 +1,12 @@
 import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
-import { clearEmbeddedSessionForkSnapshot } from "../../agents/embedded-agent-runner/session-fork.js";
+import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
+import { clearPromptCacheObservations } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
-import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
@@ -15,18 +15,28 @@ import {
 } from "../../infra/system-events.js";
 import {
   agentSessionKeysMatchByRequestKey,
-  isIncognitoSessionKey,
   normalizeAgentId,
   normalizeOptionalAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { clearSessionLifecycleQueues } from "./queue/cleanup.js";
 import {
-  clearReplyRunForResetBySessionId,
-  resolveActiveReplyOperationForSessionId,
-} from "./reply-run-registry.js";
+  getSessionControllerOperation,
+  stopReplyOperationForRestart,
+} from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { isReplyOperationPreBackendPhase } from "../../sessions/session-controller.state.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 
 export class SessionResetCleanupError extends Error {}
+
+export class SessionResetCleanupConflictError extends SessionResetCleanupError {
+  constructor() {
+    super("Reset did not complete because the session changed before cleanup. Retry /reset.");
+  }
+}
 
 /** Prepare parent facts once; cleanup observes the entry writer's in-process receipts. */
 export async function prepareSessionResetCleanupGuard(params: {
@@ -36,7 +46,7 @@ export async function prepareSessionResetCleanupGuard(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   assertCurrent?: () => void;
 }): Promise<{ assertCurrent: () => void; release: () => void }> {
-  const binding = captureIncognitoSessionOperation(params);
+  const memory = captureSessionEntryMetadataRead(params, () => {});
   const assertEntry = (
     current: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
   ) => {
@@ -45,28 +55,12 @@ export async function prepareSessionResetCleanupGuard(params: {
       current?.sessionId !== params.expectedSession?.sessionId ||
       current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
     ) {
-      throw new SessionResetCleanupError(
-        "Reset did not complete because the session changed before cleanup. Retry /reset.",
-      );
+      throw new SessionResetCleanupConflictError();
     }
   };
-  if (binding) {
+  if (memory) {
     return {
-      assertCurrent: () =>
-        assertEntry(binding.actor.sessions.readSharing(params.sessionKey)?.entry),
-      release() {},
-    };
-  }
-  if (isIncognitoSessionKey(params.sessionKey)) {
-    return {
-      assertCurrent: () =>
-        assertEntry(
-          loadExactSessionEntryReadOnly({
-            storePath: params.storePath,
-            sessionKey: params.sessionKey,
-            clone: false,
-          })?.entry,
-        ),
+      assertCurrent: () => assertEntry(memory.readCurrent()),
       release() {},
     };
   }
@@ -93,9 +87,7 @@ export async function prepareSessionResetCleanupGuard(params: {
         assertCurrent: () => {
           const current = retained.readCurrent();
           if (current === undefined) {
-            throw new SessionResetCleanupError(
-              "Reset did not complete because the session changed before cleanup. Retry /reset.",
-            );
+            throw new SessionResetCleanupConflictError();
           }
           assertEntry(current);
         },
@@ -107,8 +99,11 @@ export async function prepareSessionResetCleanupGuard(params: {
 
 /** Reset must report unfinished child cleanup before committing a fresh conversation. */
 export async function stopSessionResetSubagents(
-  params: Parameters<typeof killSessionSubagentRuns>[0] & { assertCurrent: () => void },
-): Promise<void> {
+  params: Parameters<typeof killSessionSubagentRuns>[0] & {
+    assertCurrent: () => void;
+    beforeKill?: () => boolean | Promise<boolean>;
+  },
+): Promise<{ stopped: number; failed: number }> {
   try {
     // Hooks and child finalizers can yield after reset accepted its parent. Fence
     // that incarnation before selection and at every child cancellation boundary.
@@ -118,6 +113,7 @@ export async function stopSessionResetSubagents(
     if (result.status === "error") {
       throw new Error(result.error);
     }
+    return { stopped: result.killed, failed: 0 };
   } catch (cause) {
     if (cause instanceof SessionResetCleanupError) {
       throw cause;
@@ -129,8 +125,48 @@ export async function stopSessionResetSubagents(
   }
 }
 
+/**
+ * Every reset path (chat `/new` and `/reset`, Gateway reset and delete) stops the
+ * session's exec processes here, before the replacement conversation is committed:
+ * in-flight commands, `background: true` services and adopted survivors. After a
+ * reset nothing would manage them. Durable processes are kept.
+ */
+export async function stopSessionResetProcesses(params: {
+  scopeKeys: Array<string | undefined>;
+  assertCurrent: () => void;
+}): Promise<void> {
+  try {
+    params.assertCurrent();
+    await stopSessionExecProcesses(
+      params.scopeKeys.filter((key): key is string => Boolean(key)),
+      params.assertCurrent,
+    );
+  } catch (cause) {
+    if (cause instanceof SessionResetCleanupError) {
+      throw cause;
+    }
+    throw new SessionResetCleanupError(
+      "Reset did not complete because some session processes could not be confirmed stopped. Inspect them with process list and retry /reset.",
+      { cause },
+    );
+  }
+}
+
+/** Chat reset: stop the session's subagents, then (with the parent stopped) its processes. */
+export async function stopSessionResetWork(
+  params: Parameters<typeof stopSessionResetSubagents>[0],
+): Promise<{ stopped: number; failed: number }> {
+  const stopped = await stopSessionResetSubagents(params);
+  await stopSessionResetProcesses({
+    scopeKeys: [params.sessionKey],
+    assertCurrent: params.assertCurrent,
+  });
+  return stopped;
+}
+
 export function clearCommittedSessionResetRuntimeState(params: {
   previousSessionEntry: Pick<SessionEntry, "sessionId"> | undefined;
+  storePath: string;
   agentId: string;
   sessionKey: string;
   signal?: AbortSignal;
@@ -142,6 +178,12 @@ export function clearCommittedSessionResetRuntimeState(params: {
   try {
     clearSessionResetRuntimeState([params.sessionKey, params.previousSessionEntry.sessionId], {
       activeReplySessionId: params.previousSessionEntry.sessionId,
+      controllerTarget: captureSessionTarget({
+        storeScope: params.storePath,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        incarnation: params.previousSessionEntry.sessionId,
+      }),
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       assertCurrent: () => params.signal?.throwIfAborted(),
@@ -156,6 +198,7 @@ export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
   opts: {
     agentId: string;
+    controllerTarget?: SessionTarget;
     sessionKey: string;
     activeReplySessionId?: string;
     assertCurrent: () => void;
@@ -165,16 +208,10 @@ export function clearSessionResetRuntimeState(
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
   clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
   if (opts.activeReplySessionId) {
-    clearEmbeddedSessionForkSnapshot(opts.activeReplySessionId);
+    clearPromptCacheObservations(opts.activeReplySessionId);
   }
-  const cleared = clearSessionLifecycleQueues({
-    keys,
-    agentId: opts.agentId,
-    sessionKey: opts.sessionKey,
-    sessionId: opts.activeReplySessionId,
-    assertCurrent: opts.assertCurrent,
-  });
-  for (const key of cleared.keys) {
+  const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
+  for (const key of cleared) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;
     if (owner && owner !== normalizeAgentId(opts.agentId)) {
@@ -186,20 +223,23 @@ export function clearSessionResetRuntimeState(
 
   if (opts.activeReplySessionId) {
     opts.assertCurrent();
-    const operation = resolveActiveReplyOperationForSessionId(opts.activeReplySessionId);
+    const operation = getSessionControllerOperation(opts.sessionKey, opts.controllerTarget);
     const ownerAgentId =
       normalizeOptionalAgentId(operation?.agentId) ?? parseAgentSessionKey(operation?.key)?.agentId;
     if (
       operation &&
       ownerAgentId === normalizeAgentId(opts.agentId) &&
       operation.sessionId === opts.activeReplySessionId &&
-      cleared.keys.some(
+      cleared.some(
         (key) =>
           key !== opts.activeReplySessionId &&
           agentSessionKeysMatchByRequestKey(operation.key, key),
       )
     ) {
-      clearReplyRunForResetBySessionId(opts.activeReplySessionId);
+      if (!isReplyOperationPreBackendPhase(operation.phase)) {
+        opts.assertCurrent();
+        stopReplyOperationForRestart(operation);
+      }
     }
   }
 }

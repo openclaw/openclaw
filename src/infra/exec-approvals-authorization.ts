@@ -45,7 +45,7 @@ export async function commitExecAuthorizationLocked(
 
 function retainedAuthorization(
   params: ExecAuthorizationCommitInput,
-  { snapshot, readCurrent }: Awaited<ReturnType<typeof commitExecAuthorizations>>,
+  { file, readCurrent }: Awaited<ReturnType<typeof commitExecAuthorizations>>,
 ): () => void {
   const matchKeys = new Set(
     params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
@@ -55,7 +55,7 @@ function retainedAuthorization(
   const authorization = {
     ...params.authorization,
     policySnapshot: createExecApprovalPolicySnapshot({
-      file: snapshot.file,
+      file,
       agentId: params.agentId,
     }),
   };

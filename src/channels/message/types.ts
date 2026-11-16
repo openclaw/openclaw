@@ -90,6 +90,8 @@ export type MessageReceipt = {
   deleteToken?: string;
   sentAt: number;
   raw?: readonly MessageReceiptSourceResult[];
+  /** Normalized physical send evidence, retained even when a source has no platform ID. */
+  sourceResults?: readonly MessageReceiptSourceResult[];
 };
 
 export type RenderedMessageBatchPlanKind =
@@ -336,6 +338,11 @@ export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   /** Opt into provider reconciliation for ordinary single-payload queued sends. */
   automaticUnknownSendReconciliation?: boolean;
+  /**
+   * Resend an ordinary agent final text once after an ambiguous transport failure,
+   * accepting a rare duplicate over a lost reply.
+   */
+  replayAmbiguousFinalText?: boolean;
   /** Recognize inert channel metadata without admitting controls or side effects. */
   isTextOnlyChannelData?: (channelData: NonNullable<ReplyPayload["channelData"]>) => boolean;
   /**

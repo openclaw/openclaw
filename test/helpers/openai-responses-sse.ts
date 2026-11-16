@@ -16,7 +16,12 @@ export function writeOpenAiResponsesSse(
 
 export function writeOpenAiResponsesText(
   response: ServerResponse,
-  params: { text: string; messageId: string; responseId: string },
+  params: {
+    text: string;
+    messageId: string;
+    responseId: string;
+    usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+  },
 ): void {
   const { text } = params;
   const message = {
@@ -53,7 +58,7 @@ export function writeOpenAiResponsesText(
         id: params.responseId,
         status: "completed",
         output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        usage: params.usage ?? { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       },
     },
   ];

@@ -89,7 +89,6 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
     EMPTY_HTML_ELEMENT_RE,
   )
     .replace(/<br\s*\/?>/gi, "\n")
-    // Block elements → newlines
     .replace(/<\/?(p|div)>/gi, "\n")
     .replace(/<(b|strong)>(.*?)<\/\1>/gi, `${boldMarker}$2${boldMarker}`)
     .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")

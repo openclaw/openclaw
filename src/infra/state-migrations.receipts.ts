@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -11,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 type MigrationReceiptDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -63,7 +63,7 @@ export function resolveLegacyMigrationSourceKey(
 }
 
 export function readLegacyMigrationReceiptFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourceKey: string,
 ): LegacyMigrationReceipt | null {
   const row = executeSqliteQueryTakeFirstSync(
@@ -90,7 +90,10 @@ export function readLegacyMigrationReceipt(
   return readLegacyMigrationReceiptFromDatabase(openOpenClawStateDatabase({ env }).db, sourceKey);
 }
 
-export function recordLegacyMigrationRun(database: DatabaseSync, run: LegacyMigrationRun): void {
+export function recordLegacyMigrationRun(
+  database: EngineConnection,
+  run: LegacyMigrationRun,
+): void {
   const updates = () => ({
     finished_at: run.finishedAt,
     status: run.status,
@@ -112,7 +115,7 @@ export function recordLegacyMigrationRun(database: DatabaseSync, run: LegacyMigr
 }
 
 export function recordLegacyMigrationSource(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: LegacyMigrationSource,
 ): void {
   const updates = () => ({
@@ -149,7 +152,7 @@ export function recordLegacyMigrationSource(
 
 /** Insert run and source together inside the caller's existing synchronous transaction. */
 export function recordLegacyMigrationReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   receipt: Omit<LegacyMigrationSource, "status" | "importedAt" | "updateReportOnConflict"> & {
     now: number;
   },
@@ -171,7 +174,7 @@ export function recordLegacyMigrationReceipt(
 
 /** The caller owns the transaction and its live mutation admission. */
 export function markLegacyMigrationSourceRemovedInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourceKey: string,
 ): void {
   executeSqliteQuerySync(

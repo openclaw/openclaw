@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
+import { formatCliCommand } from "../cli/command-format.js";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UpdatePreMutationError } from "../cli/update-cli/shared.js";
@@ -53,6 +55,24 @@ export function resolveManagedHandoffCommandEnv(
   });
 }
 
+/** Gateway-started handoff admission; the returned warning requires an operator restart. */
+export async function admitManagedHandoffSupervisor(
+  supervisor: RespawnSupervisor | null | undefined,
+  root: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  if (supervisor === "schtasks") {
+    // The helper and updater inherit the task's kill-on-close Job, so the task
+    // stop they issue during activation also ends them, leaving the task
+    // disabled and the Gateway stopped (#169844). Terminal updates run outside it.
+    throw new UpdatePreMutationError(
+      "managed-service-handoff-failed",
+      `This Gateway runs as a Windows Scheduled Task, and updates started from the Gateway (Control UI, chat, or automatic updates) cannot finish there yet: stopping the task also ends the updater, which would leave the task disabled and the Gateway stopped. Nothing was changed. Update from a PowerShell or Command Prompt window that you opened yourself, not one started by the Gateway: ${formatCliCommand("openclaw update", env)}`,
+    );
+  }
+  return supervisor === "systemd" ? admitSystemdUpdate(root, env) : undefined;
+}
+
 /** Package ownership permits installation, not control of an operator's system unit. */
 export async function admitSystemdUpdate(
   root: string,
@@ -73,8 +93,13 @@ export async function admitSystemdUpdate(
     await fs.access(installRoot, fs.constants.W_OK | fs.constants.X_OK);
   } catch (cause) {
     const { uid } = await fs.stat(installRoot);
+    const invocation = resolveOpenClawCliInvocation({
+      entryPath: path.join(installRoot, "openclaw.mjs"),
+      execArgv: [],
+      args: ["update", "--yes", "--no-restart"],
+    });
     const updateCommand = formatInstallationTargetCommand(
-      [process.execPath, path.join(installRoot, "openclaw.mjs"), "update", "--yes", "--no-restart"],
+      [invocation.command, ...invocation.args],
       resolveInstallationTarget(env),
       { env },
     );

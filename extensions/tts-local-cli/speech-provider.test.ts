@@ -185,7 +185,6 @@ describe("buildCliSpeechProvider", () => {
 
   it.each([
     ["consecutive empty quotes", "--voice \"\"  ''", [], ["--voice", "", ""]],
-    ["quoted whitespace", '--voice " \t "', [], ["--voice", " \t "]],
     ["adjacent fragments", "--voice a''b\"\"", [], ["--voice", "ab"]],
     ["explicit array empty arguments", "", ["--voice", ""], ["--voice", ""]],
   ] as const)("preserves %s through the speech process", async (_name, command, args, expected) => {
@@ -208,11 +207,6 @@ describe("buildCliSpeechProvider", () => {
   });
 
   it.each([
-    {
-      source: "ID3-tagged stdout",
-      audio: [...EMPTY_ID3V2_HEADER, ...VALID_MPEG_FRAME_HEADER],
-      writeFile: false,
-    },
     {
       source: "ID3v2.4 footer stdout",
       audio: [

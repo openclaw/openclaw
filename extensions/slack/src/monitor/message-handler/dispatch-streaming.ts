@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSlackMarkdownOptions } from "../../accounts.js";
 import { trackSlackDraftMessage } from "../../draft-message-boundaries.js";
 import { formatSlackError } from "../../errors.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
@@ -16,6 +17,7 @@ import {
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
+  SlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError,
   startSlackStream,
   stopSlackStream,
@@ -45,6 +47,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     slackStreamFallbackTeamId,
   } = setup;
   const { account, ctx, forcedReplyThreadTs, message, slackMessageMetadata } = prepared;
+  const markdownOptions = resolveSlackMarkdownOptions({
+    cfg: ctx.cfg,
+    accountId: account.accountId,
+  });
   const boundaryState: {
     streamBoundary: ReturnType<typeof trackSlackDraftMessage> | null;
     interruptedThreadTs: string | undefined;
@@ -56,6 +62,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     nativeProgressStreamStartPromise: null as Promise<SlackStreamSession | null> | null,
     nativeProgressStreamThreadTs: undefined as string | undefined,
     streamFailed: false,
+    pendingTextIsProgress: false,
     usedReplyThreadTs: undefined as string | undefined,
     usedBlockReplyThreadTs: undefined as string | undefined,
     observedReplyDelivery: false,
@@ -153,7 +160,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     payload: ReplyPayload;
     threadTs: string | undefined;
   }) => {
-    const preparedReply = prepareSlackReply(params.payload);
+    const preparedReply = prepareSlackReply(params.payload, markdownOptions);
     markDelivered(buildSlackEventDeliveryKey(params, preparedReply));
     // Single-use reply modes move later same-turn payloads off the preview
     // thread, so protect both delivery keys from duplicates.
@@ -201,7 +208,8 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return undefined;
     }
     let fallbackError = err;
-    if (!session.stopped) {
+    // A stop would flush the rejected text again and fail the same way.
+    if (!session.stopped && !(err instanceof SlackStreamMessageTooLongError)) {
       try {
         const stopResult = await stopStream(session);
         if (session.stoppedBySlack) {
@@ -229,7 +237,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return undefined;
     }
     const sent = await deliverPreparedReply(
-      prepareSlackReply({ text: fallbackText }),
+      prepareSlackReply({ text: fallbackText }, markdownOptions),
       session.threadTs,
       true,
     );
@@ -271,10 +279,22 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           await stopStream(session, chunks);
           state.observedReplyDelivery ||= session.delivered;
         } catch (error) {
-          if (!(error instanceof SlackStreamNotDeliveredError)) {
+          if (error instanceof SlackStreamMessageTooLongError && chunks?.length) {
+            // The closeout pushed the message past Slack's size. Stop without
+            // it so the message still leaves streaming state.
+            runtime.error?.(
+              danger(
+                "slack-stream: Slack rejected the closeout with msg_too_long; stopping without it",
+              ),
+            );
+            markSlackStreamFallbackDelivered(session);
+            await stopStream(session);
+            state.observedReplyDelivery ||= session.delivered;
+          } else if (error instanceof SlackStreamNotDeliveredError) {
+            await deliverPendingStreamFallback(session, error);
+          } else {
             throw error;
           }
-          await deliverPendingStreamFallback(session, error);
         }
       } catch (error) {
         state.streamFailed = true;
@@ -333,7 +353,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
         ? undefined
         : replyThreadTs;
-    const preparedReply = prepareSlackReply(params.payload);
+    const preparedReply = prepareSlackReply(params.payload, markdownOptions);
     const deliveryKey = buildSlackEventDeliveryKey(
       {
         kind: params.kind,
@@ -343,12 +363,17 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       preparedReply,
     );
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
-      logVerbose("slack: suppressed duplicate normal delivery within the same turn");
       return { visibleReplySent: false };
     }
+    const session = state.streamSession;
+    const discardProgress = params.kind === "final" && state.pendingTextIsProgress;
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
     if (!sent?.receipt.platformMessageIds.length) {
       return { visibleReplySent: false };
+    }
+    // A confirmed final supersedes optional progress, never unacknowledged answer text.
+    if (discardProgress && session?.pendingText && !session.stopped) {
+      markSlackStreamFallbackDelivered(session);
     }
     state.observedReplyDelivery = true;
     const deliveredThreadTs = resolveSlackReplyThreadTs({
@@ -371,11 +396,22 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
 
   const isStreamingEligible = (payload: ReplyPayload, options?: { maxTextBytes?: number }) => {
     const reply = resolveSendableOutboundReplyParts(payload);
-    const renderPlan = resolveSlackReplyRenderPlan(payload);
+    const renderPlan = resolveSlackReplyRenderPlan(payload, payload.text, markdownOptions);
     const plannedBlocks =
       renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
+    const previewThreadTs =
+      state.streamSession?.threadTs ??
+      state.interruptedThreadTs ??
+      state.nativeProgressStreamThreadTs;
+    const finalThreadTs = resolveSlackReplyThreadTs({
+      replyToMode: replyDeliveryMode,
+      replyToId: payload.replyToId,
+      threadId: previewThreadTs,
+      replyToCurrent: payload.replyToCurrent,
+    });
     return (
       !state.streamFailed &&
+      (!previewThreadTs || finalThreadTs === previewThreadTs) &&
       !reply.hasMedia &&
       renderPlan.mode !== "split" &&
       !renderPlan.textIsSlackPlainText &&
@@ -411,7 +447,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return { visibleReplySent: false };
     }
     let session = state.streamSession;
-    const threadTs = session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs();
+    const threadTs = resolveSlackReplyThreadTs({
+      replyToMode: replyDeliveryMode,
+      replyToId: params.payload.replyToId,
+      threadId: session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs(),
+      replyToCurrent: params.payload.replyToCurrent,
+    });
     if (state.streamFailed || !threadTs) {
       state.streamFailed = true;
       return await deliverNormally({
@@ -422,13 +463,16 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
     const hookContent = resolveSendableOutboundReplyParts(params.payload).trimmedText;
     const text = params.streamText ?? hookContent;
-    const deliveryKey = buildSlackEventDeliveryKey({ ...params, threadTs, textOverride: text });
+    const deliveryKey = buildSlackEventDeliveryKey(
+      { ...params, threadTs, textOverride: text },
+      prepareSlackReply(params.payload, markdownOptions),
+    );
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
-      logVerbose("slack-stream: suppressed duplicate reply payload");
       return { visibleReplySent: false };
     }
     let messageId: string | undefined;
     let fallbackDelivery: LivePreviewDeliveryResult | undefined;
+    state.pendingTextIsProgress = false;
     try {
       // Each logical reply owns an acknowledged send. Empty chunks flush short
       // SDK buffers before core settles the reply, including queued fallbacks.

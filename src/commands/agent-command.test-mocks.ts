@@ -1,4 +1,4 @@
-// Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
+// Agent command test mocks replace runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 
@@ -19,24 +19,6 @@ vi.mock("../agents/runtime-plugins.js", async () => {
       const registry = createEmptyPluginRegistry();
       return { registry, primaryRegistry: registry };
     },
-  };
-});
-
-vi.mock("../logging/subsystem.js", () => {
-  const createMockLogger = () => ({
-    subsystem: "test",
-    isEnabled: vi.fn(() => true),
-    trace: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  });
-  return {
-    createSubsystemLogger: vi.fn(() => createMockLogger()),
   };
 });
 
@@ -64,10 +46,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -290,15 +272,12 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: vi.fn(() => []),
-}));
-
 vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: vi.fn(
     (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
       snapshot: params?.existingSnapshot ?? {
@@ -309,7 +288,6 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
         version: 0,
       },
       shouldRefresh: !params?.existingSnapshot,
-      snapshotVersion: 0,
     }),
   ),
 }));

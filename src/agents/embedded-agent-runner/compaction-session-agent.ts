@@ -21,7 +21,6 @@ export async function prepareCompactionSessionAgent(params: {
   llmRuntime: LlmRuntime;
   providerStreamFn: StreamFn | undefined;
   sessionId: string;
-  signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
   resolvedApiKey?: string;
   authStorage: Parameters<typeof resolveEmbeddedAgentStream>[0]["authStorage"];

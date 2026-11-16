@@ -45,7 +45,3 @@ export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConf
     models: MINIMAX_TEXT_MODEL_ORDER.map(buildMinimaxApiModelDefinition),
   };
 }
-
-export function buildMinimaxPortalProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
-  return buildMinimaxProvider(env);
-}

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { startGitOperationTiming } from "../../infra/git-operation-timing.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
@@ -16,11 +20,11 @@ import {
 import {
   clearRegistryWorktreeProvisionedChunks,
   createWorktreeRemovalClaimsGuard,
+  finalizeWorktreeRemovalRows,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
 import { WorktreeSnapshotError, WorktreeRemovalLockError } from "./removal-errors.js";
-import { finalizeManagedWorktreeRemoval } from "./removal-finalization.js";
 import {
   assertExactStateOwner,
   prepareSnapshotBranchDeletion,
@@ -37,6 +41,7 @@ import {
   captureManagedWorktreeSnapshot,
   verifyManagedWorktreeExactSnapshot,
 } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeRunEndCleanup,
@@ -63,14 +68,13 @@ export async function removeSettledManagedWorktree(
   input: RemoveWorktreeParams & WorktreeAllocationGuard & { claimToken: string },
   context: {
     env: NodeJS.ProcessEnv;
-    now: () => number;
     getConfig: () => OpenClawConfig;
     snapshotRetentionMs: number;
   },
   timing: ReturnType<typeof startGitOperationTiming>,
-  prepareArchive?: (snapshot: string) => Promise<void>,
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>,
 ): Promise<RemoveManagedWorktreeResult> {
-  const { env, now, getConfig, snapshotRetentionMs } = context;
+  const { env, getConfig, snapshotRetentionMs } = context;
   let params = input;
   timing?.markRemovalStage("preparation");
   params.signal?.throwIfAborted();
@@ -158,6 +162,7 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
+    const archive = await prepareArchive?.();
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;
@@ -245,7 +250,11 @@ export async function removeSettledManagedWorktree(
     if (
       (await checkHead()) !== head ||
       (snapshot &&
-        (await git.require(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions)) !== head)
+        (await git.require(
+          record.repoRoot,
+          ["rev-parse", worktreeSnapshotBase(snapshotRef!, snapshot)],
+          gitOptions,
+        )) !== head)
     ) {
       throw new Error(
         "Worktree HEAD changed after snapshot preparation; checkout and branch preserved.",
@@ -267,7 +276,7 @@ export async function removeSettledManagedWorktree(
           env,
           record.id,
           {
-            runEndCleanup: { outcome: "retained-dirty", at: now() },
+            runEndCleanup: { outcome: "retained-dirty", at: Date.now() },
           },
           {
             onlyIfLive: true,
@@ -279,7 +288,7 @@ export async function removeSettledManagedWorktree(
       }
     }
     if (snapshot) {
-      await prepareArchive?.(snapshot);
+      await archive?.(snapshot);
     }
     // Pin the completed capture before deletion. Failed or interrupted deletion
     // must never replace it with a snapshot of a partially removed checkout.
@@ -288,40 +297,99 @@ export async function removeSettledManagedWorktree(
       ["update-ref", pendingRef, snapshot ?? head, ""],
       gitOptions,
     );
-    const finalize = async (recoveryPath?: string) => {
+    const finalize = async (recoveryPath?: string): Promise<RemoveManagedWorktreeResult> => {
       timing?.markRemovalStage("finalization");
-      return await finalizeManagedWorktreeRemoval({
-        record,
-        env,
-        claimToken,
-        now,
-        snapshotRef,
-        snapshotOid: snapshot ?? head,
-        snapshotError,
-        runEndCleanup: params.runEndCleanup,
-        recoveryPath,
-        snapshotRetentionMs,
-        git: params.exactState ? git.require : requireGit,
-        options: params.exactState
-          ? gitOptions
-          : {
-              ...gitOptions,
-              signal: undefined,
-              beforeRun: () => {
-                params.rollbackGuard();
-                assertClaim();
-              },
+      const runEndCleanup = params.runEndCleanup;
+      const finalizeGit = params.exactState ? git.require : requireGit;
+      const options = params.exactState
+        ? gitOptions
+        : {
+            ...gitOptions,
+            signal: undefined,
+            beforeRun: () => {
+              params.rollbackGuard();
+              assertClaim();
             },
-        deletionOptions,
-        onFinalized: () => {
-          exactFinalized = true;
-        },
-        workerAuthority: {
-          leaseSet: params.workerAuthority.leaseSet,
-          predicates: [{ kind: "removal-claim", id: record.id, token: claimToken }],
-        },
-        withOwnerMutation: params.withOwnerMutation,
-      });
+          };
+      const workerAuthority: WorktreeWorkerAuthority = {
+        leaseSet: params.workerAuthority.leaseSet,
+        predicates: [{ kind: "removal-claim", id: record.id, token: claimToken }],
+      };
+      const withOwnerMutation = params.withOwnerMutation;
+      options.beforeRun();
+      const removedAt = Date.now();
+      const update = (patch: Parameters<typeof updateRegistryWorktree>[2]) =>
+        updateRegistryWorktree(env, record.id, patch, {
+          assertCurrent: options.beforeRun,
+          removalToken: claimToken,
+          workerAuthority,
+        });
+      // A failed housekeeping command must not make a deleted checkout appear live.
+      const publish = () =>
+        update({
+          removedAt,
+          snapshotRef,
+          ...(runEndCleanup ? { runEndCleanup } : {}),
+        });
+      await (withOwnerMutation ? withOwnerMutation(publish, { settle: true }) : publish());
+      exactFinalized = true;
+      try {
+        if (deletionOptions) {
+          await finalizeGit(record.repoRoot, ["branch", "-d", "--", record.branch], {
+            ...deletionOptions,
+            ...options,
+          });
+        }
+        // Only prune the recorded checkout's empty parent, never a replacement allocation root.
+        options.beforeRun();
+        await fs.rmdir(path.dirname(record.path)).catch(() => undefined);
+        await finalizeGit(
+          record.repoRoot,
+          ["update-ref", "-d", `refs/openclaw/removals/${record.id}`, snapshot ?? head],
+          options,
+        );
+        options.beforeRun();
+        await finalizeWorktreeRemovalRows(
+          env,
+          {
+            worktreeId: record.id,
+            lastActiveAt: record.lastActiveAt,
+            removedAt,
+            token: claimToken,
+          },
+          workerAuthority,
+        );
+      } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
+        if (runEndCleanup) {
+          try {
+            await update({
+              runEndCleanup: {
+                outcome: "failed",
+                at: Date.now(),
+                reason: truncateUtf16Safe(formatErrorMessage(error), 500),
+              },
+            });
+          } catch (outcomeError) {
+            if (hasSqliteWorkerOutcomeUnknown(outcomeError)) {
+              throw outcomeError;
+            }
+            // Preserve the housekeeping failure if its outcome cannot be recorded.
+          }
+        }
+        throw error;
+      }
+      timing?.recordRecovery(snapshotRef);
+      return {
+        removed: true,
+        ...(snapshotRef ? { snapshotRef } : {}),
+        ...(snapshotError ? { snapshotError } : {}),
+        ...(recoveryPath
+          ? { recoveryPath, recoveryRetainedUntil: removedAt + snapshotRetentionMs }
+          : {}),
+      };
     };
     const expected = params.exactState;
     if (expected) {

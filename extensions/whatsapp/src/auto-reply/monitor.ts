@@ -16,7 +16,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
+import { resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
   WhatsAppConnectionController,
@@ -30,6 +30,7 @@ import {
   type WhatsAppBaileysMessageCache,
 } from "../inbound/baileys-cache.js";
 import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { WHATSAPP_APPEND_REPLY_MAX_AGE_MS } from "../inbound/message-delivery.js";
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import type { WebInboundCallbackMessage } from "../inbound/types.js";
 import {
@@ -43,8 +44,8 @@ import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
+import { resolveWebMonitorConfigSnapshot } from "./monitor/config.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
-import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
@@ -58,42 +59,6 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 }
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
-type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
-
-function resolveWebMonitorConfigSnapshot(params: {
-  cfg: WhatsAppRuntimeConfig;
-  accountId?: string | null;
-}): {
-  cfg: WhatsAppRuntimeConfig;
-  account: ReturnType<typeof resolveWhatsAppAccount>;
-} {
-  const account = resolveWhatsAppAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const cfg = {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      whatsapp: {
-        ...params.cfg.channels?.whatsapp,
-        responsePrefix: account.messagePrefix,
-        allowFrom: account.allowFrom,
-        groupAllowFrom: account.groupAllowFrom,
-        groupPolicy: account.groupPolicy,
-        textChunkLimit: account.textChunkLimit,
-        // Account merge replaces `streaming` wholesale, so pinning the
-        // account-resolved object here keeps downstream root-level resolver
-        // reads (chunk mode, block enable/coalesce) on this account's config.
-        streaming: account.streaming,
-        mediaMaxMb: account.mediaMaxMb,
-        groups: account.groups,
-      },
-    },
-  } satisfies WhatsAppRuntimeConfig;
-  return { cfg, account };
-}
-
 function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
 }
@@ -113,7 +78,6 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
-const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -176,9 +140,9 @@ export async function monitorWebChannel(
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
-  const reconnectCatchUpWindowMs = Math.min(
+  const appendReplyMaxAgeMs = Math.min(
     Math.max(messageTimeoutMs, 60_000),
-    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
+    WHATSAPP_APPEND_REPLY_MAX_AGE_MS,
   );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
@@ -258,13 +222,7 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: tuning.debounceMs,
-              appendReplyWindow: connectionLocal.openedAfterRecentInbound
-                ? {
-                    afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
-                    untilMs: connectionLocal.startedAt + reconnectCatchUpWindowMs,
-                    maxAgeMs: reconnectCatchUpWindowMs,
-                  }
-                : undefined,
+              appendReplyMaxAgeMs,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
@@ -476,13 +434,31 @@ export async function monitorWebChannel(
         accountId: account.accountId,
         selfE164: selfE164 ?? null,
       });
-      whatsappLog.info(
-        formatWhatsAppInboundListeningLog({
-          groups: inboundPolicy.account.groups,
-          groupPolicy: inboundPolicy.groupPolicy,
-          hasGroupAllowFrom: inboundPolicy.groupAllowFrom.length > 0,
-        }),
-      );
+      let groupScope: string;
+      if (inboundPolicy.groupPolicy === "disabled") {
+        groupScope = "groups disabled by groupPolicy";
+      } else if (
+        inboundPolicy.groupPolicy === "allowlist" &&
+        !inboundPolicy.groupAllowFrom.length
+      ) {
+        groupScope = "group inbound blocked by empty groupPolicy allowlist";
+      } else {
+        const groups = inboundPolicy.account.groups ?? {};
+        if (Object.keys(groups).length === 0) {
+          const suffix =
+            inboundPolicy.groupPolicy === "allowlist"
+              ? "sender allowlist configured"
+              : "no group allowlist configured";
+          groupScope = `all groups; ${suffix}`;
+        } else if (Object.hasOwn(groups, "*")) {
+          groupScope = "all groups; wildcard configured";
+        } else {
+          const explicitGroupCount = Object.keys(groups).length;
+          const groupLabel = explicitGroupCount === 1 ? "group" : "groups";
+          groupScope = `${explicitGroupCount} configured ${groupLabel}`;
+        }
+      }
+      whatsappLog.info(`Listening for WhatsApp inbound messages (DM + ${groupScope}).`);
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }

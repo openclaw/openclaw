@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
@@ -21,17 +22,60 @@ type GatewayProgramArgs = {
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
 
+/**
+ * A CLI entrypoint the service install publishes before the service starts. It is not on
+ * disk while planning, so the argument builder uses it as given instead of probing.
+ */
+export type PlannedCliEntrypoint = { planned: string };
+
+/**
+ * Plans the entrypoint inside `packageRoot`, a copy of the same version as the running CLI
+ * that is not installed yet: the entry this CLI's own files resolve to, at the same relative path.
+ */
+export async function planCliEntrypoint(params: {
+  sourceEntrypoint: string;
+  sourceRoot: string;
+  packageRoot: string;
+  service: "gateway" | "node";
+}): Promise<PlannedCliEntrypoint> {
+  const source = await resolveCliEntrypointPathForService(params.sourceEntrypoint, params.service);
+  const relative = path.relative(
+    await fs.realpath(params.sourceRoot),
+    await fs.realpath(source).catch(() => source),
+  );
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Cannot plan the service CLI: ${source} is outside ${params.sourceRoot}.`);
+  }
+  return { planned: path.join(params.packageRoot, relative) };
+}
+
 const canAccessEntrypoint = (candidate: string) =>
   fs.access(candidate).then(
     () => true,
     () => false,
   );
 
-async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Promise<string> {
+function buildNodeInstallEntrypointCandidates(root: string): string[] {
+  return ["openclaw.mjs", "dist/entry.js", "dist/entry.mjs"].map((entry) => path.join(root, entry));
+}
+
+/** Node services must enter through the supervisor, including when repairing old definitions. */
+export function resolveNodeServiceEntrypoint(argv1 = process.argv[1]): Promise<string> {
+  return resolveCliEntrypointPathForService(argv1, "node");
+}
+
+async function resolveCliEntrypointPathForService(
+  argv1 = process.argv[1],
+  service: "gateway" | "node" = "gateway",
+): Promise<string> {
   if (!argv1) {
     throw new Error("Unable to resolve CLI entrypoint path");
   }
 
+  const installCandidates =
+    service === "node"
+      ? buildNodeInstallEntrypointCandidates
+      : buildGatewayInstallEntrypointCandidates;
   const normalized = path.resolve(argv1);
   const resolvedPath = await fs.realpath(normalized).catch(() => normalized);
   if (resolvedPath.includes(`${path.sep}.pnpm${path.sep}`)) {
@@ -47,7 +91,7 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
     ) {
       // Persist the verified package link, never the replaceable store generation.
       const stableEntrypoint = await findFirstAccessibleGatewayEntrypoint(
-        buildGatewayInstallEntrypointCandidates(owner.packageRoot),
+        installCandidates(owner.packageRoot),
         canAccessEntrypoint,
       );
       if (stableEntrypoint) {
@@ -60,11 +104,24 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
     // Existing installed command lines may point at versioned pnpm realpaths.
     // Repair prefers stable package symlink paths when they still exist.
     const preferredDistEntrypoint = await findFirstAccessibleGatewayEntrypoint(
-      buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
+      service === "node"
+        ? [
+            ...new Set(
+              [normalized, resolvedPath].flatMap((entry) =>
+                installCandidates(path.dirname(path.dirname(entry))),
+              ),
+            ),
+          ]
+        : buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
       canAccessEntrypoint,
     );
     if (preferredDistEntrypoint) {
       return preferredDistEntrypoint;
+    }
+    if (service === "node") {
+      throw new Error(
+        `Cannot find built CLI launcher beside ${normalized}. Reinstall OpenClaw and retry.`,
+      );
     }
     // Prefer the original (possibly symlinked) path over the resolved realpath.
     // This keeps LaunchAgent/systemd paths stable across package version updates,
@@ -81,7 +138,10 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
     return resolvedPath;
   }
 
-  const distCandidates = buildDistCandidates(resolvedPath, normalized);
+  const distCandidates = buildDistCandidates(
+    service === "node" ? [normalized, resolvedPath] : [resolvedPath, normalized],
+    installCandidates,
+  );
 
   const entrypoint = await findFirstAccessibleGatewayEntrypoint(
     distCandidates,
@@ -96,7 +156,10 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
   );
 }
 
-function buildDistCandidates(...inputs: string[]): string[] {
+function buildDistCandidates(
+  inputs: string[],
+  installCandidates: (root: string) => string[],
+): string[] {
   const roots: string[] = [];
   for (const inputPath of inputs) {
     const baseDir = path.dirname(inputPath);
@@ -108,7 +171,7 @@ function buildDistCandidates(...inputs: string[]): string[] {
       roots.push(path.join(parts.slice(0, binIndex).join(path.sep), path.basename(inputPath)));
     }
   }
-  return [...new Set(roots.flatMap(buildGatewayInstallEntrypointCandidates))];
+  return [...new Set(roots.flatMap(installCandidates))];
 }
 
 function resolveRepoRootForDev(): string {
@@ -152,7 +215,8 @@ export async function resolveOpenClawWrapperPath(
 }
 
 async function resolveCliProgramArguments(params: {
-  cliEntrypoint?: string;
+  cliEntrypoint?: string | PlannedCliEntrypoint;
+  service?: "gateway" | "node";
   args: string[];
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
@@ -167,11 +231,21 @@ async function resolveCliProgramArguments(params: {
   if (!params.runtimePath?.trim()) {
     throw new Error(
       params.runtime === "bun"
-        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
+        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4.4 or newer with WAL-reset-safe node:sqlite, then retry."
         : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
     );
   }
   const runtimePath = params.runtimePath;
+
+  if (params.runtime === "standalone") {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: runtimePath,
+      entryPath: null,
+      args: params.args,
+      execArgv: [],
+    });
+    return { programArguments: [invocation.command, ...invocation.args] };
+  }
 
   if (params.dev) {
     const repoRoot = resolveRepoRootForDev();
@@ -186,20 +260,25 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
-  const cliEntrypointPath = await resolveCliEntrypointPathForService(params.cliEntrypoint);
+  const cliEntrypointPath =
+    typeof params.cliEntrypoint === "object"
+      ? params.cliEntrypoint.planned
+      : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
   return {
     programArguments: [
       runtimePath,
       ...resolveRuntimeArgs(params.runtime),
-      (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
+      typeof params.cliEntrypoint === "object"
+        ? cliEntrypointPath
+        : ((await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath),
       ...params.args,
     ],
   };
 }
 
 export async function resolveGatewayProgramArguments(params: {
-  /** Retained CLI entrypoint to plan for instead of this process's argv[1]. */
-  cliEntrypoint?: string;
+  /** Retained or planned CLI entrypoint to use instead of this process's argv[1]. */
+  cliEntrypoint?: string | PlannedCliEntrypoint;
   port: number;
   allowUnconfigured?: boolean;
   dev?: boolean;
@@ -225,7 +304,8 @@ export async function resolveGatewayProgramArguments(params: {
 }
 
 export async function resolveNodeProgramArguments(params: {
-  cliEntrypoint?: string;
+  resumeSavedTarget?: boolean;
+  cliEntrypoint?: string | PlannedCliEntrypoint;
   host: string;
   port: number;
   contextPath?: string;
@@ -241,19 +321,22 @@ export async function resolveNodeProgramArguments(params: {
   runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
-  const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
-  if (params.tls === false && !params.tlsFingerprint) {
-    // Managed services must carry plaintext explicitly; omission would let the
-    // node runtime re-inherit TLS from the operator's global Gateway config.
-    args.push("--no-tls");
-  } else if (params.tls || params.tlsFingerprint) {
-    args.push("--tls");
-  }
-  if (params.tlsFingerprint) {
-    args.push("--tls-fingerprint", params.tlsFingerprint);
-  }
-  if (params.contextPath) {
-    args.push("--context-path", params.contextPath);
+  const args = ["node", "run"];
+  if (!params.resumeSavedTarget) {
+    args.push("--host", params.host, "--port", String(params.port));
+    if (params.tls === false && !params.tlsFingerprint) {
+      // Managed services must carry plaintext explicitly; omission would let the
+      // node runtime re-inherit TLS from the operator's global Gateway config.
+      args.push("--no-tls");
+    } else if (params.tls || params.tlsFingerprint) {
+      args.push("--tls");
+    }
+    if (params.tlsFingerprint) {
+      args.push("--tls-fingerprint", params.tlsFingerprint);
+    }
+    if (params.contextPath) {
+      args.push("--context-path", params.contextPath);
+    }
   }
   if (params.nodeId) {
     args.push("--node-id", params.nodeId);
@@ -269,5 +352,5 @@ export async function resolveNodeProgramArguments(params: {
   } else if (params.commands !== undefined) {
     args.push("--commands", params.commands.join(","));
   }
-  return resolveCliProgramArguments({ ...params, args });
+  return resolveCliProgramArguments({ ...params, service: "node", args });
 }

@@ -23,10 +23,10 @@ export const ISOLATED_RUNTIME_NODE_ARGS = [
   "--import",
   `data:text/javascript,${encodeURIComponent(`
     import fs from "node:fs";
-    import { registerHooks } from "node:module";
+    import nodeModule from "node:module";
     import path from "node:path";
     import { fileURLToPath, pathToFileURL } from "node:url";
-    registerHooks({
+    nodeModule.registerHooks({
       resolve(specifier, context, nextResolve) {
         const resolved = nextResolve(specifier, context);
         if (!resolved.url.startsWith("file:")) return resolved;
@@ -103,9 +103,10 @@ export function runIsolatedModuleScript(
 }
 
 export function createSourceRuntime(root: string): string {
+  const packageJson: { files: string[] } = JSON.parse(fs.readFileSync("package.json", "utf8"));
   const runtimeRoot = path.join(root, "runtime");
   fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
-  for (const dirname of ["node_modules", "packages", "scripts", "src"]) {
+  for (const dirname of ["node_modules", "packages", "scripts", "src", "docs"]) {
     fs.symlinkSync(
       path.resolve(dirname),
       path.join(runtimeRoot, dirname),
@@ -113,17 +114,7 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-sqlite.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "node-runtime-env.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
-    "worker-heap-flag.mjs",
+    ...packageJson.files.filter((file) => !file.includes("/") && file.endsWith(".mjs")),
     "package.json",
     "tsconfig.json",
   ]) {

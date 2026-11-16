@@ -37,6 +37,30 @@ function isEarlierStableSameReleaseMonth(params) {
   );
 }
 
+function isExtendedStableTrain(parsed) {
+  return parsed !== undefined && classifyReleaseTrain(parsed) === "extended-stable";
+}
+
+// Extended-stable installs follow the npm extended-stable selector, which only
+// ever names a final patch-33+ release. The newest such release below the
+// candidate is the predecessor those installs upgrade from.
+function newestExtendedStablePredecessor(candidate, newestFirstStable) {
+  return newestFirstStable.find(
+    (version) =>
+      isExtendedStableTrain(parseVersion(version)) &&
+      compareOpenClawVersions(version, candidate.version) < 0,
+  );
+}
+
+function isExtendedStablePredecessor(params) {
+  const { baseline, candidate } = params;
+  return (
+    isExtendedStableTrain(baseline) &&
+    isExtendedStableTrain(candidate) &&
+    compareOpenClawVersions(baseline.version, candidate.version) < 0
+  );
+}
+
 export function resolveReleaseUpgradeBaseline(candidateVersion, publishedVersions, context = {}) {
   const targetContextRef = normalizeTargetContextRef(context.targetContextRef);
   const candidate = parseVersion(candidateVersion);
@@ -65,6 +89,9 @@ export function resolveReleaseUpgradeBaseline(candidateVersion, publishedVersion
   if (!targetContextRef.startsWith("extended-stable/")) {
     const baseline =
       requestedBaseline?.version ??
+      (isExtendedStableTrain(candidate)
+        ? newestExtendedStablePredecessor(candidate, published)
+        : undefined) ??
       published.find((version) => compareOpenClawVersions(version, candidate.version) < 0);
     if (
       !baseline ||
@@ -100,23 +127,43 @@ export function resolveReleaseUpgradeBaseline(candidateVersion, publishedVersion
     );
   }
 
+  // The previous extended-stable release is what the extended-stable selector
+  // serves until this candidate publishes, so it is the primary predecessor.
+  const isFrozenLinePredecessor = (version) => {
+    const baseline = parseVersion(version);
+    return (
+      isEarlierStableSameReleaseMonth({ baseline, candidate }) ||
+      isExtendedStablePredecessor({ baseline, candidate })
+    );
+  };
   const baseline =
     requestedBaseline?.version ??
+    newestExtendedStablePredecessor(candidate, published) ??
     published.find((version) =>
       isEarlierStableSameReleaseMonth({ baseline: parseVersion(version), candidate }),
     );
-  if (
-    !baseline ||
-    !published.includes(baseline) ||
-    !isEarlierStableSameReleaseMonth({ baseline: parseVersion(baseline), candidate })
-  ) {
+  if (!baseline || !published.includes(baseline) || !isFrozenLinePredecessor(baseline)) {
     throw new Error(
       requestedBaseline
         ? `previous_version ${requestedBaseline.version} is not a published stable predecessor of ${candidate.version} on ${targetContextRef}`
-        : `no published stable baseline from the frozen release month predates candidate ${candidate.version} on ${targetContextRef}`,
+        : `no published stable baseline from the frozen release month or extended-stable line predates candidate ${candidate.version} on ${targetContextRef}`,
     );
   }
   return `openclaw@${baseline}`;
+}
+
+// Extended-stable candidates upgrade primarily from the previous extended-stable
+// release; every other candidate upgrades from its newest stable predecessor.
+function primaryQualificationBaseline(candidateVersion, survivorVersions) {
+  const candidate = parseVersion(candidateVersion);
+  const newestFirst = survivorVersions.toSorted((left, right) =>
+    compareOpenClawVersions(right, left),
+  );
+  return (
+    (isExtendedStableTrain(candidate)
+      ? newestExtendedStablePredecessor(candidate, newestFirst)
+      : undefined) ?? newestFirst[0]
+  );
 }
 
 export function validateQualificationBaselines(value, context = {}) {
@@ -158,6 +205,14 @@ export function validateQualificationBaselines(value, context = {}) {
         targetContextRef: context.targetContextRef,
       });
     }
+    if (
+      value.upgradeBaseline !==
+      `openclaw@${primaryQualificationBaseline(context.candidateVersion, versions.slice(1))}`
+    ) {
+      throw new Error(
+        "qualification upgrade baseline must be the newest selected predecessor of the candidate's release train",
+      );
+    }
   }
   return {
     upgradeBaseline: value.upgradeBaseline,
@@ -183,24 +238,31 @@ export function resolveQualificationBaselines({
   const upgradeBaseline = resolveReleaseUpgradeBaseline(candidateVersion, publishedVersions, {
     targetContextRef,
   });
+  const candidate = parseVersion(candidateVersion);
   const compatible = [...new Set(publishedVersions)].filter(
     (version) =>
       parseVersion(version)?.channel === "stable" &&
       compareOpenClawVersions(version, candidateVersion) < 0,
   );
+  const newestFirst = compatible.toSorted((left, right) => compareOpenClawVersions(right, left));
   const baselines = [upgradeBaseline];
-  if (!normalizeTargetContextRef(targetContextRef).startsWith("extended-stable/")) {
+  if (normalizeTargetContextRef(targetContextRef).startsWith("extended-stable/")) {
+    // Keep the frozen month's own stable predecessor beside the extended-stable one.
+    const sameMonth = newestFirst.find((version) =>
+      isEarlierStableSameReleaseMonth({ baseline: parseVersion(version), candidate }),
+    );
+    if (sameMonth) {
+      baselines.push(`openclaw@${sameMonth}`);
+    }
+  } else {
     // Keep supported-line breadth, bounded by the candidate rather than current latest.
-    const newestFirst = compatible.toSorted((left, right) => compareOpenClawVersions(right, left));
     baselines.push(
       ...newestFirst
         .filter((version) => classifyReleaseTrain(parseVersion(version)) === "stable")
         .slice(0, 2)
         .map((version) => `openclaw@${version}`),
     );
-    const extended = newestFirst.find(
-      (version) => classifyReleaseTrain(parseVersion(version)) === "extended-stable",
-    );
+    const extended = newestExtendedStablePredecessor(candidate, newestFirst);
     if (extended) {
       baselines.push(`openclaw@${extended}`);
     }

@@ -49,6 +49,13 @@ function hasWebSearchTool(tools) {
 }
 
 function responseEvents(text) {
+  const completedMessage = {
+    type: "message",
+    id: "msg_schema_e2e_1",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
   return [
     {
       type: "response.output_item.added",
@@ -62,19 +69,14 @@ function responseEvents(text) {
     },
     {
       type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: "msg_schema_e2e_1",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
+      item: completedMessage,
     },
     {
       type: "response.completed",
       response: {
         id: "resp_schema_e2e_1",
         status: "completed",
+        output: [completedMessage],
         usage: {
           input_tokens: 11,
           output_tokens: 7,

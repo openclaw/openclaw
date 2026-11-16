@@ -39,7 +39,7 @@ For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew i
 - [iMessage access control and routing](/channels/imessage/access-control) — DM and group policy, mention gating, per-group prompts, ACP bindings, and config writes.
 - [iMessage deployment patterns](/channels/imessage/deployment) — dedicated bot macOS user, remote Mac over Tailscale, multi-account, and DM history.
 - [iMessage media and attachments](/channels/imessage/media) — attachment ingestion and staging, outbound chunking, and delivery target formats.
-- [iMessage private API actions](/channels/imessage/rich-messages) — tapbacks, threaded replies, effects, native polls, approval controls, and question reactions.
+- [iMessage private API actions](/channels/imessage/rich-messages) — tapbacks, threaded replies, effects, native polls, approval controls, and agent questions.
 - [iMessage message behavior](/channels/imessage/messaging) — split-send DM coalescing and automatic inbound recovery after a restart.
 - [iMessage troubleshooting](/channels/imessage/troubleshooting) — symptom-first fixes and the configuration reference links.
 
@@ -92,7 +92,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="read-receipts-and-typing" />[Read receipts and typing](/channels/imessage/rich-messages#read-receipts-and-typing)
 - <a id="inbound-tapbacks" />[Inbound tapbacks](/channels/imessage/rich-messages#inbound-tapbacks)
 - <a id="approval-polls-and-reactions" />[Approval polls and reactions](/channels/imessage/rich-messages#approval-polls-and-reactions)
-- <a id="question-reactions-1-2-3-4" />[Question reactions (1️⃣ / 2️⃣ / 3️⃣ / 4️⃣)](/channels/imessage/rich-messages#question-reactions-1-2-3-4)
+- <a id="question-reactions-1-2-3-4" />[Agent questions](/channels/imessage/rich-messages#question-reactions-1-2-3-4)
 - <a id="imsg-not-found-or-rpc-unsupported" />[imsg not found or RPC unsupported](/channels/imessage/troubleshooting#imsg-not-found-or-rpc-unsupported)
 - <a id="messages-send-but-inbound-imessages-do-not-arrive" />[Messages send but inbound iMessages do not arrive](/channels/imessage/troubleshooting#messages-send-but-inbound-imessages-do-not-arrive)
 - <a id="gateway-is-not-running-on-macos" />[Gateway is not running on macOS](/channels/imessage/troubleshooting#gateway-is-not-running-on-macos)

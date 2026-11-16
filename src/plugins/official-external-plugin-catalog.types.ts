@@ -10,6 +10,7 @@ import type {
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
+  OpenClawPackageBuild,
   PluginPackageChannel,
   PluginPackageInstall,
 } from "./package-manifest.types.js";
@@ -79,6 +80,8 @@ type OfficialExternalCatalogChannel = PluginPackageChannel & {
 
 /** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
+  /** An installable plugin can still belong to the default core distribution. */
+  build?: Pick<OpenClawPackageBuild, "bundledDist">;
   legacyPluginIds?: readonly string[];
   legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];

@@ -1020,6 +1020,80 @@ private func inspectAISetupSurface(
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct OnboardingAISetupTests {
+    @Test(arguments: ["empty", "local-only", "normal", "discovery-failed"])
+    func `account path explains available options and discovery failures`(catalog: String) async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "AccountEmptyState"))
+        let harness = try AISetupHarness(
+            url: #require(URL(string: "ws://example.invalid")),
+            handler: { _, request, _ in
+                guard request.method == "openclaw.setup.detect" else {
+                    Issue.record("Account navigation unexpectedly requested \(request.method)")
+                    return unavailableGatewayResponse(id: request.id)
+                }
+                if catalog == "discovery-failed" {
+                    return unavailableGatewayResponse(id: request.id)
+                }
+                let original = detectedSetupResponse(id: request.id)
+                var envelope = try #require(JSONSerialization.jsonObject(with: original) as? [String: Any])
+                var payload = try #require(envelope["payload"] as? [String: Any])
+                payload["candidates"] = []
+                payload["manualProviders"] = catalog == "normal" ? [[
+                    "id": "openai", "label": "OpenAI", "hint": "API key",
+                ]] : []
+                payload["authOptions"] = catalog == "empty" ? [] : [[
+                    "id": catalog == "local-only" ? "ollama" : "openai-token-sharing",
+                    "brandId": catalog == "local-only" ? "ollama" : "openai",
+                    "label": catalog == "local-only" ? "Ollama" : "Sign in with ChatGPT (Beta)",
+                    "kind": "oauth", "featured": true,
+                ]]
+                envelope["payload"] = payload
+                return try JSONSerialization.data(withJSONObject: envelope)
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(state: state, defaults: defaults, routeIdentityProvider: { "local" })
+        do {
+            await view.aiSetup.detectConnections()
+            _ = AppKitTestSupport.application
+            let hosting = NSHostingView(rootView: view.aiSetupPage(contentHeight: 600))
+            hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 600)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+            }
+            window.orderFront(nil)
+            try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
+            let snapshot = try await inspectAISetupAccessibility(hosting)
+            #expect(snapshot.actions["Back"] == true)
+            #expect(snapshot.actions["Check again"] == true)
+            if catalog == "normal" {
+                #expect(snapshot.labels.contains("Sign in with ChatGPT (Beta)"))
+                #expect(snapshot.actions.contains { $0.key.contains("API Keys") && $0.value })
+            } else if catalog == "discovery-failed" {
+                #expect(snapshot.actions["Try again"] == true)
+            } else {
+                #expect(snapshot.labels.contains("No account connections are available"))
+                #expect(!snapshot.labels.contains("Ollama"))
+            }
+            #expect(snapshot.labels.contains("No account connections are available") ==
+                (catalog == "empty" || catalog == "local-only"))
+            try await pressOnboardingEntryButton("Check again", in: hosting)
+            try await TestWait.state("explicit account rediscovery") {
+                await harness.recorder.snapshot().methods.filter { $0 == "openclaw.setup.detect" }.count == 2
+            }
+            view.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+            await harness.gateway.shutdown()
+        } catch {
+            view.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+            await harness.gateway.shutdown()
+            throw error
+        }
+    }
+
     @Test(arguments: [false, true], [ColorScheme.light, .dark])
     func `two path onboarding keeps discovery passive and local setup reachable`(
         hasLocalModel: Bool,
@@ -2421,7 +2495,7 @@ struct OnboardingAISetupTests {
 
     @Test(arguments: [
         (choiceID: "test-provider-login", label: "Test provider", stepType: "text"),
-        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT (Beta)", stepType: "note"),
+        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT", stepType: "note"),
     ])
     func `advertised browser auth preserves its choice and session after a pre-dispatch disconnect`(
         choice: (choiceID: String, label: String, stepType: String)
@@ -3669,14 +3743,14 @@ struct OnboardingAISetupTests {
                     try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return ax.actions["Finish"] == false &&
+                        return ax.actions["Next"] == false &&
                             ax.actions.contains { $0.key.contains("API Keys") && $0.value }
                     }
                     try await pressOnboardingEntryButton("API Keys", in: hosting)
                     try await TestWait.state("API key provider form") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
-                            ax.actions["Finish"] == false
+                            ax.actions["Next"] == false
                     }
                     #expect(events.persistenceCalls == 4)
                 }
@@ -3825,6 +3899,8 @@ struct OnboardingAISetupTests {
             "agents.list", "openclaw.setup.detect", "agents.list", "openclaw.setup.activate",
         ])
         #expect(view.aiSetup.verifiedExistingInference)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(handoffs == [.dashboard])
     }
 

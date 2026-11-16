@@ -1,5 +1,6 @@
 import { resolveModelServiceTierContextTokens } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -22,13 +23,7 @@ type OpenAIResponsesPayloadModel = {
   contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
-};
-
-type OpenAIResponsesPayloadPolicyOptions = {
-  extraParams?: Record<string, unknown>;
-  storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
-  enablePromptCacheStripping?: boolean;
-  enableServerCompaction?: boolean;
+  thinkingLevelMap?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicy = {
@@ -37,6 +32,7 @@ type OpenAIResponsesPayloadPolicy = {
   defaultManagedReasoningEffort: "none" | undefined;
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
+  requiresStatelessCompactionReplay: boolean;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
@@ -160,6 +156,8 @@ function resolveOpenAIResponsesPayloadCapabilities(model: OpenAIResponsesPayload
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
     explicitContinuationOptIn,
+    requiresStatelessCompactionReplay:
+      endpointClass === "openai-public" || (isOpenAIProvider && endpointClass === "default"),
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
@@ -198,38 +196,37 @@ export function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | 
 
 function resolveOpenAIRequestedServiceTier(
   extraParams?: Record<string, unknown>,
+  serviceTiers?: readonly string[],
 ): OpenAIServiceTier | undefined {
   const explicitTier = normalizeOpenAIServiceTier(
     extraParams?.serviceTier ?? extraParams?.service_tier,
   );
-  if (explicitTier) {
-    return explicitTier;
-  }
   const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
   const fastMode = normalizeFastMode(
     typeof rawFastMode === "function" ? rawFastMode() : rawFastMode,
   );
-  return fastMode === "ultrafast" ? "ultrafast" : fastMode ? "priority" : undefined;
+  // Authored tiers remain operator-owned; model restrictions apply to speed overrides.
+  return fastMode === undefined || fastMode === "auto"
+    ? explicitTier
+    : fastMode === "ultrafast" && (!serviceTiers || serviceTiers.includes("ultrafast"))
+      ? "ultrafast"
+      : fastMode
+        ? "priority"
+        : explicitTier
+          ? "default"
+          : undefined;
 }
 
-/** Resolve the same explicit-tier-before-fast-mode precedence used at request egress. */
+/** Resolve the same speed-override-before-default-tier precedence used at request egress. */
 export function resolveOpenAIResponsesRequestContextTokens(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
   serviceTiers?: readonly string[],
 ): number | undefined {
-  // Authored service tiers remain operator-owned; model restrictions apply to Fast mode.
-  if (
-    serviceTiers &&
-    !serviceTiers.includes("ultrafast") &&
-    !normalizeOpenAIServiceTier(extraParams?.serviceTier ?? extraParams?.service_tier)
-  ) {
-    return undefined;
-  }
   return resolveOpenAIResponsesPayloadCapabilities(model).allowsOpenAIServiceTier
     ? resolveModelServiceTierContextTokens(
         normalizeOptionalLowercaseString(model.provider),
-        resolveOpenAIRequestedServiceTier(extraParams),
+        resolveOpenAIRequestedServiceTier(extraParams, serviceTiers),
       )
     : undefined;
 }
@@ -308,10 +305,12 @@ function stripInputItemStatuses(input: unknown): void {
   if (!Array.isArray(input)) {
     return;
   }
-  for (const item of input) {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      // Only item-level status is provider metadata. Nested values may be user or tool payloads.
-      delete (item as Record<string, unknown>).status;
+  for (let index = 0; index < input.length; index++) {
+    const item = input[index];
+    if (item && typeof item === "object" && !Array.isArray(item) && "status" in item) {
+      // Converted history can be shared; strip metadata on the request's own item.
+      const { status: _, ...rest } = item;
+      input[index] = rest;
     }
   }
 }
@@ -319,7 +318,12 @@ function stripInputItemStatuses(input: unknown): void {
 /** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
-  options: OpenAIResponsesPayloadPolicyOptions = {},
+  options: {
+    extraParams?: Record<string, unknown>;
+    storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
+    enablePromptCacheStripping?: boolean;
+    enableServerCompaction?: boolean;
+  } = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
@@ -342,7 +346,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
     isResponsesApi &&
     // Custom endpoints need an explicit capability; model-name hints describe native routes.
     !supportsOpenAIReasoningEffort(
-      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      capabilities.usesKnownNativeOpenAIRoute
+        ? model
+        : { compat: model.compat, thinkingLevelMap: model.thinkingLevelMap },
       "none",
     );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields
@@ -370,6 +376,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : undefined,
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
+    requiresStatelessCompactionReplay: capabilities.requiresStatelessCompactionReplay,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
     shouldStripPromptCache:
@@ -383,6 +390,30 @@ export function resolveOpenAIResponsesPayloadPolicy(
   };
 }
 
+/** Enforce replay storage on the final input, including items introduced by payload hooks. */
+export function enforceOpenAIResponsesCompactionReplayStorage(
+  payloadObj: Record<string, unknown>,
+  policy: Pick<
+    OpenAIResponsesPayloadPolicy,
+    "requiresStatelessCompactionReplay" | "shouldStripStore"
+  >,
+): void {
+  if (
+    policy.requiresStatelessCompactionReplay &&
+    Array.isArray(payloadObj.input) &&
+    payloadObj.input.some((item) => isRecord(item) && item.type === "compaction")
+  ) {
+    // Storing a replayed checkpoint can fail after output has streamed. Prevent
+    // the conflict instead of replaying a request that may already have done work.
+    if (policy.shouldStripStore) {
+      delete payloadObj.store;
+    } else {
+      payloadObj.store = false;
+    }
+    delete payloadObj.previous_response_id;
+  }
+}
+
 /** Mutate a Responses request payload according to the resolved endpoint policy. */
 export function applyOpenAIResponsesPayloadPolicy(
   payloadObj: Record<string, unknown>,
@@ -394,6 +425,7 @@ export function applyOpenAIResponsesPayloadPolicy(
   if (policy.shouldStripStore) {
     delete payloadObj.store;
   }
+  enforceOpenAIResponsesCompactionReplayStorage(payloadObj, policy);
   if (policy.shouldStripPromptCache) {
     delete payloadObj.prompt_cache_key;
     delete payloadObj.prompt_cache_retention;

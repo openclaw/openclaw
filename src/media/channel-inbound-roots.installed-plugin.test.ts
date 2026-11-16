@@ -15,10 +15,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const enabledCfg: OpenClawConfig = { channels: { imessage: { enabled: true } } };
-const ctx: MsgContext = {
-  Provider: "imessage",
-  AccountId: "work",
-};
+const ctx: MsgContext = { Provider: "imessage", AccountId: "work" };
 let pluginDir: string;
 let bundledPluginsDir: string;
 

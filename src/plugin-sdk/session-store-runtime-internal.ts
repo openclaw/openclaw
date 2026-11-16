@@ -25,7 +25,8 @@ export async function getSessionEntryAsync(
   params: SessionStoreReadParams,
 ): Promise<SessionEntry | undefined> {
   const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
-  return entry ? projectPluginSessionEntry(entry) : undefined;
+  // The public read owns its mutable result; internal actor readers borrow committed facts.
+  return entry ? structuredClone(projectPluginSessionEntry(entry)) : undefined;
 }
 
 /** Looks up a visible current session ID in one selected store. */
@@ -61,13 +62,29 @@ export function toSessionAccessScope(params: SessionStoreReadParams): SessionAcc
 }
 
 export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  const publicEntry = projectPublicSessionEntry(entry);
-  return {
-    ...publicEntry,
-    ...(entry.restartRecoveryRuns
-      ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
-      : {}),
-  };
+  return projectPublicSessionEntry(entry);
+}
+
+// Public results own their containers; immutable prompt strings can remain shared.
+export function copyMutableSessionEntry<T extends InternalSessionEntry | null>(entry: T): T {
+  if (!entry) {
+    return entry;
+  }
+  const copied = { ...entry };
+  const pending: object[] = [copied];
+  while (pending.length) {
+    const parent = pending.pop()!;
+    for (const key of Object.keys(parent)) {
+      const value: unknown = Reflect.get(parent, key);
+      if (value === null || typeof value !== "object") {
+        continue;
+      }
+      const child = Array.isArray(value) ? [...value] : { ...value };
+      Reflect.set(parent, key, child);
+      pending.push(child);
+    }
+  }
+  return copied;
 }
 
 export { projectPublicSessionEntryPatch as projectPluginSessionEntryPatch } from "../config/sessions/session-entry-projection.js";

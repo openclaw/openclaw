@@ -274,7 +274,6 @@ final class CookieSyncManager: NSObject {
             self.startupWatchdog = nil
             if self.process?.isRunning == true {
                 self.retryAttempt = 0
-                self.logger.debug("cookie sync startup watchdog passed")
             }
         }
         self.startupWatchdog = timer

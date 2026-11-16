@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest as route } from "./get-reply-directives-routing.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const renderedMentionPattern = "<@BOT> \\(Bek \\(Ops\\)\\)";
@@ -10,211 +10,150 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>()),
   getLoadedChannelPluginById: (id: string) =>
     id === "slack"
-      ? { mentions: { stripPatterns: () => [renderedMentionPattern, "<@[^>\\s]+>"] } }
+      ? {
+          id: "slack",
+          config: {},
+          mentions: { stripPatterns: () => [renderedMentionPattern, "<@[^>\\s]+>"] },
+        }
       : undefined,
 }));
 
 describe("sender-owned directive projection", () => {
   it.each([
     {
-      name: "selects an inline shortcut after a rendered group mention",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-      chatType: "channel" as const,
-      isGroup: true,
-    },
-    {
       name: "selects an inline shortcut when the rendered mention trails the text",
       rawText: "Please /help continue <@BOT> (Bek (Ops))",
       commandText: "Please /help continue",
       expected: "Please continue <@BOT> (Bek (Ops))",
-      chatType: "channel" as const,
-      isGroup: true,
     },
     {
-      name: "selects an inline shortcut on a later line after a rendered mention",
-      rawText: "<@BOT> (Bek (Ops)) Please summarize\n/help",
-      commandText: "Please summarize /help",
-      expected: "<@BOT> (Bek (Ops)) Please summarize\n",
-      chatType: "channel" as const,
-      isGroup: true,
-    },
-    {
-      name: "selects an inline shortcut after mention rendering in a direct message",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-      chatType: "direct" as const,
-      isGroup: false,
-    },
-    {
-      name: "keeps attachment context after a multiline sender shortcut",
+      name: "keeps direct-message attachment context after a multiline sender shortcut",
       rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
       commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
-      chatType: "channel" as const,
-      isGroup: true,
+      isGroup: false,
     },
-  ])("$name", ({ rawText, commandSourceText, commandText, expected, chatType, isGroup }) => {
-    const preparedSource = commandSourceText ?? rawText;
+    {
+      name: "rejects prepared metadata that does not reconstruct the command body",
+      rawText: "unrelated sender text",
+      commandSourceText: "<@BOT> (Bek (Ops)) different /help text",
+      commandText: "Please /help continue",
+      agentText: "[Forwarded message]\nPlease /help continue",
+      expected: "[Forwarded message]\nPlease /help continue",
+      rejected: true,
+    },
+  ])("$name", async (testCase) => {
+    const { rawText, commandText, expected } = testCase;
+    const isGroup = testCase.isGroup !== false;
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
-      ChatType: chatType,
+      ChatType: isGroup ? "channel" : "direct",
       CommandBody: commandText,
       RawBody: rawText,
-      BodyForAgent: rawText,
+      BodyForAgent: testCase.agentText ?? rawText,
       CommandAuthorized: true,
-      ChannelContext: { chat: { commandSourceText: preparedSource } },
+      WasMentioned: true,
+      ChannelContext: { chat: { commandSourceText: testCase.commandSourceText ?? rawText } },
     });
-    const result = resolveReplyDirectiveRouting({
-      commandText: ctx.commandText,
-      agentText: ctx.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup,
-      wasMentioned: true,
-      ctx,
-      cfg: { commands: { text: true } },
-      agentId: "main",
-      resetTriggered: false,
-    });
-    expect(result.inlineCommand).toBe("/help");
+    const result = await route(ctx, { isGroup });
+    expect(result.inlineCommand).toBe(testCase.rejected ? undefined : "/help");
     expect(result.cleanedBody).toBe(expected);
   });
 
-  it("rejects prepared channel metadata that does not reconstruct the command body", () => {
-    const agentText = "[Forwarded message]\nPlease /help continue";
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      ChatType: "channel",
-      CommandBody: "Please /help continue",
-      RawBody: "unrelated sender text",
-      BodyForAgent: agentText,
-      CommandAuthorized: true,
-      ChannelContext: {
-        chat: { commandSourceText: "<@BOT> (Bek (Ops)) different /help text" },
-      },
-    });
-    const result = resolveReplyDirectiveRouting({
-      commandText: ctx.commandText,
-      agentText: ctx.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: true,
-      wasMentioned: true,
-      ctx,
-      cfg: { commands: { text: true } },
-      agentId: "main",
-      resetTriggered: false,
-    });
-    expect(result.inlineCommand).toBeUndefined();
-    expect(result.cleanedBody).toBe(agentText);
-  });
+  const tail = "/think high\n  code()";
+  const prose =
+    "Prüfe anschließend, ob das Modell über /model bzw. /models in Telegram auswählbar ist.";
+  const forwardedStatus = `${prose}\n[Forwarded message]\n/status marker\n${tail}`;
+  it.each<[string, string, string, boolean, string?, string?, boolean?]>([
+    ["preserves model prose and forwarded status", prose, forwardedStatus, false],
+    [
+      "removes only sender status",
+      `${prose} /status`,
+      `${prose} /status\n[Forwarded message]\n/status marker\n${tail}`,
+      true,
+      forwardedStatus,
+    ],
+    ["keeps an empty sender projection", "", "[Forwarded message]\n/status marker", false],
+    [
+      "keeps flat history opaque",
+      "hello",
+      "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
+      false,
+    ],
+    ["does not resurrect a consumed reset", "new session", "", false, "", "new session", true],
+    [
+      "keeps tails after leading blanks",
+      "/status",
+      `\n\n/status:\n${tail}`,
+      false,
+      tail,
+      `\n\n/status:\n${tail}`,
+    ],
+  ])(
+    "%s",
+    async (
+      _name,
+      commandText,
+      agentText,
+      inlineStatus,
+      expected = agentText,
+      rawText = commandText,
+      resetTriggered = false,
+    ) => {
+      const ctx = buildTestCtx({
+        CommandBody: commandText,
+        RawBody: rawText,
+        BodyForAgent: agentText,
+        CommandAuthorized: true,
+      });
+      const result = await route(ctx, {
+        resetTriggered,
+        preparedModelCatalog: { entries: [], routeVariants: [] },
+      });
+      expect(result.cleanedBody).toBe(expected);
+      expect(result.inlineStatusRequested).toBe(inlineStatus);
+      expect(result.directives.hasThinkDirective).toBe(false);
+      expect(result.directives.hasModelDirective).toBe(false);
+    },
+  );
 
   it.each([
-    {
-      name: "preserves forwarded status text beside an ordinary caption",
-      commandText: "Please summarize",
-      rawText: "Please summarize",
-      agentText: "Please summarize\n[Forwarded message]\n/status marker",
-      expected: "Please summarize\n[Forwarded message]\n/status marker",
-      inlineStatus: false,
+    { body: "/status", suppressed: false },
+    { body: "/skill weather\n  first\n  second", suppressed: false },
+    { body: "/reset\ninspect this", suppressed: false },
+    { body: "/status", suppressed: true },
+  ])(
+    "keeps standalone command status out of attachment context: %j",
+    async ({ body, suppressed }) => {
+      const agentText = `[System receipt]\n\n${body}\n[media attached: media://inbound/voice.mp3]`;
+      const ctx = buildTestCtx({
+        CommandBody: body,
+        RawBody: `${body}\n[media attached: media://inbound/voice.mp3]`,
+        BodyForAgent: agentText,
+        CommandAuthorized: !suppressed,
+        CommandInterpretationSuppressed: suppressed,
+      });
+      const result = await route(ctx);
+      expect(result.inlineStatusRequested).toBe(false);
+      expect(result.cleanedBody).toBe(agentText);
     },
-    {
-      name: "removes sender status while preserving forwarded status",
-      commandText: "Please /status summarize",
-      rawText: "Please /status summarize",
-      agentText: "Please /status summarize\n[Forwarded message]\n/status marker",
-      expected: "Please summarize\n[Forwarded message]\n/status marker",
-      inlineStatus: true,
+  );
+
+  it.each([true, false])(
+    "preserves reasoning authorization before clearing (authorized: %s)",
+    async (authorized) => {
+      const ctx = buildTestCtx({
+        Body: "/reasoning on",
+        CommandBody: "/reasoning on",
+        CommandAuthorized: authorized,
+      });
+      const result = await route(ctx);
+      expect(result.directives.hasReasoningDirective).toBe(authorized);
+      expect((await result.resolveModelLevels()).resolvedReasoningLevel).toBe(
+        authorized ? "on" : "off",
+      );
     },
-    {
-      name: "preserves forwarded session directives beside a caption",
-      commandText: "Please summarize",
-      rawText: "Please summarize",
-      agentText: "Please summarize\n[Forwarded message]\n/think high\n  code()",
-      expected: "Please summarize\n[Forwarded message]\n/think high\n  code()",
-      inlineStatus: false,
-    },
-    {
-      name: "keeps an empty sender projection distinct from forwarded content",
-      commandText: "",
-      rawText: "",
-      agentText: "[Forwarded message]\n/status marker",
-      expected: "[Forwarded message]\n/status marker",
-      inlineStatus: false,
-    },
-    {
-      name: "strips repeated sender status without changing remaining whitespace",
-      commandText: "Please /status summarize /status\n  code()",
-      rawText: "Please /status summarize /status\n  code()",
-      agentText: "Please /status summarize /status\n  code()",
-      expected: "Please summarize\n  code()",
-      inlineStatus: true,
-    },
-    {
-      name: "keeps flat history opaque to command cleanup",
-      commandText: "hello",
-      rawText: "hello",
-      agentText:
-        "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
-      expected:
-        "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
-      inlineStatus: false,
-    },
-    {
-      name: "does not resurrect a consumed reset body",
-      commandText: "new session",
-      rawText: "new session",
-      agentText: "",
-      expected: "",
-      inlineStatus: false,
-      resetTriggered: true,
-    },
-    {
-      name: "keeps normalized command tails",
-      commandText: "/status",
-      rawText: "/status:\n/think high\n  code()",
-      agentText: "/status:\n/think high\n  code()",
-      expected: "/think high\n  code()",
-      inlineStatus: false,
-    },
-    {
-      name: "keeps tails after leading blanks",
-      commandText: "/status",
-      rawText: "\n\n/status:\n/think high\n  code()",
-      agentText: "\n\n/status:\n/think high\n  code()",
-      expected: "/think high\n  code()",
-      inlineStatus: false,
-    },
-  ])("$name", ({ commandText, rawText, agentText, expected, inlineStatus, resetTriggered }) => {
-    const ctx = buildTestCtx({
-      CommandBody: commandText,
-      RawBody: rawText,
-      BodyForAgent: agentText,
-      CommandAuthorized: true,
-    });
-    const result = resolveReplyDirectiveRouting({
-      commandText: ctx.commandText,
-      agentText: ctx.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: false,
-      wasMentioned: false,
-      ctx,
-      cfg: { commands: { text: true } },
-      agentId: "main",
-      resetTriggered: resetTriggered === true,
-    });
-    expect(result.cleanedBody).toBe(expected);
-    expect(result.hasInlineStatus).toBe(inlineStatus);
-    expect(result.directives.hasThinkDirective).toBe(false);
-  });
+  );
 });

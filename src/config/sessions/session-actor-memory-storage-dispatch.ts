@@ -11,7 +11,6 @@ import {
   readSessionActorMemoryCollaboration,
   mutateSessionActorMemoryCollaboration,
 } from "./session-actor-memory-collaboration.js";
-import { readSessionActorMemoryCompletion } from "./session-actor-memory-completion.js";
 import {
   readSessionActorMemoryConversationDelivery,
   beginSessionActorMemoryConversationDelivery,
@@ -82,6 +81,7 @@ export function readSessionActorMemoryStorage(
       return readSessionActorBoardQuery(context, query);
     case "progressCard.get":
       return readSessionActorProgressCard(context, query.input.sessionKey);
+    case "session.rewrite.prepare":
     case "session.report.prepare":
     case "session.correction.prepare":
     case "session.transcript.messageFacts":
@@ -95,10 +95,9 @@ export function readSessionActorMemoryStorage(
       return readSessionActorMemoryCorpus(context, query);
     case "session.history.search":
       return readSessionActorMemorySearch(context, query.input);
-    case "session.completion.read":
-      return readSessionActorMemoryCompletion(context.state, query.input, context);
     case "session.turn.prepare":
       return prepareSessionActorMemoryTurn(context, query.input);
+    case "session.lifecycle.artifacts":
     case "session.entry.creation":
     case "session.entry.read":
     case "session.entry.readById":
@@ -200,8 +199,6 @@ export function mutateSessionActorMemoryStorage(
     case "session.outbox.complete":
     case "session.outbox.recordFailure":
     case "session.outbox.discardIntent":
-    case "session.heartbeat.persist":
-    case "session.heartbeat.claim":
     case "session.messageToolOutcome.record":
     case "session.trajectory.append":
       return mutateSessionActorMemorySideEffects(context, command);
@@ -212,11 +209,14 @@ export function mutateSessionActorMemoryStorage(
     case "progressCard.put":
     case "progressCard.clearForReset":
       return executeSessionActorProgressCardCommand(context, command);
+    case "session.rewrite.commit":
+    case "session.event.append":
     case "session.report.assistant":
     case "session.report.abortedPartial":
     case "session.report.append":
     case "session.correction.commit":
     case "session.workerTranscript.commit":
+    case "session.transcript.manualCompact":
       return executeSessionActorMemoryReportCommand(context, command);
     case "session.usage.write":
       return mutateSessionActorMemoryUsage(context, command);
@@ -229,8 +229,9 @@ export function mutateSessionActorMemoryStorage(
     case "session.lifecycle.reclaim":
       return executeSessionActorMemoryEntryCommand(context, command);
     case "session.parentFork.commit":
+    case "session.parentFork.transcript":
     case "session.messageCut":
-      return executeSessionActorMemoryForkCommand(context, command);
+      return executeSessionActorMemoryForkCommand(context, command, authority.parentFork);
     case "session.pendingInput.mutate": {
       const window =
         command.input.kind === "finish"
@@ -238,18 +239,7 @@ export function mutateSessionActorMemoryStorage(
           : context.state;
       return createSessionActorMemoryPending(window, context).mutate(command.input);
     }
-    case "session.pendingInput.interruptHistory": {
-      if (!authority.isPendingInputProtected) {
-        throw new Error("Pending input reconciliation requires its live custody owner");
-      }
-      const window = editPendingWindow(context, command.input.sessionId);
-      return createSessionActorMemoryPending(window, context).interruptHistory(command.input, {
-        isProtected: (candidate) =>
-          authority.isPendingInputProtected!(candidate, context.state.hot.entry?.sessionId),
-        admit: (stage, grant) =>
-          context.admit(stage, { ...grant, currentSessionId: context.state.hot.entry?.sessionId }),
-      });
-    }
+
     case "session.goal.mutate":
       return createSessionActorMemoryGoals(context).mutate(command.input);
     default:

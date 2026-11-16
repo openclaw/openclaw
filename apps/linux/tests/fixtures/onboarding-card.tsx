@@ -2,6 +2,7 @@ import { render } from "@solidjs/web";
 import type { GatewayBrowserClient } from "../../../../ui/src/api/gateway.ts";
 import type { ApplicationContext } from "../../../../ui/src/app/context.ts";
 import { ApplicationProvider } from "../../../../ui/src/lib/reactive/context.ts";
+import { createCustodianActions } from "../../../../ui/src/pages/custodian/custodian-actions.ts";
 import { CustodianSessionStore } from "../../../../ui/src/pages/custodian/custodian-session-store.ts";
 import { CustodianSetupCard } from "../../../../ui/src/pages/custodian/custodian-setup-card.tsx";
 import "../../../../ui/src/styles/base.css";
@@ -77,27 +78,30 @@ window.addEventListener("openclaw:gateway-notice", (event) => {
 window.addEventListener("openclaw:native-gateways-changed", report);
 
 render(
-  () => (
-    <ApplicationProvider value={context}>
-      <header>OPENCLAW · SYNTHETIC GATEWAY DATA</header>
-      <main>
-        <h1>{title()}</h1>
-        <p>Production setup card in the native desktop app. Provider results are synthetic.</p>
-        <CustodianSetupCard store={store} />
-        <p id="action-error" role="alert" />
-        <nav aria-label="Proof navigation">
-          <a href="/fixture/chat/custodian">Open chat</a>
-          <a href="/fixture/custodian?unavailable=1">Show unavailable provider</a>
-          <button type="button" onClick={() => location.reload()}>
-            Reload chat
-          </button>
-          <button type="button" onClick={leaveGatewayBase}>
-            Open sibling path
-          </button>
-        </nav>
-      </main>
-    </ApplicationProvider>
-  ),
+  () => {
+    const { actions } = createCustodianActions(() => store);
+    return (
+      <ApplicationProvider value={context}>
+        <header>OPENCLAW · SYNTHETIC GATEWAY DATA</header>
+        <main>
+          <h1>{title()}</h1>
+          <p>Production setup card in the native desktop app. Provider results are synthetic.</p>
+          <CustodianSetupCard store={store} actions={actions.setup} />
+          <p id="action-error" role="alert" />
+          <nav aria-label="Proof navigation">
+            <a href="/fixture/chat/custodian">Open chat</a>
+            <a href="/fixture/custodian?unavailable=1">Show unavailable provider</a>
+            <button type="button" onClick={() => location.reload()}>
+              Reload chat
+            </button>
+            <button type="button" onClick={leaveGatewayBase}>
+              Open sibling path
+            </button>
+          </nav>
+        </main>
+      </ApplicationProvider>
+    );
+  },
   document.getElementById("app")!,
 );
 store.subscribe(report);

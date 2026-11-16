@@ -335,7 +335,7 @@ try {
   if (process.argv[2] === "read") {
     process.stdout.write(JSON.stringify(snapshot(process.argv[3])));
   } else if (process.argv[2] === "compose") {
-    const { body, dropped } = compose(JSON.parse(readFileSync(0, "utf8")));
+    const { body, dropped } = compose(JSON.parse(readFileSync(0).toString("utf8")));
     if (dropped.length > 0) {
       console.error(`Dropped squash co-author credit: ${JSON.stringify(dropped)}`);
     }

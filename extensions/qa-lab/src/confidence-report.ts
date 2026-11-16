@@ -599,45 +599,45 @@ async function evaluateLane(
   };
 }
 
-function applySkipBackfillState(
-  lanes: readonly QaConfidenceLaneResult[],
-): QaConfidenceLaneResult[] {
-  const byId = new Map(lanes.map((lane) => [lane.id, lane]));
-  return lanes.map((lane) => {
+export async function buildQaConfidenceReport(params: {
+  manifest: QaConfidenceManifest;
+  artifactRoot: string;
+  strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
+  generatedAt?: string;
+}) {
+  const evaluatedLanes = [];
+  for (const lane of params.manifest.lanes) {
+    evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
+  }
+  const byId = new Map(evaluatedLanes.map((lane) => [lane.id, lane]));
+  const lanes: QaConfidenceLaneResult[] = evaluatedLanes.map((lane) => {
     if (!lane.skippedCount || lane.skippedCount <= 0 || !lane.skipBackfillLane) {
       return lane;
     }
     const backfillLane = byId.get(lane.skipBackfillLane);
     const skipBackfilled = backfillLane?.status === "pass";
-    return {
-      ...lane,
+    return Object.assign({}, lane, {
       skipBackfilled,
       details: `${lane.details}; skipped rows backfilled by ${lane.skipBackfillLane}: ${
         skipBackfilled ? "yes" : "no"
       }`,
-    };
+    });
   });
-}
-
-function countLaneResults(lanes: readonly QaConfidenceLaneResult[]) {
-  return {
-    total: lanes.length,
-    passed: lanes.filter((lane) => lane.status === "pass").length,
-    failed: lanes.filter((lane) => lane.status === "fail").length,
-    blocked: lanes.filter((lane) => lane.status === "blocked").length,
-    missing: lanes.filter((lane) => lane.status === "missing").length,
-    unknown: lanes.filter((lane) => lane.status === "unknown" || lane.status === "missing").length,
+  const requiredLanes = lanes.filter((lane) => lane.required);
+  const counts = {
+    total: requiredLanes.length,
+    passed: requiredLanes.filter((lane) => lane.status === "pass").length,
+    failed: requiredLanes.filter((lane) => lane.status === "fail").length,
+    blocked: requiredLanes.filter((lane) => lane.status === "blocked").length,
+    missing: requiredLanes.filter((lane) => lane.status === "missing").length,
+    unknown: requiredLanes.filter((lane) => lane.status === "unknown" || lane.status === "missing")
+      .length,
   };
-}
-
-function failuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
-  return lanes
+  const unclassifiedFailures = requiredLanes
     .filter((lane) => lane.status === "unknown" || lane.status === "missing")
     .map((lane) => `${lane.id} is unclassified: ${lane.details}`);
-}
-
-function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
-  return lanes.flatMap((lane) => {
+  const globalFailures = requiredLanes.flatMap((lane) => {
     if (lane.status === "blocked" || lane.status === "missing" || lane.status === "unknown") {
       return [
         `${lane.id} is ${lane.status === "unknown" ? "unclassified" : lane.status}: ${lane.details}`,
@@ -651,24 +651,6 @@ function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]):
     }
     return [];
   });
-}
-
-export async function buildQaConfidenceReport(params: {
-  manifest: QaConfidenceManifest;
-  artifactRoot: string;
-  strictZeroUnknowns?: boolean;
-  strictGlobalPass?: boolean;
-  generatedAt?: string;
-}) {
-  const evaluatedLanes = [];
-  for (const lane of params.manifest.lanes) {
-    evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
-  }
-  const lanes = applySkipBackfillState(evaluatedLanes);
-  const requiredLanes = lanes.filter((lane) => lane.required);
-  const counts = countLaneResults(requiredLanes);
-  const unclassifiedFailures = failuresForLaneResults(requiredLanes);
-  const globalFailures = globalFailuresForLaneResults(requiredLanes);
   const zeroUnknowns = counts.unknown === 0;
   const globalPass = zeroUnknowns && globalFailures.length === 0;
   const strictZeroUnknowns = params.strictZeroUnknowns === true;

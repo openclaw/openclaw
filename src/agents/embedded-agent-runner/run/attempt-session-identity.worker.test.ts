@@ -12,7 +12,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
+import {
+  makeAttempt,
+  makeNormalizationInput,
+  makePromptState,
+} from "./attempt-normalization.test-support.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 
 let testState: OpenClawTestState;
@@ -52,17 +57,21 @@ it("loads attempt entries and adopts successors without SQLite on the calling th
       });
       const nextMarker = formatSqliteSessionFileMarker({ ...target, sessionId: "session-after" });
       const sessionPromptState = {
+        ...makePromptState(),
         sessionId: "session-before",
         sessionFile: kind === "marker" ? target.sessionKey : previousMarker,
         sessionTarget: { ...target, sessionId: "session-before" },
         adoptSessionId: vi.fn(),
       };
-      await applyEmbeddedAttemptSessionIdentity({
-        sessionPromptState,
-        sessionIdUsed: "session-after",
-        sessionFileUsed: kind === "marker" ? nextMarker : target.sessionKey,
-        assertCurrent: () => {},
-      });
+      await normalizeEmbeddedRunAttempt(
+        makeNormalizationInput(
+          makeAttempt(undefined, {
+            sessionIdUsed: "session-after",
+            sessionFileUsed: kind === "marker" ? nextMarker : target.sessionKey,
+          }),
+          sessionPromptState,
+        ),
+      );
       expect(sessionPromptState.adoptSessionId).toHaveBeenCalledWith("session-after");
       expect(sessionPromptState.sessionTarget).toEqual({ ...target, sessionId: "session-after" });
       expect(observer.counts).toEqual(emptySqliteCounts());

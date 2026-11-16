@@ -75,8 +75,18 @@ export function renderSlackRichText(
           const name = read(element.name);
           return name ? `:${name}:` : "";
         }
-        case "date":
-          return literal(read(element.fallback) ?? "");
+        case "date": {
+          const fallback = read(element.fallback);
+          if (fallback) {
+            return literal(fallback);
+          }
+          if (typeof element.timestamp !== "number") {
+            return "";
+          }
+          const date = new Date(element.timestamp * 1000);
+          // Slack's display format depends on the viewer; keep this fallback in UTC.
+          return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+        }
         default:
           return "";
       }

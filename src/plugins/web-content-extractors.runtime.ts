@@ -10,22 +10,15 @@ import type {
 
 export function resolvePluginWebContentExtractors(params?: {
   config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: readonly string[];
 }): PluginWebContentExtractorEntry[] {
   const extractors: PluginWebContentExtractorEntry[] = [];
   for (const plugin of resolveEnabledBundledManifestContractPlugins({
     config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env: params?.env,
-    onlyPluginIds: params?.onlyPluginIds,
     contract: "webContentExtractors",
   })) {
     const loaded = loadBundledPublicArtifactEntries({
       dirName: plugin.id,
       pluginId: plugin.id,
-      env: params?.env,
       owner: plugin,
       artifactCandidates: ["web-content-extractor.js", "web-content-extractor-api.js"],
       suffix: "WebContentExtractor",

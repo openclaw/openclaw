@@ -3,7 +3,7 @@
  * for compaction and history pruning.
  */
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
 import { isToolCallBlockType } from "../shared/tool-block-contract.js";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -19,7 +19,7 @@ const CONVERSATION_ANCHOR_ROLES = new Set([
 
 function hasMeaningfulText(text: string): boolean {
   const trimmed = text.trim();
-  if (!trimmed || isSilentReplyText(trimmed)) {
+  if (!trimmed) {
     return false;
   }
   const heartbeat = stripHeartbeatToken(trimmed, { mode: "message" });
@@ -29,6 +29,9 @@ function hasMeaningfulText(text: string): boolean {
 /** Returns whether a message has content worth preserving as conversation. */
 function hasMeaningfulConversationContent(message: AgentMessage): boolean {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return false;
+  }
+  if (isSilentAssistantTranscriptMessage(message)) {
     return false;
   }
   if ((message as { role?: unknown }).role === "custom") {

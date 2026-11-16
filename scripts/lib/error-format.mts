@@ -10,6 +10,19 @@ export function formatErrorMessage(error: unknown): string {
   return String(error);
 }
 
+/** Preserve the diagnostic chain for CLI failures whose owner attached nested causes. */
+export function formatErrorMessageWithCauses(error: unknown): string {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current !== undefined && !seen.has(current) && messages.length < 8) {
+    seen.add(current);
+    messages.push(formatErrorMessage(current));
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return messages.join("\nCaused by: ");
+}
+
 /** Read Error messages unchanged and stringify every other value. */
 export function coerceErrorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);

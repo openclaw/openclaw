@@ -50,11 +50,37 @@ tracked defaults unchanged.
 
 ## Release Workflow
 
+Store releases also run every **Monday at 11:00 AM Pacific**, using
+`America/Los_Angeles` for daylight saving time. The weekly schedule follows the
+manual `release` path below, including qualification, phone/Wear screenshots,
+and the `android-store-release` environment. It is independent of
+`ANDROID_INTERNAL_ENABLED`. Only weekly store runs send Discord results; see
+[weekly mobile releases](https://docs.openclaw.ai/ci/scheduled-workflows#weekly-mobile-store-releases)
+for notification setup and scheduling behavior.
+
+Both operations fetch the selected commit's complete ancestry without fetching
+unrelated branches, tags, or historical file contents. Git fetches historical file
+contents on demand when release notes read them. The release owner separately
+fetches current `main` for its ancestry check and each public phone/Wear source
+ref for release notes, retaining the same blobless filter.
+
+Compare read-only history acquisition against a base revision without building
+or uploading a release:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-android-release-history.mts \
+  --remote <repository-url> --source <main-sha> --base <base-revision> \
+  --baseline-ref <public-phone-ref> --baseline-ref <public-wear-ref>
+```
+
+This runs five serial pairs with fresh Git object stores, compares release-note
+inventories and selected evidence, and reports acquisition time and object bytes.
+
 1. Run the manual **Android Store Release** GitHub Action from `main` with its default `release` operation. The upload uses the `android-store-release` environment and freezes the commit selected at dispatch, even if `main` advances while the run is queued. The `internal` operation and daily schedule use the same release owner with the differences described below.
 2. The workflow derives the Gateway version from the root `package.json`, selects the Android revision from source refs and current public releases, and chooses the next sequential phone/Wear codes above the uploaded codes and pinned floor. It refuses a version regression, an exhausted revision or native code range, and uploaded new-format codes whose source refs are missing.
 3. Planning identifies the public releases in `production` and `wear:production`. OpenAI generates separate phone and Wear notes from changes since those releases. Internal uploads do not advance the public baseline. Staged, halted, or ambiguous public releases stop preparation.
 4. The workflow saves the plan and generated notes for the selected clean source commit. Fastlane and Gradle consume those artifacts at runtime. No tracked release files, preparation commits, or follow-up PRs are needed.
-5. The upload lane validates auth, signing, version metadata, and generated notes; captures phone and Wear screenshots; and builds the signed phone AAB, Wear AAB, and third-party APK. It rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
+5. The upload lane validates auth, signing, and version metadata, then captures phone and Wear screenshots. It generates the phone and Wear notes while building both signed AABs together in one Gradle invocation. Both operations must succeed before upload; the lane validates the saved notes and rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
 6. Before the first new-format upload, the lane records the immutable legacy-code cutover marker. The phone and Wear bundles go to `internal` and `wear:internal`. Production promotion remains manual in Google Play Console. A successful upload records the unchanged source SHA and planned identity in its immutable release ref.
 
 Both release operations omit `changesNotSentForReview` when the selected Play
@@ -72,6 +98,11 @@ isolate those staged changes. See Google's
 `pnpm android:release:upload` runs the same planning, note generation, and upload
 flow from a clean local `main` matching `origin/main`, with no
 required arguments.
+Notes generation and bundle building share the same selected source and saved
+plan. Screenshots finish before either starts. If the build fails, the lane waits
+for the notes process to finish within its existing budget before retaining the
+attempt. Building an archive from a saved plan does not require release notes;
+standalone release preflight and upload still validate both audiences' notes.
 The read-only Fastlane `release_plan` lane accepts an `output_path` for its JSON
 plan. It opens a temporary Play edit to inspect both artifact inventories and
 aborts that edit before returning. It never uploads or commits a Play edit.
@@ -215,7 +246,7 @@ saved plan, notes, and exact AABs when investigating a failed or uncertain uploa
 Agent-driven recovery requires explicit maintainer direction after reporting the
 failure; do not automatically rerun the upload or record its ref.
 
-The third-party flavor is archived as a signed APK for non-Play distribution. The Play release lane never uploads it. Official GitHub distribution is owned only by `.github/workflows/android-release.yml`, which publishes regular final and correction tags through the protected `android-release` environment as `OpenClaw-Android.apk`.
+Store and Internal releases build only the phone and Wear AABs. The third-party flavor is built as a signed APK for non-Play distribution by `.github/workflows/android-release.yml`, which publishes regular final and correction tags through the protected `android-release` environment as `OpenClaw-Android.apk`. Local `pnpm android:release:archive` continues to build all three artifacts.
 
 ## Release SHA tracking
 
@@ -275,10 +306,11 @@ For each audience, the shared generator shortlists up to ten changed files from
 a compact inventory and commit subjects, then drafts highlights from focused
 endpoint diffs. Current source and Play flavor configuration check availability.
 A separate factual review can request one correction. Each stage reports
-progress, with at most five model requests per audience and a five-minute budget
-for the complete generation. Exhausted budgets or unapproved notes stop
-preparation before upload. Retrying a saved, valid artifact reuses its exact text
-without another model call.
+progress, with at most five model stages per audience. Each stage permits one SDK
+retry for a transient connection, timeout, or retryable API failure, including
+backoff within the unchanged five-minute budget for the complete generation.
+Exhausted budgets or unapproved notes stop preparation before upload. Retrying a
+saved, valid artifact reuses its exact text without another model call.
 
 If Play accepted an upload but recording its v2 ref failed, the next run stops on
 the unmapped codes. Preserve `android-plan.json`, the notes, and both uploaded

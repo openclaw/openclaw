@@ -16,6 +16,7 @@ struct DashboardIdentityFixture: Sendable {
 
     init(
         announcement: String?,
+        controlUiBasePath: String? = nil,
         endpointGate: GatewayConnectionSuspensionGate? = nil,
         source: GatewayConnectionEndpointSource? = nil) throws
     {
@@ -41,12 +42,14 @@ struct DashboardIdentityFixture: Sendable {
             }, receiveHook: { socket, index in
                 if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 let data = GatewayWebSocketTestSupport.connectOkData(id: socket.snapshotConnectRequestID() ?? "connect")
-                guard let identityURL = announcement.value else { return .data(data) }
+                let identityURL = announcement.value
+                guard identityURL != nil || controlUiBasePath != nil else { return .data(data) }
                 var frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
                 var payload = try #require(frame["payload"] as? [String: Any])
                 var snapshot = try #require(payload["snapshot"] as? [String: Any])
                 snapshot["controlUiIdentityUrl"] = identityURL
                 payload["snapshot"] = snapshot
+                payload["controlUiBasePath"] = controlUiBasePath
                 frame["payload"] = payload
                 return try .data(JSONSerialization.data(withJSONObject: frame))
             })
@@ -181,6 +184,36 @@ struct GatewayConnectionDashboardIdentityTests {
             announcement)
         #expect(fixture.requests.value == ["health"])
         await fixture.connection.shutdown()
+    }
+
+    @Test(arguments: [nil, "/__openclaw__"])
+    @MainActor
+    func `remote dashboards open under the Control UI mount advertised by hello`(basePath: String?) async throws {
+        let fixture = try DashboardIdentityFixture(announcement: nil, controlUiBasePath: basePath)
+        let manager = DashboardManager._testMake(
+            connectionProvider: { _ in fixture.connection },
+            browserIdentityURLProvider: nil,
+            controlUiBasePathProvider: nil)
+        let result: Result<Void, Error>
+        do {
+            let configuration = try await manager.dashboardConfiguration(
+                endpoint: fixture.source.snapshot(),
+                mode: .remote,
+                target: .profile("mounted"),
+                token: fixture.config.token).configuration
+            let mount = "127.0.0.1:28901\(basePath ?? "")/"
+            #expect(configuration.url.absoluteString == "http://\(mount)")
+            guard case let .nativeDevice(gatewayUrl, _, _, _) = configuration.auth else {
+                Issue.record("Remote dashboard must keep native device auth")
+                throw CancellationError()
+            }
+            #expect(gatewayUrl == "ws://\(mount)")
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        await fixture.connection.shutdown()
+        try result.get()
     }
 
     @Test(arguments: ["closed", "switched", "retired", "other-retired"])

@@ -2,7 +2,7 @@
   "id": "amazon-bedrock-mantle",
   "categories": ["models"],
   "name": "Amazon Bedrock Mantle",
-  "description": "OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routing.",
+  "description": "OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI Responses, Chat Completions, and Anthropic Messages routing.",
   "activation": {
     "onStartup": false
   },

@@ -1,9 +1,8 @@
-// Transcript artifact usage, previews, and response bounds.
-import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { canAccess } from "../infra/path-existence.js";
 import {
   createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
@@ -39,9 +38,13 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   storePath: string | undefined,
   sessionFile?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile).find(
-    (value) => fs.existsSync(value),
-  );
+  let filePath: string | undefined;
+  for (const candidate of resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile)) {
+    if (await canAccess(candidate)) {
+      filePath = candidate;
+      break;
+    }
+  }
   if (!filePath) {
     return null;
   }

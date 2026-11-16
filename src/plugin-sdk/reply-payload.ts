@@ -1,4 +1,3 @@
-// Reply payload helpers normalize plugin reply targets, text, media, and approval metadata.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   getReplyPayloadMetadata,
@@ -79,13 +78,15 @@ export function resolveAskUserQuestionOptionIndex(params: {
     ?.get(params.questionId)
     ?.get(params.optionValue.trim().toLowerCase());
 }
-export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
+export type { ReplyMediaFailure, ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
+  appendReplyMediaFailures,
   buildTtsSupplementMediaPayload,
   copyReplyPayloadMetadata,
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,
+  isHostNoticePayload,
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,

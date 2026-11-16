@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import {
   getSessionInitializationUpstreamLinkCurrent,
   type SessionInitialization,
@@ -114,8 +115,13 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
           }
           initialization.assertCurrent();
         },
-        /** @deprecated Use linkAsync. Retained for released official harnesses until the next Plugin SDK major. */
+        /** @deprecated Await linkAsync; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
         link(input: Parameters<typeof upsertSessionUpstreamLink>[0]) {
+          warnPluginSdkDeprecation({
+            family: "native-session-binding",
+            method: "createNativeSessionInitializationOwner.prepare.link",
+            replacement: "createNativeSessionInitializationOwner.prepare.linkAsync",
+          });
           initialization.assertCurrent();
           const prepared = prepareLink(input);
           acceptLink(upsertSessionUpstreamLink(input, prepared));

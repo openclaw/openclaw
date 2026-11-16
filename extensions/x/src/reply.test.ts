@@ -1,17 +1,21 @@
-import { describe, expect, it } from "vitest";
-import { createXApiClient } from "./api.js";
-import { sendXReply } from "./reply.js";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sendXDelivery } from "./send.js";
 import { normalizeXReplyTarget } from "./target.js";
-import { createXTestSpend } from "./test-support/spend.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
+import { client, config, fixture, post as makePost } from "./test-support/monitor-fixture.js";
 
-function createReplyFixture() {
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  getXApi: vi.fn(),
+}));
+afterEach(() => clearRuntimeConfigSnapshot());
+
+function createReplyFixture(signature = "", failSecondPost = false) {
+  const cfg = { ...config, channels: { x: { ...config.channels?.x, replySignature: signature } } };
+  fixture({ posts: [], cfg });
   const sent: { text: string; reply: { in_reply_to_tweet_id: string } }[] = [];
   const api = createXApiClient({
-    spend: createXTestSpend(),
-    clientId: "client",
-    clientSecret: "secret",
-    refreshToken: "refresh",
-    saveRefreshToken: async () => {},
     fetch: async (input, init) => {
       if (input.endsWith("/oauth2/token")) {
         return Response.json({ access_token: "access" });
@@ -20,24 +24,25 @@ function createReplyFixture() {
         throw new Error("Expected a serialized reply request body");
       }
       sent.push(JSON.parse(init.body));
-      return Response.json({ data: { id: String(100 + sent.length) } });
+      return failSecondPost && sent.length === 2
+        ? new Response(null, { status: 403 })
+        : Response.json({ data: { id: String(100 + sent.length) } });
     },
   });
-  return { api, sent };
+  client.getXApi.mockResolvedValue(api);
+  const send = (
+    text: string,
+    visibleWorkSessions?: Parameters<typeof sendXDelivery>[0]["visibleWorkSessions"],
+  ) => sendXDelivery({ cfg, text, to: "x:90", mention: makePost("90", "10"), visibleWorkSessions });
+  return { api, sent, send };
 }
 
 describe("X public reply delivery", () => {
   it("honors URL and Unicode weights and reserves the signature for the last self-reply", async () => {
-    const { api, sent } = createReplyFixture();
+    const { api, sent, send } = createReplyFixture("— signed 🦞");
     const url = `https://example.com/sessions/${"a".repeat(300)}`;
-    const result = await sendXReply({
-      api,
-      text: "界".repeat(145),
-      replyToId: "x:90",
-      signature: "— signed 🦞",
-      visibleWorkSessions: [{ sessionKey: "work", url, publicRead: true }],
-    });
-    expect(result.postIds).toEqual(["101", "102"]);
+    const result = await send("界".repeat(145), [{ sessionKey: "work", url, publicRead: true }]);
+    expect(result.receipt.platformMessageIds).toEqual(["101", "102"]);
     expect(sent.map((post) => post.reply.in_reply_to_tweet_id)).toEqual(["90", "101"]);
     expect(sent[0]!.text).toBe("界".repeat(140));
     expect(sent[1]!.text).toBe(`${"界".repeat(5)}\n${url}\n— signed 🦞`);
@@ -45,39 +50,30 @@ describe("X public reply delivery", () => {
   });
 
   it("reports already-posted ids when a later chunk fails without replaying the first", async () => {
-    let posts = 0;
-    const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
-      refreshToken: "refresh",
-      saveRefreshToken: async () => {},
-      fetch: async (input) => {
-        if (input.endsWith("/oauth2/token")) {
-          return Response.json({ access_token: "access" });
-        }
-        posts++;
-        return posts === 1
-          ? Response.json({ data: { id: "101" } })
-          : new Response(null, { status: 403 });
+    const { sent, send } = createReplyFixture("", true);
+    await expect(send("a".repeat(300))).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      message:
+        "X reply chain failed after one or more posts were sent | X API /2/tweets failed (HTTP 403) | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+      deliveryResult: {
+        visibleReplySent: true,
+        receipt: { platformMessageIds: ["101"] },
+        content: "a".repeat(280),
       },
     });
-    await expect(
-      sendXReply({ api, text: "a".repeat(300), replyToId: "90", signature: "" }),
-    ).rejects.toMatchObject({ postIds: ["101"], text: "a".repeat(280) });
-    expect(posts).toBe(2);
+    expect(sent).toHaveLength(2);
   });
 
   it.each([
     { label: "punctuation around URLs", value: "(https://example.com/a_(b)).", weight: 26 },
   ])("splits $label only above the 280-character weight limit", async ({ value, weight }) => {
-    const { api, sent } = createReplyFixture();
+    const { sent, send } = createReplyFixture();
     const prefix = "a".repeat(279 - weight);
     const output = value;
-    await sendXReply({ api, text: `${prefix} ${value}`, replyToId: "90", signature: "" });
+    await send(`${prefix} ${value}`);
     expect(sent.map((post) => post.text)).toEqual([`${prefix} ${output}`]);
     sent.length = 0;
-    await sendXReply({ api, text: `${prefix}a ${value}`, replyToId: "90", signature: "" });
+    await send(`${prefix}a ${value}`);
     expect(sent.map((post) => post.text)).toEqual([`${prefix}a`, output]);
   });
 

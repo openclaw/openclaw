@@ -1,4 +1,3 @@
-// Context-engine host compatibility checks prevent engines from running on unsupported harnesses.
 import type {
   ContextEngine,
   ContextEngineHostCapability,

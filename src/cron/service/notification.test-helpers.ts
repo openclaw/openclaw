@@ -1,3 +1,4 @@
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult, applyTriggerNoFireResult } from "./timer-outcomes.js";
@@ -5,10 +6,22 @@ import { applyJobResult, applyTriggerNoFireResult } from "./timer-outcomes.js";
 export async function applyJobResultAndDrainNotifications(
   state: CronServiceState,
   job: Parameters<typeof applyJobResult>[1],
-  result: Parameters<typeof applyJobResult>[2],
+  result: Omit<Parameters<typeof applyJobResult>[2], "errorReason">,
 ): Promise<boolean> {
   const deferredNotifications: DeferredCronNotifications = [];
-  const shouldDelete = applyJobResult(state, job, result, { deferredNotifications });
+  const shouldDelete = applyJobResult(
+    state,
+    job,
+    {
+      ...result,
+      errorReason: resolveCronRunErrorReason(
+        result.error,
+        result.provider,
+        result.errorClassification,
+      ),
+    },
+    { deferredNotifications },
+  );
   await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
   return shouldDelete;
 }

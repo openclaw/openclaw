@@ -26,7 +26,7 @@ export async function runNodeHostWorker(
 ): Promise<void> {
   const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
   await initializeSqliteRuntimeCapabilities();
-  ensureNodeHostStateReady();
+  await ensureNodeHostStateReady();
   const nodeConfig = await loadNodeHostConfig();
   // The private app worker is a capability superset; persisted headless
   // command allowlists never apply here.

@@ -71,7 +71,7 @@ export function createPlacementWorkspaceResultReader(
         { current: true },
       );
       context.admission.assertCurrent();
-      if (!reply?.ok || reply.type !== "workers.placementPendingResults") {
+      if (!reply) {
         throw new Error("Worker workspace results are unavailable");
       }
       return reply.pendingResults;

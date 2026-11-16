@@ -1,5 +1,4 @@
 // Codex tests cover native execution policy plugin behavior.
-import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   prepareCodexNativeExecutionPolicy,
@@ -19,10 +18,10 @@ vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) =>
   };
 });
 
-function mockSelectedEntry(entry: SessionEntry) {
+function mockSelectedNodeEntry(execNode: string) {
   const release = vi.fn();
   sessionStoreMocks.captureSessionEntryCurrentCheckAsync.mockResolvedValue({
-    entry,
+    entry: { sessionId: "session-1", updatedAt: 1, execHost: "node", execNode },
     isCurrent: async () => true,
     async assertCurrent() {},
     release,
@@ -96,12 +95,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
   });
 
   it("honors persisted default-session exec hosts with explicit main agent policy", async () => {
-    mockSelectedEntry({
-      sessionId: "session-1",
-      updatedAt: 1,
-      execHost: "node",
-      execNode: "worker-5",
-    });
+    mockSelectedNodeEntry("worker-5");
 
     expect(
       (
@@ -127,12 +121,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
   });
 
   it("does not read an unscoped session entry for an explicit multi-agent roster", async () => {
-    mockSelectedEntry({
-      sessionId: "session-1",
-      updatedAt: 1,
-      execHost: "node",
-      execNode: "worker-6",
-    });
+    mockSelectedNodeEntry("worker-6");
 
     expect(
       (
@@ -155,12 +144,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
   });
 
   it("uses global policy when an explicit multi-agent roster has no selected agent", async () => {
-    mockSelectedEntry({
-      sessionId: "session-1",
-      updatedAt: 1,
-      execHost: "node",
-      execNode: "worker-6",
-    });
+    mockSelectedNodeEntry("worker-6");
 
     expect(
       (

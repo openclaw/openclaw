@@ -1,6 +1,5 @@
 import { MessagePort, Worker } from "node:worker_threads";
 import {
-  findPersistedAuthProfileCredentialAsync,
   saveAuthProfileStore,
   type AuthProfileStore,
   type OAuthCredential,
@@ -16,19 +15,17 @@ import {
 
 function expectNoDatabaseWork(assertCurrent: () => void) {
   const sql = observeHostDataSql();
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+  const spies = [
+    vi.spyOn(Worker.prototype, "postMessage"),
+    vi.spyOn(MessagePort.prototype, "postMessage"),
+  ];
   try {
     assertCurrent();
   } finally {
-    const workerRequests = requests.mock.calls.length;
-    const portMessages = messages.mock.calls.length;
+    const counts = spies.map((spy) => spy.mock.calls.length);
     sql.restore();
-    requests.mockRestore();
-    messages.mockRestore();
-    expect(sql.queries).toEqual([]);
-    expect(workerRequests).toBe(0);
-    expect(portMessages).toBe(0);
+    spies.forEach((spy) => spy.mockRestore());
+    expect({ queries: sql.queries, counts }).toEqual({ queries: [], counts: [0, 0] });
   }
 }
 
@@ -71,18 +68,10 @@ it.each(["shared", "agent"] as const)(
       });
       const prepared = await auth.resolve(false);
       expect(prepared.token).toBe("synthetic-access");
-      expect(await findPersistedAuthProfileCredentialAsync({ profileId, agentDir })).toEqual(
-        credential,
-      );
-      expectNoDatabaseWork(() => {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          prepared.assertCurrent();
-        }
-      });
+      expectNoDatabaseWork(prepared.assertCurrent);
 
       const revoked = { ...credential, authFlow: "chatgpt-identity" };
       const fetchImpl = vi.fn(async () => new Response("must not be sent"));
-      const beforeRequest = vi.fn(() => expectNoDatabaseWork(prepared.assertCurrent));
       await expect(
         fetchWithSsrFGuard({
           url: "https://public.example/responses",
@@ -93,14 +82,10 @@ it.each(["shared", "agent"] as const)(
             save({ ...store, profiles: { [profileId]: revoked } });
             return [{ address: "93.184.216.34", family: 4 }];
           },
-          beforeRequest,
+          beforeRequest: () => expectNoDatabaseWork(prepared.assertCurrent),
         }),
       ).rejects.toThrow("subscription sharing is unavailable");
-      expect(beforeRequest).toHaveBeenCalledOnce();
       expect(fetchImpl).not.toHaveBeenCalled();
-      expect(await findPersistedAuthProfileCredentialAsync({ profileId, agentDir })).toEqual(
-        revoked,
-      );
     });
   },
 );

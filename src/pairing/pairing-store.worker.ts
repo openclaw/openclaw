@@ -1,17 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
-import {
-  dedupePreserveOrder,
-  resolveAllowFromAccountId,
-  resolvePairingRequestAccountId,
-} from "./pairing-store-keys.js";
+import { resolveAllowFromAccountId, resolvePairingRequestAccountId } from "./pairing-store-keys.js";
 import {
   CHANNEL_PAIRING_PENDING_MAX,
   generateUniqueCode,
@@ -118,7 +115,7 @@ function writeChanges(database: OpenClawStateDatabase, channel: string, snapshot
   }
   const now = Date.now();
   const entries = Object.entries(snapshot.state.allowFrom ?? {}).flatMap(([account, values]) =>
-    dedupePreserveOrder(
+    normalizeUniqueStringEntries(
       values
         .map((value) => normalizeOptionalString(value) ?? "")
         .filter((value) => value && value !== "*"),

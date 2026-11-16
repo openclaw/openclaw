@@ -11,7 +11,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "../../infra/gateway-owner-lease.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
@@ -80,6 +80,7 @@ import {
   resolveGatewayUpdateAdmission,
   reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
+import { updateRecoveryCleanupHandler } from "./update-cleanup.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
@@ -89,6 +90,7 @@ const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
   "update.report": updateReportHandler,
+  "update.recovery.cleanup": updateRecoveryCleanupHandler,
   "update.run": async (request) => {
     const { respond, client, context, sessionMutationCommitGuard } = request;
     const params = await admitGatewayUpdateRequest(request);
@@ -241,7 +243,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       const message =
         reason === "owner_required"
           ? `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: currentConfig, channel: requester.channel, id: requester.senderId })}`
-          : "Updates from chat are disabled (commands.restart=false). Use the Control UI or ask the Gateway operator to update OpenClaw.";
+          : "Updates from chat are disabled (commands.restart=false). Use the OpenClaw app or ask the Gateway operator to update OpenClaw.";
       if (adoptedCampaignId && updateLifecycle.campaign?.getState()?.id === adoptedCampaignId) {
         updateLifecycle.campaign?.clear();
       }
@@ -374,7 +376,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       const detectedSupervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,
       });
-      const gatewayOwner = readGatewayOwnerLease({ current: true });
+      const gatewayOwner = await readGatewayOwnerLeaseAsync();
       const foregroundOrigin: ForegroundUpdateOrigin | undefined =
         gatewayOwner?.mode === "foreground" &&
         gatewayOwner.state === "live" &&
@@ -483,23 +485,21 @@ export const updateHandlers: GatewayRequestHandlers = {
             requesterAuthority: retainedRequesterAuthority,
             beforePark: async () => {
               const current = (await getUpdateRun(runId)) ?? run;
-              const assertMayPark = () => {
-                const currentConfig = getConfig();
+              const claimMayPark = async () =>
+                !foregroundOrigin ||
+                (managedHandoffOwner
+                  ? await claimManagedServiceUpdateHandoff(managedHandoffOwner)
+                  : false);
+              const assertMayPark = (claimed: boolean) => {
                 retainedRequesterAuthority.assertCurrent();
-                if (foregroundOrigin) {
-                  if (
-                    !managedHandoffOwner ||
-                    !claimManagedServiceUpdateHandoff(managedHandoffOwner) ||
-                    !isRestartEnabled(currentConfig)
-                  ) {
-                    throw new Error("Foreground update authority changed before parking.");
-                  }
-                  assertForegroundRespawnEnabled();
+                assertForegroundRespawnEnabled();
+                if (!claimed || (foregroundOrigin && !isRestartEnabled(getConfig()))) {
+                  throw new Error("Foreground update authority changed before parking.");
                 }
               };
-              assertMayPark();
+              assertMayPark(await claimMayPark());
               await notify(current, current.phase === "requested" ? "parking" : "activating");
-              assertMayPark();
+              assertMayPark(await claimMayPark());
               if (foregroundOrigin) {
                 scheduleGatewayRestart({
                   delayMs: 0,
@@ -554,7 +554,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             handoff = {
               status: "already-running",
               command: started.command,
-              message: "Another managed update is already running; retry after it completes.",
+              message: started.message,
             };
           }
           result = {

@@ -3,12 +3,14 @@ import { WebAPIPlatformError } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackSuggestedPrompt } from "../channel-meta.js";
 import { formatSlackError } from "../errors.js";
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 export type SlackSuggestedPromptsOutcome = "accepted" | "rejected" | "internal_error" | "failed";
 
 export type SlackSuggestedPromptsInput = {
   channelId: string;
   threadTs?: string;
+  retryTransientErrors?: boolean;
   title?: string;
   prompts: SlackSuggestedPrompt[];
 };
@@ -40,6 +42,13 @@ export async function updateSlackSuggestedPrompts(
     // Agent apps answer ok or internal_error (live-verified 2026-09-02).
     // Transport failures prove nothing about Agent View.
     const code = error instanceof WebAPIPlatformError ? error.data.error : undefined;
+    if (
+      params.retryTransientErrors &&
+      (params.threadTs || code !== "internal_error") &&
+      isTransientSlackApiError(error)
+    ) {
+      throw error;
+    }
     const outcome =
       code === "not_agent_app" || code === "missing_scope"
         ? "rejected"

@@ -20,8 +20,11 @@ Brotli callbacks. Gateway HTTP lifecycle limits apply on the main listener;
 the compatibility listener preserves the previous Teams limits: 30s inactivity,
 30s total request, and 15s to receive headers. During channel stop, new callbacks
 receive retryable HTTP 503 while active responses settle, for up to 30 seconds,
-before the route is released. Optional inbound media and context
-enrichment has a shared 10-second budget. The SDK returns after the raw activity
+before the route is released. Inbound attachment downloads get up to 120
+seconds, because authenticated Teams image views can take tens of seconds; an
+attachment that misses that budget reaches the agent as unavailable. Optional
+context enrichment (team identity, quoted messages, thread history) then gets
+its own 10-second budget. The SDK returns after the raw activity
 is durably appended;
 the agent turn drains independently and replies proactively. If request
 handling or durable admission misses the transport window, Teams may retry the

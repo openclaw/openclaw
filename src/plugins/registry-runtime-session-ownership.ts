@@ -190,12 +190,11 @@ export function createPluginSessionOwnership(
     }
     assertReservedSessionKeyOwned(params.sessionKey, params.action);
   };
-  const { readOwnershipEntry, listOwnershipEntries, withPreparedSessionOwnership } =
-    createPluginSessionOwnershipReads({
-      runtime: registryParams.runtime,
-      currentSessionConfig,
-      assertRuntimeOwnerCurrent,
-    });
+  const { readOwnershipEntry, listOwnershipEntries } = createPluginSessionOwnershipReads({
+    runtime: registryParams.runtime,
+    currentSessionConfig,
+    assertRuntimeOwnerCurrent,
+  });
   const resolveStoredSessionOwnershipTarget = async (params: {
     agentId?: string;
     env?: NodeJS.ProcessEnv;
@@ -242,18 +241,16 @@ export function createPluginSessionOwnership(
     return target.entry;
   };
   const resolveStoredSessionExecutionOwner = async (params: {
-    action: string;
-    agentId?: string;
     sessionKey: string;
     storePath?: string;
   }): Promise<string | undefined> => {
     const target = await resolveStoredSessionOwnershipTarget(params);
     const { entry, sessionKey } = target;
     const locked = entry
-      ? resolveLockedSessionHarnessRegistration(sessionKey, entry, params.action)
+      ? resolveLockedSessionHarnessRegistration(sessionKey, entry, "admit work on")
       : undefined;
     if (!entry || !locked || locked.ownerPluginId === pluginId) {
-      assertSessionEntryOwned({ action: params.action, ...target });
+      assertSessionEntryOwned({ action: "admit work on", ...target });
       return undefined;
     }
     const registration = "registration" in locked ? locked.registration : undefined;
@@ -263,7 +260,7 @@ export function createPluginSessionOwnership(
       );
     }
     if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
-      assertLockedSessionEntryOwned(sessionKey, entry, params.action);
+      assertLockedSessionEntryOwned(sessionKey, entry, "admit work on");
     }
     return locked.ownerPluginId;
   };
@@ -368,7 +365,7 @@ export function createPluginSessionOwnership(
     }
     const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
     // Embedded runs accept one exact key. Carry its resolved store into the
-    // keyless ID/file scan so incognito ownership stays in the process-held DB.
+    // keyless ID/file scan so incognito ownership stays in its memory namespace.
     const ownershipStorePath =
       sessionKey && sessionKeyAgentId
         ? resolveSessionStorePathForScope({
@@ -544,7 +541,6 @@ export function createPluginSessionOwnership(
     }
   };
   return {
-    withPreparedSessionOwnership,
     createSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["createSessionEntry"]>[0],

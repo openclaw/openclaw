@@ -8,7 +8,6 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
-  type MattermostFetch,
   type MattermostPost,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -33,14 +32,14 @@ function isCurrentMattermostReadTarget(params: {
 }): boolean {
   const toolContext = params.context.toolContext;
   const nativeChannelId = toolContext?.currentChannelId;
-  if (typeof nativeChannelId === "string" && nativeChannelId.trim()) {
+  if (nativeChannelId?.trim()) {
     // Mattermost DMs route outbound messages via `user:<peerId>`, while the
     // trusted native channel ID remains the exact conversation identity.
     return parseMattermostChannelTarget(nativeChannelId) === params.channelId;
   }
   const messagingTarget = toolContext?.currentMessagingTarget;
   return (
-    typeof messagingTarget === "string" &&
+    messagingTarget !== undefined &&
     Boolean(messagingTarget.trim()) &&
     parseMattermostChannelTarget(messagingTarget) === params.channelId
   );
@@ -76,7 +75,6 @@ export async function readMattermostMessages(params: {
   after?: string;
   accountId?: string | null;
   context: ReadContext;
-  fetchImpl?: MattermostFetch;
 }): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled) {
@@ -91,7 +89,6 @@ export async function readMattermostMessages(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    fetchImpl: params.fetchImpl,
     allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
   if (params.context.conversationReadOrigin !== "direct-operator") {

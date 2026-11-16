@@ -11,9 +11,9 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  resolveDefaultModelMaxTokens,
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
-  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { withAgentModelAliases } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -62,6 +62,7 @@ import {
   type ProviderPromptText,
   validateLmstudioSetupUrl,
 } from "./setup-prompts.js";
+import { buildLmstudioSetupProviderConfig } from "./setup-provider-config.js";
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
 const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
@@ -118,34 +119,6 @@ function resolvePositiveInteger(value: string | undefined): number | undefined {
   return parseStrictPositiveInteger(trimmed);
 }
 
-function buildLmstudioSetupProviderConfig(params: {
-  existingProvider: ModelProviderConfig | undefined;
-  sharedProvider?: ModelProviderConfig;
-  baseUrl: string;
-  apiKey?: ModelProviderConfig["apiKey"];
-  headers: ModelProviderConfig["headers"] | undefined;
-  models: ModelDefinitionConfig[];
-}): ModelProviderConfig {
-  const {
-    auth: _auth,
-    apiKey: _apiKey,
-    ...provider
-  } = {
-    ...params.existingProvider,
-    ...params.sharedProvider,
-  };
-  const resolvedAuth = resolveLmstudioProviderAuthMode(params.apiKey);
-  return {
-    ...provider,
-    baseUrl: params.baseUrl,
-    api: params.sharedProvider?.api ?? params.existingProvider?.api ?? "openai-completions",
-    ...(resolvedAuth ? { auth: resolvedAuth } : {}),
-    ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
-    headers: params.headers,
-    models: params.models,
-  };
-}
-
 function applyRequestedContextWindowToAllModels(params: {
   models: ModelDefinitionConfig[];
   discoveryModels: LmstudioModelWire[];
@@ -169,7 +142,8 @@ function applyRequestedContextWindowToAllModels(params: {
       requestedContextWindow,
       contextLimitByModelId.get(model.id) ?? requestedContextWindow,
     );
-    return { ...model, contextTokens, maxTokens: Math.min(model.maxTokens, contextTokens) };
+    // These fresh discovery rows carry a synthesized cap, not an authored output limit.
+    return { ...model, contextTokens, maxTokens: resolveDefaultModelMaxTokens(contextTokens) };
   });
 }
 
@@ -431,11 +405,11 @@ export async function promptAndConfigureLmstudioInteractive(params: {
     ? (params.config.models?.providers?.[PROVIDER_ID]?.baseUrl ?? defaultBaseUrl)
     : await promptText({
         message: `${LMSTUDIO_PROVIDER_LABEL} base URL`,
-        initialValue: defaultBaseUrl,
+        // Prefilling the default makes typed input append to it; hint it and use it for blank input.
         placeholder: defaultBaseUrl,
         validate: validateLmstudioSetupUrl,
       });
-  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? defaultBaseUrl);
+  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw?.trim() || defaultBaseUrl);
   let credentialInput: SecretInput | undefined = params.suppliedApiKey;
   let credentialMode: SecretInputMode | undefined;
   const implicitRefMode = params.allowSecretRefPrompt === false && !params.secretInputMode;
@@ -754,22 +728,13 @@ export async function configureLmstudioNonInteractive(
     setupDiscoveryApiKey,
     useHeaderOnlyAuth,
   } = validated;
-  const normalizedCtx = customBaseUrl
-    ? {
-        ...ctx,
-        opts: {
-          ...ctx.opts,
-          customBaseUrl: baseUrl,
-        },
-      }
-    : ctx;
   if (useHeaderOnlyAuth) {
     await removeProviderAuthProfilesWithLock({
-      cfg: normalizedCtx.config,
+      cfg: ctx.config,
       provider: PROVIDER_ID,
-      agentDir: normalizedCtx.agentDir,
+      agentDir: ctx.agentDir,
     });
-    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(normalizedCtx.config);
+    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(ctx.config);
     return applyProviderDefaultModel(
       {
         ...configWithoutStoredLmstudioAuth,
@@ -805,9 +770,10 @@ export async function configureLmstudioNonInteractive(
   // Reuse the verified key without prompting again; the shared owner persists credentials.
   const configured = await configureOpenAICompatibleSelfHostedProviderNonInteractive({
     ctx: {
-      ...normalizedCtx,
+      ...ctx,
       opts: {
-        ...normalizedCtx.opts,
+        ...ctx.opts,
+        ...(customBaseUrl ? { customBaseUrl: baseUrl } : {}),
         customModelId: selectedModelId,
       },
       resolveApiKey: async () => resolvedOrSynthetic,

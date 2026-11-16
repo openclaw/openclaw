@@ -1,12 +1,13 @@
-import type { Model, SimpleStreamOptions } from "@openclaw/llm-core";
+import {
+  usesClaude5RequestContract,
+  type Model,
+  type SimpleStreamOptions,
+} from "@openclaw/llm-core";
 import type { AnthropicOptions } from "../provider-options.js";
 import {
   defaultsClaudeAdaptiveThinking,
   requiresClaudeAdaptiveThinking,
   resolveAnthropicThinkingEffort,
-  resolveClaudeHaiku55ModelIdentity,
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
 } from "../providers/anthropic-model-contract.js";
 import { adjustMaxTokensForThinking } from "../providers/simple-options.js";
@@ -70,10 +71,7 @@ export function resolveAnthropicTransportOptions(
     requestedMaxTokens: options?.maxTokens,
     // Claude 5 defaults thinking on; the clamped 32k baseline starves thinking
     // plus response output, so these models keep their full catalog cap.
-    useModelDefault:
-      resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
-      resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
-      resolveClaudeOpus5ModelIdentity(model) !== undefined,
+    useModelDefault: usesClaude5RequestContract(model),
   });
   if (baseMaxTokens === undefined) {
     throw new Error(
@@ -91,7 +89,6 @@ export function resolveAnthropicTransportOptions(
     headers: options?.headers,
     onPayload: options?.onPayload,
     onResponse: options?.onResponse,
-    maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
     interleavedThinking: options?.interleavedThinking,
     toolChoice: options?.toolChoice,
@@ -101,6 +98,8 @@ export function resolveAnthropicTransportOptions(
     anthropicServerCompaction: options?.anthropicServerCompaction,
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
+    onClaudeCodeVersionRequired: options?.onClaudeCodeVersionRequired,
+    onFastModeUnsupported: options?.onFastModeUnsupported,
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   } satisfies AnthropicTransportOptions);
   resolved.reasoning = applyAnthropicThinkingOptions(model, resolved, options, "transport");
@@ -110,7 +109,9 @@ export function resolveAnthropicTransportOptions(
 /** Keep both entry points on one thinking mode while retaining their output-budget policies. */
 export function applyAnthropicThinkingOptions(
   model: Model<"anthropic-messages">,
-  resolved: AnthropicOptions & { maxTokens: number },
+  resolved: Pick<AnthropicOptions, "thinkingEnabled" | "thinkingBudgetTokens" | "effort"> & {
+    maxTokens: number;
+  },
   options: Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets"> | undefined,
   profile: "provider" | "transport",
 ): SimpleStreamOptions["reasoning"] {
@@ -123,11 +124,7 @@ export function applyAnthropicThinkingOptions(
     resolved.thinkingEnabled = false;
     return reasoning;
   }
-  if (
-    !reasoning ||
-    supportsClaudeAdaptiveThinking(model) ||
-    (!managed && defaultsClaudeAdaptiveThinking(model))
-  ) {
+  if (!reasoning || supportsClaudeAdaptiveThinking(model)) {
     resolved.thinkingEnabled = Boolean(reasoning) || defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
       resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);

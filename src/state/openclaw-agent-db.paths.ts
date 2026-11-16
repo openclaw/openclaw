@@ -1,11 +1,11 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 
 type OpenClawAgentSqlitePathOptions = {
   agentId: string;
@@ -15,34 +15,16 @@ type OpenClawAgentSqlitePathOptions = {
 
 export const INCOGNITO_AGENT_SQLITE_BASENAME = "incognito-openclaw-agent.sqlite";
 
-class IncognitoAgentDatabasePathCollisionError extends Error {
-  readonly path: string;
-
-  constructor(pathname: string) {
-    super(
-      `Incognito agent database sentinel path already exists: ${pathname}. This filename is reserved for in-memory incognito state; move or rename the file and retry.`,
-    );
-    this.name = "IncognitoAgentDatabasePathCollisionError";
-    this.path = pathname;
-  }
-}
-
-export function assertIncognitoAgentDatabasePathAvailable(pathname: string): void {
-  if (existsSync(pathname)) {
-    throw new IncognitoAgentDatabasePathCollisionError(pathname);
-  }
-}
-
 const agentSqlitePaths = new Map<string, string>();
 // Keep the FIFO cursor so eviction never rescans deleted Map entries.
 const agentSqlitePathKeys = agentSqlitePaths.keys();
 
 export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathOptions): string {
-  const agentId = normalizeAgentId(options.agentId);
   if (options.path != null) {
     return path.resolve(options.path);
   }
-  // The state-dir owner still observes env, cwd, and legacy-directory changes.
+  const agentId = normalizeAgentId(options.agentId);
+  // The state-dir owner still observes env and cwd changes.
   // Only its resolved output is memoized; a changed root selects a new entry.
   const stateDir = resolveStateDir(options.env ?? process.env);
   const cacheKey = `${agentId}:${stateDir}`;
@@ -61,7 +43,7 @@ export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathO
   return resolved;
 }
 
-/** Resolve the lexical sentinel path that keys one agent's process-held incognito database. */
+/** Resolve the lexical sentinel path used by an agent's memory session owner. */
 export function resolveIncognitoOpenClawAgentSqlitePath(
   options: Omit<OpenClawAgentSqlitePathOptions, "path">,
 ): string {
@@ -102,11 +84,11 @@ export function resolveExplicitIncognitoAgentSqliteTarget(
   return { agentId, env, path: resolved };
 }
 
-type AgentDatabasePathIdentity = { lexicalPath: string } & (
-  | { realPath: string; device: bigint; inode: bigint }
+export type AgentDatabasePathIdentity = { lexicalPath: string } & (
+  | { realPath: string; device: string; inode: string }
   | {
-      parentDevice: bigint;
-      parentInode: bigint;
+      parentDevice: string;
+      parentInode: string;
       parentRealPath: string;
       unresolvedSuffix: string;
     }
@@ -132,8 +114,8 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
 function areMissingSuffixAliases(params: {
   left: string;
   right: string;
-  parentDevice: bigint;
-  parentInode: bigint;
+  parentDevice: string;
+  parentInode: string;
   parentRealPath: string;
 }): boolean {
   if (params.left === params.right) {
@@ -151,8 +133,8 @@ function areMissingSuffixAliases(params: {
   }
   const suffixPair = [params.left, params.right].toSorted();
   const cacheKey = JSON.stringify([
-    params.parentDevice.toString(),
-    params.parentInode.toString(),
+    params.parentDevice,
+    params.parentInode,
     params.parentRealPath,
     ...suffixPair,
   ]);
@@ -214,8 +196,8 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     return {
       lexicalPath,
       realPath,
-      device: stat.dev,
-      inode: stat.ino,
+      device: stat.dev.toString(),
+      inode: stat.ino.toString(),
     };
   } catch (error) {
     if (!hasErrnoCode(error, "ENOENT")) {
@@ -231,8 +213,8 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     const parentStat = statSync(parentRealPath, { bigint: true });
     return {
       lexicalPath,
-      parentDevice: parentStat.dev,
-      parentInode: parentStat.ino,
+      parentDevice: parentStat.dev.toString(),
+      parentInode: parentStat.ino.toString(),
       parentRealPath,
       unresolvedSuffix: observed.unresolvedSegments.join(path.sep),
     };
@@ -269,12 +251,18 @@ function areSameAgentDatabasePathIdentities(
 }
 
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
-export function createOpenClawAgentDatabasePathMatcher(): {
+export function createOpenClawAgentDatabasePathMatcher(
+  observations: readonly AgentDatabasePathIdentity[] = [],
+): {
   (left: string, right: string): boolean;
+  capture(pathname: string): void;
+  observations(): AgentDatabasePathIdentity[];
   createIndex(): (pathname: string) => string;
   isCurrent(): boolean;
 } {
-  const identities = new Map<string, AgentDatabasePathIdentity>();
+  const identities = new Map<string, AgentDatabasePathIdentity>(
+    observations.map((identity) => [identity.lexicalPath, identity]),
+  );
   const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
     const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
     const cached = identities.get(lexicalPath);
@@ -290,6 +278,10 @@ export function createOpenClawAgentDatabasePathMatcher(): {
     (left: string, right: string) =>
       areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right)),
     {
+      capture(pathname: string) {
+        resolveIdentity(pathname);
+      },
+      observations: () => [...identities.values()],
       // Independent groups share observations, but retain their own first path spelling.
       createIndex() {
         const keys = new Map<string, string>();
@@ -357,6 +349,21 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
     resolveAgentDatabasePathIdentity(left),
     resolveAgentDatabasePathIdentity(right),
   );
+}
+
+export function includesOpenClawAgentDatabasePath(
+  paths: readonly string[],
+  target: string,
+  samePath = isSameOpenClawAgentDatabasePath,
+): boolean {
+  return paths.some((pathname) => {
+    try {
+      return samePath(pathname, target);
+    } catch {
+      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
+      return false;
+    }
+  });
 }
 
 function canonicalPathForRegistryBoundary(pathname: string): string {

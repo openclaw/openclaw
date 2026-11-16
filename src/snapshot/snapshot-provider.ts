@@ -43,3 +43,11 @@ export type SnapshotVerificationResult = {
 };
 
 export type SnapshotSummary = SnapshotResult;
+
+type EngineSnapshotManifest =
+  | SnapshotManifest
+  | import("./export-envelope.js").PostgresExportEnvelope;
+export type EngineSnapshotResult = {
+  readonly ref: SnapshotRef;
+  readonly manifest: EngineSnapshotManifest;
+};

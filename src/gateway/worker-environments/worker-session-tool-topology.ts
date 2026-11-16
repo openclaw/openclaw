@@ -3,6 +3,8 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
@@ -93,7 +95,17 @@ export async function resolveWorkerSessionToolTarget(params: {
   source: WorkerSessionToolSource;
   requestedSessionKey: string;
 }): Promise<WorkerSessionToolTarget> {
-  const loaded = await readWorkerSessionToolEntry(params.requestedSessionKey);
+  const cfg = getRuntimeConfig();
+  const readRelatedEntry = (key: string) =>
+    readWorkerSessionToolEntry(
+      key,
+      // Raw lineage keys belong to the source agent unless a fixed store owns them.
+      !parseAgentSessionKey(key) &&
+        resolvePersistedSessionStoreOwnerForKey(cfg, key).kind === "none"
+        ? params.source.agentId
+        : undefined,
+    );
+  const loaded = await readRelatedEntry(params.requestedSessionKey);
   const entry = loaded.entry;
   const targetSessionId = entry?.sessionId;
   if (
@@ -121,7 +133,7 @@ export async function resolveWorkerSessionToolTarget(params: {
   );
   const parent =
     sharedParentIncarnation && sourceParent && sourceParentId
-      ? await readWorkerSessionToolEntry(sourceParent)
+      ? await readRelatedEntry(sourceParent)
       : undefined;
   const siblingToSibling = Boolean(
     parent &&

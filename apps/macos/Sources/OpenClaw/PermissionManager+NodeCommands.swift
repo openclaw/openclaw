@@ -9,7 +9,6 @@ import Speech
 import UserNotifications
 
 extension PermissionManager {
-    @MainActor private static var screenCaptureNeedsRestart = false
     /// All native command failures use this owner, including failures found at the effect boundary.
     static func missingPermission(
         _ states: [(Capability, OpenClawPermissionState)]) -> OpenClawNodeError?
@@ -65,8 +64,8 @@ extension PermissionManager {
                 granted: self.screenRecordingPermissions.checkPostEventPermission(),
                 requestAttempted: self.eventPostingRequestAttempted)
         case .screenRecording:
-            if self.screenCaptureNeedsRestart { return .restartRequired }
-            return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive() ? nil : .notDetermined
+            let granted = await self.screenRecordingPermissions.checkScreenRecordingPermissionLive()
+            return self.screenRecordingState.missingState(granted: granted)
         case .camera, .microphone:
             switch AVCaptureDevice.authorizationStatus(for: capability == .camera ? .video : .audio) {
             case .authorized: return nil
@@ -80,7 +79,6 @@ extension PermissionManager {
             default: return .denied
             }
         case .location:
-            guard CLLocationManager.locationServicesEnabled() else { return .denied }
             let status = await self.locationAuthorizationStatus()
             let requireAlways = AppDefaults.standard.string(forKey: locationModeKey) ==
                 OpenClawLocationMode.always.rawValue
@@ -119,8 +117,9 @@ extension PermissionManager {
         guard error.domain == SCStreamErrorDomain, error.code == -3801 else {
             return error
         }
-        self.screenCaptureNeedsRestart = self.screenRecordingPermissions.checkScreenRecordingPermission()
+        self.screenRecordingState.needsRestart = self.screenRecordingPermissions.checkScreenRecordingPermission()
+        self.screenRecordingState.requestAttempted = true
         return self.missingPermission([(
-            .screenRecording, self.screenCaptureNeedsRestart ? .restartRequired : .denied)])!
+            .screenRecording, self.screenRecordingState.needsRestart ? .restartRequired : .denied)])!
     }
 }

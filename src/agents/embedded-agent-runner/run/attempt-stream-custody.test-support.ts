@@ -10,6 +10,7 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
@@ -28,9 +29,6 @@ export const checkpoint: CompactionReplayRejection = {
   data: "synthetic-rejected-checkpoint",
   id: "synthetic-checkpoint",
 };
-type ReplayOptions = NonNullable<Parameters<StreamFn>[2]> & {
-  onCompactionRejected?: (rejected: CompactionReplayRejection) => void;
-};
 
 export async function createStreamCustodyFixture(
   makeRoot: () => string,
@@ -42,6 +40,7 @@ export async function createStreamCustodyFixture(
     toolNames?: string[];
     thinkingRecovery?: boolean;
     onIdleTimeout?: (error: Error) => void;
+    deferStreamGuards?: boolean;
     /** Durable owner carrying a real Anthropic compaction checkpoint for `model`. */
     anthropicCompaction?: { model: Model; owner: AssistantMessage };
   } = {},
@@ -66,67 +65,48 @@ export async function createStreamCustodyFixture(
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   const manager = SessionManager.open(target, root);
   manager.appendMessage({ role: "user", content: "Synthetic history", timestamp: 1 });
-  manager.appendMessage(
-    options.anthropicCompaction?.owner ?? {
-      ...createAssistant(model, [
-        ...(options.thinkingRecovery
-          ? [
-              {
-                type: "thinking" as const,
-                thinking: "Synthetic historical reasoning",
-                thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
-              },
-            ]
-          : []),
-        { type: "text", text: "Synthetic checkpoint owner" },
-      ]),
-      ...(!options.thinkingRecovery
-        ? {
-            providerReplay: {
-              v: 1,
-              type: "openai-responses-compaction",
-              ...checkpoint,
-              replayIndex: 0,
-              provider: model.provider,
-              api: model.api,
-              model: model.id,
-              baseUrlHash: "synthetic",
-            },
-          }
-        : {}),
-    },
-  );
+  const owner =
+    options.anthropicCompaction?.owner ??
+    createAssistant(model, [{ type: "text", text: "Synthetic checkpoint owner" }]);
+  if (!options.anthropicCompaction && options.thinkingRecovery) {
+    owner.content.unshift({
+      type: "thinking",
+      thinking: "Synthetic historical reasoning",
+      thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
+    });
+  } else if (!options.anthropicCompaction) {
+    owner.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      ...checkpoint,
+      replayIndex: 0,
+      provider: model.provider,
+      api: model.api,
+      model: model.id,
+      baseUrlHash: "synthetic",
+    };
+  }
+  manager.appendMessage(owner);
+  const assistants = () =>
+    manager
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "assistant" ? [entry.message] : [],
+      );
   const checkpointPresent = () =>
-    manager
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          entry.message.providerReplay?.data === checkpoint.data,
-      );
+    assistants().some((message) => message.providerReplay?.data === checkpoint.data);
   const thinkingPresent = () =>
-    manager
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          entry.message.content.some((block) => block.type === "thinking"),
-      );
+    assistants().some((message) => message.content.some((block) => block.type === "thinking"));
   const replayPresent = options.thinkingRecovery ? thinkingPresent : checkpointPresent;
-  expect(replayPresent(), "fixture replay must survive durable append").toBe(true);
   const controller = new AbortController();
   const sdkSession = options.withSessionWriteSettlement
-    ? (
-        await createTestSession({
-          sessionManager: manager,
-          model,
-          withSessionWriteSettlement: options.withSessionWriteSettlement,
-        })
-      ).session
+    ? await createTestSession({
+        sessionManager: manager,
+        model,
+        withSessionWriteSettlement: options.withSessionWriteSettlement,
+      })
     : undefined;
-  const activeSession = sdkSession ?? {
+  const activeSession = sdkSession?.session ?? {
     agent: { streamFn: provider },
     sessionId: target.sessionId,
     messages: manager.buildSessionContext().messages,
@@ -176,28 +156,39 @@ export async function createStreamCustodyFixture(
     diagnostics: { runTrace: createDiagnosticTraceContext() },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
   } as unknown as EmbeddedAttemptExecutionPhaseInput;
-  const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
-    runId: input.attempt.runId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-  });
-  const streamGuards = installEmbeddedAttemptStreamGuards(input, {
-    onRejectedProviderReplayRepaired: repaired,
-    onIdleTimeout: options.onIdleTimeout ?? (() => {}),
-    diagnosticOwner,
-  });
+  let diagnosticOwner: ReturnType<typeof createDiagnosticEmbeddedRunOwner>;
+  let streamGuards: ReturnType<typeof installEmbeddedAttemptStreamGuards>;
+  const prepareStreamGuards = (watchdogAttempt?: SessionControllerWatchdogAttempt) => {
+    if (streamGuards) {
+      throw new Error("Stream guards already installed");
+    }
+    diagnosticOwner = createDiagnosticEmbeddedRunOwner({ ...input.attempt, watchdogAttempt });
+    streamGuards = installEmbeddedAttemptStreamGuards(input, {
+      onRejectedProviderReplayRepaired: repaired,
+      onIdleTimeout: options.onIdleTimeout ?? (() => {}),
+      diagnosticOwner,
+    });
+  };
+  if (!options.deferStreamGuards) {
+    prepareStreamGuards();
+  }
   expect(replayPresent(), "fixture preparation must retain replay").toBe(true);
-  const streamOptions: ReplayOptions = {
+  const streamOptions = {
     signal: controller.signal,
     onCompactionRejected: previousNotification,
   };
   return {
     input,
-    diagnosticOwner,
-    streamGuards,
+    get diagnosticOwner() {
+      return diagnosticOwner;
+    },
+    get streamGuards() {
+      return streamGuards;
+    },
+    prepareStreamGuards,
     controller,
     manager,
-    session: sdkSession,
+    session: sdkSession?.session,
     attempt: input.attempt,
     repaired,
     previousNotification,
@@ -216,18 +207,14 @@ export async function createStreamCustodyFixture(
       if (!managerTarget) {
         throw new Error("Fixture manager lost its durable target");
       }
-      expect(
-        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(target))),
-      ).toBe(
+      const database = toDatabaseOptions(resolveSqliteReadScope(target));
+      expect(resolveOpenClawAgentSqlitePath(database)).toBe(
         resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(managerTarget))),
       );
-      const work = runOpenClawAgentWorkerWrite(
-        toDatabaseOptions(resolveSqliteReadScope(target)),
-        async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      );
+      const work = runOpenClawAgentWorkerWrite(database, async () => {
+        entered.resolve();
+        await release.promise;
+      });
       await entered.promise;
       return { release: release.resolve, work };
     },

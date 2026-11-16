@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Enforces source-managed provider secret ownership rules.
  */
@@ -6,7 +7,6 @@ import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { isRecord } from "../utils.js";
 import { resolveEnvSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { normalizeProviderMapKeys } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -107,9 +107,6 @@ export function enforceSourceManagedProviderSecrets(params: {
 
   let nextProviders: Record<string, ProviderConfig> | null = null;
   for (const [providerKey, provider] of Object.entries(providers)) {
-    if (!isRecord(provider)) {
-      continue;
-    }
     const canonicalProviderKey = normalizeProviderId(providerKey);
     const sourceProvider = sourceProvidersByKey.get(canonicalProviderKey);
     if (!sourceProvider) {
@@ -135,7 +132,7 @@ export function enforceSourceManagedProviderSecrets(params: {
       sourceProvider,
       sourceConfig: params.sourceConfigForSecrets,
     });
-    const currentHeaders = isRecord(nextProvider.headers) ? nextProvider.headers : undefined;
+    const currentHeaders = nextProvider.headers;
     if (
       Object.entries(sourceHeaderMarkers).some(
         ([headerName, marker]) => currentHeaders?.[headerName] !== marker,

@@ -6,14 +6,14 @@ import type {
 } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/session-transcript-writer-claim-error.js";
-import type { SessionManagerMemoryBinding } from "./session-manager-incognito-scope.js";
+import type { ActiveSessionManagerMemoryBinding } from "./session-manager-incognito-scope.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { prepareSessionManagerMetadataCommand } from "./session-manager-metadata-command.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 
 /** Adapts the existing manager contract to its selected actor, without opening a database. */
 export function createSessionManagerMemoryDatabase(
-  binding: SessionManagerMemoryBinding,
+  binding: ActiveSessionManagerMemoryBinding,
 ): SessionManagerIncognitoDatabase {
   const { actor, storage, database } = binding;
   if (actor.target.database.kind !== "memory") {

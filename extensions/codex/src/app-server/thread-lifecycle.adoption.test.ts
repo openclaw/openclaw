@@ -93,25 +93,32 @@ describe("Codex app-server adopted thread lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["native-tools", "delegation"] as const)(
-    "preserves expected native ownership instead of starting a fresh %s-restricted thread",
+  it.each(["native-tools", "delegation", "host-only-delegation", "runtime identity"] as const)(
+    "preserves expected native ownership when %s would replace its thread",
     async (restriction) => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
       const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
       const nativeModel = threadStartResult(threadId);
       await testCodexAppServerBindingStore.mutate(identity, {
         kind: "patch",
         threadId,
-        patch: { model: nativeModel.model, modelProvider: nativeModel.modelProvider },
+        patch: {
+          model: nativeModel.model,
+          modelProvider: nativeModel.modelProvider,
+          ...(restriction === "runtime identity" ? { appServerRuntimeFingerprint: "before" } : {}),
+        },
       });
       params.expectedSessionRuntimeOwnership = {
         model: "native",
         auth: "host",
         modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
       };
-      if (restriction === "delegation") {
-        params.delegationCapability = "report_only";
+      if (restriction === "delegation" || restriction === "host-only-delegation") {
+        params.delegationCapability = restriction === "delegation" ? "report_only" : "host_only";
+      } else if (restriction === "native-tools") {
+        params.disableTools = true;
       }
       const before = testCodexAppServerBindingStore.read(identity);
       const fixture = await createLeasedCodexLifecycleHarness({
@@ -127,9 +134,15 @@ describe("Codex app-server adopted thread lifecycle", () => {
             cwd: workspaceDir,
             dynamicTools: [],
             appServer: createThreadLifecycleAppServerOptions(),
+            ...(restriction === "runtime identity" ? { appServerRuntimeFingerprint: "after" } : {}),
             ...(restriction === "native-tools" ? { nativeCodeModeEnabled: false } : {}),
           }),
-        ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        ).rejects.toMatchObject({
+          name: "AgentHarnessPreflightError",
+          ...(restriction === "runtime identity"
+            ? { message: expect.stringContaining("changing runtime identity") }
+            : {}),
+        });
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
         );
@@ -143,6 +156,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
   it("preserves the cold native thread after host rotation with changed tools", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
     const storePath = path.join(tempDir, "sessions.json");
     params.config = { session: { store: storePath } };
     const scope = { agentId: "main", sessionKey: params.sessionKey!, storePath };
@@ -201,6 +215,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+      params.disableTools = false;
       const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
       const harness = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),

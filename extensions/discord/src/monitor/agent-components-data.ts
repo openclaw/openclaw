@@ -90,12 +90,6 @@ export function parseDiscordModalId(data: ComponentData, customId?: string): str
 export function resolveInteractionCustomId(
   interaction: AgentComponentInteraction,
 ): string | undefined {
-  if (!interaction?.rawData || typeof interaction.rawData !== "object") {
-    return undefined;
-  }
-  if (!("data" in interaction.rawData)) {
-    return undefined;
-  }
   return normalizeOptionalString(interaction.rawData.data?.custom_id);
 }
 
@@ -131,12 +125,8 @@ export function resolveModalFieldValues(
         return mapOptionLabels(field.options, fields.getStringSelect(field.id, required));
       }
       case "role-select": {
-        try {
-          const roles = fields.getRoleSelect(field.id, required);
-          return roles.map((role) => role.name ?? role.id);
-        } catch {
-          return fields.getStringSelect(field.id, required);
-        }
+        const roles = fields.getRoleSelect(field.id, required);
+        return roles.map((role) => role.name || role.id);
       }
       case "user-select": {
         const users = fields.getUserSelect(field.id, required);

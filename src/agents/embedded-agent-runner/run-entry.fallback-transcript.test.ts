@@ -18,6 +18,7 @@ import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { FailoverError } from "../failover-error.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
+import { resetStickyRateLimitFallbacksForTest } from "../model-fallback-sticky.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 
@@ -36,8 +37,12 @@ vi.mock("../harness/selection.js", () => ({
 }));
 
 describe("run entry durable fallback notices", () => {
+  const primary = "openai/gpt-4.1-mini";
+  const backup = "anthropic/claude-haiku-3-5";
   const files = useTempSessionsFixture("fallback-transcript-");
   afterEach(() => {
+    // These cases share one session id and deliberately leave rate-limit stickiness behind.
+    resetStickyRateLimitFallbacksForTest();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
@@ -50,6 +55,7 @@ describe("run entry durable fallback notices", () => {
       omitSessionKey?: boolean;
       abortSignal?: AbortSignal;
       writerContext?: boolean;
+      unadmittedPrimary?: boolean;
     } = {},
   ) {
     const identity = {
@@ -107,7 +113,9 @@ describe("run entry durable fallback notices", () => {
           await options.onStep?.(step);
         },
         runCandidate: async (provider, model) => {
-          await admission.admit("embedded");
+          if (!options.unadmittedPrimary || provider !== "openai") {
+            await admission.admit("embedded");
+          }
           if (options.writerContext) {
             const authority = getAgentRunContext(identity.runId)?.delegatedAuthority;
             if (!authority) {
@@ -139,43 +147,45 @@ describe("run entry durable fallback notices", () => {
           return makeResult({ provider, model });
         },
       });
-    return { scope, entry, admission, candidates, steps, run };
+    return { scope, entry, candidates, steps, run, [Symbol.dispose]: () => admission.close() };
   }
 
   it("persists a real transition once, preserving callbacks and source-session binding", async () => {
-    const f = await fixture();
-    try {
-      expect((await f.run()).provider).toBe("anthropic");
-      expect((await f.run()).provider).toBe("anthropic");
-      expect(f.steps.map((step) => step.fallbackStepFinalOutcome)).toEqual([
-        "next_fallback",
-        "succeeded",
-        "next_fallback",
-        "succeeded",
-      ]);
-      const events = await loadTranscriptEvents(f.scope);
-      const notices = events
-        .map((event) => readModelFallbackNotice(asOptionalRecord(event)?.message))
-        .filter(Boolean);
-      expect(notices).toEqual([
-        {
-          kind: "model-fallback",
-          runId: f.scope.runId,
-          fromModel: "openai/gpt-4.1-mini",
-          toModel: "anthropic/claude-haiku-3-5",
-          reason: "rate_limit",
-        },
-      ]);
-      expect(JSON.stringify(events)).not.toContain("synthetic-secret");
-      expect(JSON.stringify(events)).not.toContain("policy-only");
-      expect(events.filter((event) => asOptionalRecord(event)?.type === "message")).toHaveLength(1);
-    } finally {
-      f.admission.close();
-    }
+    using f = await fixture();
+    const result = await f.run();
+    expect(result.provider).toBe("anthropic");
+    expect(result.result.meta.modelFallbackTranscriptToModel).toBe(backup);
+    // Stickiness skips the second transition; this test covers de-duplication across repeated transitions.
+    resetStickyRateLimitFallbacksForTest();
+    expect((await f.run()).provider).toBe("anthropic");
+    expect(f.steps.map((step) => step.fallbackStepFinalOutcome)).toEqual([
+      "next_fallback",
+      "succeeded",
+      "next_fallback",
+      "succeeded",
+    ]);
+    await f.run();
+    expect(f.candidates).toEqual([primary, backup, primary, backup, backup]);
+    const events = await loadTranscriptEvents(f.scope);
+    const notices = events
+      .map((event) => readModelFallbackNotice(asOptionalRecord(event)?.message))
+      .filter(Boolean);
+    expect(notices).toEqual([
+      {
+        kind: "model-fallback",
+        runId: f.scope.runId,
+        fromModel: primary,
+        toModel: backup,
+        reason: "rate_limit",
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(events)).not.toContain("policy-only");
+    expect(events.filter((event) => asOptionalRecord(event)?.type === "message")).toHaveLength(1);
   });
 
   it("keeps the fallback usable when notice storage and an observer fail", async () => {
-    const f = await fixture({
+    using f = await fixture({
       onStep: () => {
         throw new Error("observer failed");
       },
@@ -183,100 +193,95 @@ describe("run entry durable fallback notices", () => {
     const append = vi
       .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
       .mockRejectedValue(new Error("synthetic storage failure"));
-    try {
-      expect((await f.run()).provider).toBe("anthropic");
-      expect(append).toHaveBeenCalledTimes(1);
-      expect(f.candidates).toEqual(["openai/gpt-4.1-mini", "anthropic/claude-haiku-3-5"]);
-    } finally {
-      f.admission.close();
-    }
+    const result = await f.run();
+    expect(result.provider).toBe("anthropic");
+    expect(result.result.meta.modelFallbackTranscriptToModel).toBeUndefined();
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(f.candidates).toEqual([primary, backup]);
   });
 
+  it("records a skipped transition only after the backup admits its run", async () => {
+    using f = await fixture({ unadmittedPrimary: true });
+    const result = await f.run();
+    expect(result.result.meta.modelFallbackTranscriptToModel).toBe("anthropic/claude-haiku-3-5");
+    const notices = (await loadTranscriptEvents(f.scope))
+      .map((event) => readModelFallbackNotice(asOptionalRecord(event)?.message))
+      .filter(Boolean);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      fromModel: "openai/gpt-4.1-mini",
+      toModel: "anthropic/claude-haiku-3-5",
+    });
+  });
+
+  const replacements = [
+    { sessionId: "replacement-session" },
+    { activeWriterRunId: "replacement-run" },
+    { lifecycleRevision: "replacement-revision" },
+  ];
   it.each(
     [false, true].flatMap((writerContext) =>
-      (["session reset", "writer replacement", "lifecycle reset"] as const).map((change) => ({
-        writerContext,
-        change,
-      })),
+      replacements.map((replacement) => ({ writerContext, replacement })),
     ),
   )(
-    "refuses a notice after $change with bound writer=$writerContext",
-    async ({ writerContext, change }) => {
-      const f = await fixture({
+    "refuses a notice after $replacement with bound writer=$writerContext",
+    async ({ writerContext, replacement }) => {
+      using f = await fixture({
         writerContext,
         onStep: async (step) => {
           if (step.fallbackStepFinalOutcome === "next_fallback") {
-            await replaceSessionEntry(f.scope, {
-              ...f.entry,
-              ...(change === "session reset"
-                ? { sessionId: "replacement-session" }
-                : change === "writer replacement"
-                  ? { activeWriterRunId: "replacement-run" }
-                  : { lifecycleRevision: "replacement-revision" }),
-            });
+            await replaceSessionEntry(f.scope, { ...f.entry, ...replacement });
           }
         },
       });
-      try {
-        await f.run();
-        expect(await loadTranscriptEvents(f.scope)).toEqual([]);
-        expect(
-          await loadTranscriptEvents({ ...f.scope, sessionId: "replacement-session" }),
-        ).toEqual([]);
-      } finally {
-        f.admission.close();
-      }
+      await f.run();
+      expect(await loadTranscriptEvents(f.scope)).toEqual([]);
+      expect(await loadTranscriptEvents({ ...f.scope, sessionId: "replacement-session" })).toEqual(
+        [],
+      );
     },
   );
 
-  it("does not write a transition after cancellation", async () => {
-    const controller = new AbortController();
-    const f = await fixture({
-      abortSignal: controller.signal,
-      onStep: (step) => {
-        if (step.fallbackStepFinalOutcome === "next_fallback") {
-          controller.abort(new Error("cancelled fallback"));
-        }
-      },
-    });
-    try {
-      await expect(f.run()).rejects.toThrow("cancelled fallback");
+  it.each(["observer", "commit"] as const)(
+    "rechecks cancellation at the %s boundary",
+    async (boundary) => {
+      const controller = new AbortController();
+      const message =
+        boundary === "observer" ? "cancelled fallback" : "cancelled before notice commit";
+      const abort = () => controller.abort(new Error(message));
+      using f = await fixture({
+        abortSignal: controller.signal,
+        onStep: (step) => {
+          if (boundary === "observer" && step.fallbackStepFinalOutcome === "next_fallback") {
+            abort();
+          }
+        },
+      });
+      if (boundary === "commit") {
+        const append = transcript.appendAssistantMessageToSessionTranscript;
+        vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
+          async (params) => {
+            abort();
+            return append(params);
+          },
+        );
+      }
+      await expect(f.run()).rejects.toThrow(message);
       expect(await loadTranscriptEvents(f.scope)).toEqual([]);
-      expect(f.candidates).toEqual(["openai/gpt-4.1-mini"]);
-    } finally {
-      f.admission.close();
-    }
-  });
-
-  it("rechecks cancellation at the canonical write boundary", async () => {
-    const controller = new AbortController();
-    const f = await fixture({ abortSignal: controller.signal });
-    const append = transcript.appendAssistantMessageToSessionTranscript;
-    vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
-      async (params) => {
-        controller.abort(new Error("cancelled before notice commit"));
-        return append(params);
-      },
-    );
-    try {
-      await expect(f.run()).rejects.toThrow("cancelled before notice commit");
-      expect(await loadTranscriptEvents(f.scope)).toEqual([]);
-      expect(f.candidates).toEqual(["openai/gpt-4.1-mini"]);
-    } finally {
-      f.admission.close();
-    }
-  });
+      expect(f.candidates).toEqual([primary]);
+    },
+  );
 
   it.each(["maintenance", "missingSession", "omitSessionKey"] as const)(
     "skips durable notices for %s contexts",
     async (skip) => {
-      const f = await fixture({ [skip]: true });
-      try {
-        expect((await f.run()).provider).toBe("anthropic");
-        expect(await loadTranscriptEvents(f.scope)).toEqual([]);
-      } finally {
-        f.admission.close();
+      using f = await fixture({ [skip]: true });
+      expect((await f.run()).provider).toBe("anthropic");
+      if (skip === "maintenance") {
+        await f.run();
+        expect(f.candidates).toEqual([primary, backup, primary, backup]);
       }
+      expect(await loadTranscriptEvents(f.scope)).toEqual([]);
     },
   );
 });

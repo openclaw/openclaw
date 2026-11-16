@@ -8,6 +8,10 @@ import type {
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import type { SandboxStateOwnerPath } from "../sandbox/state-owner-path.js";
+import type { WorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
+
+export type WorktreeWaitBudget = { remainingMs: number };
 
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
@@ -89,6 +93,8 @@ export type WorktreeLeaseSet = {
 
 /** Explicit worker authority replaces the native guard, including predicate-only authority. */
 export type WorktreeWorkerAuthority = {
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
+  stateOwnerPath?: SandboxStateOwnerPath;
   leaseSet?: WorktreeLeaseSet;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -99,7 +105,7 @@ export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" |
   workerAuthority?: WorktreeWorkerAuthority;
 };
 
-type WorktreeSourceCurrent = {
+export type WorktreeSourceCurrent = {
   assertCurrent: SessionSourceAssertion;
   workerAuthority?: Omit<WorktreeWorkerAuthority, "leaseSet">;
   /** Checkout custody for rollback within this callback, independent of caller/source freshness. */
@@ -109,6 +115,7 @@ type WorktreeSourceCurrent = {
 
 export type WorktreeSourceStage = <T>(
   run: (current: WorktreeSourceCurrent) => T | Promise<T>,
+  acquisition?: { waitMs?: number },
 ) => Promise<T>;
 
 export type CreateManagedWorktreeParams = {
@@ -128,7 +135,7 @@ export type CreateManagedWorktreeParams = {
   /** Guest projections receive committed source, never host ignored-file provisioning. */
   provisionIgnoredFiles?: boolean;
   signal?: AbortSignal;
-  onProgress?: (phase: "checkout" | "setup") => void;
+  onProgress?: (phase: "base" | "checkout" | "setup") => void;
   /** Committed prompt files are ready; workspace tools must still await creation. */
   onPromptReady?: (facts: {
     id: string;
@@ -139,6 +146,8 @@ export type CreateManagedWorktreeParams = {
   }) => Promise<void>;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
+  /** One caller-owned contention budget across source preparation and creation. */
+  waitBudget?: WorktreeWaitBudget;
   /** Revalidate the selected source for one operation without retaining its guard afterward. */
   withSource?: WorktreeSourceStage;
   /** Cleanup retains checkout custody without requiring a retired source selection. */
@@ -178,6 +187,7 @@ export type ManagedWorktreeBranchesResult = {
   headBranch?: string;
   repositoryStatus?: ManagedWorktreeRepositoryStatus;
   branchesUnavailable?: boolean;
+  refreshing?: boolean;
 };
 
 export type ManagedWorktreeGcResult = {
@@ -187,11 +197,21 @@ export type ManagedWorktreeGcResult = {
   /** Complete recovery locations, even when individual issue details are omitted. */
   retiredCheckoutPaths: string[];
   snapshotsPruned: number;
+  scratch?: import("../../infra/scratch-cleanup.js").ScratchCleanupResult;
+  scratchDeferred?: "io-pressure";
+  /** Current or last repository stage; independent of checkout removal counts. */
+  gitMaintenance?: {
+    repoRoot: string;
+    stage: "packs" | "objects" | "maintenance" | "completed" | "suspended" | "throttled";
+    packsBefore?: number;
+    packsAfter?: number;
+  };
+  packsRemoved?: number;
   outcome: "completed" | "deferred" | "partial";
   /** Bounded per-worktree cleanup disposition; issueCount includes omitted entries. */
   issues: {
     id?: string;
-    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots";
+    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots" | "git-maintenance";
     outcome: "failed" | "deferred" | "retired";
     reason: string;
   }[];

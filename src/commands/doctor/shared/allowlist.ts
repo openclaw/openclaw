@@ -3,10 +3,9 @@ import {
   asOptionalObjectRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { DoctorAllowFromList } from "../types.js";
 
 /** Return true when an allowFrom-like list has at least one normalized sender entry. */
-export function hasAllowFromEntries(list?: DoctorAllowFromList) {
+export function hasAllowFromEntries(list?: unknown) {
   return Array.isArray(list) && normalizeStringEntries(list).length > 0;
 }
 

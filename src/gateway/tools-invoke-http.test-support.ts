@@ -1,9 +1,15 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
+import {
+  withOpenClawTestState as withTestState,
+  type OpenClawTestState as TestState,
+} from "../test-utils/openclaw-test-state.js";
+import { createTestGatewayHttpServer } from "./http-server.test-support.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -11,6 +17,16 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import type { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 let useRealSessionSpawnTool = false;
+
+export function withToolsInvokeTestState<T>(
+  options: Parameters<typeof withTestState>[0],
+  run: (state: TestState) => Promise<T>,
+): Promise<T> {
+  return withTestState(options, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    return await run(state);
+  });
+}
 
 export async function createToolsInvokeSessionSpawnFixture(
   options: OpenClawToolsOptions,
@@ -27,8 +43,6 @@ export async function createToolsInvokeSessionSpawnFixture(
     execute: async () => ({
       content: [],
       details: {},
-      ok: true,
-      route: { agentTo: options.agentTo, agentThreadId: options.agentThreadId },
       inheritedToolDenylist: options.inheritedToolDenylist,
     }),
   };
@@ -51,9 +65,9 @@ export function registerToolsInvokeSpawnWorkspaceTests(params: {
     { name: "restricted explicit root", restricted: true, explicitRoot: true },
     { name: "unrestricted inherited tools", restricted: false, explicitRoot: true },
   ])("preserves the HTTP hidden-spawn boundary for $name", async (scenario) => {
-    const configuredWorkspace = "/tmp/http-configured-agent-workspace";
-    const storedWorkspace = "/tmp/http-requester-workspace";
-    const explicitRoot = "/tmp/http-requester-workspace/scoped";
+    const configuredWorkspace = "/tmp/http-configured";
+    const storedWorkspace = "/tmp/http-requester";
+    const explicitRoot = "/tmp/http-requester/scoped";
     const sessionKey = "agent:main:subagent:http-requester";
     params.setConfig({
       agents: { entries: { main: { workspace: configuredWorkspace } } },
@@ -83,7 +97,7 @@ export function registerToolsInvokeSpawnWorkspaceTests(params: {
     const response = await params.invoke({
       tool: "sessions_spawn",
       sessionKey,
-      args: { task: "Inspect the inherited workspace", agentId: "main", visible: false },
+      args: { task: "Inspect workspace", agentId: "main", visible: false },
     });
 
     expect(response.status).toBe(200);
@@ -92,7 +106,7 @@ export function registerToolsInvokeSpawnWorkspaceTests(params: {
       result: { details: { status: "accepted" } },
     });
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ task: "Inspect the inherited workspace", agentId: "main" }),
+      expect.objectContaining({ task: "Inspect workspace", agentId: "main" }),
       expect.objectContaining({
         agentSessionKey: sessionKey,
         inheritedToolPolicySource: scenario.restricted ? "sender" : undefined,
@@ -105,7 +119,6 @@ export function registerToolsInvokeSpawnWorkspaceTests(params: {
   });
 }
 
-/** Shared loopback transport with an independently reset Gateway context for each test. */
 export function createToolsInvokeHttpTestServer(params: {
   handleToolsInvoke: typeof handleToolsInvokeHttpRequest;
   getPluginHandlers?: () => ReadonlyArray<
@@ -113,46 +126,24 @@ export function createToolsInvokeHttpTestServer(params: {
   >;
 }) {
   let resolveGatewayContext: GatewayContextResolver | undefined;
-  const server = createServer((req, res) => {
-    void (async () => {
-      if (
-        await params.handleToolsInvoke(req, res, {
-          auth: { mode: "none", allowTailscale: false },
-          resolveGatewayContext,
-        })
-      ) {
-        return;
+  const server = createTestGatewayHttpServer(async (req, res) => {
+    if (
+      await params.handleToolsInvoke(req, res, {
+        auth: { mode: "none", allowTailscale: false },
+        resolveGatewayContext,
+      })
+    ) {
+      return true;
+    }
+    for (const handler of params.getPluginHandlers?.() ?? []) {
+      if (await handler(req, res)) {
+        return true;
       }
-      for (const handler of params.getPluginHandlers?.() ?? []) {
-        if (await handler(req, res)) {
-          return;
-        }
-      }
-      res.statusCode = 404;
-      res.end("not found");
-    })().catch((error: unknown) => {
-      res.statusCode = 500;
-      res.end(String(error));
-    });
+    }
+    return false;
   });
   return {
-    async listen() {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected loopback HTTP server address");
-      }
-      return address.port;
-    },
-    async close() {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    ...server,
     setMethodRegistry(this: void, registry: GatewayMethodRegistry) {
       const context = resolveGatewayContext?.();
       if (!context) {
@@ -171,13 +162,9 @@ export function createToolsInvokeHttpTestServer(params: {
 export const expectOkInvokeResponse = async (res: Response) => {
   expect(res.status).toBe(200);
   const body: unknown = await res.json();
-  if (
-    !isRecord(body) ||
-    typeof body.ok !== "boolean" ||
-    (body.result !== undefined && !isRecord(body.result))
-  ) {
-    throw new Error("Expected an object tool response");
-  }
-  expect(body.ok).toBe(true);
+  assert(
+    isRecord(body) && body.ok === true && (body.result === undefined || isRecord(body.result)),
+    "Expected an object tool response",
+  );
   return { ok: body.ok, result: body.result };
 };

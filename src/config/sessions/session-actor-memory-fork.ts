@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   assertModelSelectionUnlocked,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
@@ -16,14 +15,22 @@ import type { ForkSessionEntryFromParentTargetResult } from "./session-accessor.
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import type {
+  SessionActorMemoryParentForkCallbacks,
   SessionActorMemoryForkCommand,
   SessionActorMemoryForkQuery,
   SessionActorMemoryForkWrites,
 } from "./session-actor-memory-fork-contract.js";
-import { resolveSessionActorMemoryWindow } from "./session-actor-memory-state.js";
+import {
+  createSessionActorMemoryState,
+  resolveSessionActorMemoryWindow,
+} from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
-import { planSessionMessageCut } from "./session-message-cut-plan.js";
+import {
+  createMemorySessionMessageCutReader,
+  planInPlaceSessionMessageCut,
+  planSessionMessageCut,
+} from "./session-message-cut-plan.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { mergeSessionEntry, type InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -46,6 +53,7 @@ export function readSessionActorMemoryForkQuery(
 function commitParentFork(
   context: SessionActorMemoryStorageContext,
   input: SessionActorMemoryForkWrites["session.parentFork.commit"]["input"],
+  callbacks?: SessionActorMemoryParentForkCallbacks,
 ): ForkSessionEntryFromParentTargetResult {
   const parentKey = normalizeStoreSessionKey(input.params.parentTarget.canonicalKey);
   const targetKey = normalizeStoreSessionKey(input.params.sessionTarget.canonicalKey);
@@ -59,11 +67,12 @@ function commitParentFork(
     return { status: "missing-entry" };
   }
   if (input.patch?.skipExisting && base.sessionId.trim()) {
-    const sessionEntry = input.patch.skipped
+    const skipped = input.patch.skipped;
+    const sessionEntry = skipped
       ? installSessionActorMemoryEntry(
           context.edit(targetKey),
           preserveSqliteSameKeySessionRolloverLineage({
-            next: mergeSessionEntry(base, input.patch.skipped),
+            next: mergeSessionEntry(base, skipped),
             previous: base,
             sessionKey: targetKey,
           }),
@@ -86,19 +95,20 @@ function commitParentFork(
   if (!source) {
     return { status: "failed" };
   }
-  const providers = new Set(input.cliForkProviders?.map(normalizeProviderId));
   const sessionId = randomUUID();
+  const patch = input.patch?.forked;
   const next: SessionEntry = {
     ...mergeSessionEntry(base, {
-      ...input.patch?.forked,
+      ...patch,
       forkSource: { sessionKey: parentKey, sessionId: parentEntry.sessionId },
       forkedFromParent: true,
       sessionId,
       totalTokens: undefined,
       totalTokensFresh: false,
       totalTokensVersion: undefined,
-      cliSessionBindings: forkCliSessionBindings(parentEntry, (provider) =>
-        providers.has(normalizeProviderId(provider)),
+      cliSessionBindings: forkCliSessionBindings(
+        parentEntry,
+        (provider) => callbacks?.supportsCliFork?.(provider) ?? false,
       ),
       cliSessionIds: undefined,
       claudeCliSessionId: undefined,
@@ -107,7 +117,9 @@ function commitParentFork(
     lastRunId: undefined,
   };
   const target = context.edit(targetKey);
-  const sessionEntry = installSessionActorMemoryEntry(target, next);
+  const sessionEntry = installSessionActorMemoryEntry(target, next, {
+    preserveVisibility: input.patch?.preserveVisibility,
+  });
   const events = createSessionActorMemoryEvents({ ...context, state: target });
   const forkedEvents = buildForkedChildTranscriptEvents({
     parentSessionFile: formatSqliteSessionFileMarker({
@@ -136,31 +148,96 @@ function commitParentFork(
 export function executeSessionActorMemoryForkCommand(
   context: SessionActorMemoryStorageContext,
   command: SessionActorMemoryForkCommand,
+  callbacks?: SessionActorMemoryParentForkCallbacks,
 ) {
   switch (command.type) {
     case "session.parentFork.commit":
-      return commitParentFork(context, command.input);
+      return commitParentFork(context, command.input, callbacks);
+    case "session.parentFork.transcript": {
+      const target = context.edit(context.state.hot.target.sessionKey);
+      // Transcript-only forks precede child entry creation. Keep their window with the actor
+      // so creation can adopt it without inventing a live logical entry.
+      const current = target.hot.entry?.sessionId === command.input.sessionId;
+      const window = current ? target : createSessionActorMemoryState(target.hot.target);
+      const previous = target.historicalWindows.get(command.input.sessionId);
+      if (!current) {
+        if (previous) {
+          Object.assign(window, structuredClone(previous));
+        } else {
+          installSessionActorMemoryEntry(window, {
+            sessionId: command.input.sessionId,
+            updatedAt: Date.now(),
+          });
+        }
+      }
+      const events = createSessionActorMemoryEvents({ ...context, state: window });
+      for (const event of command.input.events) {
+        events.writeEvent(event);
+      }
+      if (!current) {
+        target.historicalWindows.set(command.input.sessionId, {
+          hot: window.hot,
+          usageRollup: window.usageRollup,
+          sourceCreatedAt: window.sourceCreatedAt,
+          conversationLinks: window.conversationLinks,
+          primaryConversationRef: window.primaryConversationRef,
+          workerTranscriptCommits: window.workerTranscriptCommits,
+          events: window.events,
+          pendingInputs: window.pendingInputs,
+          completions: window.completions,
+          goalReceipts: window.goalReceipts,
+        });
+      }
+      return {
+        status: "created" as const,
+        transcript: {
+          sessionId: command.input.sessionId,
+          sessionFile: target.hot.target.sessionKey,
+        },
+      };
+    }
     case "session.messageCut": {
       const { intent, sourceRepositoryWorkspaceId } = command.input;
       const source = context.get(normalizeStoreSessionKey(intent.sourceKey));
+      const sourceEvents = source?.events.map(({ event }) => event) ?? [];
+      const preparedIntent = {
+        ...intent,
+        expectedState:
+          intent.expectedState ??
+          (source?.hot.entry && {
+            sessionId: source.hot.entry.sessionId,
+            lifecycleRevision: source.hot.entry.lifecycleRevision,
+          }),
+      };
+      const targetKey = normalizeStoreSessionKey(intent.targetKey);
+      // Rewind and switch share the file-backed identity contract: the transcript
+      // keeps its id and gains one appended control row.
+      if (preparedIntent.mode !== "fork") {
+        const plan = planInPlaceSessionMessageCut(
+          source?.hot.entry,
+          createMemorySessionMessageCutReader(sourceEvents),
+          { ...preparedIntent, mode: preparedIntent.mode },
+          sourceRepositoryWorkspaceId,
+        );
+        if (plan.status !== "prepared") {
+          return plan;
+        }
+        const target = context.edit(targetKey);
+        const entry = installSessionActorMemoryEntry(target, plan.result.entry);
+        createSessionActorMemoryEvents({ ...context, state: target }).appendNavigationControl(
+          plan.leafEvent,
+        );
+        return { ...plan.result, entry };
+      }
       const plan = planSessionMessageCut(
         source?.hot.entry,
-        source?.events.map(({ event }) => event) ?? [],
-        {
-          ...intent,
-          expectedState:
-            intent.expectedState ??
-            (source?.hot.entry && {
-              sessionId: source.hot.entry.sessionId,
-              lifecycleRevision: source.hot.entry.lifecycleRevision,
-            }),
-        },
+        sourceEvents,
+        { ...preparedIntent, mode: "fork" },
         sourceRepositoryWorkspaceId,
       );
       if (plan.status !== "prepared") {
         return plan;
       }
-      const targetKey = normalizeStoreSessionKey(intent.targetKey);
       const target = context.edit(targetKey);
       const entry = installSessionActorMemoryEntry(target, plan.result.entry);
       const events = createSessionActorMemoryEvents({ ...context, state: target });

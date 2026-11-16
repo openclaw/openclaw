@@ -19,6 +19,8 @@ export type UsageCostTranscriptFile = {
   inode?: number;
   eventCount?: number;
   maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
 };
 
 export type ParsedTranscriptEntry = {
@@ -35,9 +37,19 @@ export type ParsedTranscriptEntry = {
   toolResultCounts: { total: number; errors: number };
 };
 
+/**
+ * Canonical latency inputs for one full transcript scan.
+ *
+ * `userTimestamps` names each billed reply's own user turn, so a displaced path
+ * measures inside itself. `activeUserTimestamp` is the continuation cursor the
+ * next append-only scan measures its first reply against.
+ */
+export type UsageRollupTiming = {
+  userTimestamps: ReadonlyMap<ParsedTranscriptEntry, number>;
+  activeUserTimestamp?: number;
+};
+
 export type CostUsageTotals = {
-  /** Unavailable means numeric fields are known subtotals, not complete usage. */
-  usageReport?: Usage["usageReport"];
   input: number;
   output: number;
   cacheRead: number;
@@ -69,6 +81,7 @@ export type CostUsageSummary = {
     pendingFiles: number;
     staleFiles: number;
     refreshedAt?: number;
+    partial?: { reason: "aggregate-boundary"; message: string };
   };
 };
 
@@ -94,7 +107,6 @@ export type SessionUtcQuarterHourMessageCounts = SessionMessageCounts & {
 };
 
 export type SessionUtcQuarterHourTokenUsage = {
-  usageReport?: Usage["usageReport"];
   date: string; // YYYY-MM-DD (UTC)
   quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
   input: number;
@@ -120,7 +132,6 @@ export type SessionDailyLatency = SessionLatencyStats & {
 };
 
 export type SessionDailyModelUsage = {
-  usageReport?: Usage["usageReport"];
   date: string; // YYYY-MM-DD
   provider?: string;
   model?: string;

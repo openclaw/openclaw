@@ -173,8 +173,8 @@ export function isWebPushQuietHours(
     minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(nowMs);
-  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
   const current = hour * 60 + minute;
   return quiet.startMinute < quiet.endMinute
     ? current >= quiet.startMinute && current < quiet.endMinute

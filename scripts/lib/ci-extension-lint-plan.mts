@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isCiDocumentationPath } from "../ci-changed-scope.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { selectAffectedBoundaryPackages } from "./extension-boundary-selection.mts";
 
@@ -10,6 +11,7 @@ export async function resolveCiExtensionLintSelection(
 ) {
   const available = listAvailableExtensionIds(cwd);
   const fullReasons: string[] = [];
+  const relevantFiles: string[] = [];
   if (forceFull) {
     fullReasons.push("OPENCLAW_CI_EXTENSION_LINT_FULL");
   }
@@ -17,6 +19,10 @@ export async function resolveCiExtensionLintSelection(
     if (path.isAbsolute(file) || file.split("/").some((part) => part === ".." || !part)) {
       throw new Error(`Invalid changed extension lint path: ${file}`);
     }
+    if (isCiDocumentationPath(file)) {
+      continue;
+    }
+    relevantFiles.push(file);
     if (
       file.startsWith("extensions/") &&
       /\.[cm]?[jt]sx?$/u.test(file) &&
@@ -64,7 +70,7 @@ export async function resolveCiExtensionLintSelection(
       selection = selectAffectedBoundaryPackages(
         cwd,
         available,
-        [...new Set(changedFiles)].map((file) => ({ path: file, status: "M" })),
+        relevantFiles.map((file) => ({ path: file, status: "M" })),
         baseRef,
         { includeTestSources: true },
       );

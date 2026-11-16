@@ -1,9 +1,8 @@
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import {
@@ -56,7 +55,7 @@ export function writeAcpSessionMetaForMigration(params: {
   );
 }
 
-/** @deprecated Use readAcpSessionEntryAsync; retained for the v2026.9.4 Plugin SDK contract. */
+/** @deprecated Use readAcpSessionEntryAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readAcpSessionEntry(params: {
   sessionKey: string;
   agentId?: string;
@@ -74,10 +73,7 @@ export function readAcpSessionEntry(params: {
   if (!sessionKey) {
     return null;
   }
-  if (
-    getSessionActorStorageBinding({ ...params, sessionKey }) ||
-    captureIncognitoSessionBinding(params)
-  ) {
+  if (isIncognitoSessionKey(sessionKey)) {
     throw new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync");
   }
   const storeEntry = readSessionEntryFromStore(params);

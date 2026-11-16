@@ -1,5 +1,5 @@
 import type { Mock } from "vitest";
-import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import type { EmbeddedRunAttemptResult as Attempt } from "./embedded-agent-runner/run/types.js";
 import { FailoverError } from "./failover-error.js";
 import {
   type EmbeddedAttemptParams,
@@ -12,17 +12,11 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
-/** Deterministic primary failures for the shared embedded-runner fallback harness. */
 export function createModelFallbackAttemptMocks(
-  runEmbeddedAttemptMock: Pick<
-    Mock<(params: unknown) => Promise<EmbeddedRunAttemptResult>>,
-    "mockImplementation"
-  >,
+  runEmbeddedAttemptMock: Pick<Mock<(params: unknown) => Promise<Attempt>>, "mockImplementation">,
 ) {
-  function mockPrimaryFailureThenFallbackSuccess(
-    makePrimaryAttempt: (
-      attemptParams: EmbeddedAttemptParams,
-    ) => EmbeddedRunAttemptResult | Promise<EmbeddedRunAttemptResult>,
+  function primaryFailure(
+    makePrimaryAttempt: (params: EmbeddedAttemptParams) => Attempt | Promise<Attempt>,
     options?: { primaryProvider?: string },
   ) {
     const primaryProvider = options?.primaryProvider ?? "openai";
@@ -39,14 +33,10 @@ export function createModelFallbackAttemptMocks(
     });
   }
 
-  function mockPrimaryErrorThenFallbackSuccess(
-    errorMessage: string,
-    options?: { primaryProvider?: string },
-  ) {
-    mockPrimaryFailureThenFallbackSuccess(
+  function primaryError(errorMessage: string, options?: { primaryProvider?: string }) {
+    primaryFailure(
       (attemptParams) =>
         makeEmbeddedRunnerAttempt({
-          assistantTexts: [],
           lastAssistant: buildEmbeddedRunnerAssistant({
             provider: attemptParams.provider,
             model: attemptParams.modelId ?? "mock-1",
@@ -58,41 +48,37 @@ export function createModelFallbackAttemptMocks(
     );
   }
 
+  function mockPromptFailure(makeError: () => Error, sessionIdUsed?: string) {
+    primaryFailure(() =>
+      makeEmbeddedRunnerAttempt({
+        ...(sessionIdUsed !== undefined ? { sessionIdUsed } : {}),
+        terminal: { kind: "failed", source: "prompt", error: makeError() },
+      }),
+    );
+  }
+
   return {
-    mockPrimaryFailureThenFallbackSuccess,
-    mockPrimaryErrorThenFallbackSuccess,
-    mockPrimaryOverloadedThenFallbackSuccess: () =>
-      mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD),
+    mockPrimaryFailureThenFallbackSuccess: primaryFailure,
+    mockPrimaryErrorThenFallbackSuccess: primaryError,
+    mockPrimaryOverloadedThenFallbackSuccess: () => primaryError(OVERLOADED_ERROR_PAYLOAD),
     mockPrimaryPromptErrorThenFallbackSuccess: (errorMessage: string) =>
-      mockPrimaryFailureThenFallbackSuccess(() =>
-        makeEmbeddedRunnerAttempt({
-          terminal: { kind: "failed", source: "prompt", error: new Error(errorMessage) },
-        }),
-      ),
+      mockPromptFailure(() => new Error(errorMessage)),
     mockPrimarySuspendingPromptErrorThenFallbackSuccess: (sessionId: string) =>
-      mockPrimaryFailureThenFallbackSuccess(() =>
-        makeEmbeddedRunnerAttempt({
-          sessionIdUsed: sessionId,
-          terminal: {
-            kind: "failed",
-            source: "prompt",
-            error: new FailoverError(RATE_LIMIT_ERROR_MESSAGE, {
-              reason: "rate_limit",
-              provider: "openai",
-              model: "mock-1",
-              suspend: true,
-            }),
-          },
-        }),
+      mockPromptFailure(
+        () =>
+          new FailoverError(RATE_LIMIT_ERROR_MESSAGE, {
+            reason: "rate_limit",
+            provider: "openai",
+            model: "mock-1",
+            suspend: true,
+          }),
+        sessionId,
       ),
     mockPrimaryStaleRateLimitTextSuccess: (errorMessage: string) =>
-      mockPrimaryFailureThenFallbackSuccess(() =>
+      primaryFailure(() =>
         makeEmbeddedRunnerAttempt({
           assistantTexts: ["primary ok"],
           lastAssistant: buildEmbeddedRunnerAssistant({
-            provider: "openai",
-            model: "mock-1",
-            stopReason: "stop",
             content: [{ type: "text", text: "primary ok" }],
             errorMessage,
           }),

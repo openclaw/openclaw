@@ -1,9 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createAskUserTool } from "../../agents/tools/ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -30,10 +29,6 @@ import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
-
-afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
-});
 
 const sessionKey = "agent:main:hosted-question";
 const toolArgs = {
@@ -231,6 +226,7 @@ async function withHostedQuestion(
     } finally {
       manager.close();
       await manager.drain();
+      await scheduler.stop();
       parent.close();
       captured.release();
     }

@@ -19,4 +19,4 @@ CREATE TABLE "secret_store_entries" (
   CHECK ((("scope_kind" = 'team') AND ("scope_id" = '')) OR (("scope_kind" = 'identity') AND (char_length("scope_id") > 0)))
 );
 
-CREATE INDEX "secret_store_entries_live_idx" ON "secret_store_entries" (("scope_kind") ASC NULLS FIRST, ("scope_id") ASC NULLS FIRST, ("name") ASC NULLS FIRST) WHERE "deleted_at_ms" IS NULL;
+CREATE INDEX "secret_store_entries_live_idx" ON "secret_store_entries" (("scope_kind") ASC, ("scope_id") ASC, ("name") ASC) WHERE "deleted_at_ms" IS NULL;

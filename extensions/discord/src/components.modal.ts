@@ -2,19 +2,10 @@ import {
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForInteractionImpl,
 } from "./component-custom-id.js";
-import { createDiscordSelectMenu } from "./components.builders.js";
 import { mapTextInputStyle } from "./components.parse.js";
 import type { DiscordModalEntry, DiscordModalFieldDefinition } from "./components.types.js";
-import {
-  CheckboxGroup,
-  Label,
-  Modal,
-  RadioGroup,
-  RoleSelectMenu,
-  StringSelectMenu,
-  TextInput,
-  UserSelectMenu,
-} from "./internal/discord.js";
+import { RoleSelectMenu, StringSelectMenu, UserSelectMenu } from "./internal/components.message.js";
+import { CheckboxGroup, Label, Modal, RadioGroup, TextInput } from "./internal/components.modal.js";
 
 function createModalFieldComponent(
   field: DiscordModalFieldDefinition,
@@ -31,9 +22,19 @@ function createModalFieldComponent(
     return new DynamicTextInput();
   }
   if (field.type === "select" || field.type === "role-select" || field.type === "user-select") {
-    const type =
-      field.type === "select" ? "string" : field.type === "role-select" ? "role" : "user";
-    const select = createDiscordSelectMenu(type, field.id, field.options);
+    const select =
+      field.type === "select"
+        ? new (class extends StringSelectMenu {
+            customId = field.id;
+            options = field.options ?? [];
+          })()
+        : field.type === "role-select"
+          ? new (class extends RoleSelectMenu {
+              customId = field.id;
+            })()
+          : new (class extends UserSelectMenu {
+              customId = field.id;
+            })();
     select.required = field.required;
     select.minValues = field.minValues;
     select.maxValues = field.maxValues;

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { ARCHIVE_LIMIT_ERROR_CODE, ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
@@ -10,13 +11,22 @@ import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-c
 import { bindFileTransferAudit } from "./audit-context.js";
 import type { FileTransferAuditOp } from "./audit.js";
 import { inspectDirFetchArchive } from "./dir-fetch-archive.js";
-import { DIR_FETCH_MAX_ENTRIES } from "./dir-fetch-limits.js";
+import {
+  DIR_FETCH_DEFAULT_MAX_BYTES,
+  DIR_FETCH_HARD_MAX_BYTES,
+  DIR_FETCH_MAX_ENTRIES,
+} from "./dir-fetch-limits.js";
+import { readFileCreateMetadata } from "./file-create-protocol.js";
+import {
+  FILE_FETCH_DEFAULT_MAX_BYTES,
+  FILE_FETCH_HARD_MAX_BYTES,
+  readFileFetchBinaryMaxBytes,
+} from "./file-fetch-protocol.js";
 import { commandKind, requestApproval } from "./node-invoke-policy-approval.js";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
 } from "./node-invoke-policy-commands.js";
-import { prepareParams, validateFetchMaxBytesParam } from "./node-invoke-policy-params.js";
 import {
   policyDeniedResult,
   runPathPreflight,
@@ -25,6 +35,36 @@ import {
 } from "./node-invoke-policy-preflight.js";
 import { persistLiteralGrant } from "./policy.js";
 const DIR_FETCH_ARCHIVE_INSPECTION_TIMEOUT_MS = 30_000;
+
+function readMaxBytes(input: {
+  value: unknown;
+  defaultValue: number;
+  hardMax: number;
+  policyMax?: number;
+}): number {
+  const parsed =
+    input.value === undefined
+      ? input.defaultValue
+      : readPositiveIntegerParam({ maxBytes: input.value }, "maxBytes");
+  const requested = parsed ?? input.defaultValue;
+  const clamped = Math.max(1, Math.min(requested, input.hardMax));
+  return input.policyMax ? Math.min(clamped, input.policyMax) : clamped;
+}
+
+function validateFetchMaxBytesParam(
+  command: FileTransferNodeInvokeCommand,
+  params: Record<string, unknown>,
+) {
+  if (command !== "file.fetch" && command !== "dir.fetch") {
+    return;
+  }
+  if (params.maxBytes !== undefined) {
+    readPositiveIntegerParam(params, "maxBytes");
+  }
+  if (command === "file.fetch") {
+    readFileFetchBinaryMaxBytes(params);
+  }
+}
 
 function readAuditSizeBytes(
   command: FileTransferNodeInvokeCommand,
@@ -134,12 +174,33 @@ async function handleFileTransferInvoke(
 
   let forwardedParams: Record<string, unknown>;
   try {
-    forwardedParams = prepareParams({
-      command,
-      params,
-      followSymlinks: gate.followSymlinks,
-      maxBytes: gate.maxBytes,
-    });
+    const { followSymlinks, maxBytes } = gate;
+    forwardedParams = {
+      ...params,
+      // A caller may narrow the configured permission, never expand it.
+      followSymlinks: followSymlinks && params.followSymlinks !== false,
+    };
+    delete forwardedParams.preflightOnly;
+    delete forwardedParams.expectedCanonicalPath;
+    delete forwardedParams.expectedBinding;
+    if (command === "file.create") {
+      Object.assign(forwardedParams, readFileCreateMetadata(params, maxBytes));
+    } else if (command === "file.fetch") {
+      const binaryMax = readFileFetchBinaryMaxBytes(params);
+      forwardedParams.maxBytes = readMaxBytes({
+        value: params.maxBytes,
+        defaultValue: FILE_FETCH_DEFAULT_MAX_BYTES,
+        hardMax: binaryMax ?? FILE_FETCH_HARD_MAX_BYTES,
+        policyMax: maxBytes,
+      });
+    } else if (command === "dir.fetch") {
+      forwardedParams.maxBytes = readMaxBytes({
+        value: params.maxBytes,
+        defaultValue: DIR_FETCH_DEFAULT_MAX_BYTES,
+        hardMax: DIR_FETCH_HARD_MAX_BYTES,
+        policyMax: maxBytes,
+      });
+    }
   } catch (error) {
     return {
       ok: false,

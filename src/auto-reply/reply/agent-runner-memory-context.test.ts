@@ -4,85 +4,61 @@ import {
   providerContextTokenCacheKey,
 } from "../../agents/context-cache.js";
 import { resolveFollowupContextTokens } from "./agent-runner-memory-runtime.js";
-import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
+
+const provider = "fixture-maintenance";
+const model = "maintenance-model";
+const window = { id: "small", label: "Small", contextWindow: 200_000 };
+const catalogModel = {
+  provider,
+  id: model,
+  contextTokens: 872_000,
+  contextWindows: [window],
+};
+type BudgetParams = Parameters<typeof resolveFollowupContextTokens>[0];
+function resolveBudget(
+  thinkingCatalog: BudgetParams["followupRun"]["run"]["thinkingCatalog"],
+  sessionEntry?: BudgetParams["sessionEntry"],
+  cap?: number,
+) {
+  const followupRun = createTestFollowupRun({ provider, model, thinkingCatalog });
+  const cfg = withTestModelContextTokens({
+    cfg: {},
+    followupRun,
+    defaultModel: model,
+    contextTokens: cap,
+  });
+  return resolveFollowupContextTokens(
+    { followupRun, defaultModel: model, sessionEntry, cfg },
+    "openclaw",
+  );
+}
 
 it.each([
   { name: "accepted prompt", selected: undefined, cap: undefined, expected: 872_000 },
   { name: "selected window", selected: "small", cap: undefined, expected: 200_000 },
   { name: "authored cap", selected: undefined, cap: 64_000, expected: 64_000 },
 ])("uses the $name budget for maintenance", ({ selected, cap, expected }) => {
-  const provider = "fixture-maintenance";
-  const model = "maintenance-model";
-  const followupRun = createTestFollowupRun({
-    provider,
-    model,
-    thinkingCatalog: [
-      {
-        provider,
-        id: model,
-        contextWindow: 128_000,
-        contextWindowSource: "synthetic",
-        contextTokens: 872_000,
-        contextWindows: [{ id: "small", label: "Small", contextWindow: 200_000 }],
-      },
-    ],
-  });
   expect(
-    resolveFollowupContextTokens(
-      {
-        cfg: cap
-          ? {
-              models: {
-                providers: {
-                  [provider]: {
-                    baseUrl: "https://fixture.example.test/v1",
-                    models: [
-                      {
-                        id: model,
-                        name: model,
-                        contextTokens: cap,
-                        reasoning: false,
-                        input: ["text"],
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        maxTokens: 16384,
-                      },
-                    ],
-                  },
-                },
-              },
-            }
-          : {},
-        followupRun,
-        defaultModel: model,
-        sessionEntry: {
-          sessionId: followupRun.run.sessionId,
-          updatedAt: 0,
-          contextWindow: selected,
-        },
-      },
-      "openclaw",
+    resolveBudget(
+      [{ ...catalogModel, contextWindow: 128_000, contextWindowSource: "synthetic" }],
+      { sessionId: "session", updatedAt: 0, contextWindow: selected },
+      cap,
     ),
   ).toBe(expected);
 });
 
 it("ignores a foreign runtime catalog and unqualified shared cache", () => {
-  const provider = "fixture-maintenance-runtime";
-  const model = "maintenance-model";
   const caches = getContextWindowCaches();
   const key = providerContextTokenCacheKey(provider, model);
   const previous = caches.discoveredTokenCache.get(key);
   caches.discoveredTokenCache.set(key, 1_000_000);
   try {
-    const followupRun = createTestFollowupRun({
-      provider,
-      model,
-      thinkingCatalog: [
+    expect(
+      resolveBudget([
         { provider, id: model, nativeRuntime: "codex", contextWindow: 1_000_000 },
         { provider, id: model, contextWindow: 200_000 },
-      ],
-    });
-    expect(
-      resolveFollowupContextTokens({ cfg: {}, followupRun, defaultModel: model }, "openclaw"),
+      ]),
     ).toBe(200_000);
   } finally {
     if (previous === undefined) {
@@ -94,48 +70,24 @@ it("ignores a foreign runtime catalog and unqualified shared cache", () => {
 });
 
 it("keeps the admitted synthetic estimate when prompt capacity is unknown", () => {
-  const followupRun = createTestFollowupRun({
-    provider: "fixture-unknown",
-    model: "unknown-model",
-    thinkingCatalog: [
+  expect(
+    resolveBudget([
       {
-        provider: "fixture-unknown",
-        id: "unknown-model",
+        provider,
+        id: model,
         contextWindow: 128_000,
         contextWindowSource: "synthetic",
       },
-    ],
-  });
-  expect(
-    resolveFollowupContextTokens(
-      { cfg: {}, followupRun, defaultModel: "unknown-model" },
-      "openclaw",
-    ),
+    ]),
   ).toBe(128_000);
 });
 
 it("ignores a selected window from a different session", () => {
-  const followupRun = createTestFollowupRun({
-    provider: "fixture-session",
-    model: "session-model",
-    thinkingCatalog: [
-      {
-        provider: "fixture-session",
-        id: "session-model",
-        contextTokens: 872_000,
-        contextWindows: [{ id: "small", label: "Small", contextWindow: 200_000 }],
-      },
-    ],
-  });
   expect(
-    resolveFollowupContextTokens(
-      {
-        cfg: {},
-        followupRun,
-        defaultModel: "session-model",
-        sessionEntry: { sessionId: "foreign-session", updatedAt: 0, contextWindow: "small" },
-      },
-      "openclaw",
-    ),
+    resolveBudget([catalogModel], {
+      sessionId: "foreign-session",
+      updatedAt: 0,
+      contextWindow: "small",
+    }),
   ).toBe(872_000);
 });

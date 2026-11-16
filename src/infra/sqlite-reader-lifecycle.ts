@@ -1,9 +1,14 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeWindowsPathForComparison } from "@openclaw/fs-safe/path";
+import type { SubsystemLogger } from "../logging/subsystem.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { sqliteReaderCounter } from "./sqlite-reader-metrics.js";
+import { readThreadDiskReadBytes } from "./thread-disk-io.js";
+
+const HEAVY_READ_BYTES = 64 * 1024 * 1024;
 
 export type SqliteReaderOwner = {
   operation: string;
@@ -25,12 +30,16 @@ type ActiveReader = Omit<SqliteReaderDiagnostic, "ageMs" | "idleMs"> & {
 };
 
 type ReaderLease = { progress(): void; release(): void };
+export type SqliteOperationHoldContext = Readonly<
+  Record<string, string | number | boolean | null | undefined>
+>;
 type Connection = {
   id: number;
   path?: string;
   database: WeakRef<DatabaseSync>;
   owner: SqliteReaderOwner;
   openedAtMs: number;
+  readers: Map<symbol, ActiveReader>;
 };
 
 export type SqliteReaderDiagnostics = {
@@ -53,18 +62,24 @@ export type SqliteReaderDiagnostics = {
   activeReaders: SqliteReaderDiagnostic[];
 };
 
-const readerOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteReaderOwners"),
-  () =>
-    new AsyncLocalStorage<
-      SqliteReaderOwner & { timing: { preparedAtMs: number; hostAdmissionWaitMs: number } }
-    >(),
-);
-
-const activeReaders = resolveGlobalSingleton(Symbol.for("openclaw.sqliteActiveReaders"), () => ({
-  byDatabase: new WeakMap<DatabaseSync, Map<symbol, ActiveReader>>(),
-  byPath: new Map<string, Map<symbol, ActiveReader>>(),
-}));
+const readerOwners = new AsyncContext<
+  SqliteReaderOwner & {
+    timing: {
+      preparedAtMs: number;
+      hostAdmissionWaitMs: number;
+      databaseAdmissionWaitMs: number;
+      transactions: { count: number };
+      holdContext?: SqliteOperationHoldContext;
+      // Hydration owners fill scalars; only slow transactions materialize log context.
+      hydrationActiveEvents?: number;
+      hydrationMetadataRows?: number;
+      hydrationMetadataLimit?: number;
+      hydrationExhausted?: number;
+      hydrationDependencyRows?: number;
+      diskRead?: { context?: SqliteOperationHoldContext };
+    };
+  }
+>(Symbol.for("openclaw.sqliteReaderOwners"));
 
 const connections = resolveGlobalSingleton(Symbol.for("openclaw.sqliteReaderConnections"), () => ({
   nextId: 0,
@@ -84,14 +99,88 @@ function boundedOperation(operation: string): string {
   return (normalized || "sqlite reader").slice(0, 120);
 }
 
-export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: () => T): T {
+export function withSqliteReaderOwner<T>(
+  owner: SqliteReaderOwner,
+  operation: () => T,
+  holdContext?: SqliteOperationHoldContext,
+  /** Reader workers supply the sink to keep logging out of shared lifecycle imports. */
+  logger?: Pick<SubsystemLogger, "warn">,
+): T;
+export function withSqliteReaderOwner<T>(
+  owner: SqliteReaderOwner,
+  operation: () => T | Promise<T>,
+  holdContext?: SqliteOperationHoldContext,
+  logger?: Pick<SubsystemLogger, "warn">,
+): T | Promise<T> {
+  const parent = readerOwners.getStore();
+  const operationName = boundedOperation(owner.operation);
+  const before =
+    logger && !parent && !isMainThread && owner.ownerKind === "worker"
+      ? readThreadDiskReadBytes()
+      : undefined;
+  const diskRead: { context?: SqliteOperationHoldContext } | undefined =
+    parent?.timing.diskRead ?? (before === undefined ? undefined : {});
+  const startedAtMs = Date.now();
+  const counter = before === undefined ? undefined : sqliteReaderCounter(operationName);
   return readerOwners.run(
     {
       ...owner,
-      operation: boundedOperation(owner.operation),
-      timing: { preparedAtMs: Date.now(), hostAdmissionWaitMs: 0 },
+      operation: operationName,
+      timing: {
+        preparedAtMs: startedAtMs,
+        hostAdmissionWaitMs: 0,
+        databaseAdmissionWaitMs: 0,
+        transactions: parent?.timing.transactions ?? { count: 0 },
+        holdContext,
+        diskRead,
+      },
     },
-    operation,
+    () => {
+      if (before === undefined || !diskRead || !logger) {
+        return operation();
+      }
+      const finish = () => {
+        try {
+          const after = readThreadDiskReadBytes();
+          if (after === undefined || after < before) {
+            return;
+          }
+          if (counter) {
+            Atomics.add(counter.values, 0, 1n);
+            Atomics.add(counter.values, 1, BigInt(after - before));
+          }
+          if (after - before < HEAVY_READ_BYTES) {
+            return;
+          }
+          logger.warn("heavy SQLite reader operation", {
+            operation: operationName,
+            readBytes: after - before,
+            elapsedMs: Date.now() - startedAtMs,
+            context: {
+              ...diskRead.context,
+              ...holdContext,
+              readerOperation: operationName,
+            },
+            pid: process.pid,
+            threadId,
+            thresholdBytes: HEAVY_READ_BYTES,
+          });
+        } catch {
+          // Accounting and logging cannot change a completed operation's outcome.
+        }
+      };
+      try {
+        const result = operation();
+        if (result instanceof Promise) {
+          return result.finally(finish);
+        }
+        finish();
+        return result;
+      } catch (error) {
+        finish();
+        throw error;
+      }
+    },
   );
 }
 
@@ -107,6 +196,27 @@ export function captureSqliteReaderOwner(): SqliteReaderOwner | undefined {
 /** Mutable diagnostic counters only; never source or write authority. */
 export function currentSqliteOperationTiming() {
   return readerOwners.getStore()?.timing;
+}
+
+/** Materialize only after the transaction owner's slow-hold threshold. */
+export function readSqliteOperationHoldContext(
+  diagnosticContext: SqliteOperationHoldContext | undefined,
+  hydration: boolean,
+) {
+  const timing = currentSqliteOperationTiming();
+  return {
+    ...diagnosticContext,
+    ...timing?.holdContext,
+    ...(hydration && timing?.hydrationActiveEvents !== undefined
+      ? {
+          activeEvents: timing.hydrationActiveEvents,
+          metadataRows: timing.hydrationMetadataRows,
+          metadataLimit: timing.hydrationMetadataLimit,
+          exhausted: timing.hydrationExhausted,
+          dependencyRows: timing.hydrationDependencyRows,
+        }
+      : {}),
+  };
 }
 
 function currentOwner(
@@ -132,14 +242,15 @@ function connectionFor(database: DatabaseSync): Connection {
       database: new WeakRef(database),
       owner: currentOwner("sqlite connection"),
       openedAtMs: now,
+      readers: new Map(),
     };
     connections.byDatabase.set(database, connection);
-    if (connection.path) {
-      const entries = connections.byPath.get(connection.path) ?? new Map();
-      entries.set(connection.id, connection);
-      connections.byPath.set(connection.path, entries);
-    }
     connections.finalizer.register(database, connection, connection);
+  }
+  if (connection.path) {
+    const entries = connections.byPath.get(connection.path) ?? new Map();
+    entries.set(connection.id, connection);
+    connections.byPath.set(connection.path, entries);
   }
   return connection;
 }
@@ -153,11 +264,7 @@ function forgetConnection(connection: Connection): void {
       connections.byPath.delete(connection.path);
     }
   }
-  const database = connection.database.deref();
-  if (database && connections.byDatabase.get(database) === connection) {
-    connections.byDatabase.delete(database);
-  }
-  connections.finalizer.unregister(connection);
+  // Keep the weak database association so explicit reader assertions survive close.
 }
 
 /** Register weak metadata without replacing native methods or acquiring lifecycle custody. */
@@ -183,17 +290,8 @@ export function retainSqliteReader(
     lastProgressAtMs: now,
   };
   const token = Symbol(reader.operation);
-  const databaseReaders = activeReaders.byDatabase.get(database) ?? new Map();
+  const databaseReaders = connection.readers;
   databaseReaders.set(token, reader);
-  activeReaders.byDatabase.set(database, databaseReaders);
-  const databasePath = connection.path;
-  const pathReaders = databasePath
-    ? (activeReaders.byPath.get(databasePath) ?? new Map<symbol, ActiveReader>())
-    : undefined;
-  pathReaders?.set(token, reader);
-  if (databasePath && pathReaders) {
-    activeReaders.byPath.set(databasePath, pathReaders);
-  }
   return {
     progress() {
       if (databaseReaders.has(token)) {
@@ -201,23 +299,7 @@ export function retainSqliteReader(
       }
     },
     release() {
-      if (!databaseReaders.delete(token)) {
-        return;
-      }
-      if (
-        databaseReaders.size === 0 &&
-        activeReaders.byDatabase.get(database) === databaseReaders
-      ) {
-        activeReaders.byDatabase.delete(database);
-      }
-      pathReaders?.delete(token);
-      if (
-        databasePath &&
-        pathReaders?.size === 0 &&
-        activeReaders.byPath.get(databasePath) === pathReaders
-      ) {
-        activeReaders.byPath.delete(databasePath);
-      }
+      databaseReaders.delete(token);
     },
   };
 }
@@ -240,6 +322,7 @@ export function readSqliteReaderDiagnosticsForPath(databasePath: string): Sqlite
   const key = sqliteReaderDatabasePathKey(databasePath);
   const entries = connections.byPath.get(key);
   const localConnections: SqliteReaderDiagnostics["connections"] = [];
+  const readers: ActiveReader[] = [];
   const now = Date.now();
   for (const connection of entries?.values() ?? []) {
     const database = connection.database.deref();
@@ -247,22 +330,16 @@ export function readSqliteReaderDiagnosticsForPath(databasePath: string): Sqlite
       forgetConnection(connection);
       continue;
     }
-    const location = database.location();
-    if (!location || sqliteReaderDatabasePathKey(location) !== key) {
-      forgetConnection(connection);
-      continue;
-    }
-    const readers = activeReaders.byDatabase.get(database);
+    readers.push(...connection.readers.values());
     localConnections.push({
       ...connection.owner,
       connectionId: connection.id,
       threadId,
       ageMs: Math.max(0, now - connection.openedAtMs),
       transactionOpen: database.isTransaction,
-      trackedReaders: readers?.size ?? 0,
+      trackedReaders: connection.readers.size,
     });
   }
-  const readers = activeReaders.byPath.get(key);
   return {
     scope: "current-thread",
     blockingOwner: "unknown",
@@ -270,7 +347,7 @@ export function readSqliteReaderDiagnosticsForPath(databasePath: string): Sqlite
     threadId,
     observedAtMs: now,
     connectionCount: localConnections.length,
-    readerCount: readers?.size ?? 0,
+    readerCount: readers.length,
     connections: localConnections
       .toSorted(
         (left, right) =>
@@ -278,12 +355,12 @@ export function readSqliteReaderDiagnosticsForPath(databasePath: string): Sqlite
           Number(right.transactionOpen) - Number(left.transactionOpen),
       )
       .slice(0, 8),
-    activeReaders: diagnostics(readers?.values() ?? []),
+    activeReaders: diagnostics(readers),
   };
 }
 
 export function assertNoActiveSqliteReaders(database: DatabaseSync, label: string): void {
-  const readers = diagnostics(activeReaders.byDatabase.get(database)?.values() ?? []);
+  const readers = diagnostics(connections.byDatabase.get(database)?.readers.values() ?? []);
   if (readers.length === 0) {
     return;
   }

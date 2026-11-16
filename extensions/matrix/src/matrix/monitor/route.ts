@@ -15,27 +15,6 @@ import { resolveMatrixThreadSessionKeys } from "./threads.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;
 
-function resolveMatrixDmSessionKey(params: {
-  accountId: string;
-  agentId: string;
-  roomId: string;
-  dmSessionScope?: "per-user" | "per-room";
-  fallbackSessionKey: string;
-}): string {
-  if (params.dmSessionScope !== "per-room") {
-    return params.fallbackSessionKey;
-  }
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "matrix",
-    accountId: params.accountId,
-    peer: {
-      kind: "channel",
-      id: params.roomId,
-    },
-  });
-}
-
 type MatrixInboundRouteParams = {
   cfg: CoreConfig;
   accountId: string;
@@ -137,13 +116,15 @@ export function projectMatrixInboundRoute(
     : configuredFallbackRoute;
 
   const dmSessionKey =
-    params.isDirectMessage && !configuredSessionKey
-      ? resolveMatrixDmSessionKey({
-          accountId: params.accountId,
+    params.isDirectMessage && !configuredSessionKey && params.dmSessionScope === "per-room"
+      ? buildAgentSessionKey({
           agentId: effectiveRoute.agentId,
-          roomId: params.roomId,
-          dmSessionScope: params.dmSessionScope,
-          fallbackSessionKey: effectiveRoute.sessionKey,
+          channel: "matrix",
+          accountId: params.accountId,
+          peer: {
+            kind: "channel",
+            id: params.roomId,
+          },
         })
       : effectiveRoute.sessionKey;
   let routeWithDmScope =

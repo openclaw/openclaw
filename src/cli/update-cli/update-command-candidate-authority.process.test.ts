@@ -26,6 +26,7 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 
 const runtimeFixture = createFixtureLifetime();
@@ -65,6 +66,7 @@ type BoundaryObservation = {
   ppid: number;
   source: string;
   doctorAuthority?: boolean;
+  index?: { value_json: string };
 };
 
 it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const)(
@@ -135,7 +137,11 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
         await state.writeConfig(currentConfig);
         await seedInstalledPluginIndex({}, { config: configSnapshot.config, env: state.env });
         const originalConfig = fs.readFileSync(state.configPath, "utf8");
-        const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
+        const readIndex = () =>
+          readPersistedInstalledPluginIndexRowSync({
+            env: state.env,
+            artifactPreservingReadOnly: true,
+          });
         const originalIndex = readIndex();
         const events = state.path("candidate-events.jsonl");
         const readyPath = state.path("ready");
@@ -154,6 +160,7 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
         let boundPid: number | undefined;
         let configAtBoundary: string | undefined;
         let indexAtBoundary: ReturnType<typeof readIndex>;
+        let replacementChanges: number | bigint | undefined;
         let observation: BoundaryObservation | undefined;
         let stdout = "";
         let stderr = "";
@@ -164,32 +171,22 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
               executor: grant,
               bufferedSteps: [],
               resultPath,
-              params: {
+              params: finishParams({
                 root,
-                result: {
+                result: updateResult({
                   status: "skipped",
                   reason: "already-current",
-                  mode: "npm",
                   root,
-                  steps: [],
                   durationMs: 0,
-                },
+                }),
                 coreAlreadyCurrent: true,
                 mutationStarted: false,
                 shouldRestart: false,
-                installKindChanged: false,
                 configSnapshot,
-                requestedChannel: null,
-                storedChannel: "stable",
-                channel: "stable",
-                downgradeRisk: false,
                 opts: { json: true, yes: true, run: { runId: run.runId, env: state.env } },
-                controlPlaneUpdateSentinelMeta: null,
-                preUpdatePluginInstallRecords: {},
-                startedAt: Date.now(),
                 updateStepTimeoutMs: 60_000,
                 rollbackBlockedReason: "state-migrated-no-rollback",
-              },
+              }),
             };
             const pending = runUtf8CommandWithTimeout([process.execPath, workerPath], {
               input: JSON.stringify(input),
@@ -239,18 +236,16 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
                 expect(observation.doctorAuthority).toBe(true);
               }
               configAtBoundary = fs.readFileSync(state.configPath, "utf8");
-              indexAtBoundary = readIndex();
+              indexAtBoundary = boundary.index;
+              expect(indexAtBoundary).toBeDefined();
               expect(indexAtBoundary).not.toEqual(originalIndex);
               if (fault !== "healthy") {
-                const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-                try {
-                  db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-                    "replacement",
-                    root,
-                  );
-                } finally {
-                  db.close();
-                }
+                using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+                const changed = db
+                  .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
+                  .run("replacement", root);
+                replacementChanges = changed.changes;
+                expect(changed.changes).toBe(1);
               }
             } finally {
               fs.writeFileSync(proceed, "go");
@@ -264,6 +259,25 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
+        const outcomeObservation =
+          "value" in outcome
+            ? {
+                ok: true,
+                code: outcome.value.code,
+                signal: outcome.value.signal,
+                termination: outcome.value.termination,
+                cleanup: outcome.value.cleanup,
+              }
+            : {
+                ok: false,
+                error:
+                  outcome.error instanceof Error
+                    ? {
+                        name: outcome.error.name,
+                        message: outcome.error.message.slice(0, 512),
+                      }
+                    : { name: "NonError", message: "Non-Error rejection" },
+              };
         const evidence: BoundaryObservation[] = fs
           .readFileSync(events, "utf8")
           .trim()
@@ -276,11 +290,18 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
             parentPid: process.pid,
             observation,
             evidence,
+            outcome: outcomeObservation,
+            ...(replacementChanges === undefined
+              ? {}
+              : { replacementChanges: Number(replacementChanges) }),
             stdout,
             stderr,
           }),
         );
         expect(observation).toBeDefined();
+        if (fault !== "healthy") {
+          expect(replacementChanges).toBe(1);
+        }
         const finalConfig = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
         if (fault === "healthy") {
           expect("value" in outcome && outcome.value.code === 0, stderr).toBe(true);

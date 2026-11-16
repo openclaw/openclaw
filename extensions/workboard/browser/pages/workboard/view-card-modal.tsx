@@ -7,20 +7,19 @@ import { t } from "../../i18n/index.ts";
 import {
   changedDraftPayload,
   draftPayload,
+  resetDraftState,
   workboardCardSessionKey,
 } from "../../lib/workboard/card-state.ts";
+import { addWorkboardCardComment, saveWorkboardCardDraft } from "../../lib/workboard/mutations.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import {
-  addWorkboardCardComment,
-  getWorkboardState,
-  resetDraftState,
-  saveWorkboardCardDraft,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTemplateId,
   type WorkboardUiState,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/types.ts";
 import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
 import { DraftChoices } from "./view-draft-choices.tsx";
 import {
@@ -247,7 +246,7 @@ function CardModalContent(props: WorkboardProps) {
         label: editing() ? t("workboard.editCard") : t("workboard.newCard"),
         description: editing() ? t("workboard.editCardHelp") : t("workboard.newCardHelp"),
         style:
-          "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --wa-color-overlay-modal: rgba(0, 0, 0, 0.32);",
+          "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --openclaw-modal-backdrop-color: rgba(0, 0, 0, 0.32);",
         onCancel: dismissDraft,
       }}
     >
@@ -447,7 +446,7 @@ function CardModalContent(props: WorkboardProps) {
               </section>
             ) : undefined}
           </div>
-          <div class="workboard-modal__actions">
+          <openclaw-modal-actions class="workboard-modal__actions">
             <button
               class="btn"
               type="button"
@@ -462,7 +461,7 @@ function CardModalContent(props: WorkboardProps) {
             >
               {editing() ? t("common.save") : t("common.create")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </form>
         <WorkboardErrorToast
           owner={state()}
@@ -515,7 +514,7 @@ export function CardDiscardDialog(props: {
         label: props.title,
         description: t("workboard.discardDraftHelp"),
         style:
-          "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
+          "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --openclaw-modal-backdrop-color: rgba(0, 0, 0, 0.24);",
         onCancel: () => {
           props.onKeepEditing();
           return true;
@@ -526,14 +525,14 @@ export function CardDiscardDialog(props: {
         <section class="workboard-discard">
           <h2>{props.title}</h2>
           <p>{t("workboard.discardDraftHelp")}</p>
-          <div class="workboard-discard__actions">
+          <openclaw-modal-actions class="workboard-discard__actions">
             <button class="btn" type="button" autofocus onClick={() => props.onKeepEditing()}>
               {t("workboard.keepEditing")}
             </button>
             <button class="btn danger" type="button" onClick={() => props.onDiscard()}>
               {t("workboard.discardDraft")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </section>
         {props.error ?? undefined}
       </>

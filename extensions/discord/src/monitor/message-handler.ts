@@ -13,14 +13,14 @@ export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams & { client: Client },
 ): DiscordMessageHandlerWithLifecycle {
   const dispatcher = createDiscordMessageDispatcher(params);
-  const createIngressMonitor = params.testing?.createIngressMonitor ?? createDiscordIngressMonitor;
-  const ingress = createIngressMonitor({
+  const ingress = createDiscordIngressMonitor({
     ...params,
     dispatch: (event, lifecycle) =>
       dispatcher(event, params.client, {
         abortSignal: lifecycle.abortSignal,
         turnAdoptionLifecycle: lifecycle,
       }),
+    onDeadLetter: (event, signal) => dispatcher.notifyDeadLetter(event, params.client, signal),
   });
   ingress.start();
   const activeAdmissions = new Set<Promise<void>>();

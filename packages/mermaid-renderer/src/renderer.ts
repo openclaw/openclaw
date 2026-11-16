@@ -1,8 +1,7 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import createDOMPurify from "dompurify";
-import type { MermaidConfig } from "mermaid";
 import frameScriptUrl from "./frame.js?url&no-inline";
-import mermaidScriptUrl from "./mermaid-script-url.ts";
+import peleScriptUrl from "./pele-script-url.ts";
 
 export type MermaidTheme = {
   background: string;
@@ -72,6 +71,8 @@ const SVG_PRESENTATION_ATTRIBUTES = [
   "word-spacing",
   "visibility",
   "display",
+  "rx",
+  "ry",
 ];
 const SVG_ATTRIBUTES = [
   "id",
@@ -90,8 +91,6 @@ const SVG_ATTRIBUTES = [
   "cx",
   "cy",
   "r",
-  "rx",
-  "ry",
   "d",
   "points",
   "transform",
@@ -122,7 +121,7 @@ const SVG_ATTRIBUTES = [
 type MermaidFrame = {
   frame: HTMLIFrameElement;
   ready: Promise<void>;
-  render: (source: string, config: MermaidConfig) => Promise<string>;
+  render: (source: string, theme: MermaidTheme) => Promise<string>;
   dispose: (error: Error) => void;
 };
 
@@ -188,8 +187,8 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
 }
 
 function createMermaidFrame(): MermaidFrame {
-  if (!mermaidScriptUrl) {
-    throw new MermaidTransientError("The Mermaid classic script URL was not injected.");
+  if (!peleScriptUrl) {
+    throw new MermaidTransientError("The diagram engine script URL was not injected.");
   }
   const frame = document.createElement("iframe");
   const channel = new MessageChannel();
@@ -230,7 +229,7 @@ function createMermaidFrame(): MermaidFrame {
         renderer = undefined;
       }
     },
-    render(source, config) {
+    render(source, theme) {
       if (disposed || !frame.isConnected) {
         return Promise.reject(new MermaidTransientError("Mermaid renderer is unavailable."));
       }
@@ -244,7 +243,9 @@ function createMermaidFrame(): MermaidFrame {
         channel.port1.postMessage({
           id,
           source,
-          config,
+          theme,
+          maxSourceLength: MAX_SOURCE_LENGTH,
+          maxEdges: MAX_EDGES,
           maxSvgLength: MAX_SVG_LENGTH,
           maxSvgElements: MAX_SVG_ELEMENTS,
         });
@@ -298,7 +299,7 @@ function createMermaidFrame(): MermaidFrame {
   frame.referrerPolicy = "no-referrer";
   frame.style.cssText =
     "position:fixed;left:-10000px;top:0;width:1024px;height:768px;border:0;visibility:hidden;pointer-events:none";
-  const scripts = [mermaidScriptUrl, frameScriptUrl].map((url) => new URL(url, location.href).href);
+  const scripts = [peleScriptUrl, frameScriptUrl].map((url) => new URL(url, location.href).href);
   const policy = `default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
   const page = document.implementation.createHTMLDocument("");
   const meta = page.createElement("meta");
@@ -325,8 +326,8 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
       new Error(`Mermaid diagrams must contain 1–${MAX_SOURCE_LENGTH} characters.`),
     );
   }
-  // Mermaid's initialization and rendering share global config. Keep them in
-  // one serialized owner, including after a failed render or a theme change.
+  // Web and native hosts share one serialized sandbox, including after a failed
+  // render or theme change. The native adapter also serializes image decoding.
   const result = renderQueue.then(async () => {
     if (renderer && !renderer.frame.isConnected) {
       renderer.dispose(new MermaidTransientError("Mermaid renderer was removed."));
@@ -335,38 +336,7 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
     const active = renderer;
     try {
       await active.ready;
-      const config: MermaidConfig = {
-        startOnLoad: false,
-        securityLevel: "strict",
-        secure: ["dompurifyConfig"],
-        htmlLabels: false,
-        suppressErrorRendering: true,
-        maxTextSize: MAX_SOURCE_LENGTH,
-        maxEdges: MAX_EDGES,
-        arrowMarkerAbsolute: false,
-        theme: "base",
-        look: "classic",
-        flowchart: { layout: "dagre" },
-        state: { layout: "dagre" },
-        class: { layout: "dagre" },
-        er: { layout: "dagre" },
-        requirement: { layout: "dagre" },
-        themeCSS: "",
-        fontFamily: theme.fontFamily,
-        themeVariables: {
-          darkMode: theme.darkMode,
-          background: theme.background,
-          primaryColor: theme.background,
-          primaryTextColor: theme.foreground,
-          primaryBorderColor: theme.border,
-          lineColor: theme.muted,
-          secondaryColor: theme.accent,
-          tertiaryColor: theme.background,
-          textColor: theme.foreground,
-          edgeLabelBackground: theme.background,
-        },
-      };
-      return sanitizeMermaidSvg(await active.render(source, config), theme.background);
+      return sanitizeMermaidSvg(await active.render(source, theme), theme.background);
     } catch (error) {
       active.dispose(error instanceof Error ? error : new Error(String(error)));
       throw error;

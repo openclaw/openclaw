@@ -100,13 +100,11 @@ export function isZaloCredentialRevocation(
   );
 }
 
-export function captureZalouserCredentialsEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
+export function captureZalouserCredentialsEnv(): NodeJS.ProcessEnv {
   return {
-    ...env,
-    OPENCLAW_STATE_DIR: resolveStateDir(env),
-    OPENCLAW_SUPERVISOR_MODE: env.OPENCLAW_SUPERVISOR_MODE,
+    ...process.env,
+    OPENCLAW_STATE_DIR: resolveStateDir(process.env),
+    OPENCLAW_SUPERVISOR_MODE: process.env.OPENCLAW_SUPERVISOR_MODE,
   };
 }
 

@@ -18,7 +18,7 @@ export function noteDoctorAgentDatabasePathHealth(params: {
         ? {
             repaired: 0,
             warnings: [
-              "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix after the update finishes.",
+              "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
             ],
           }
         : repairOpenClawAgentDatabasePaths(database),

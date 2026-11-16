@@ -10,9 +10,9 @@ openclaw_node_version_matches() {
     *x)
       [[ "${actual%%.*}" == "${requested%%.*}" ]] || return 1
       if [[ "${requested%%.*}" == "24" ]]; then
-        openclaw_node_version_at_least "$actual" "24.16.0"
+        openclaw_node_version_at_least "$actual" "24.22.1"
       elif [[ "${requested%%.*}" == "26" ]]; then
-        openclaw_node_version_at_least "$actual" "26.1.0"
+        openclaw_node_version_at_least "$actual" "26.12.1"
       else
         (( ${requested%%.*} > 26 ))
       fi

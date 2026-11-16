@@ -59,9 +59,25 @@ const InstallRecordShape = {
 const InstallRecordSchema = z.object(InstallRecordShape);
 export type InstallRecordBase = z.infer<typeof InstallRecordSchema>;
 
+const SourceSnapshotDigestSchema = z.strictObject({
+  contentDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  dependencyClosureDigest: z.string().regex(/^[a-f0-9]{64}$/),
+});
+const SourceSnapshotDigestRecordShape = z.record(z.string(), z.unknown());
+// Zod records omit __proto__; validate entries before rebuilding inert own properties.
+const SourceSnapshotDigestsSchema = z
+  .custom<Record<string, unknown>>(
+    (value) => SourceSnapshotDigestRecordShape.safeParse(value).success,
+  )
+  .transform((value) => Object.entries(value))
+  .pipe(z.array(z.tuple([z.string().min(1), SourceSnapshotDigestSchema])))
+  .transform((entries) => Object.fromEntries(entries));
+
 export const StrictPluginInstallRecordSchema = z.object({
   ...InstallRecordShape,
   source: z.union([InstallSourceSchema, z.literal("marketplace")]),
+  /** Retained package child-plugin engine ownership for uninstall without runtime files. */
+  contextEngineIdsByPlugin: z.record(z.string().min(1), z.array(z.string().min(1))).optional(),
   marketplaceName: z.string().optional(),
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),
@@ -82,6 +98,8 @@ export const StrictPluginInstallRecordSchema = z.object({
   acceptedSurfaceHash: z.string().optional(),
   acceptedSurfaceAt: z.string().optional(),
   acceptedSurfaceIntegrity: z.string().optional(),
+  /** Verified installed source closures, keyed by runtime plugin id. */
+  sourceSnapshotDigests: SourceSnapshotDigestsSchema.optional(),
 } as const);
 export type PluginInstallRecord = z.infer<typeof StrictPluginInstallRecordSchema>;
 export type PluginAcceptedDeclaredSurface = NonNullable<PluginInstallRecord["acceptedSurface"]>;

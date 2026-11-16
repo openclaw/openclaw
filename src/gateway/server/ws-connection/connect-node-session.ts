@@ -66,9 +66,10 @@ export async function prepareGatewayNodeConnect(
   // from an allowed network, which must not silently approve its
   // command/capability surface.
   const deviceApprovedNonInteractively =
-    deviceApprovedVia === "silent" ||
-    deviceApprovedVia === "ssh-verified" ||
-    deviceApprovedVia === "bootstrap";
+    !state.authResult.openclawId &&
+    (deviceApprovedVia === "silent" ||
+      deviceApprovedVia === "ssh-verified" ||
+      deviceApprovedVia === "bootstrap");
   let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
   try {
     reconciliation = await reconcileNodePairingOnConnect({
@@ -140,6 +141,7 @@ export async function prepareGatewayNodeConnect(
     !state.isWebchat;
   // Only the initial surface inherits device approval; manifest upgrades still prompt.
   if (
+    !state.authResult.openclawId &&
     (approveLocalSurface ||
       deviceApprovedVia === "ssh-verified" ||
       deviceApprovedVia === "bootstrap") &&

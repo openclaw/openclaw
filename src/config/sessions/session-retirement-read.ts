@@ -12,7 +12,7 @@ import type {
   SessionRetirementReadOperation,
   SessionRetirementReadResult,
 } from "./session-retirement-read.types.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -34,9 +34,6 @@ export async function listSessionEntryKeysReadOnly(
   return withSessionRetirementReaders([reader], async () => {
     const result = await reader.read({ operation: "keys", ordered: true });
     reader.assertCurrent();
-    if (result.operation !== "keys") {
-      throw new Error("Session key inventory returned another retirement operation");
-    }
     return result.keys;
   });
 }
@@ -59,9 +56,12 @@ export function captureSessionRetirementReader(
       assertDatabasePathIdentity(ownerStorePath, ownerIdentity);
     }
   };
-  const read = async (
+  function read<Operation extends SessionRetirementReadOperation["operation"]>(
+    request: Extract<SessionRetirementReadOperation, { operation: Operation }>,
+  ): Promise<Extract<SessionRetirementReadResult, { operation: Operation }>>;
+  async function read(
     request: SessionRetirementReadOperation,
-  ): Promise<SessionRetirementReadResult> => {
+  ): Promise<SessionRetirementReadResult> {
     assertCurrent();
     if (!identity.key.startsWith("file:")) {
       return request.operation === "keys"
@@ -78,9 +78,9 @@ export function captureSessionRetirementReader(
         return result;
       },
       // Ordered scans retain writer admission through reader failure and eviction cleanup.
-      targetDiscoveryLane,
+      sessionStoreLane,
     );
-  };
+  }
   return { database, assertCurrent, read };
 }
 
@@ -90,14 +90,10 @@ export function withSessionRetirementReaders<T>(
   read: () => Promise<T>,
 ): Promise<T> {
   const databases = readers.map((reader) => reader.database);
-  return runOpenClawAgentWriteAdmissions(
-    databases,
-    async () => {
-      const assertNativeCurrent = captureSessionEntryNativeMutationWitness(databases);
-      const result = await read();
-      assertNativeCurrent();
-      return result;
-    },
-    true,
-  );
+  return runOpenClawAgentWriteAdmissions(databases, async () => {
+    const assertNativeCurrent = captureSessionEntryNativeMutationWitness(databases);
+    const result = await read();
+    assertNativeCurrent();
+    return result;
+  });
 }

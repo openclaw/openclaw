@@ -1,59 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
+import { createRunFixture } from "./code-mode-lifecycle.test-support.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
+import { toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
-  createCodeModeRunOwner,
   disposeAllCodeModeRuns,
   reserveActiveRunSlot,
   storeSuspendedRun,
-  type PendingBridgeState,
 } from "./code-mode-state.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
-import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from "./tool-search.js";
 
 async function parkExpiringRun(method: "callValue" | "agentWait") {
-  const rawConfig = {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+  const { config, ctx, owner, continuation } = createRunFixture({
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
-  } as never;
-  const config = resolveCodeModeConfig(rawConfig);
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
-  const ctx = { config: rawConfig, runtimeConfig: rawConfig, catalogRef };
-  const runtime = new ToolSearchRuntime(ctx, toToolSearchConfig(config));
-  const owner = createCodeModeRunOwner(ctx, config);
+  });
   const cancel = vi.fn();
-  const pending: PendingBridgeState = {
-    id: `bridge:${method}:1`,
-    method,
-    args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
-    reply: owner.inbox.createReply(`bridge:${method}:1`),
-    cancel,
-  };
-
-  const continuation = {
-    executor: "quickjs" as const,
-    retainedBytes: 1,
-    async resume() {
-      throw new Error("unused test continuation");
-    },
-    async dispose() {},
-  };
   await owner.retainContinuation(continuation);
 
   storeSuspendedRun({
     owner,
     replayId: "cm_replay_lifecycle",
-    pending: [pending],
-    replaySafe: false,
+    pending: [
+      {
+        id: `bridge:${method}:1`,
+        method,
+        args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
+        reply: owner.inbox.createReply(`bridge:${method}:1`),
+        cancel,
+      },
+    ],
     settlementMode: { kind: "awaiting" },
     continuation,
     parentToolCallId: "code-mode-lifecycle",
     ctx,
     config,
-    runtime,
+    runtime: new ToolSearchRuntime(ctx, toToolSearchConfig(config)),
     catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
     output: new CodeModeOutputState(config.maxOutputBytes),
@@ -77,26 +61,15 @@ describe("Code Mode run lifecycle", () => {
     release();
   });
 
-  it("expires an idle suspended snapshot and aborts its outstanding tool", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const { cancel, runId } = await parkExpiringRun("callValue");
-
+  it.each(["callValue", "agentWait"] as const)("bounds suspended %s lifetime", async (method) => {
+    const { cancel, runId } = await parkExpiringRun(method);
     expect(activeRuns.has(runId)).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(activeRuns.has(runId)).toBe(false);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("retains an active collector only within its bounded snapshot TTL windows", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const { cancel, runId } = await parkExpiringRun("agentWait");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(activeRuns.has(runId)).toBe(true);
-    expect(cancel).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3_000);
+    if (method === "agentWait") {
+      expect(activeRuns.has(runId)).toBe(true);
+      expect(cancel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(3_000);
+    }
     expect(activeRuns.has(runId)).toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
   });

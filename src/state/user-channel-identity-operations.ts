@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
@@ -23,9 +23,9 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
-  getUserProfileDisplay,
   isUserProfileCatalogReady,
-  readUserProfileIdentity,
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
 } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
@@ -34,7 +34,6 @@ import type {
   UserChannelIdentityResult,
   UserChannelIdentitySelector,
   UserChannelIdentityWorkerOperations,
-  UserProfileAuthority,
 } from "./user-profiles.types.js";
 
 type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -60,6 +59,18 @@ function unwrapIdentityResult<T>(result: UserChannelIdentityResult<T>, profileId
   }
   result satisfies never;
   throw new Error("Unsupported channel identity result");
+}
+
+/** A presentation lookup: the returned profile ID is not an authority lease. */
+export async function readCanonicalUserChannelIdentityProfileId(
+  identity: UserChannelIdentity,
+  options: IdentityOptions = {},
+): Promise<string | undefined> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "userProfiles.channelIdentity.resolve",
+    identity,
+  });
+  return reply?.linked?.profileId;
 }
 
 export async function listCanonicalUserChannelIdentities(
@@ -120,13 +131,23 @@ async function changeIdentity(
           context.admission.assertCurrent();
           assertCurrent?.();
           if (request.stage === "commit" && captured.action !== "authorize") {
-            fence ??= fenceUserProfileMutationAuthority(context.admission, {
-              profiles: request.facts.profiles,
-              identities: [],
-              channels: request.facts.channels,
-            });
+            const { profiles, channels } = request.facts;
+            if (
+              !grant(() => {
+                fence = fenceUserProfileMutationAuthority(context.admission, {
+                  profiles,
+                  identities: [],
+                  channels,
+                });
+              })
+            ) {
+              // An expired grant cannot commit; release its fence before another attempt.
+              fence?.settle(true);
+              fence = undefined;
+            }
+          } else {
+            grant();
           }
-          grant();
         });
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
@@ -267,8 +288,8 @@ export async function prepareUserProfileRolePolicyAuthority(
 ) {
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
-    if (isUserProfileCatalogReady(source)) {
-      const profile = readUserProfileIdentity(profileId, source);
+    if (isUserProfileCatalogReady(source.path)) {
+      const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
           profileId: profile.profileId,
@@ -276,6 +297,21 @@ export async function prepareUserProfileRolePolicyAuthority(
           githubLogin: profile.githubLogin ?? null,
         }
       );
+    }
+    if (isArtifactPreservingStateRead("shared", source.path)) {
+      const catalog = await prepareUserProfileCatalog({ ...options, path: source.path });
+      try {
+        const profile = catalog.readCurrentAuthority(profileId);
+        return (
+          profile && {
+            profileId: profile.profileId,
+            role: profile.role,
+            githubLogin: profile.githubLogin ?? null,
+          }
+        );
+      } finally {
+        catalog.release();
+      }
     }
     return runOpenClawStateWorkerOperation(
       context,
@@ -304,35 +340,16 @@ async function prepareUserProfileAuthority(
     profileId,
     options,
     dependency,
-    async (
-      context,
-    ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
-      const source = { path: context.admission.databasePath };
-      if (!includeProfile && isUserProfileCatalogReady(source)) {
-        const profile = readUserProfileIdentity(profileId, source);
-        return (
-          profile && {
-            ...profile,
-            aliases: [
-              profile.profileId,
-              ...[...profile.aliases].filter((id) => id !== profile.profileId).toSorted(),
-            ],
-            display: getUserProfileDisplay(profile.profileId, source),
-          }
-        );
+    async (context) => {
+      const catalog = await prepareUserProfileCatalog({
+        ...options,
+        path: context.admission.databasePath,
+      });
+      try {
+        return catalog.readCurrentAuthority(profileId, includeProfile);
+      } finally {
+        catalog.release();
       }
-      const reply = await executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        {
-          type: "userProfiles.authority.resolve",
-          profileId,
-          ...(includeProfile ? { includeProfile } : {}),
-        },
-      );
-      if (!reply) {
-        return undefined;
-      }
-      return reply.profile;
     },
     includeProfile,
   );

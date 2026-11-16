@@ -1,3 +1,4 @@
+import { normalizeInputProvenance } from "../../../sessions/input-provenance.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import type {
   SessionEntry as SessionManagerEntry,
@@ -9,6 +10,7 @@ import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
+  hasLoadedTranscriptTail: (entryId: string, parentId: string | null) => boolean;
   appendThinkingLevelChange: (thinkingLevel: string) => Promise<string>;
   appendModelChange: (provider: string, modelId: string) => Promise<string>;
   appendCustomEntryAsync: (customType: string, data?: unknown) => Promise<string>;
@@ -94,9 +96,31 @@ export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   preserveLeaf: boolean;
+  currentTurnPersisted: boolean;
+  currentUserIdempotencyKey?: string;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
-  if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
+  if (
+    !candidate ||
+    !isUserSessionMessageEntry(candidate.messageEntry) ||
+    !params.sessionManager.hasLoadedTranscriptTail(
+      candidate.messageEntry.id,
+      candidate.messageEntry.parentId,
+    )
+  ) {
+    return undefined;
+  }
+  const provenance = candidate.messageEntry.message.provenance;
+  // Keep unanswered chat input in ordinary history. Merging it into a new turn
+  // would repeat it when that turn's stored model prompt is replayed later.
+  if (
+    !params.preserveLeaf &&
+    !params.currentTurnPersisted &&
+    (!params.currentUserIdempotencyKey ||
+      candidate.messageEntry.message.idempotencyKey !== params.currentUserIdempotencyKey) &&
+    candidate.messageEntry.message.excludeFromContext !== true &&
+    (provenance == null || normalizeInputProvenance(provenance)?.kind === "external_user")
+  ) {
     return undefined;
   }
   const merge = mergeOrphanedTrailingUserPrompt({

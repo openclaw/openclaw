@@ -8,7 +8,6 @@ import {
 } from "../../state/openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   runWithSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
@@ -16,12 +15,9 @@ import {
 import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
-  prepareMemorySessionTranscriptProjection,
-  type SessionTranscriptProjectionRow,
   type PreparedSessionTranscriptProjection,
   type PreparedSessionTranscriptProjectionMetadata,
 } from "./session-transcript-projection-rebuild.js";
-import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
 const ACTIVE_ROWS_PER_CHUNK = 512;
 const FTS_ROWS_PER_CHUNK = 128;
@@ -40,7 +36,6 @@ type ReconcileWorkerPlanInput = ReconcileWorkerOwner & {
 
 export type SessionTranscriptReconcileWorkerInput =
   | (ReconcileWorkerPlanInput & { mode: "disk"; leaseId: string })
-  | { mode: "memory"; sessionIds: string[] }
   | (ReconcileWorkerOwner & { mode: "release"; leaseId: string; path: string });
 
 export type SessionTranscriptReconcileWorkerTask = {
@@ -73,8 +68,7 @@ export type SessionTranscriptReconcileWorkerMessage =
   | { type: "lease-release-failed"; error: string }
   | { type: "fts-chunk"; chunk: EncodedTranscriptFtsChunk; sessionId: string }
   | { type: "plan-finish"; sessionId: string }
-  | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata }
-  | { type: "source-read"; sessionId: string };
+  | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata };
 
 type SessionTranscriptReconcileWorkerCommand = {
   accepted: boolean;
@@ -152,20 +146,6 @@ function encodeFtsChunk(rows: readonly TranscriptIndexEntry[]): EncodedTranscrip
   return { rows: metadata, textBytes };
 }
 
-function takeFtsChunkEnd(rows: readonly TranscriptIndexEntry[], start: number): number {
-  let bytes = 0;
-  let end = start;
-  while (end < rows.length && end - start < FTS_ROWS_PER_CHUNK) {
-    const rowBytes = Buffer.byteLength(rows[end]?.text ?? "", "utf8");
-    if (end > start && bytes + rowBytes > FTS_TEXT_BYTES_PER_CHUNK) {
-      break;
-    }
-    bytes += rowBytes;
-    end += 1;
-  }
-  return end;
-}
-
 async function streamPreparedProjection(
   plan: PreparedSessionTranscriptProjection,
   port: MessagePort,
@@ -187,56 +167,38 @@ async function streamPreparedProjection(
       return false;
     }
   }
-  for (let offset = 0; offset < ftsRows.length;) {
-    const end = takeFtsChunkEnd(ftsRows, offset);
-    const chunk = encodeFtsChunk(ftsRows.slice(offset, end));
+  let rows: TranscriptIndexEntry[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    const chunk = encodeFtsChunk(rows);
+    rows = [];
+    bytes = 0;
     const reply = await postAndWait(port, { type: "fts-chunk", chunk, sessionId: plan.sessionId }, [
       chunk.textBytes.buffer,
     ]);
-    if (!reply.accepted) {
+    return reply.accepted;
+  };
+  for (const row of ftsRows) {
+    const rowBytes = Buffer.byteLength(row.text, "utf8");
+    if (rows.length > 0 && bytes + rowBytes > FTS_TEXT_BYTES_PER_CHUNK && !(await flush())) {
       return false;
     }
-    offset = end;
+    rows.push(row);
+    bytes += rowBytes;
+    // An oversized row stays whole, but never shares its transport batch.
+    if (
+      (rows.length >= FTS_ROWS_PER_CHUNK || bytes >= FTS_TEXT_BYTES_PER_CHUNK) &&
+      !(await flush())
+    ) {
+      return false;
+    }
+  }
+  if (rows.length > 0 && !(await flush())) {
+    return false;
   }
   return (
     (await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId })).yield === true
   );
-}
-
-async function prepareMemoryProjection(sessionId: string, port: MessagePort) {
-  const rows = new Map<number, SessionTranscriptProjectionRow>();
-  const decoder = new TextDecoder();
-  let fragments: string[] = [];
-  while (true) {
-    const pending = waitForMessage<MemoryTranscriptProjectionFrame>(port);
-    port.postMessage({
-      type: "source-read",
-      sessionId,
-    } satisfies SessionTranscriptReconcileWorkerMessage);
-    const frame = await pending;
-    if (frame.type === "source-unavailable") {
-      return undefined;
-    }
-    if (frame.type === "source-end") {
-      const plan = prepareMemorySessionTranscriptProjection(
-        sessionId,
-        frame.snapshot.transcriptUpdatedAt,
-        rows,
-        frame.snapshot.generation,
-      );
-      rows.clear();
-      return plan;
-    }
-    fragments.push(decoder.decode(frame.bytes, { stream: !frame.final }));
-    if (frame.final) {
-      rows.set(frame.seq, {
-        seq: frame.seq,
-        created_at: frame.createdAt,
-        event_json: fragments.join(""),
-      });
-      fragments = [];
-    }
-  }
 }
 
 async function run(
@@ -265,9 +227,6 @@ async function run(
   >;
   try {
     const database = (() => {
-      if (reconcileInput.mode === "memory") {
-        return undefined;
-      }
       const options = {
         agentId: reconcileInput.agentId,
         path: reconcileInput.path,
@@ -292,10 +251,7 @@ async function run(
     const sessionIds = reconcileInput.sessionIds;
     let yielded = false;
     for (const [index, sessionId] of sessionIds.entries()) {
-      const plan =
-        reconcileInput.mode === "memory"
-          ? await prepareMemoryProjection(sessionId, port)
-          : prepareSessionTranscriptProjection(database!.db, sessionId);
+      const plan = prepareSessionTranscriptProjection(database.db, sessionId);
       if (plan) {
         if (await streamPreparedProjection(plan, port)) {
           yielded = index < sessionIds.length - 1;
@@ -311,26 +267,12 @@ async function run(
     };
   }
 
-  try {
-    // The original read handle and lease remain pinned through the final native phase.
-    if (!coordination?.reconciliation) {
-      closeDatabase?.();
-    }
-    port.postMessage(terminalMessage);
-    if (reconcileInput.mode === "disk") {
-      // The final parent write must finish before this independent deletion fence is released.
-      await waitForMessage(port);
-      // Cleanup uses the handles and lease opened by this task, even after retirement.
-      if (coordination?.reconciliation) {
-        closeDatabase?.();
-      }
-      releaseLease(reconcileInput, port, closeDatabase !== undefined);
-    }
-  } finally {
-    if (reconcileInput.mode === "memory") {
-      port.close();
-    }
-  }
+  port.postMessage(terminalMessage);
+  // The final parent write must finish before this independent deletion fence is released.
+  await waitForMessage(port);
+  // Cleanup uses the handles and lease opened by this task, even after retirement.
+  closeDatabase?.();
+  releaseLease(reconcileInput, port, closeDatabase !== undefined);
 }
 
 serveWorkerTasks(
@@ -345,23 +287,14 @@ serveWorkerTasks(
       // SAFETY: The typed pool owns this private payload; phase admission is checked below.
       value as SessionTranscriptReconcileWorkerTask;
     try {
-      if (input.mode === "memory") {
-        await run(input, port);
-      } else {
-        if (
-          !coordination?.reconciliation ||
-          coordination.actorId !== `transcript:${input.mode}:${input.leaseId}` ||
-          coordination.databasePath !==
-            resolveOpenClawStateSqlitePath(resolveLeaseEnvironment(input))
-        ) {
-          throw new Error("Transcript worker shared-state owner changed");
-        }
-        await runWithSqliteMutationWorkerCoordination(
-          coordination,
-          { env: resolveLeaseEnvironment(input) },
-          () => run(input, port, coordination, sourceIdentity),
-        );
+      if (!coordination?.reconciliation) {
+        throw new Error("Transcript worker requires lifecycle coordination");
       }
+      await runWithSqliteMutationWorkerCoordination(
+        coordination,
+        { env: resolveLeaseEnvironment(input) },
+        () => run(input, port, coordination, sourceIdentity),
+      );
     } finally {
       value.port.close();
     }

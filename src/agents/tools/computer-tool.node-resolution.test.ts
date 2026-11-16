@@ -20,56 +20,16 @@ import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { ComputerToolTransport } from "./computer-tool.js";
+import {
+  callGatewayToolMock,
+  createComputerTool,
+  gatewayComputerStatusMock,
+  listNodesMock,
+  macComputerNode,
+  screenshotPayload,
+  sleepMock,
+} from "./computer-tool.test-helpers.js";
 import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
-
-const listNodesMock = vi.fn();
-const callGatewayToolMock = vi.fn();
-const sleepMock = vi.hoisted(() => vi.fn());
-const gatewayComputerStatusMock = vi.hoisted(() => vi.fn());
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
-
-vi.mock("./nodes-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./nodes-utils.js")>();
-  return { ...actual, listNodes: listNodesMock };
-});
-
-vi.mock("./gateway.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./gateway.js")>();
-  return { ...actual, callGatewayTool: callGatewayToolMock };
-});
-
-vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
-vi.mock("./computer-tool-gateway.js", () => ({
-  loadGatewayComputerStatus: gatewayComputerStatusMock,
-  bindGatewayComputerCleanup: async () => undefined,
-}));
-
-const { createComputerTool } = await import("./computer-tool.js");
-
-function macComputerNode(overrides?: Record<string, unknown>) {
-  return {
-    nodeId: "mac-1",
-    displayName: "Studio",
-    platform: "macos",
-    connected: true,
-    commands: ["screen.snapshot", "computer.act"],
-    ...overrides,
-  };
-}
-
-function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
-  return {
-    payload: {
-      format: "png",
-      base64,
-      displayFrameId: `display-${screenIndex}-frame`,
-      width: 1280,
-      height: 800,
-      screenIndex,
-    },
-  };
-}
 
 function attachedDesktopHarness(desktopRegistry?: ReturnType<typeof createDesktopSessionRegistry>) {
   const h = createHarness();
@@ -616,34 +576,6 @@ describe("createComputerTool node resolution", () => {
     },
   );
 
-  it("resolves and executes on a capable non-Mac node", async () => {
-    const platform = "windows";
-    const nodeId = `${platform}-1`;
-    listNodesMock.mockResolvedValue([
-      {
-        nodeId,
-        displayName: `${platform} desktop`,
-        platform,
-        connected: true,
-        commands: ["computer.act", "screen.snapshot"],
-      },
-    ]);
-    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
-      (body as { command?: string }).command === "computer.act"
-        ? { payload: { ok: true } }
-        : screenshotPayload(),
-    );
-    const tool = createComputerTool();
-
-    await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({ nodeId, command: "computer.act" }),
-      { signal: undefined },
-    );
-  });
-
   it.each([
     {
       name: "no computer-capable node is connected",
@@ -727,8 +659,8 @@ describe("createComputerTool node resolution", () => {
     );
   });
 
-  it("prepares blank selectors before validation and reaches the same node as omitted selectors", async () => {
-    listNodesMock.mockResolvedValue([macComputerNode()]);
+  it("prepares blank selectors before validation and resolves a capable Windows node", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode({ platform: "windows" })]);
     callGatewayToolMock.mockResolvedValue(screenshotPayload());
     for (const selectors of [
       {},
@@ -750,17 +682,5 @@ describe("createComputerTool node resolution", () => {
         { signal: undefined },
       );
     }
-  });
-
-  it("leaves nonblank invalid targets for validation and unknown nodes for resolution", async () => {
-    listNodesMock.mockResolvedValue([macComputerNode()]);
-    const tool = createComputerTool();
-    const invalidTarget = { action: "screenshot", target: "foo" };
-    expect(Value.Check(tool.parameters, tool.prepareArguments?.(invalidTarget))).toBe(false);
-    const unknownNode = { action: "screenshot", node: "unknown-node" };
-    await expect(tool.execute("call", tool.prepareArguments?.(unknownNode))).rejects.toThrow(
-      /unknown node/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 });

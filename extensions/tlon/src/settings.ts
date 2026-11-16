@@ -4,7 +4,6 @@ import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
 export const TLON_PENDING_APPROVAL_LIMIT = 100;
 
-/** Pending approval request stored for persistence */
 export type PendingApproval = {
   id: string;
   type: "dm" | "channel" | "group";
@@ -12,6 +11,16 @@ export type PendingApproval = {
   channelNest?: string;
   groupFlag?: string;
   messagePreview?: string;
+  /**
+   * Set when the request came from a group DM (club). The requesting ship is then only an
+   * unverified author claim, so approval replays must keep the club-scoped, non-owner identity.
+   */
+  clubId?: string;
+  /**
+   * Set when a DM request came from a verified 1:1 DM. DM requests stored before this marker
+   * existed cannot be told apart from group DM claims, so their messages are never replayed.
+   */
+  verifiedDirect?: boolean;
   /** Full message context for processing after approval */
   originalMessage?: {
     messageId: string;
@@ -44,7 +53,6 @@ export type TlonSettingsStore = {
   defaultAuthorizedShips?: string[];
   /** Ship that receives approval requests for DMs, channel mentions, and group invites */
   ownerShip?: string;
-  /** Pending approval requests awaiting owner response */
   pendingApprovals?: PendingApproval[];
 };
 
@@ -130,7 +138,9 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
       typeof obj.id === "string" &&
       (obj.type === "dm" || obj.type === "channel" || obj.type === "group") &&
       typeof obj.requestingShip === "string" &&
-      typeof obj.timestamp === "number"
+      typeof obj.timestamp === "number" &&
+      (obj.clubId === undefined || typeof obj.clubId === "string") &&
+      (obj.verifiedDirect === undefined || typeof obj.verifiedDirect === "boolean")
     );
   });
 }

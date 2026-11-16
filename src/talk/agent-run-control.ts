@@ -1,19 +1,19 @@
 /**
- * Runtime adapter for realtime voice control of active OpenClaw agent runs.
- *
  * The shared module owns classification and message contracts; this adapter
  * binds those contracts to embedded-run abort, status, and steering primitives.
  */
-import type {
-  ActiveEmbeddedRunOwner,
-  EmbeddedAgentQueueMessageOutcome,
-} from "../agents/embedded-agent-runner/runs.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
-import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
+import type {
+  ReplyBackendQueueMessageMismatch,
+  ReplyMessageInjectionOptions,
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityPreparation,
+} from "../sessions/session-controller.contracts.js";
+import type { SessionControllerSteerResult } from "../sessions/session-controller.steer.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import { captureRealtimeVoiceRunOwner } from "./agent-run-control-owner.js";
 import {
@@ -52,8 +52,55 @@ export function buildRealtimeVoiceAgentErrorProviderResult(
     : { error: formatErrorMessage(error) };
 }
 
+// These callback shapes shipped in the realtime-voice SDK in v2026.8.1.
+// Keep the external adapter contract; built-in execution belongs to the controller.
+type RealtimeVoiceAgentQueueOutcome =
+  | {
+      queued: true;
+      sessionId: string;
+      runId?: string;
+      target?: "embedded_run" | "reply_run";
+      gatewayHealth: "live";
+      transcriptCommit?: "unconfirmed";
+      errorMessage?: string;
+      deliveredAtMs?: number;
+      enqueuedAtMs?: number;
+    }
+  | {
+      queued: false;
+      sessionId: string;
+      reason:
+        | ReplyBackendQueueMessageMismatch
+        | "no_active_run"
+        | "not_streaming"
+        | "stale_run"
+        | "compacting"
+        | "guarded_injection_unsupported"
+        | "runtime_rejected";
+      gatewayHealth: "live";
+      errorMessage?: string;
+    };
+
+type RealtimeVoiceAgentRunOwner = {
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+  startedAtMs?: number;
+  abort: () => boolean;
+};
+
 type RealtimeVoiceAgentControlDeps = {
-  queueGuardedEmbeddedAgentMessageWithOutcomeAsync?: typeof import("../agents/embedded-agent-runner/runs.js").queueGuardedEmbeddedAgentMessageWithOutcomeAsync;
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync?: (
+    sessionId: string,
+    text: string,
+    options: ReplyMessageInjectionOptions | undefined,
+    canInject: () => boolean,
+    sourcePreparation?: Pick<ReplyToolAuthorityPreparation, "assertCurrent" | "prepareCurrent"> &
+      Partial<Pick<ReplyToolAuthorityPreparation, "compatAssertCurrent">> & {
+        prepareMessage?: () => Promise<string>;
+      },
+  ) => Promise<RealtimeVoiceAgentQueueOutcome>;
   abortEmbeddedAgentRun: (sessionId: string) => boolean;
   queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
@@ -66,16 +113,16 @@ type RealtimeVoiceAgentControlDeps = {
       toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
       userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     },
-  ) => Promise<EmbeddedAgentQueueMessageOutcome>;
+  ) => Promise<RealtimeVoiceAgentQueueOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
     sessionId?: string;
     sessionKey?: string;
   }) => RealtimeVoiceAgentRunActivity;
   resolveActiveEmbeddedRunSessionId: (sessionKey: string) => string | undefined;
-  resolveActiveEmbeddedRunOwnerByRunId?: (runId: string) => ActiveEmbeddedRunOwner | undefined;
+  resolveActiveEmbeddedRunOwnerByRunId?: (runId: string) => RealtimeVoiceAgentRunOwner | undefined;
   resolveActiveReplyRunOwnerForSignal?: (
     signal: AbortSignal,
-  ) => Pick<ActiveEmbeddedRunOwner, "sessionId" | "sessionKey" | "abort"> | undefined;
+  ) => Pick<RealtimeVoiceAgentRunOwner, "sessionId" | "sessionKey" | "abort"> | undefined;
 };
 
 /** Apply a spoken status, cancel, steer, or follow-up request to an active run. */
@@ -96,6 +143,8 @@ export async function controlRealtimeVoiceAgentRun(
     createUserTurnTranscriptRecorder?: (text: string) => UserTurnTranscriptRecorder;
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
+    /** Optional Gateway Stop override; otherwise cancel the captured exact run owner. */
+    cancelRun?: (runId: string) => Promise<boolean>;
   },
   providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
@@ -104,32 +153,42 @@ export async function controlRealtimeVoiceAgentRun(
   const mode = resolveRealtimeVoiceAgentControlIntent({ text, mode: params.mode }).mode;
   const controlResultContext = { mode, sessionKey };
   const target = params.runTarget;
-  let commands = providedDeps;
+  let commands:
+    | typeof import("./agent-run-control.runtime.js").realtimeVoiceControlRuntime
+    | undefined;
   // Exact registered runs need their owner-bound selector, never a key-only lookup.
   // Cold requests without a live registration do not load the mutating runtime.
-  if (!commands && target && !target.signal.aborted && target.isCurrent()) {
+  if (!providedDeps && target && !target.signal.aborted && target.isCurrent()) {
     commands = (await import("./agent-run-control.runtime.js")).realtimeVoiceControlRuntime;
   }
   const projections =
     commands ??
-    (target === undefined
-      ? await import("../agents/embedded-agent-runner/active-run-projections.js")
+    (!providedDeps && target === undefined
+      ? await import("../sessions/session-controller.queries.js")
       : undefined);
   const resolveCurrentRun = () => {
-    const candidate =
-      target && !target.signal.aborted && target.isCurrent()
-        ? (commands?.resolveActiveEmbeddedRunOwnerByRunId?.(target.runId) ??
-          commands?.resolveActiveReplyRunOwnerForSignal?.(target.signal))
+    const liveTarget = target && !target.signal.aborted && target.isCurrent() ? target : undefined;
+    const builtInOwner =
+      !providedDeps && liveTarget
+        ? commands?.resolveSourceRunOwner(liveTarget.runId, liveTarget.signal)
         : undefined;
+    const candidate = liveTarget
+      ? providedDeps
+        ? (providedDeps.resolveActiveEmbeddedRunOwnerByRunId?.(liveTarget.runId) ??
+          providedDeps.resolveActiveReplyRunOwnerForSignal?.(liveTarget.signal))
+        : builtInOwner
+      : undefined;
     const exactOwner =
       candidate?.sessionKey === sessionKey && target?.isCurrent(candidate.sessionId)
         ? candidate
         : undefined;
     const sessionId =
       target === undefined
-        ? projections?.resolveActiveEmbeddedRunSessionId(sessionKey)
+        ? providedDeps
+          ? providedDeps.resolveActiveEmbeddedRunSessionId(sessionKey)
+          : projections?.resolveActiveSessionRunId(sessionKey)
         : exactOwner?.sessionId;
-    return { sessionId, exactOwner };
+    return { sessionId, exactOwner, operation: exactOwner ? builtInOwner?.operation : undefined };
   };
   let current = resolveCurrentRun();
   // Custom dependency adapters own their state; the built-in selector pins its registry owner.
@@ -184,13 +243,13 @@ export async function controlRealtimeVoiceAgentRun(
   if (!current.sessionId || (target === undefined && !isLegacyCurrent())) {
     return noActiveRun();
   }
-  if (!commands) {
+  if (!providedDeps && !commands) {
     commands = (await import("./agent-run-control.runtime.js")).realtimeVoiceControlRuntime;
     // Loading commands can outlive admission; resolve the exact target again
     // in the continuation that performs the action.
     current = resolveCurrentRun();
   }
-  const { sessionId, exactOwner } = current;
+  const { sessionId } = current;
   if (!sessionId || (target === undefined && !isLegacyCurrent())) {
     return noActiveRun();
   }
@@ -210,8 +269,13 @@ export async function controlRealtimeVoiceAgentRun(
   if (mode === "cancel") {
     const aborted =
       target === undefined
-        ? commands.abortEmbeddedAgentRun(sessionId)
-        : exactOwner?.abort() === true;
+        ? providedDeps
+          ? providedDeps.abortEmbeddedAgentRun(sessionId)
+          : await commands!.stopRealtimeVoiceSessionRun({ sessionKey, sessionId })
+        : target !== null &&
+          (params.cancelRun
+            ? await params.cancelRun(target.runId)
+            : preparedOwner.exactOwner?.abort() === true);
     const message = aborted
       ? "Cancelled the active OpenClaw run."
       : "OpenClaw could not cancel the active run.";
@@ -264,37 +328,39 @@ export async function controlRealtimeVoiceAgentRun(
       ? !target.signal.aborted && target.isCurrent(sessionId)
       : legacyOwner?.isCurrent() === true;
   };
-  const outcome: EmbeddedAgentQueueMessageOutcome =
-    target || legacyOwner
-      ? commands.queueGuardedEmbeddedAgentMessageWithOutcomeAsync
-        ? await commands.queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+  const preparation = bindPreparedToolAuthority(
+    bindWorkerToolPreparation({
+      assertCurrent: () => {
+        if (!canInject()) {
+          throw new Error("The original Talk run is no longer current");
+        }
+      },
+      compatAssertCurrent: () => {
+        const overlay = params.getToolAuthorityOverlay?.();
+        options.toolAuthorityOverlay = overlay;
+        if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
+          throw new Error("The original Talk caller authority no longer matches");
+        }
+      },
+      prepareCurrent,
+      prepareMessage: deferMessagePreparation
+        ? async () => {
+            await prepareCurrent();
+            return prepareMessage();
+          }
+        : undefined,
+    }),
+  );
+  let outcome: RealtimeVoiceAgentQueueOutcome;
+  if (providedDeps) {
+    outcome = target
+      ? providedDeps.queueGuardedEmbeddedAgentMessageWithOutcomeAsync
+        ? await providedDeps.queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
             sessionId,
             steerText,
             options,
             canInject,
-            bindPreparedToolAuthority(
-              bindWorkerToolPreparation({
-                assertCurrent: () => {
-                  if (!canInject()) {
-                    throw new Error("The original Talk run is no longer current");
-                  }
-                },
-                compatAssertCurrent: () => {
-                  const overlay = params.getToolAuthorityOverlay?.();
-                  options.toolAuthorityOverlay = overlay;
-                  if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
-                    throw new Error("The original Talk caller authority no longer matches");
-                  }
-                },
-                prepareCurrent,
-                prepareMessage: deferMessagePreparation
-                  ? async () => {
-                      await prepareCurrent();
-                      return prepareMessage();
-                    }
-                  : undefined,
-              }),
-            ),
+            preparation,
           )
         : {
             queued: false,
@@ -302,7 +368,51 @@ export async function controlRealtimeVoiceAgentRun(
             gatewayHealth: "live",
             reason: "guarded_injection_unsupported",
           }
-      : await commands.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, options);
+      : await providedDeps.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, options);
+  } else {
+    const injectionOptions: ReplyMessageInjectionOptions = options;
+    injectionOptions.assertCurrent = preparation.assertCurrent;
+    injectionOptions.toolAuthorityPreparation = preparation;
+    let queueAccepted: boolean | undefined;
+    injectionOptions.onQueueAccepted = (accepted) => {
+      queueAccepted = queueAccepted === true || accepted;
+    };
+    let steer: SessionControllerSteerResult;
+    try {
+      steer = await commands!.steerActiveRun(
+        preparedOwner.operation ?? legacyOwner?.operation,
+        steerText,
+        injectionOptions,
+      );
+    } catch (error) {
+      // A final refusal proves no enqueue; an accepted or missing receipt stays uncertain.
+      const errorMessage = formatErrorMessage(error);
+      steer =
+        queueAccepted === false
+          ? { status: "rejected", reason: "runtime_rejected", errorMessage }
+          : { status: "indeterminate", errorMessage };
+    }
+    if (steer.status === "rejected") {
+      return {
+        ok: false,
+        ...controlResultContext,
+        sessionId,
+        active: true,
+        queued: false,
+        reason: steer.reason,
+        message: formatRealtimeVoiceAgentQueueRejection(mode, steer.reason),
+        ...controlResultPresentation,
+      };
+    }
+    outcome = {
+      queued: true,
+      sessionId,
+      gatewayHealth: "live",
+      ...(steer.status === "indeterminate" || steer.result?.transcriptCommit === "unconfirmed"
+        ? { transcriptCommit: "unconfirmed" as const }
+        : {}),
+    };
+  }
   if (!outcome.queued) {
     return {
       ok: false,
@@ -328,7 +438,7 @@ export async function controlRealtimeVoiceAgentRun(
     sessionId: outcome.sessionId,
     active: true,
     queued: true,
-    target: outcome.target,
+    ...(outcome.target ? { target: outcome.target } : {}),
     ...(unconfirmed ? { reason: "delivery_unconfirmed" } : {}),
     message,
     ...controlResultPresentation,

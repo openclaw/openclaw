@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
 import { convertToLlm } from "openclaw/plugin-sdk/agent-core";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexDurableCustomMessage } from "./context-engine-projection.js";
 import { CodexHistoryRejection } from "./history-rejection.js";
@@ -245,6 +248,10 @@ class HistoryProjection {
   }
 
   append(message: AgentMessage): void {
+    // Verify every raw row first; transcript bookkeeping never becomes model history.
+    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      return;
+    }
     if (message.role === "user") {
       this.projectUserMessage(message);
     } else if (message.role === "assistant") {
@@ -409,7 +416,16 @@ export class SettledTurnPriorContext {
   }
 
   prependTo(current: JsonValue[]): JsonValue[] {
-    this.finishGroup();
+    if (this.active.pending.size) {
+      // The verified current turn is a safe boundary; earlier user steering was not.
+      // An unfinished exchange leaves no contiguous, complete prior suffix to replay.
+      this.groups = [];
+      this.count = 0;
+      this.bytes = 0;
+      this.omitted = true;
+    } else {
+      this.finishGroup();
+    }
     const includeNotice = this.trim(
       current.length,
       current.reduce<number>((bytes, item) => bytes + responseItemBytes(item), 0),

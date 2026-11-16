@@ -6,6 +6,7 @@ import type {
   SessionsPatchResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
@@ -150,45 +151,48 @@ function outputLifecycleResults(
     );
   } else {
     for (const result of results) {
+      const key = sanitizeTerminalText(result.key);
       switch (result.status) {
         case "archived":
-          runtime.log(`Archived session ${result.key}.`);
+          runtime.log(`Archived session ${key}.`);
           break;
         case "already_archived":
-          runtime.log(`Session ${result.key} is already archived.`);
+          runtime.log(`Session ${key} is already archived.`);
           break;
         case "deleted": {
-          runtime.log(`Deleted session ${result.key}.`);
+          runtime.log(`Deleted session ${key}.`);
           const archivedTranscripts = result.archived ?? [];
           for (const archived of archivedTranscripts) {
-            runtime.log(`Archived transcript: ${archived}`);
+            runtime.log(`Archived transcript: ${sanitizeTerminalText(archived)}`);
           }
           if (archivedTranscripts.length > 0) {
             const agentId = deletedSessions?.get(result)?.agentId;
             runtime.log("Archived transcripts can remain eligible for memory search.");
             runtime.log(
               agentId
-                ? `To remove indexed memories for this session, run openclaw memory forget --agent ${quoteCliArg(agentId)} --session ${quoteCliArg(result.key)} on the Gateway host or container using its state and configuration.`
+                ? `To remove indexed memories for this session, run openclaw memory forget --agent ${quoteCliArg(sanitizeTerminalText(agentId))} --session ${quoteCliArg(key)} on the Gateway host or container using its state and configuration.`
                 : "Run openclaw memory forget on the Gateway host or container using its state and configuration; select the owning agent with --agent and this session with --session.",
             );
           }
           if (result.worktreePreserved) {
             const preserved = result.worktreePreserved;
             runtime.error(
-              `Worktree ${preserved.branch} at ${preserved.path} needs attention: ${WORKTREE_PRESERVATION_REASON_COPY[preserved.reason]}. Inspect it with ${formatCliCommand("openclaw worktrees list")}.`,
+              `Worktree ${sanitizeTerminalText(preserved.branch)} at ${sanitizeTerminalText(preserved.path)} needs attention: ${WORKTREE_PRESERVATION_REASON_COPY[preserved.reason]}. Inspect it with ${formatCliCommand("openclaw worktrees list")}.`,
             );
           }
           break;
         }
         case "would_archive":
-          runtime.log(`[dry-run] archive session ${result.key}`);
+          runtime.log(`[dry-run] archive session ${key}`);
           break;
         case "would_delete":
-          runtime.log(`[dry-run] delete session ${result.key} and its live transcript state`);
+          runtime.log(`[dry-run] delete session ${key} and its live transcript state`);
           break;
         case "not_found":
         case "failed":
-          runtime.error(`${operation} ${result.key}: ${result.error ?? "Unknown failure."}`);
+          runtime.error(
+            `${operation} ${key}: ${sanitizeTerminalText(result.error ?? "Unknown failure.")}`,
+          );
           break;
       }
     }

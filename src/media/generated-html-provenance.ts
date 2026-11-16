@@ -27,9 +27,6 @@ export async function readGeneratedHtmlProvenance(
     { context, current: true },
   );
   context.admission.assertCurrent();
-  if (!reply) {
-    return undefined;
-  }
   return reply;
 }
 
@@ -93,9 +90,8 @@ export async function pruneGeneratedHtmlProvenance(
   if (stale.length === 0) {
     return;
   }
-  const removed = await writeGeneratedHtmlProvenance(context, {
+  await writeGeneratedHtmlProvenance(context, {
     type: "generatedHtmlProvenance.prune",
     input: stale,
   });
-  logVerbose(`trusted-html prune removed ${removed} stale marker(s)`);
 }

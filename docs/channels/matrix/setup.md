@@ -16,7 +16,7 @@ Install the Matrix plugin, point it at a homeserver, and choose how invites, all
 openclaw plugins install @openclaw/matrix
 ```
 
-`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from ClawHub by default. Use `npm:@openclaw/matrix` to install directly from npm. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 
@@ -95,6 +95,10 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 }
 ```
 
+When an account stops or reloads, Matrix stops waiting for background tasks after
+30 seconds without task progress. A delayed task from the retired monitor cannot
+start a join or send through a client that is still serving another monitor.
+
 ### Group join introductions
 
 When the bot joins an allowed group room, it posts one introduction grounded in
@@ -129,6 +133,8 @@ The wizard converts a friendly name into a normalized account ID (`Ops Bot` -> `
 ### Cached credentials
 
 Matrix caches account credentials in the shared `state/openclaw.sqlite` plugin state. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status checks. Upgrades import the retired `~/.openclaw/credentials/matrix/credentials*.json` files through `openclaw doctor --fix`, verify the SQLite rows, then archive the files.
+
+Removing an account with `openclaw channels remove --channel matrix --account <id> --delete` clears its cached login so re-adding it signs in again. Other accounts and the removed account's encrypted room state are preserved.
 
 ### Environment variables
 

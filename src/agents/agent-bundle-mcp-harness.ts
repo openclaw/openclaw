@@ -1,7 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
   getAdvertisedScopedMcpCatalog,
   acquireRequesterScopedMcpRuntime,
@@ -13,8 +16,11 @@ import {
   buildBundleMcpToolsFromCatalog,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
-import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import {
+  buildConfiguredRequesterConnectCatalog,
+  mergeMcpConnectCatalog,
+} from "./agent-bundle-mcp-requester-connect.js";
+import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,
@@ -28,6 +34,7 @@ import {
   requiresMcpCodexToolApproval,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -48,34 +55,6 @@ type StaticHarnessMcpTools = {
   diagnosticNotice?: string;
   dispose: () => Promise<void>;
 };
-
-function createHarnessDisposer(runtime: Pick<StaticHarnessMcpTools, "dispose"> | undefined) {
-  let disposed = false;
-  return async () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    await runtime?.dispose();
-  };
-}
-
-function formatConfiguredMcpDiagnosticNotice(
-  messages: readonly string[],
-  runLabel: "this scheduled run" | "this run",
-): string | undefined {
-  const bounded = [...new Set(messages)]
-    .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
-    .filter(Boolean)
-    .slice(0, 4);
-  if (bounded.length === 0) {
-    return undefined;
-  }
-  return (
-    `Configured MCP is incomplete for ${runLabel}: ${bounded.join("; ")}. ` +
-    "Do not claim MCP-backed work succeeded; report this blocker to the operator."
-  );
-}
 
 type InteractiveConfiguredMcpApprovalRequest = {
   signal?: AbortSignal;
@@ -189,8 +168,12 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   warn?: (message: string) => void;
 };
 
-function notConnectedToolResult(serverName: string, toolName: string) {
-  const message = `Requester has not connected MCP server "${serverName}" (tool "${toolName}") for this turn.`;
+function notConnectedToolResult(serverName: string, toolName: string, hasRequester: boolean) {
+  const message = hasRequester
+    ? `Requester has not connected MCP server "${serverName}" (tool "${toolName}") for this turn.`
+    : `MCP server "${serverName}" (tool "${toolName}") connects with each user's own account, ` +
+      "and this turn has no verified user (for example a scheduled run, a subagent or a completion). " +
+      "No other account is used. Ask the user to request this in their own message.";
   return {
     content: [{ type: "text" as const, text: message }],
     details: {
@@ -200,6 +183,24 @@ function notConnectedToolResult(serverName: string, toolName: string) {
       mcpTool: toolName,
     },
   };
+}
+
+/** Lists the same sign-in tools a requester sees, so senderless turns keep one catalog. */
+function buildSenderlessConnectCatalog(
+  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+): McpToolCatalog | undefined {
+  const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
+    logDiagnostics: false,
+  });
+  return buildConfiguredRequesterConnectCatalog({
+    serverNames: partitionMcpServersByConnectionScope(loaded.mcpServers).oauthRequesterServerNames,
+    mcpServers: loaded.mcpServers,
+    safeServerNamesByServer,
+  });
 }
 
 async function resolveHarnessCapabilityProfile(
@@ -276,18 +277,12 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         });
       }
     : undefined;
-  let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
-  try {
-    liveRuntime = await materializeBundleMcpToolsForRun({
-      ...acquisition,
-      agentId: params.agentId,
-      reservedToolNames: params.reservedToolNames,
-      ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
-    });
-  } catch (error) {
-    await retireSnapshotRuntime?.();
-    throw error;
-  }
+  const liveRuntime = await materializeBundleMcpToolsForRun({
+    ...acquisition,
+    agentId: params.agentId,
+    reservedToolNames: params.reservedToolNames,
+    ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
+  });
   try {
     // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
     const omissions: string[] = [];
@@ -330,19 +325,26 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         },
       ),
     );
-    const diagnosticNotice = formatConfiguredMcpDiagnosticNotice(
-      [
-        ...(liveRuntime.diagnostics ?? []).map(
-          (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
-        ),
-        ...omissions,
-      ],
-      params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
-    );
+    const messages = [
+      ...(liveRuntime.diagnostics ?? []).map(
+        (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
+      ),
+      ...omissions,
+    ];
+    const runLabel = params.requestInteractiveCodexApproval ? "this run" : "this scheduled run";
+    const bounded = [...new Set(messages)]
+      .map((message) => truncateUtf16Safe(message.replaceAll(/\s+/g, " ").trim(), 180))
+      .filter(Boolean)
+      .slice(0, 4);
+    const diagnosticNotice =
+      bounded.length > 0
+        ? `Configured MCP is incomplete for ${runLabel}: ${bounded.join("; ")}. ` +
+          "Do not claim MCP-backed work succeeded; report this blocker to the operator."
+        : undefined;
     return {
       tools: allowed,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),
-      dispose: createHarnessDisposer(liveRuntime),
+      dispose: liveRuntime.dispose,
     };
   } catch (error) {
     await liveRuntime.dispose();
@@ -394,11 +396,14 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       }
     }
 
+    const hasRequester = normalizeOptionalString(params.requesterSenderId) !== undefined;
     const advertisedCatalog =
       getAdvertisedScopedMcpCatalog(params.sessionId) ??
       (liveCatalog
         ? mergeMcpConnectCatalog(liveCatalog, scopedRuntime?.requesterConnect)
-        : undefined);
+        : hasRequester
+          ? undefined
+          : buildSenderlessConnectCatalog(params));
     if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
       await liveRuntime?.dispose();
       return undefined;
@@ -413,7 +418,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       reservedToolNames,
       createExecute: (tool) =>
         requesterConnect?.createExecute(tool.serverName) ??
-        (async () => notConnectedToolResult(tool.serverName, tool.toolName)),
+        (async () => notConnectedToolResult(tool.serverName, tool.toolName, hasRequester)),
     });
     const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
@@ -438,7 +443,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: createHarnessDisposer(liveRuntime),
+      dispose: liveRuntime?.dispose ?? (async () => {}),
     };
   } catch (error) {
     await liveRuntime?.dispose();

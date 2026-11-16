@@ -1,9 +1,11 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  type CrabboxState,
-  crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
+} from "./crabbox-worker-warm-image-records.js";
+import {
+  type CrabboxState,
+  crabboxCaptureUnsupportedSentence,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -56,7 +58,7 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
         }
         const lines = options.recover
           ? [
-              "Selected recovery record cleared; retained images and other allocation choices are preserved. No provider commands were run.",
+              "Selected recovery record and capture-source allocation cleared; retained images and other allocation choices are preserved. No provider commands were run.",
               nextSteps,
             ]
           : [];
@@ -87,14 +89,16 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
                 : "in progress";
             lines.push(`  Capture ${label}: ${image.capture.selector}`);
             if (uncertain) {
-              lines.push(`  ${crabboxWarmImageRecoveryHint(image.capture.selector)}`);
+              lines.push(
+                `  ${crabboxWarmImageRecoveryHint(image.capture.selector, image.capture.checkpointIds)}`,
+              );
             } else if (image.capture.stale) {
               lines.push(`  ${CRABBOX_WARM_IMAGE_WAIT_HINT}`);
             }
           }
           if (image.retirement) {
             lines.push(
-              `  Checkpoint deletion pending: ${image.retirement.checkpointId}; retried during the next warm-image capture or worker teardown.`,
+              `  Checkpoint deletion pending: ${image.retirement.checkpointId}; retried during periodic maintenance or the next warm-image capture or worker teardown.`,
             );
           }
         }

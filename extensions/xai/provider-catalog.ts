@@ -75,29 +75,6 @@ export async function buildLiveXaiProvider(params: {
   };
 }
 
-function isXaiOAuthResponsesModel(
-  row: unknown,
-  modelId: string,
-  fallback: ModelDefinitionConfig | undefined,
-) {
-  if ((XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
-    return false;
-  }
-  const backend =
-    readLiveModelCatalogStringField(row, "api_backend") ??
-    readLiveModelCatalogStringField(row, "apiBackend") ??
-    readLiveModelCatalogStringField(row, "backend");
-  if (backend) {
-    const normalizedBackend = backend.toLowerCase();
-    return (
-      normalizedBackend === "responses" ||
-      normalizedBackend === "chat" ||
-      normalizedBackend === "language"
-    );
-  }
-  return Boolean(fallback);
-}
-
 function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
   const modelId =
     readLiveModelCatalogStringField(row, "id") ?? readLiveModelCatalogStringField(row, "model");
@@ -105,7 +82,21 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
     return undefined;
   }
   const fallback = resolveXaiCatalogEntry(modelId === "grok-build" ? "grok-build-0.1" : modelId);
-  if (!isXaiOAuthResponsesModel(row, modelId, fallback)) {
+  if ((XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
+    return undefined;
+  }
+  const backend =
+    readLiveModelCatalogStringField(row, "api_backend") ??
+    readLiveModelCatalogStringField(row, "apiBackend") ??
+    readLiveModelCatalogStringField(row, "backend");
+  const normalizedBackend = backend?.toLowerCase();
+  if (
+    backend
+      ? normalizedBackend !== "responses" &&
+        normalizedBackend !== "chat" &&
+        normalizedBackend !== "language"
+      : !fallback
+  ) {
     return undefined;
   }
   const contextWindow =
@@ -140,9 +131,16 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
           ),
         )
       : [];
+  // The account's listed efforts replace the bundled row's profile; the xAI hook builds the
+  // ladder from them.
+  const {
+    thinkingLevels: _levels,
+    defaultThinkingLevel: _default,
+    ...bundledCompat
+  } = fallback?.compat ?? {};
   const compat =
     supportedReasoningEfforts.length > 0
-      ? { ...fallback?.compat, supportedReasoningEfforts }
+      ? { ...bundledCompat, supportedReasoningEfforts }
       : fallback?.compat;
 
   return {

@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { appendGatewayLifecycleAuditLog, resolveGatewayRestartLogPath } from "./restart-logs.js";
 import { readGatewayForcedRestartSummary, warnAboutGatewayRestartStorm } from "./restart-storm.js";
 
@@ -9,7 +8,6 @@ const { findForeignLaunchdJobs } = vi.hoisted(() => ({
   findForeignLaunchdJobs: vi.fn(async () => [
     {
       label: "ai.openclaw.test.storm",
-      program: "/tmp/synthetic-updater.sh",
       keepAlive: true,
       gatewayActions: ["restart"],
       safeToRemove: true,
@@ -19,24 +17,19 @@ const { findForeignLaunchdJobs } = vi.hoisted(() => ({
 
 vi.mock("./launchd-foreign-jobs.js", () => ({ findForeignLaunchdJobs }));
 
-describe("managed Gateway external restart storm diagnostics", () => {
-  let stateDir: string;
-  let env: NodeJS.ProcessEnv;
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const warn = vi.fn();
+let env: NodeJS.ProcessEnv;
 
-  beforeEach(() => {
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-storm-"));
-    env = { OPENCLAW_STATE_DIR: stateDir };
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-01T12:00:00.000Z"));
-    findForeignLaunchdJobs.mockClear();
-  });
+beforeEach(() => {
+  env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-restart-storm-") };
+  vi.useFakeTimers({ now: new Date("2026-09-01T12:00:00.000Z") });
+  vi.clearAllMocks();
+});
+afterEach(() => vi.useRealTimers());
 
-  afterEach(() => {
-    vi.useRealTimers();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  function restart() {
+function restart(count = 1) {
+  for (let i = 0; i < count; i++) {
     appendGatewayLifecycleAuditLog(env, {
       source: "cli",
       action: "restart",
@@ -44,88 +37,62 @@ describe("managed Gateway external restart storm diagnostics", () => {
       interactive: false,
     });
   }
+}
 
-  function record(fields: string, ageMs = 0) {
-    const logPath = resolveGatewayRestartLogPath(env);
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.appendFileSync(
-      logPath,
-      `[${new Date(Date.now() - ageMs).toISOString()}] openclaw gateway lifecycle ${fields}\n`,
-    );
-  }
+const append = (text: string) => fs.appendFileSync(resolveGatewayRestartLogPath(env), text);
 
-  it("warns at the third external restart, names the likely job, and deduplicates across startup calls", async () => {
-    const firstStartup = vi.fn();
-    restart();
-    restart();
-    await warnAboutGatewayRestartStorm(env, firstStartup);
-    expect(firstStartup).not.toHaveBeenCalled();
-    expect(findForeignLaunchdJobs).not.toHaveBeenCalled();
+it("warns at the third external restart, names the likely job, and deduplicates across startup calls", async () => {
+  restart(2);
+  await warnAboutGatewayRestartStorm(env, warn);
+  expect(warn).not.toHaveBeenCalled();
+  expect(findForeignLaunchdJobs).not.toHaveBeenCalled();
 
-    restart();
-    await warnAboutGatewayRestartStorm(env, firstStartup);
-    expect(firstStartup).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("3 external CLI restarts in 10 minutes"),
-    );
-    expect(firstStartup.mock.calls[0]?.[0]).toContain("ai.openclaw.test.storm");
-    expect(firstStartup.mock.calls[0]?.[0]).toContain("openclaw doctor --fix");
+  restart();
+  await warnAboutGatewayRestartStorm(env, warn);
+  const message =
+    /3 external CLI restarts in 10 minutes.*ai\.openclaw\.test\.storm.*openclaw doctor --fix/;
+  expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(message));
 
-    const nextStartup = vi.fn();
-    restart();
-    await warnAboutGatewayRestartStorm(env, nextStartup);
-    expect(nextStartup).not.toHaveBeenCalled();
-    expect(findForeignLaunchdJobs).toHaveBeenCalledTimes(1);
-    expect(fs.readFileSync(resolveGatewayRestartLogPath(env), "utf8")).toContain(
-      "restart-storm warning Gateway restart storm:",
-    );
-  });
+  const nextStartup = vi.fn();
+  restart();
+  await warnAboutGatewayRestartStorm(env, nextStartup);
+  expect(nextStartup).not.toHaveBeenCalled();
+  expect(findForeignLaunchdJobs).toHaveBeenCalledTimes(1);
+  const log = fs.readFileSync(resolveGatewayRestartLogPath(env), "utf8");
+  expect(log).toContain("restart-storm warning Gateway restart storm:");
+});
 
-  it("expires old restarts and warnings and ignores malformed and future records", async () => {
-    restart();
-    restart();
-    restart();
+it.each([
+  ["expired", 3, 1],
+  ["oversize", 2, 0],
+] as const)("ignores %s history", async (mode, count, warnings) => {
+  restart(3);
+  if (mode === "expired") {
     await warnAboutGatewayRestartStorm(env, vi.fn());
     vi.setSystemTime(new Date("2026-09-01T12:10:00.001Z"));
-    record("source=cli action=restart mode=kickstart", -60_000);
-    fs.appendFileSync(
-      resolveGatewayRestartLogPath(env),
-      "[invalid] openclaw gateway lifecycle source=cli action=restart mode=kickstart\n",
-    );
-    expect(readGatewayForcedRestartSummary(env).count).toBe(0);
-
-    restart();
-    restart();
-    restart();
-    const warn = vi.fn();
-    await warnAboutGatewayRestartStorm(env, warn);
-    expect(warn).toHaveBeenCalledTimes(1);
-  });
-
-  it("bounds history reads even when the restart log has a large handoff transcript", async () => {
-    restart();
-    restart();
-    restart();
-    fs.appendFileSync(resolveGatewayRestartLogPath(env), `${"x".repeat(256 * 1024)}\n`);
-    restart();
-    restart();
-    const warn = vi.fn();
-    await warnAboutGatewayRestartStorm(env, warn);
-    expect(readGatewayForcedRestartSummary(env).count).toBe(2);
-    expect(warn).not.toHaveBeenCalled();
+    const event = "openclaw gateway lifecycle source=cli action=restart mode=kickstart\n";
+    append(`[2026-09-01T12:11:00.001Z] ${event}`);
+    append(`[invalid] ${event}`);
+  } else {
+    append(`${"x".repeat(256 * 1024)}\n`);
+  }
+  expect(readGatewayForcedRestartSummary(env).count).toBe(0);
+  restart(count);
+  await warnAboutGatewayRestartStorm(env, warn);
+  expect(readGatewayForcedRestartSummary(env).count).toBe(count);
+  expect(warn).toHaveBeenCalledTimes(warnings);
+  if (!warnings) {
     expect(findForeignLaunchdJobs).not.toHaveBeenCalled();
-  });
+  }
+});
 
-  it("does not block startup when history is absent or job inspection fails", async () => {
-    const warn = vi.fn();
-    await warnAboutGatewayRestartStorm(env, warn);
-    expect(warn).not.toHaveBeenCalled();
-    restart();
-    restart();
-    restart();
-    findForeignLaunchdJobs.mockRejectedValueOnce(new Error("launchd unavailable"));
-    await warnAboutGatewayRestartStorm(env, warn);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Check for a stray keepalive launchd job"),
-    );
-  });
+it("does not block startup when history is absent or job inspection fails", async () => {
+  await warnAboutGatewayRestartStorm(env, warn);
+  expect(warn).not.toHaveBeenCalled();
+  restart(3);
+  findForeignLaunchdJobs.mockRejectedValueOnce(new Error("launchd unavailable"));
+  await warnAboutGatewayRestartStorm(env, warn);
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("Check for a stray keepalive launchd job"),
+  );
 });

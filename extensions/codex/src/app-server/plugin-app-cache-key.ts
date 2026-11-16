@@ -2,10 +2,10 @@
  * Builds stable Codex plugin/app inventory cache keys from app-server startup,
  * auth, account, and version inputs without storing secret material.
  */
-import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   buildCodexAppInventoryCacheKey,
   type CodexAppInventoryCacheKeyInput,
@@ -24,7 +24,6 @@ import type {
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
-/** Inputs that identify the Codex app inventory cache scope for one runtime. */
 type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
   "codexHome" | "endpoint"
@@ -35,7 +34,6 @@ type CodexPluginAppCacheKeyParams = Omit<
   desktopGenerationFingerprint?: string;
 };
 
-/** Builds the full app inventory cache key for Codex plugin/app discovery. */
 export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams): string {
   return buildCodexAppInventoryCacheKey(
     {
@@ -151,15 +149,7 @@ function fingerprintCodexPluginAppCacheCredentials(
   if (!authToken && headers.length === 0) {
     return null;
   }
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:plugin-app-cache-credentials:v1");
-  hash.update("\0");
-  hash.update(authToken);
-  for (const [key, value] of headers) {
-    hash.update("\0");
-    hash.update(key);
-    hash.update("\0");
-    hash.update(value);
-  }
-  return `sha256:${hash.digest("hex")}`;
+  return `sha256:${sha256Hex(
+    ["openclaw:codex:plugin-app-cache-credentials:v1", authToken, ...headers.flat()].join("\0"),
+  )}`;
 }

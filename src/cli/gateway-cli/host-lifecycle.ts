@@ -101,7 +101,7 @@ export function createGatewayHostLifecycle(params: {
           );
         }
         if (action === "restart") {
-          scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 });
+          scheduleSafeGatewayRestart({ reason: "gateway.restart.safe" });
           return ok({ outcome: "scheduled" });
         }
         if (state !== "serving") {

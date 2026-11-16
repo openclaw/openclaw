@@ -148,7 +148,15 @@ export function isExplicitCommandTurn(commandTurn: CommandTurnContext | undefine
   );
 }
 
-/** Resolves the target session override for trusted native or explicit steer command turns. */
+/** Retains one-message followup intent after its authorized handler strips command text. */
+export function isExplicitFollowupCommandTurn(input: CommandTurnContextInput): boolean {
+  const turn = resolveCommandTurnContext(input);
+  return (
+    turn.kind !== "normal" && turn.authorized && turn.commandName?.toLowerCase() === "followup"
+  );
+}
+
+/** Resolves the target session override for trusted native or continuing command turns. */
 export function resolveCommandTurnTargetSessionKey(
   input: Omit<CommandTurnContextInput, "CommandTurn" | "rawText" | "BotUsername"> & {
     CommandTurn?: CommandTurnContext;
@@ -156,11 +164,12 @@ export function resolveCommandTurnTargetSessionKey(
   },
 ): string | undefined {
   const commandTurn = resolveCommandTurnContext(input);
-  const isExplicitTextSteer =
+  const isExplicitTextContinuation =
     isAuthorizedTextSlashCommandTurn(commandTurn) &&
     (commandTurn.commandName?.toLowerCase() === "steer" ||
-      commandTurn.commandName?.toLowerCase() === "tell");
-  if (!isNativeCommandTurn(commandTurn) && !isExplicitTextSteer) {
+      commandTurn.commandName?.toLowerCase() === "tell" ||
+      commandTurn.commandName?.toLowerCase() === "followup");
+  if (!isNativeCommandTurn(commandTurn) && !isExplicitTextContinuation) {
     return undefined;
   }
   return normalizeOptionalString(input.CommandTargetSessionKey);

@@ -59,6 +59,7 @@ export async function releaseWorktreeCapacity(params: {
     cleanupContext,
     params.assertCurrent,
     identity,
+    params.context.maintenanceScope,
   );
   if (!store) {
     throw new Error("Managed worktree reservation cleanup lost its original database");

@@ -1,5 +1,6 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { invokeNativeHookRelay } from "../../agents/harness/native-hook-relay.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const nativeHookRelayHandlers: GatewayRequestHandlers = {
@@ -21,13 +22,10 @@ export const nativeHookRelayHandlers: GatewayRequestHandlers = {
       );
       respond(true, result);
     } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          error instanceof Error ? error.message : "native hook relay failed",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "native hook relay failed",
       );
     }
   },

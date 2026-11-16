@@ -59,7 +59,7 @@ export function readCiCheckoutStep(job: string, name = "Checkout"): Step & { run
 }
 
 export function renderGitTestClock(
-  source: string,
+  initialSource: string,
   options: {
     realClock?: boolean;
     realDrain?: boolean;
@@ -68,6 +68,7 @@ export function renderGitTestClock(
     cancelDuringCleanup?: boolean;
   } = {},
 ): string {
+  let source = initialSource;
   // Change Python before shell quoting, so injected clock literals cannot alter
   // the generated argument or reintroduce a pipe-backed source transport.
   const embedded = /^(run_owner ')([\s\S]*?)('\n# End generated CI Git owner\.)$/mu;
@@ -80,7 +81,6 @@ export function renderGitTestClock(
       return prefix + adjusted.replaceAll("'", "'\\''") + suffix;
     });
   }
-  let cancellationSource = source;
   if (options.cancelDuringCleanup && source.includes("def run_git(")) {
     const boundary = "            group_signal(child.pid, signal.SIGTERM, deadline)";
     if (source.split(boundary).length !== 2) {
@@ -88,7 +88,7 @@ export function renderGitTestClock(
     }
     // Only the selected actor arms this exact child. Keep the real signal,
     // descendant drain, and owner's cancellation checkpoints intact.
-    cancellationSource = source.replace(
+    source = source.replace(
       boundary,
       `${boundary}
             fixture_cancel = os.path.join(os.environ["TMPDIR"], f"cleanup-target-{child.pid}.json")
@@ -101,24 +101,22 @@ export function renderGitTestClock(
   }
   // Command deadlines and TERM grace are independent. Real-clock callers keep
   // real grace unless they explicitly opt into the fixture's immediate escalation.
-  const clockSource =
-    (options.realDrain ?? options.realClock)
-      ? cancellationSource
-      : cancellationSource.replace(
-          "kill_at = deadline - cleanup_seconds / 2",
-          "kill_at = time.monotonic()",
-        );
+  if (!(options.realDrain ?? options.realClock)) {
+    source = source.replace(
+      "kill_at = deadline - cleanup_seconds / 2",
+      "kill_at = time.monotonic()",
+    );
+  }
   // Keep the owner's cancellation checkpoints and requested backoff duration,
   // but advance its policy clock without sleeping. Cancellation proofs opt out.
-  const backoffSource =
-    (options.virtualBackoff ?? !options.realClock)
-      ? clockSource.replace(
-          /def backoff\(seconds\):\n[\s\S]*?(?=\n\ndef |$)/u,
-          (body) =>
-            body
-              .replace(
-                "def backoff(seconds):",
-                `def backoff(seconds):
+  if (options.virtualBackoff ?? !options.realClock) {
+    source = source.replace(
+      /def backoff\(seconds\):\n[\s\S]*?(?=\n\ndef |$)/u,
+      (body) =>
+        body
+          .replace(
+            "def backoff(seconds):",
+            `def backoff(seconds):
     class FixtureBackoffClock:
         now = 0
         def monotonic(self):
@@ -127,19 +125,19 @@ export function renderGitTestClock(
             self.now += seconds
     fixture_clock = FixtureBackoffClock()
     print(f"fixture backoff: {seconds}", flush=True)`,
-              )
-              .replaceAll("time.monotonic()", "fixture_clock.monotonic()")
-              .replaceAll("time.sleep(", "fixture_clock.sleep(")
-              .trimEnd() +
-            '\n    print(f"fixture backoff advanced: {fixture_clock.now:.6f}", flush=True)\n',
-        )
-      : clockSource;
+          )
+          .replaceAll("time.monotonic()", "fixture_clock.monotonic()")
+          .replaceAll("time.sleep(", "fixture_clock.sleep(")
+          .trimEnd() +
+        '\n    print(f"fixture backoff advanced: {fixture_clock.now:.6f}", flush=True)\n',
+    );
+  }
   if (options.realClock && options.readyFetchClockAdvanceSeconds === undefined) {
-    return backoffSource;
+    return source;
   }
   // Only a ready, deliberately stalled tree advances the fetch clock. Real
   // process startup and teardown retain their independent wall-clock watchdogs.
-  const fetchClockSource = backoffSource
+  source = source
     .replace(
       "def run_git(",
       `def fetch_clock(timeout=None):
@@ -159,12 +157,8 @@ def run_git(`,
       "deadline is not None and time.monotonic() >= deadline",
       "deadline is not None and fetch_clock() >= deadline",
     );
-  // Deadline-policy proofs retain their actual timeout arguments and drain.
-  if (options.realClock) {
-    return fetchClockSource;
-  }
-  return (
-    fetchClockSource
+  if (!options.realClock) {
+    source = source
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
       .replace(/\btimeout=(?:30|60|120)(?=[,)])/gu, "timeout=2")
       .replace(/--((?:checkout-)?git) 120\b/gu, "--$1 2")
@@ -172,22 +166,17 @@ def run_git(`,
       .replaceAll("120s git", "2s git")
       .replaceAll("sleep $((attempt * 2))", 'echo "fixture backoff: $((attempt * 2))"')
       .replaceAll("sleep $((attempt * 5))", "sleep 0.05")
-      .replaceAll("sleep 5", "sleep 0.05")
-  );
+      .replaceAll("sleep 5", "sleep 0.05");
+  }
+  return source;
 }
 
 export function expectCiCheckoutCleanup(report: Report) {
   assert.deepEqual(report.cleanupRemaining, [], "fixture cleanup left owned processes");
   assert.equal(report.boundaries.at(-1)?.name, "exit");
-  assert(
-    report.boundaries.every((entry) => entry.sentinelAlive),
-    "unrelated process killed",
-  );
-  assert.deepEqual(
-    report.boundaries.filter((entry) => entry.alive.length > 0),
-    [],
-    "Git descendants survived BEFORE deletion, reuse, consumption, or exit",
-  );
+  for (const { name, alive, sentinelAlive } of report.boundaries) {
+    assert.deepEqual([alive, sentinelAlive], [[], true], `Unsafe process boundary: ${name}`);
+  }
 }
 
 export async function withCiCheckoutFixture<T>(
@@ -227,16 +216,14 @@ export async function withCiCheckoutFixture<T>(
   supervisor.stderr?.on("data", (data) => (stderr += String(data)));
   supervisor.on("error", (error) => (stderr += `${error}\n`));
   const joinClose = async (deadline: number) => {
-    let timer: NodeJS.Timeout | undefined;
+    const timeout = new AbortController();
     try {
-      return await Promise.race([
-        closed.then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-        }),
+      await Promise.race([
+        closed,
+        delay(Math.max(0, deadline - Date.now()), undefined, { signal: timeout.signal }),
       ]);
     } finally {
-      clearTimeout(timer);
+      timeout.abort();
     }
   };
   let report: Report | undefined;

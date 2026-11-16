@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { consentAuthority, relayCaller } from "./caller.js";
+import { consentAuthority, relayCaller, relayPrincipalForDisplay } from "./caller.js";
 import { RelayError, safeError } from "./protocol.js";
 import type { RelayService } from "./service.js";
 
@@ -89,17 +89,17 @@ export function registerMcpRelayGatewayMethods(
               }
               if (operation === "authorize.describe") {
                 result = {
-                  ...(await active.consent.describe(params.requestId, assertCurrent)),
-                  caller,
+                  ...(await active.describeConsent(params.requestId, assertCurrent)),
+                  caller: { ...caller, principal: relayPrincipalForDisplay(caller.principal) },
                 };
               } else if (operation === "authorize.approve") {
-                result = await active.consent.approve(
+                result = await active.approveConsent(
                   params.requestId,
                   consentAuthority(caller, params.ceiling),
                   assertCurrent,
                 );
               } else {
-                result = await active.consent.deny(params.requestId, assertCurrent);
+                result = await active.denyConsent(params.requestId, assertCurrent);
               }
             }
           }

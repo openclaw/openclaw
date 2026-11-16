@@ -2,7 +2,6 @@ import {
   normalizeOpenAIResponsesFunctionCallId,
   replaceCompactionReplayOwnerContent,
   shouldNormalizeOpenAIResponsesToolCallId,
-  splitOpenAIFunctionCallPairing,
 } from "@openclaw/ai/transports";
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../runtime/index.js";
@@ -67,25 +66,6 @@ function rewriteReplayMessages(
   return changed ? result : messages;
 }
 
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
-type AssistantContentBlock = AssistantMessage["content"][number];
-
-function rewriteAssistantContent(
-  message: AssistantMessage,
-  rewrite: (block: AssistantContentBlock) => AssistantContentBlock,
-): AssistantMessage {
-  if (!Array.isArray(message.content)) {
-    return message;
-  }
-  let changed = false;
-  const content = message.content.map((block) => {
-    const next = block && typeof block === "object" ? rewrite(block) : block;
-    changed ||= !Object.is(next, block);
-    return next;
-  });
-  return changed ? replaceCompactionReplayOwnerContent(message, content) : message;
-}
-
 /**
  * OpenAI Responses rejects replayed `function_call.call_id`,
  * `function_call.id`, and matching `function_call_output.call_id` values
@@ -115,7 +95,14 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      return rewriteAssistantContent(assistantMsg, (block) => {
+      if (!Array.isArray(assistantMsg.content)) {
+        return assistantMsg;
+      }
+      let changed = false;
+      const content = assistantMsg.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
         const toolCallBlock = block as OpenAIToolCallBlock;
         if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
           return block;
@@ -125,11 +112,13 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         if (nextId === toolCallBlock.id) {
           return block;
         }
+        changed = true;
         return {
           ...block,
           id: nextId,
         } as typeof block;
       });
+      return changed ? replaceCompactionReplayOwnerContent(assistantMsg, content) : assistantMsg;
     }
 
     if (role === "toolResult") {
@@ -138,78 +127,6 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         resolveId,
       });
     }
-    return msg;
-  });
-}
-
-/**
- * OpenAI can reject replayed `function_call` items with an `fc_*` id if the
- * matching `reasoning` item is absent in the same assistant turn.
- *
- * When that pairing is missing, strip the `|fc_*` suffix from tool call ids so
- * shared model runtime omits `function_call.id` on replay.
- */
-export function downgradeOpenAIFunctionCallReasoningPairs(
-  messages: AgentMessage[],
-): AgentMessage[] {
-  let pendingRewrittenIds: Map<string, string> | null = null;
-  return rewriteReplayMessages(messages, (msg) => {
-    if (!msg || typeof msg !== "object") {
-      pendingRewrittenIds = null;
-      return msg;
-    }
-
-    const role = (msg as { role?: unknown }).role;
-    if (role === "assistant") {
-      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const localRewrittenIds = new Map<string, string>();
-      let seenReplayableReasoning = false;
-      const next = rewriteAssistantContent(assistantMsg, (block) => {
-        const thinkingBlock = block as OpenAIThinkingBlock;
-        if (
-          thinkingBlock.type === "thinking" &&
-          hasOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-        ) {
-          seenReplayableReasoning = true;
-          return block;
-        }
-
-        const toolCallBlock = block as OpenAIToolCallBlock;
-        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
-          return block;
-        }
-
-        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
-          return block;
-        }
-
-        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
-        return {
-          ...block,
-          id: pairing.callId,
-        } as typeof block;
-      });
-      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
-      return next;
-    }
-
-    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      const updates: Record<string, string> = {};
-      for (const field of ["toolCallId", "toolUseId"] as const) {
-        const id = toolResult[field];
-        const nextId = typeof id === "string" ? pendingRewrittenIds.get(id) : undefined;
-        if (nextId && nextId !== id) {
-          updates[field] = nextId;
-        }
-      }
-      return Object.keys(updates).length > 0 ? { ...toolResult, ...updates } : msg;
-    }
-
-    pendingRewrittenIds = null;
     return msg;
   });
 }
@@ -254,9 +171,6 @@ export function dropStaleOpenAIReasoning(
     }
 
     const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-    if (!Array.isArray(assistantMsg.content)) {
-      return msg;
-    }
     const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.

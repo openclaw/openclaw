@@ -1,14 +1,16 @@
 /** Lazy owner-native persistence for nonterminal outbound message progress. */
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -43,8 +45,8 @@ const OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const OUTBOUND_MESSAGE_PROGRESS_MAX_ROWS = 200_000;
 const OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS = 1_024;
 const AUDIT_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-const progressRowCounts = new WeakMap<DatabaseSync, number>();
+const ensuredDatabases = new WeakSet<EngineConnection>();
+const progressRowCounts = new WeakMap<EngineConnection, number>();
 
 function progressSchemaSql(): string {
   return getOpenClawStateFeatureSchemaSql("outbound_message_progress", {
@@ -53,7 +55,7 @@ function progressSchemaSql(): string {
   });
 }
 
-function progressDb(db: DatabaseSync) {
+function progressDb(db: EngineConnection) {
   return getNodeSqliteKysely<ProgressDatabase>(db);
 }
 
@@ -69,17 +71,26 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureProgressSchemaInDatabase(db);
-      ensureColumn(db, "outbound_message_progress", "context_id TEXT");
-      ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "outbound_message_progress");
+      } else {
+        ensureProgressSchemaInDatabase(db);
+        ensureColumn(db, "outbound_message_progress", "context_id TEXT");
+        ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
+      }
     },
     options,
     { operationLabel: "audit.outbound-message-progress.schema.ensure" },
   );
   ensuredDatabases.add(database.db);
+  stageSqliteTransactionState(database.db, {
+    commit: () => {},
+    rollback: () => ensuredDatabases.delete(database.db),
+    invalidate: () => ensuredDatabases.delete(database.db),
+  });
 }
 
-function projectProgressIdentities(db: DatabaseSync, input: OutboundMessageProgressInput) {
+function projectProgressIdentities(db: EngineConnection, input: OutboundMessageProgressInput) {
   const identity = loadOrCreateAuditIdentityKey(db);
   const conversationId = input.conversationId ?? input.targetId;
   const ref = (
@@ -103,7 +114,7 @@ function projectProgressIdentities(db: DatabaseSync, input: OutboundMessageProgr
 }
 
 function bindProgressRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: OutboundMessageProgressInput,
   executionBinding?: MessageExecutionBinding,
 ): Insertable<ProgressTable> {
@@ -227,7 +238,7 @@ function rowToProgressEvent(row: ProgressRow): OutboundMessageAuditEventRecord {
     : { ...common, action: row.action, status: "started", outcome: "platform_started" };
 }
 
-function countProgressRows(db: DatabaseSync): number {
+function countProgressRows(db: EngineConnection): number {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     progressDb(db)
@@ -237,7 +248,7 @@ function countProgressRows(db: DatabaseSync): number {
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
-function deleteExpiredProgressRows(db: DatabaseSync, now: number, limit: number) {
+function deleteExpiredProgressRows(db: EngineConnection, now: number, limit: number) {
   const kysely = progressDb(db);
   const expiredSequences = kysely
     .selectFrom("outbound_message_progress")
@@ -252,7 +263,12 @@ function deleteExpiredProgressRows(db: DatabaseSync, now: number, limit: number)
   );
 }
 
-function pruneProgressAfterInsert(db: DatabaseSync, now: number): void {
+function pruneProgressAfterInsert(db: EngineConnection, now: number): void {
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => progressRowCounts.delete(db),
+    invalidate: () => progressRowCounts.delete(db),
+  });
   const kysely = progressDb(db);
   const expired = deleteExpiredProgressRows(db, now, OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS);
   const cachedCount = progressRowCounts.get(db);
@@ -268,23 +284,17 @@ function pruneProgressAfterInsert(db: DatabaseSync, now: number): void {
     0,
     OUTBOUND_MESSAGE_PROGRESS_MAX_ROWS - OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS,
   );
-  const overflow = executeSqliteQueryTakeFirstSync(
+  const overflowCutoff = kysely
+    .selectFrom("outbound_message_progress")
+    .select("sequence")
+    .orderBy("sequence", "desc")
+    .offset(retainedRows)
+    .limit(1);
+  const pruned = executeSqliteQuerySync(
     db,
-    kysely
-      .selectFrom("outbound_message_progress")
-      .select("sequence")
-      .orderBy("sequence", "desc")
-      .offset(retainedRows)
-      .limit(1),
+    kysely.deleteFrom("outbound_message_progress").where("sequence", "<=", overflowCutoff),
   );
-  const cutoff = overflow ? normalizeSqliteNumber(overflow.sequence) : undefined;
-  if (cutoff !== undefined) {
-    const pruned = executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("outbound_message_progress").where("sequence", "<=", cutoff),
-    );
-    rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
-  }
+  rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
   progressRowCounts.set(db, rowCount);
 }
 
@@ -295,22 +305,23 @@ export function recordOutboundMessageProgressInDatabase(
 ): OutboundMessageAuditEventRecord | undefined {
   const executionToken = planMessageExecutionBinding(input.executionIdentityToken, input.runId);
   ensureProgressSchema(options);
-  let cacheDatabase: DatabaseSync | undefined;
+  let cacheDatabase: EngineConnection | undefined;
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       cacheDatabase = db;
       const executionBinding = confirmMessageExecutionBinding(db, executionToken);
-      const insert = executeSqliteQuerySync(
+      const insert = executeSqliteQueryTakeFirstSync(
         db,
         progressDb(db)
           .insertInto("outbound_message_progress")
           .values(bindProgressRow(db, input, executionBinding))
-          .onConflict((conflict) => conflict.column("source_id").doNothing()),
+          .onConflict((conflict) => conflict.column("source_id").doNothing())
+          .returning("sequence"),
       );
-      if (insert.insertId === undefined) {
+      if (!insert) {
         return undefined;
       }
-      const sequence = Number(insert.insertId);
+      const sequence = insert.sequence;
       if (!Number.isSafeInteger(sequence) || sequence < 1) {
         throw new Error("outbound message progress sequence is outside the supported range");
       }
@@ -334,7 +345,7 @@ export function recordOutboundMessageProgressInDatabase(
 }
 
 export function countOutboundMessageProgressForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;
@@ -368,7 +379,7 @@ export function countOutboundMessageProgressForRunInDatabase(
 }
 
 export function readOutboundMessageProgressForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;
@@ -420,7 +431,7 @@ export function readOutboundMessageProgressForRunInDatabase(
 }
 
 export function hasOutboundMessageProgressCursorInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;

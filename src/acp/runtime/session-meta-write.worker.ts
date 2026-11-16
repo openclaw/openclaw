@@ -82,17 +82,6 @@ function readMutationSource(
     }
     return { entry: current.entry, sources: [] };
   }
-  if ("kind" in input.source) {
-    // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
-    const current = input.source.snapshot;
-    assertAcpSessionMutationEntry(
-      current.entry,
-      input.entry ?? null,
-      input.expectedControlBinding,
-      phase,
-    );
-    return current;
-  }
   return readAcpSessionSourceInWorker({ ...input, source: input.source }, phase);
 }
 

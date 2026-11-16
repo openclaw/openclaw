@@ -46,7 +46,7 @@ export async function settleReplyPendingFinalDelivery(
     terminal && cleanup
       ? {
           preserveActivity: cleanup.preserveActivity,
-          clearAfterSettled: { recoveryRunId: completion.recoveryRunId },
+          clearAfterSettled: true,
         }
       : undefined,
   );
@@ -71,7 +71,7 @@ export async function suppressPendingFinalDelivery(
       { kind: "pending-final", ...completion },
       "suppressed",
       ["prepared"],
-      { ...options, clearAfterSettled: { recoveryRunId: completion.recoveryRunId } },
+      { ...options, clearAfterSettled: true },
     );
   }
 }
@@ -89,10 +89,10 @@ export async function clearPendingFinalDeliveryAfterSuccess(
       kind: "pending-final-clear",
       sessionId: identity.sessionId,
       intentId: identity.intentId,
-      recoveryRunId: identity.recoveryRunId,
       now: Date.now(),
     },
     {
+      result: "none",
       skipMaintenance: true,
       takeCacheOwnership: true,
       preserveActivity: options.preserveActivity,

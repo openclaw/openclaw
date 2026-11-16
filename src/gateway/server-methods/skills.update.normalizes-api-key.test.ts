@@ -1,18 +1,16 @@
-// Skill update tests protect API-key normalization so redacted config sentinels
-// do not overwrite existing secret values.
-
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
+import { callGatewayHandler } from "./skills.test-helpers.js";
 
 let writtenConfig: unknown = null;
-let loadedConfig: unknown = {
-  skills: {
-    entries: {},
-  },
+let loadedConfig: OpenClawConfig = { skills: { entries: {} } };
+const secretEntry = {
+  apiKey: "secret-api-key-123",
+  env: { GEMINI_API_KEY: "secret-env-key-456", BRAVE_REGION: "us" },
 };
 
+// mock-isolation: record config mutations without reading or writing operator configuration.
 vi.mock("../../config/config.js", () => {
   return {
     loadConfig: () => loadedConfig,
@@ -29,7 +27,7 @@ vi.mock("../../config/config.js", () => {
         context: { snapshot: { path: string }; previousHash: string; attempt: number },
       ) => unknown;
     }) => {
-      const draft = structuredClone(loadedConfig) as OpenClawConfig;
+      const draft = structuredClone(loadedConfig);
       const snapshot = { path: "/tmp/openclaw/config.json" };
       const result = await params.mutate(draft, {
         snapshot,
@@ -37,127 +35,55 @@ vi.mock("../../config/config.js", () => {
         attempt: 0,
       });
       writtenConfig = draft;
-      return {
-        path: snapshot.path,
-        previousHash: "test-hash",
-        persistedHash: "persisted-hash",
-        snapshot,
-        nextConfig: draft,
-        result,
-        attempts: 1,
-        afterWrite: { mode: "auto" },
-        followUp: { action: "none" },
-      };
+      return { result };
     },
   };
 });
 
 const { skillsHandlers } = await import("./skills.js");
 
+function update(params: Record<string, unknown>) {
+  writtenConfig = null;
+  return callGatewayHandler(
+    skillsHandlers,
+    "skills.update",
+    { skillKey: "demo-skill", ...params },
+    {
+      context: { getRuntimeConfig: () => loadedConfig },
+    },
+  );
+}
+
 function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
-  if (!writtenConfig) {
-    throw new Error("Expected written config");
-  }
-  const config = writtenConfig as {
-    skills?: {
-      entries?: Record<string, unknown>;
-    };
-  };
-  expect(Object.keys(config).toSorted()).toEqual(["skills"]);
-  expect(Object.keys(config.skills ?? {}).toSorted()).toEqual(["entries"]);
-  expect(config.skills?.entries?.[skillKey]).toEqual(entry);
+  expect(writtenConfig).toEqual({ skills: { entries: { [skillKey]: entry } } });
 }
 
 describe("skills.update", () => {
   it("redacts apiKey and secret env values from the response but writes full values to config", async () => {
-    writtenConfig = null;
-    loadedConfig = {
-      skills: {
-        entries: {},
-      },
-    };
-
-    let responseResult: unknown = null;
-    await expectDefined(
-      skillsHandlers["skills.update"],
-      'skillsHandlers["skills.update"] test invariant',
-    )({
-      params: {
-        skillKey: "demo-skill",
-        apiKey: "secret-api-\r\nkey-123",
-        env: {
-          GEMINI_API_KEY: "secret-env-key-456",
-          BRAVE_REGION: "us",
-        },
-      },
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-      context: { getRuntimeConfig: () => loadedConfig } as never,
-      respond: (_success, result, _err) => {
-        responseResult = result;
+    loadedConfig = { skills: { entries: {} } };
+    const result = await update({
+      apiKey: "secret-api-\r\nkey-123",
+      env: secretEntry.env,
+    });
+    expectWrittenSkillEntry("demo-skill", secretEntry);
+    expect(result.response).toMatchObject({
+      config: {
+        apiKey: REDACTED_SENTINEL,
+        env: { GEMINI_API_KEY: REDACTED_SENTINEL, BRAVE_REGION: "us" },
       },
     });
-
-    // Full values must be persisted to config
-    expectWrittenSkillEntry("demo-skill", {
-      apiKey: "secret-api-key-123",
-      env: {
-        GEMINI_API_KEY: "secret-env-key-456",
-        BRAVE_REGION: "us",
-      },
-    });
-
-    // Response must not expose plaintext secrets
-    const config = (responseResult as { config: Record<string, unknown> }).config;
-    expect(config.apiKey).toBe(REDACTED_SENTINEL);
-    const env = config.env as Record<string, string>;
-    expect(env.GEMINI_API_KEY).toBe(REDACTED_SENTINEL);
-    // Non-secret env values should still be present
-    expect(env.BRAVE_REGION).toBe("us");
   });
 
   it("keeps existing secrets when clients submit redacted sentinel values", async () => {
-    writtenConfig = null;
-    loadedConfig = {
-      skills: {
-        entries: {
-          "demo-skill": {
-            apiKey: "secret-api-key-123",
-            env: {
-              GEMINI_API_KEY: "secret-env-key-456",
-              BRAVE_REGION: "us",
-            },
-          },
-        },
-      },
-    };
-
-    await expectDefined(
-      skillsHandlers["skills.update"],
-      'skillsHandlers["skills.update"] test invariant',
-    )({
-      params: {
-        skillKey: "demo-skill",
-        apiKey: REDACTED_SENTINEL,
-        env: {
-          GEMINI_API_KEY: REDACTED_SENTINEL,
-          BRAVE_REGION: "eu",
-        },
-      },
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-      context: { getRuntimeConfig: () => loadedConfig } as never,
-      respond: () => {},
+    loadedConfig = { skills: { entries: { "demo-skill": secretEntry } } };
+    await update({
+      apiKey: REDACTED_SENTINEL,
+      env: { GEMINI_API_KEY: REDACTED_SENTINEL, BRAVE_REGION: "eu" },
     });
 
     expectWrittenSkillEntry("demo-skill", {
-      apiKey: "secret-api-key-123",
-      env: {
-        GEMINI_API_KEY: "secret-env-key-456",
-        BRAVE_REGION: "eu",
-      },
+      ...secretEntry,
+      env: { ...secretEntry.env, BRAVE_REGION: "eu" },
     });
   });
 });

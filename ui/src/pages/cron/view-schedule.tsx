@@ -6,9 +6,11 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
+import { hasUnchangedCronSchedule, parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { EventSourceFields } from "./view-event-source.tsx";
 import {
   FieldRow,
   inputIdForField,
@@ -16,6 +18,7 @@ import {
   CronInput,
   CronSelect,
 } from "./view-fields.tsx";
+import { describeJobNextRun } from "./view-job-status.tsx";
 import type { CronProps } from "./view-types.ts";
 const EVERY_SUMMARY_KEYS = {
   seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
@@ -34,8 +37,8 @@ function describeFormSchedule(form: CronFormState): string | null {
     return Number(amount) === 1 ? t(singular) : t(plural, { amount });
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    return Number.isFinite(ms) ? t("cron.form.summaryOnce", { at: formatMs(ms) }) : null;
+    const at = parseCronScheduleAt(form.scheduleAt);
+    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
   }
   if (form.scheduleKind === "cron") {
     const expr = form.cronExpr.trim();
@@ -44,6 +47,12 @@ function describeFormSchedule(form: CronFormState): string | null {
     }
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
+  }
+  if (form.scheduleKind === "event") {
+    return t("cron.events.summary", {
+      server: form.eventServer,
+      name: form.eventName || form.eventSource,
+    });
   }
   if (form.scheduleKind === "on-exit") {
     return t("cron.form.repeatOnExit");
@@ -103,29 +112,54 @@ export function ScheduleSection(props: CronProps) {
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
   // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = createMemo(() =>
+  const processSchedule = () =>
     isOnExit()
       ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
       : isStream()
         ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null,
-  );
-  const kinds = createMemo<
-    Array<{
-      value: CronFormState["scheduleKind"];
-      label: string;
-      testId: string;
-    }>
-  >(() => {
+        : null;
+  const kinds = (): Array<{
+    value: CronFormState["scheduleKind"];
+    label: string;
+    testId: string;
+  }> => {
     const process = processSchedule();
     return [
       ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
       { value: "every", label: t("cron.form.repeatInterval"), testId: "cron-schedule-kind-every" },
       { value: "at", label: t("cron.form.repeatOnce"), testId: "cron-schedule-kind-at" },
       { value: "cron", label: t("cron.form.cronOption"), testId: "cron-schedule-kind-cron" },
+      ...((props.eventSource?.available && props.status?.triggersEnabled !== false) ||
+      form().scheduleKind === "event"
+        ? [
+            {
+              value: "event" as const,
+              label: t("cron.events.label"),
+              testId: "cron-schedule-kind-event",
+            },
+          ]
+        : []),
     ];
+  };
+  // The form owns the authored occurrence; runtime deadlines may move after
+  // a continuation or retry. Never copy that deadline into the editable time.
+  const savedOneShot = createMemo(
+    () => {
+      const job = props.editingJob;
+      return job?.schedule.kind === "at" && hasUnchangedCronSchedule(form(), job) ? job : undefined;
+    },
+    { equals: false },
+  );
+  const summary = createMemo(() => {
+    const job = savedOneShot();
+    return job?.schedule.kind === "at"
+      ? t("cron.form.summaryConfiguredAt", { at: formatMs(Date.parse(job.schedule.at)) })
+      : describeFormSchedule(form());
   });
-  const summary = createMemo(() => describeFormSchedule(form()));
+  const runtimeSummary = () => {
+    const job = savedOneShot();
+    return job ? describeJobNextRun(job, true) : null;
+  };
   return (
     <SettingsSection title={t("cron.detail.scheduleSection")}>
       <SettingsRow
@@ -140,6 +174,7 @@ export function ScheduleSection(props: CronProps) {
             onChange={(value) =>
               props.onFormChange({
                 scheduleKind: value,
+                ...(value === "event" ? { triggerEnabled: false, deleteAfterRun: false } : {}),
                 ...(value === "at" &&
                 (form().scheduleKind === "every" || form().scheduleKind === "cron")
                   ? { deleteAfterRun: true }
@@ -155,7 +190,11 @@ export function ScheduleSection(props: CronProps) {
         <CronInput
           {...props}
           field="scheduleAt"
-          label={t("cron.form.runAt")}
+          label={t(
+            props.editingJob?.schedule.kind === "at"
+              ? "cron.form.configuredTime"
+              : "cron.form.runAt",
+          )}
           required
           errorKey="scheduleAt"
           type="datetime-local"
@@ -176,6 +215,7 @@ export function ScheduleSection(props: CronProps) {
           <CronInput
             {...props}
             field="cronTz"
+            errorKey="cronTz"
             label={t("cron.form.timezoneOptional")}
             help={t("cron.form.timezoneHelp")}
             list="cron-tz-suggestions"
@@ -183,10 +223,19 @@ export function ScheduleSection(props: CronProps) {
           />
         </>
       ) : undefined}
+      {form().scheduleKind === "event" ? <EventSourceFields {...props} /> : undefined}
       {summary() ? (
         <div class="cron-schedule-summary">
           <Icon name="clock" />
-          <span>{summary()}</span>
+          <span>
+            {summary()}
+            {runtimeSummary() ? (
+              <>
+                {" · "}
+                <strong>{runtimeSummary()}</strong>
+              </>
+            ) : undefined}
+          </span>
         </div>
       ) : undefined}
     </SettingsSection>

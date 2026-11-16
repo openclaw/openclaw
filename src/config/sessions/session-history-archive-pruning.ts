@@ -14,10 +14,7 @@ import {
   type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
-import {
-  readSqliteSessionArchivePruning,
-  withSqliteSessionPageReclamation,
-} from "./session-accessor.sqlite-page-reclamation.js";
+import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import {
   observeSessionArchivePruning,
   timeArchivePruningAsync,
@@ -49,7 +46,6 @@ type OwnedArchivePruningParams = ArchivePruningParams & {
 export type SessionArchivePruningResult = {
   removedFiles: number;
   usage: SessionPhysicalDiskUsage;
-  completed: boolean;
   checkpointIncomplete: number;
   checkpoint?: SqliteWalHealth;
 };
@@ -124,12 +120,6 @@ export async function reclaimSqliteFreePages(
   return true;
 }
 
-export async function hasCanonicalSessionTranscriptArchives(
-  databaseOptions: OpenClawAgentDatabaseOptions,
-): Promise<boolean> {
-  return (await readSqliteSessionArchivePruning(databaseOptions)) !== null;
-}
-
 async function pruneCanonicalSessionTranscriptArchivesToHighWater(
   params: OwnedArchivePruningParams,
 ): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
@@ -141,13 +131,9 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
   let usage = await measure();
   let removedFiles = 0;
   while (usage.totalBytes > params.highWaterBytes) {
+    // Directory scans must not reserve the foreground writer. Concurrent shrinkage
+    // can remove one extra oldest archive; the next measurement ends the sweep.
     const removed = await params.archives.withWriter(async () => {
-      // A foreground writer may have freed space while this item waited for admission.
-      usage = await measure();
-      params.assertCurrent();
-      if (usage.totalBytes <= params.highWaterBytes) {
-        return false;
-      }
       const row = await timeArchivePruningAsync(diagnostics, "queryMs", () =>
         params.archives.read(),
       );
@@ -162,11 +148,12 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
       ) {
         throw new Error(`Invalid canonical session archive name for ${row.session_id}`);
       }
-      params.assertCurrent();
+      await params.archives.revalidateSource();
       try {
-        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
-          fs.promises.rm(archivePath),
-        );
+        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () => {
+          params.assertCurrent();
+          return fs.promises.rm(archivePath);
+        });
         removedFiles += 1;
         if (diagnostics) {
           diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
@@ -211,7 +198,10 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
 export function pruneAllSessionTranscriptArchivesToHighWater(
   input: ArchivePruningParams,
 ): Promise<SessionArchivePruningResult> {
-  const diagnostics = input.diagnostics ?? { trigger: "initial" };
+  const diagnostics: SqliteSessionArchivePruningDiagnostics = input.diagnostics ?? {
+    trigger: "initial",
+  };
+  diagnostics.highWaterBytes = input.highWaterBytes;
   return observeSessionArchivePruning(diagnostics, () =>
     withSqliteSessionPageReclamation(
       input.databaseOptions,
@@ -250,11 +240,13 @@ async function pruneSessionArchivesWithOwner(
     diagnostics.completed = checkpointIncomplete === 0 && !diagnostics.failedRemovals;
     return {
       ...result,
-      completed: diagnostics.completed,
       checkpointIncomplete,
       checkpoint: diagnostics.checkpoint,
     };
   };
+  if (before.totalBytes <= params.highWaterBytes) {
+    return finish({ removedFiles: 0, usage: before });
+  }
   // Unreclaimable WAL pressure must not destroy archives or create more WAL frames.
   if (!(await reclaimSqliteFreePages(params.databaseOptions, diagnostics, params))) {
     return finish({ removedFiles: 0, usage: await measure() });
@@ -267,17 +259,18 @@ async function pruneSessionArchivesWithOwner(
     diagnostics,
     highWaterBytes: params.highWaterBytes,
     storePath: params.storePath,
-    removeFile: (file) =>
-      params.archives.withWriter(async () => {
-        const usage = await measure();
-        params.assertCurrent();
-        if (usage.totalBytes <= params.highWaterBytes) {
-          return "preserved";
-        }
-        return timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
+    removeFile: async (file) => {
+      const usage = await measure();
+      params.assertCurrent();
+      if (usage.totalBytes <= params.highWaterBytes) {
+        return "preserved";
+      }
+      return params.archives.withWriter(() =>
+        timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
           params.archives.removeLegacy(file.path),
-        );
-      }),
+        ),
+      );
+    },
   });
   return finish({
     removedFiles: canonical.removedFiles + legacy.removedFiles,

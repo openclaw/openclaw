@@ -191,7 +191,6 @@ export async function applyManagerRuntimeControls(params: {
     handle: params.handle,
     includeStatusConfigOptionKeys: needsConfigOptionKeys,
   });
-  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const backend = params.handle.backend || params.meta.backend;
   const runtimeMode = options.runtimeMode;
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
@@ -208,7 +207,7 @@ export async function applyManagerRuntimeControls(params: {
     run: async () => {
       assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
       if (runtimeMode) {
-        if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
+        if (!params.runtime.setMode) {
           throw createUnsupportedControlError({
             backend,
             control: "session/set_mode",
@@ -221,10 +220,7 @@ export async function applyManagerRuntimeControls(params: {
       }
 
       if (configOptions.length > 0) {
-        if (
-          !capabilities.controls.includes("session/set_config_option") ||
-          !params.runtime.setConfigOption
-        ) {
+        if (!params.runtime.setConfigOption) {
           throw createUnsupportedControlError({
             backend,
             control: "session/set_config_option",

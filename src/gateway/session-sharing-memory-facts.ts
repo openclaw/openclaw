@@ -1,10 +1,10 @@
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
+  captureSessionSharingMemoryFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
+import type { SessionFactsRequest } from "./session-sharing-target.types.js";
 
 export function prepareMemorySessionMutationFacts(
   params: {
@@ -12,26 +12,28 @@ export function prepareMemorySessionMutationFacts(
     agentId: string;
     canonicalKey: string;
     allowMissing?: true;
-    storageReady?: Promise<void>;
+    storageReady?: SessionFactsRequest["storageReady"];
   },
   assertRoutingCurrent: (cfg: OpenClawConfig) => void,
 ) {
   const { agentId, canonicalKey } = params;
-  const binding = captureSessionSharingActorBinding({
-    agentId,
-    sessionKey: canonicalKey,
-    resolved: null,
-  });
-  if (!binding) {
+  let memoryActive = true;
+  const memory = captureSessionSharingMemoryFacts(
+    {
+      agentId,
+      sessionKey: canonicalKey,
+      resolved: { storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }) },
+    },
+    () => {
+      if (!memoryActive) {
+        throw new SessionMutationFactsUnavailableError();
+      }
+    },
+    Boolean(params.allowMissing),
+  );
+  if (!memory) {
     return undefined;
   }
-  const memory = captureSessionActorMutationFacts(
-    binding,
-    canonicalKey,
-    Boolean(params.allowMissing),
-    params.cfg.session?.store && resolveSessionStorePathCore(params.cfg.session.store, { agentId }),
-  );
-  let active = true;
   const read = {
     storageTarget: { agentId, canonicalKey, storePath: memory.location.path },
     // The actor installs creation and its sharing facts together before acknowledgement.
@@ -40,19 +42,18 @@ export function prepareMemorySessionMutationFacts(
       return undefined;
     },
     readCurrent(cfg: OpenClawConfig) {
-      if (!active) {
-        throw new SessionMutationFactsUnavailableError();
-      }
       assertRoutingCurrent(cfg);
-      return { ...memory.readCurrent(), readSource: memory.source };
+      return memory.readCurrent();
     },
     release() {
-      active = false;
+      memoryActive = false;
     },
   };
   const prepare = async () => {
     if (params.storageReady) {
-      await params.storageReady;
+      const ready = params.storageReady;
+      const prepared = await ("ready" in ready ? ready.ready : ready);
+      prepared?.assertCurrent();
     }
     read.readCurrent(params.cfg);
     return read;

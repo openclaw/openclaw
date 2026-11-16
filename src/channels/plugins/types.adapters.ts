@@ -33,6 +33,7 @@ import type {
   ChannelAccountState,
   ChannelDirectoryEntry,
   ChannelGroupContext,
+  ChannelDirectToolPolicyContext,
   ChannelHeartbeatDeps,
   ChannelLegacyStateMigrationPlan,
   ChannelLogSink,
@@ -233,6 +234,8 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => string[];
   loginWithQrStart?: (params: {
     accountId?: string;
+    /** Revalidate the Gateway's account binding immediately before credential writes. */
+    assertCredentialPersistenceCurrent?: () => void;
     force?: boolean;
     timeoutMs?: number;
     verbose?: boolean;
@@ -690,6 +693,10 @@ type ChannelSecurityDmRouteContext<ResolvedAccount> = ChannelSecurityContext<Res
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
+  /** Resolve configured direct-conversation permissions once per new execution admission. */
+  resolveDirectToolPolicy?: (
+    ctx: ChannelDirectToolPolicyContext,
+  ) => GroupToolPolicyConfig | undefined;
   applyConfigFixes?: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;

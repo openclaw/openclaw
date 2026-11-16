@@ -1,6 +1,7 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
-import type { PluginSessionMenuAction } from "../components/session-menu.ts";
+import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
+import { i18n } from "../i18n/lib/translate.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
@@ -44,12 +45,9 @@ export async function runControlUiPluginAction(
     isCurrent?: () => boolean;
   },
 ): Promise<void> {
-  const retry =
-    params.placement === "session"
-      ? "Reopen the session menu."
-      : "Try again from the current view.";
+  // The lazy native-plugin loader installs action copy before exposing registrations.
   if (params.placement === "session" && !params.session) {
-    throw new Error(`This session is no longer available. ${retry}`);
+    throw new Error(i18n.t("pluginUi.actionSessionUnavailable"));
   }
   const entry = params.runtime
     .registrations("actions")
@@ -57,7 +55,13 @@ export async function runControlUiPluginAction(
       (candidate) => candidate.key === params.id && candidate.value.placement === params.placement,
     );
   if (!entry) {
-    throw new Error(`This plugin action is no longer active. ${retry}`);
+    throw new Error(
+      i18n.t(
+        params.placement === "session"
+          ? "pluginUi.actionInactiveSession"
+          : "pluginUi.actionInactiveView",
+      ),
+    );
   }
   const signal = AbortSignal.any([params.signal, entry.signal]);
   const check = () => {
@@ -76,7 +80,13 @@ export async function runControlUiPluginAction(
   // A resolver can synchronously withdraw its registration or remove the view.
   check();
   if (state?.hidden || state?.disabled) {
-    throw new Error(`This plugin action is currently unavailable. ${retry}`);
+    throw new Error(
+      i18n.t(
+        params.placement === "session"
+          ? "pluginUi.actionUnavailableSession"
+          : "pluginUi.actionUnavailableView",
+      ),
+    );
   }
   await entry.value.run({
     ...context,

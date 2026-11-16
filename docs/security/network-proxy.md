@@ -60,7 +60,7 @@ openclaw gateway run
 
 ## How routing works
 
-With a valid proxy URL, protected runtime processes (`openclaw gateway run`, `openclaw node run`, `openclaw agent --local`) route normal HTTP and WebSocket egress through the proxy:
+With a valid proxy URL, protected runtime processes (`openclaw gateway run`, `openclaw node run`, `openclaw agent --local`, and the local terminal UI: `openclaw chat`, `openclaw terminal`, `openclaw tui --local`, and bare `openclaw` when it opens onboarding or the local TUI instead of a Gateway) route normal HTTP and WebSocket egress through the proxy:
 
 ```text
 OpenClaw process

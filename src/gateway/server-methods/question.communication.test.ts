@@ -37,7 +37,8 @@ async function fixture(
     ask: (signal?: AbortSignal) => Promise<void>;
   }) => Promise<void>,
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  const options = { scenario: "minimal", prepareProfileCatalog: true } as const;
+  await withOpenClawTestState(options, async (state) => {
     const storePath = state.path("sessions.json");
     const cfg: OpenClawConfig = {
       session: { store: storePath },

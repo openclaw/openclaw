@@ -18,6 +18,7 @@ function resolve(configuredModel?: Partial<ModelDefinitionConfig>) {
     baseUrl,
     contextWindow: 128_000,
     contextWindowSource: "synthetic",
+    parameterCount: 70_000_000_000,
   };
   const providerConfig = {
     baseUrl,
@@ -40,6 +41,13 @@ function resolve(configuredModel?: Partial<ModelDefinitionConfig>) {
 }
 
 describe("configured overrides and synthetic context provenance", () => {
+  it.each([
+    [baseUrl, 70_000_000_000],
+    ["https://different.example/v1", undefined],
+  ])("binds total parameter metadata to the selected route %s", (configuredBaseUrl, expected) => {
+    expect(resolve({ baseUrl: configuredBaseUrl })?.parameterCount).toBe(expected);
+  });
+
   it("drops the synthetic marker when config authors the context window", () => {
     const model = resolve({ contextWindow: 64_000 });
     expect(model?.contextWindow).toBe(64_000);

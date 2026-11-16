@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -19,6 +21,7 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -65,15 +68,22 @@ function createStore(): AuthProfileStore & {
   };
 }
 
+function createPersistedSnapshot(agentDir?: string) {
+  const store = createStore();
+  saveAuthProfileStore(store, agentDir, saveOptions);
+  setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+  return store;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
   clearRuntimeConfigSnapshot();
 });
 
-it.each(["current", "relocated", "closed"] as const)(
+it.for(["current", "relocated", "closed"] as const)(
   "keeps cold auth health behind asynchronous preparation and its %s owner",
-  async (owner) => {
+  async (owner, { signal }) => {
     await withOpenClawTestState(
       { label: "auth-health-cold-owner", scenario: "minimal" },
       async (state) => {
@@ -81,9 +91,7 @@ it.each(["current", "relocated", "closed"] as const)(
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentDir = state.agentDir("voice");
         const options = { agentId: "voice", env: state.env };
-        const store = createStore();
-        saveAuthProfileStore(store, agentDir, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+        const store = createPersistedSnapshot(agentDir);
         const pathname = openOpenClawAgentDatabase(options).path;
         closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
         revokeSqliteDatabaseAdmissionsForPath(pathname);
@@ -92,23 +100,25 @@ it.each(["current", "relocated", "closed"] as const)(
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
         let reading = false;
         let joined = false;
-        vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((target) => {
-          const reader = prepare(target);
-          if (target.databasePath !== pathname) {
-            return reader;
-          }
-          return {
-            ...reader,
-            read: async () => {
-              reading = true;
-              const rows = await reader.read();
-              joined = true;
-              entered.resolve();
-              await release.promise;
-              return rows;
-            },
-          };
-        });
+        vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(
+          async (target) => {
+            const reader = await prepare(target);
+            if (target.databasePath !== pathname) {
+              return reader;
+            }
+            return {
+              ...reader,
+              read: async () => {
+                reading = true;
+                const rows = await reader.read();
+                joined = true;
+                entered.resolve();
+                await release.promise;
+                return rows;
+              },
+            };
+          },
+        );
         let settled = false;
         const update = markAuthProfileFailure({
           store,
@@ -119,6 +129,7 @@ it.each(["current", "relocated", "closed"] as const)(
           settled = true;
         });
         void update.catch(() => {});
+        let writer: Promise<void> | undefined;
         try {
           await Promise.race([entered.promise, update]);
           expect({ reading, settled, usage: store.usageStats }).toEqual({
@@ -127,12 +138,22 @@ it.each(["current", "relocated", "closed"] as const)(
             usage: undefined,
           });
           let writerEntered = false;
-          const writer = runOpenClawAgentWriteAdmission(options, () => {
+          writer = runOpenClawAgentWriteAdmission(options, () => {
             writerEntered = true;
           });
-          await nextTurn();
+          await withinTest(
+            awaitGateBeforeSettlement(
+              writer,
+              update,
+              "Auth usage settled before the unrelated writer",
+            ),
+            signal,
+          );
           expect(writerEntered).toBe(true);
-          await writer;
+          expect({ settled, usage: store.usageStats }).toEqual({
+            settled: false,
+            usage: undefined,
+          });
           if (owner === "relocated") {
             writeConfigMachineState(
               SHARED_AUTH_STORE_STATE_KEY,
@@ -145,7 +166,7 @@ it.each(["current", "relocated", "closed"] as const)(
           }
         } finally {
           release.resolve();
-          await Promise.allSettled([update]);
+          await Promise.allSettled([update, ...(writer ? [writer] : [])]);
         }
         expect(joined).toBe(true);
         if (owner === "current") {
@@ -179,9 +200,7 @@ it.each(["local", "legacy-shared"] as const)(
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentId = owner === "local" ? "voice" : "main";
         const agentDir = state.agentDir(agentId);
-        const store = createStore();
-        saveAuthProfileStore(store, agentDir, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+        const store = createPersistedSnapshot(agentDir);
         const database = openOpenClawAgentDatabase({ agentId });
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -203,6 +222,7 @@ it.each(["local", "legacy-shared"] as const)(
             const writing = record({
               kind: "failure",
               expectedProfile: store.profiles[profileId],
+              observedAt: Date.now(),
               reason: "auth",
               whamResult: null,
               probeEligible: false,
@@ -263,9 +283,7 @@ it.each(["warm", "cold"] as const)(
         const cfg = { agents: { entries: { main: {}, voice: {} } } };
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentDir = state.agentDir("voice");
-        const store = createStore();
-        saveAuthProfileStore(store, agentDir, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+        const store = createPersistedSnapshot(agentDir);
         expect(resolveSharedAuthStoreOwnership(state.env).location).toBe("legacy-main");
         const database = openOpenClawAgentDatabase({ agentId: "voice" });
         if (temperature === "cold") {
@@ -315,9 +333,7 @@ it.each(["shared", "other-agent"] as const)(
         };
         setRuntimeConfigSnapshot(cfg, cfg);
         const ownerDir = owner === "shared" ? undefined : state.agentDir("other");
-        const store = createStore();
-        saveAuthProfileStore(store, ownerDir, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(store, ownerDir);
+        const store = createPersistedSnapshot(ownerDir);
         const database = openOpenClawAgentDatabase({ agentId: "voice" });
         const release = createDeferredCore();
         const reservation = runOpenClawAgentWorkerWrite(
@@ -364,9 +380,7 @@ it.each(["before-read", "after-read"] as const)(
         const cfg = { agents: { entries: { main: {}, voice: {} } } };
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentDir = state.agentDir("voice");
-        const store = createStore();
-        saveAuthProfileStore(store, agentDir, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+        const store = createPersistedSnapshot(agentDir);
         const database = openOpenClawAgentDatabase({ agentId: "voice" });
         const release = createDeferredCore();
         const observed = createDeferredCore();
@@ -380,8 +394,8 @@ it.each(["before-read", "after-read"] as const)(
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
         const read = vi
           .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
-          .mockImplementation((target) => {
-            const reader = prepare(target);
+          .mockImplementation(async (target) => {
+            const reader = await prepare(target);
             if (target.databasePath !== database.path) {
               return reader;
             }
@@ -433,9 +447,7 @@ it.each(["supplied-first", "ordinary-first"] as const)(
     await withOpenClawTestState(
       { label: "auth-health-publication", scenario: "minimal" },
       async (state) => {
-        const store = createStore();
-        saveAuthProfileStore(store, undefined, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(store);
+        const store = createPersistedSnapshot();
         const updated = { ...store, usageStats: { [profileId]: { errorCount: 1 } } };
         const later = { ...store, usageStats: { [profileId]: { errorCount: 2 } } };
         const rollback = new Error("synthetic outer rollback");
@@ -666,4 +678,36 @@ it("keeps the explicit auth stateDir override ahead of ambient owner paths", asy
       expect(fs.existsSync(ambientRoot)).toBe(false);
     },
   );
+});
+
+it("leaves the writer free while the host decides auth usage admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {}, voice: {} } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    writeConfigMachineState(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { location: "state-db" },
+      { env: state.env },
+    );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+    const store = createPersistedSnapshot();
+    using contention = probe.writerLock(resolveOpenClawStateSqlitePath());
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      contention.observe(request.stage);
+      admit(request, grant);
+    });
+    await withAuthProfileUsage(store, profileId, undefined, ({ record }) =>
+      record({
+        kind: "failure",
+        expectedProfile: store.profiles[profileId],
+        observedAt: Date.now(),
+        reason: "auth",
+        whamResult: null,
+        probeEligible: false,
+      }),
+    );
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(loadPersistedAuthProfileStore()?.usageStats?.[profileId]?.errorCount).toBe(1);
+    expect(store.usageStats?.[profileId]?.errorCount).toBe(1);
+  });
 });

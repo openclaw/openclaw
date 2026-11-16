@@ -11,6 +11,8 @@ import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
 import { agentSessionRunProviderCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
 import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { recordSessionModelUsage } from "../../sessions/session-model-usage.js";
@@ -79,10 +81,10 @@ export function createChatGPTV2CompactionBoundary(params: {
   context: Context,
   options: Parameters<StreamFn>[2],
   requestAnchor?: MeasuredRequestContext,
+  fixedTokenPressure?: FixedRequestTokenPressure,
 ) => Promise<AssistantMessage | undefined> {
   let failed = false;
-  let softSkipLogged = false;
-  return async (streamFn, model, context, options, requestAnchor) => {
+  return async (streamFn, model, context, options, requestAnchor, fixedTokenPressure) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
       return undefined;
     }
@@ -93,12 +95,12 @@ export function createChatGPTV2CompactionBoundary(params: {
     };
     assertActive();
     const budget = {
+      fixedTokenPressure,
       contextTokenBudget: params.contextTokenBudget,
       reserveTokens: params.reserveTokens,
       replay: {
         model,
         sessionId: requestOptions.sessionId,
-        authProfileId: requestOptions.authProfileId,
       },
     };
     // A matching measured predecessor prices the unchanged prefix once, as the
@@ -111,7 +113,9 @@ export function createChatGPTV2CompactionBoundary(params: {
           messages: context.messages,
           systemPrompt: context.systemPrompt,
           prompt: "",
-          toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+          toolSchemaTokens: fixedTokenPressure
+            ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+            : estimateToolSchemaTokenPressure(context.tools),
         });
     const outgoing = preflight
       ? (preflight.compactionReplay ?? preflight)
@@ -132,10 +136,6 @@ export function createChatGPTV2CompactionBoundary(params: {
     const fallback = (reason: string, hardLimit = false) => {
       // The early V2 trigger must not move the client's compaction threshold.
       if (!hardLimit && outgoing.route === "fits") {
-        if (!softSkipLogged) {
-          log.debug(`ChatGPT V2 compaction skipped while the request still fits: ${reason}`);
-          softSkipLogged = true;
-        }
         return undefined;
       }
       log.warn(`ChatGPT V2 compaction unavailable; falling back to client compaction: ${reason}`);
@@ -248,7 +248,9 @@ export function createChatGPTV2CompactionBoundary(params: {
                       messages: [checkpoint],
                       systemPrompt: context.systemPrompt,
                       prompt: "",
-                      toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+                      toolSchemaTokens: fixedTokenPressure
+                        ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+                        : estimateToolSchemaTokenPressure(context.tools),
                       replay: { model },
                     });
                   },
@@ -301,11 +303,12 @@ export function createChatGPTV2CompactionBoundary(params: {
             messages: [checkpoint],
             systemPrompt: context.systemPrompt,
             prompt: "",
-            toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+            toolSchemaTokens: fixedTokenPressure
+              ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+              : estimateToolSchemaTokenPressure(context.tools),
             replay: {
               model,
               sessionId: requestOptions.sessionId,
-              authProfileId: requestOptions.authProfileId,
             },
           });
           if (tokensAfter > outgoing.promptBudgetBeforeReserve) {

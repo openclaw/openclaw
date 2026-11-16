@@ -37,7 +37,7 @@ suite.define(() => {
         managedSkillsDir: "/tmp/openclaw-e2e/skills",
         skills: [],
       });
-      await page.getByText("No skills found.").waitFor();
+      await page.getByText("No skills yet. Search ClawHub to add one.").waitFor();
       const requests = await gateway.getRequests("skills.status");
       expect(requests).not.toHaveLength(0);
       for (const request of requests) {

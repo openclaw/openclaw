@@ -1,6 +1,8 @@
 import { appendFile, lstat, readFile, readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
 // These caps and counting rules are frozen in already-published updaters
 // (2026.9.3-2026.9.8), which cannot be patched. They charge every regular file's
@@ -70,6 +72,23 @@ export async function measureInstalledPackageTree(root: string): Promise<Measure
           const stat = await lstat(file);
           if (stat.isFile()) {
             bytes = stat.size;
+          }
+          if (relative === "node_modules/@anthropic-ai/sdk/package.json") {
+            const sdk: unknown = JSON.parse(await readFile(file, "utf8"));
+            if (
+              isRecord(sdk) &&
+              isRecord(sdk.dependencies) &&
+              sdk.dependencies["@opentelemetry/api"]
+            ) {
+              try {
+                createRequire(file).resolve("@opentelemetry/api");
+              } catch (error) {
+                throw new Error(
+                  "Installed @anthropic-ai/sdk cannot resolve required @opentelemetry/api",
+                  { cause: error },
+                );
+              }
+            }
           }
         }
         measurement.entries++;

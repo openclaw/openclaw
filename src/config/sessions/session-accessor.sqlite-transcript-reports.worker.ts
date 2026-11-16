@@ -1,10 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
@@ -14,7 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { createCliHistoryOwnerProbe, type CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
@@ -42,6 +41,7 @@ import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transc
 import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
 import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
@@ -54,7 +54,7 @@ export type TranscriptReportWorkerTarget = {
 export function bindSqliteWorkerBackend(
   target: TranscriptReportWorkerTarget,
   context: {
-    database: DatabaseSync;
+    database: EngineConnection;
     databasePath: string;
     admit(
       stage: "transaction" | "commit",
@@ -66,7 +66,7 @@ export function bindSqliteWorkerBackend(
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
   const pathname = resolveOpenClawAgentSqlitePath(options);
-  const sameOwner = context.database.location()
+  const sameOwner = sqlPublicationAnchor(context.database).location()
     ? readDatabasePathIdentitySync(pathname).canonicalPath === context.databasePath
     : pathname === context.databasePath &&
       getOpenClawAgentDatabaseIfOpen(options)?.db === context.database;
@@ -79,22 +79,19 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
   }
+  // Coverage asks the host for its live owner check on the commit admission of the write.
+  const ownerProbe = target.cliWriter?.confirmOwner ? createCliHistoryOwnerProbe() : undefined;
   const admit = (stage: "transaction" | "commit") =>
     context.admit(stage, (request, dispatch) =>
       requestSessionEntryCurrentAdmission(
         target.sessionEntryCurrentSource,
-        request,
+        ownerProbe && stage === "commit" && isRecord(request.facts)
+          ? { ...request, facts: { ...request.facts, publication: ownerProbe.fact } }
+          : request,
         { database },
         dispatch,
       ),
     );
-  let closed = false;
-  const assertOpen = () => {
-    if (closed || !database.db.isOpen) {
-      throw new Error("Transcript report domain is closed");
-    }
-    assertTransactionUsable(database.db);
-  };
   const readCurrentEntry = () => {
     const entry = readSessionEntryRow(database, resolved.sessionKey, "list")?.entry;
     return {
@@ -108,24 +105,24 @@ export function bindSqliteWorkerBackend(
         version: SessionTranscriptContextVersion;
       }
     | undefined;
-  return {
+  return bindSqliteWorkerDatabase<TranscriptReportWorkerOperations>(database.db, {
     execute(command) {
-      assertOpen();
       if (command.type === "prepare") {
-        return runSqliteDeferredTransactionSync<
-          Result<PreparedTranscriptReport, TranscriptAppendRefusal>
-        >(database.db, () => {
-          prepared = undefined;
-          const { refusal } = readCurrentEntry();
-          if (refusal) {
-            return err(refusal);
-          }
-          prepared = {
-            facts: prepareTranscriptReportSelection(database, resolved, command.input),
-            version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
-          };
-          return ok(prepared.facts);
-        });
+        return runSqliteReadSnapshotSync<Result<PreparedTranscriptReport, TranscriptAppendRefusal>>(
+          database.db,
+          () => {
+            prepared = undefined;
+            const { refusal } = readCurrentEntry();
+            if (refusal) {
+              return err(refusal);
+            }
+            prepared = {
+              facts: prepareTranscriptReportSelection(database, resolved, command.input),
+              version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+            };
+            return ok(prepared.facts);
+          },
+        );
       }
       return runOpenClawAgentWriteTransaction<
         Result<TranscriptReportCommit, TranscriptAppendRefusal>
@@ -145,6 +142,10 @@ export function bindSqliteWorkerBackend(
                 -1) + 1
             : undefined;
           let projectionNeedsReconcile = false;
+          let fullEntry: InternalSessionEntry | undefined;
+          const onEntryUpdated = (entry: InternalSessionEntry) => {
+            fullEntry = entry;
+          };
           const projection = {
             scheduleProjectionReconcile: false as const,
             onProjectionReconcileNeeded: () => {
@@ -159,6 +160,7 @@ export function bindSqliteWorkerBackend(
               command.input,
               command.input.preparedMessage,
               projection,
+              onEntryUpdated,
             );
           } else if (command.type === "assistant") {
             const facts = prepareTranscriptReportSelection(database, resolved, {
@@ -217,6 +219,8 @@ export function bindSqliteWorkerBackend(
                   },
                   target.cliWriter,
                   authorizeCommit,
+                  ownerProbe?.holds,
+                  onEntryUpdated,
                 )
               : false;
           const { entry, refusal: rebound } = readCurrentEntry();
@@ -231,6 +235,7 @@ export function bindSqliteWorkerBackend(
             ...((cliHistoryChanged ||
               (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
               entry,
+              fullEntry,
             }),
             ...(abortedPartial
               ? {
@@ -244,15 +249,8 @@ export function bindSqliteWorkerBackend(
         { operationLabel: "session.transcript.report" },
       );
     },
-    assertSettled() {
-      assertOpen();
-      if (database.db.isTransaction) {
-        throw new Error("Transcript report command left a transaction open");
-      }
-    },
     close() {
-      closed = true;
       prepared = undefined;
     },
-  };
+  });
 }

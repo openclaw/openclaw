@@ -25,11 +25,8 @@ import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
 } from "./targets-collision.js";
-import {
-  isPerAgentSessionStoreConfig,
-  resolveConfiguredSessionStoreTargets,
-  resolveExistingAgentSessionStoreTargetsSync,
-} from "./targets.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
+import { isPerAgentSessionStoreConfig, resolveConfiguredSessionStoreTargets } from "./targets.js";
 
 export type SessionStoreTargetsReadResult =
   | { available: true; targets: SessionStoreTarget[] }

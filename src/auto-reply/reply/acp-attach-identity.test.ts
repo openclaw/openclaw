@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
   AcpRunTurnInput,
   AcpSessionResolution,
@@ -21,10 +21,6 @@ import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-r
 const manager = vi.hoisted(() => ({
   resolveSessionAsync: vi.fn<() => Promise<AcpSessionResolution>>(),
   runTurn: vi.fn<(input: AcpRunTurnInput) => Promise<void>>(),
-  getObservabilitySnapshot: () => ({
-    turns: { queueDepth: 0 },
-    runtimeCache: { activeSessions: 0 },
-  }),
 }));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
@@ -62,6 +58,7 @@ it.each(["message", "steer"] as const)(
       captured.push(work);
       return true;
     });
+    onTestFinished(clearSink);
     const body = mode === "message" ? "keep going" : "/acp steer keep going";
     const ctx = buildTestCtx({
       Body: body,
@@ -77,66 +74,49 @@ it.each(["message", "steer"] as const)(
       prepareGatewayLocalUserIngress({
         authMethod: "token",
         authenticatedUserExpected: true,
-        profile: { profileId: "original-person", displayName: "Original Person" },
+        profile: { profileId: "a", displayName: "A" },
         isLocalClient: false,
       }),
     );
-    ctx.SenderId = "spoofed-person";
-    ctx.SenderName = "Spoofed Person";
+    ctx.SenderId = "b";
+    ctx.SenderName = "B";
 
-    try {
-      if (mode === "message") {
-        const recordProcessed = vi.fn();
-        await runDispatch({
-          bodyForAgent: body,
-          cfg,
-          ctx,
-          sessionKeyOverride: sessionKey,
-          recordProcessed,
-        });
-        expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_dispatch" });
-      } else {
-        const params = buildCommandTestParams(body, cfg, ctx);
-        params.sessionKey = sessionKey;
-        // Command processing copies public fields; attach evidence remains on the original context.
-        params.rootCtx = ctx;
-        const result = await handleAcpCommand(params, true);
-        expect(result?.reply?.text).toContain(`ACP steer sent to ${sessionKey}`);
-      }
-
-      expect(manager.runTurn).toHaveBeenCalledTimes(1);
-      expect(manager.runTurn.mock.calls[0]?.[0]).toMatchObject({
-        mode: mode === "message" ? "prompt" : "steer",
-        text: "keep going",
+    if (mode === "message") {
+      const recordProcessed = vi.fn();
+      await runDispatch({
+        bodyForAgent: body,
+        cfg,
+        ctx,
+        sessionKeyOverride: sessionKey,
+        recordProcessed,
       });
-      expect(captured).toMatchObject([
-        {
-          kind: "capture",
-          envelope: {
-            runtime: { kind: "acp" },
-            ingress: {
-              kind: "gateway-client",
-              boundary: "gateway.ws.authenticated-connect",
-              state: "present",
-            },
-            invoker: {
-              state: "present",
-              kind: "person",
-              rawPrincipalRef: "original-person",
-              displayLabel: "Original Person",
-            },
-            assurance: [
-              {
-                kind: "durable-profile",
-                rawEvidenceRef: "original-person",
-                strength: "boundary-verified",
-              },
-            ],
-          },
-        },
-      ]);
-    } finally {
-      clearSink();
+      expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_dispatch" });
+    } else {
+      // Command processing copies public fields; attach evidence remains on the original context.
+      const params = Object.assign(buildCommandTestParams(body, cfg, ctx), {
+        sessionKey,
+        rootCtx: ctx,
+      });
+      const result = await handleAcpCommand(params, true);
+      expect(result?.reply?.text).toContain(`ACP steer sent to ${sessionKey}`);
     }
+
+    expect(captured).toMatchObject([
+      {
+        kind: "capture",
+        envelope: {
+          runtime: { kind: "acp" },
+          ingress: {
+            kind: "gateway-client",
+            boundary: "gateway.ws.authenticated-connect",
+            state: "present",
+          },
+          invoker: { state: "present", kind: "person", rawPrincipalRef: "a", displayLabel: "A" },
+          assurance: [
+            { kind: "durable-profile", rawEvidenceRef: "a", strength: "boundary-verified" },
+          ],
+        },
+      },
+    ]);
   },
 );

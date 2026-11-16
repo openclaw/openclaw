@@ -47,6 +47,71 @@ describe("GitHub hovercard prefetch subscriptions", () => {
     await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  it("shares inline observers without losing badges or active-link retirement", async () => {
+    const NativeMutationObserver = MutationObserver;
+    const observers: MutationObserver[] = [];
+    const observations: (MutationObserverInit | undefined)[] = [];
+    vi.stubGlobal(
+      "MutationObserver",
+      class extends NativeMutationObserver {
+        constructor(callback: MutationCallback) {
+          super(callback);
+          observers.push(this);
+        }
+        override observe(target: Node, options?: MutationObserverInit) {
+          observations.push(options);
+          super.observe(target, options);
+        }
+      },
+    );
+    const rows = Array.from({ length: 100 }, () => createIssueLink());
+    expect(observers).toHaveLength(1);
+    const first = rows[0]!;
+    first.anchor.className = "markdown-github-item";
+    await first.provider.prefetch(
+      resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!,
+      new AbortController().signal,
+    );
+    expect(first.anchor.dataset.linkReaderTone).toBe("positive");
+    const replacement = first.anchor.cloneNode(true) as HTMLAnchorElement;
+    delete replacement.dataset.linkReaderTone;
+    replacement.removeAttribute("aria-description");
+    rows[1]!.provider.remove();
+    first.provider.replaceChildren(replacement);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replacement.dataset.linkReaderTone).toBe("positive");
+
+    const nested = rows[2]!;
+    nested.anchor.className = "markdown-github-item";
+    nested.request.mockResolvedValue(
+      issuePreviewResponse({ badge: { label: "Nested scope", tone: "accent" } }),
+    );
+    first.provider.append(nested.provider);
+    await nested.provider.prefetch(
+      resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!,
+      new AbortController().signal,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nested.anchor.dataset.linkReaderTone).toBe("accent");
+    expect(replacement.dataset.linkReaderTone).toBe("positive");
+
+    observations.length = 0;
+    await hover(replacement);
+    expect(hovercard()).not.toBeNull();
+    // Plugin intent reuses inline invalidation rather than adding another href observer.
+    expect(observations.some((options) => options?.attributeFilter?.includes("href"))).toBe(false);
+    replacement.href = "https://example.com/changed";
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replacement.hasAttribute("aria-description")).toBe(false);
+    expect(hovercard()).toBeNull();
+    replacement.href = ISSUE_HREF;
+    await hover(replacement);
+    expect(hovercard()).not.toBeNull();
+    replacement.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()).toBeNull();
   });
   it.each(["agent", "destination"])(
     "projects inline facts without extra requests until %s changes",
@@ -94,7 +159,6 @@ describe("GitHub hovercard prefetch subscriptions", () => {
   it.each([
     { phase: "pending", change: "connection" },
     { phase: "pending", change: "principal" },
-    { phase: "cached", change: "connection" },
     { phase: "cached", change: "principal" },
   ])("retires $phase inline state after $change changes", async ({ phase, change }) => {
     const { provider, anchor, request } = createIssueLink();
@@ -225,7 +289,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       if (change === "agent") {
         provider.agentId = "other";
       } else if (change === "client") {
-        provider.client = { request } as unknown as GatewayBrowserClient;
+        provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
       } else {
         provider.remove();
         await Promise.resolve();

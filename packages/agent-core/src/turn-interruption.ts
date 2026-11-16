@@ -66,19 +66,3 @@ export async function appendInterruptedTurnMessage(
   await emit({ type: "message_start", message: interruption });
   await emit({ type: "message_end", message: interruption });
 }
-
-export function normalizeCoreContextMessages(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map((message) => {
-    if (message.role !== "custom" || message.customType !== "openclaw:turn-aborted") {
-      return message;
-    }
-    return {
-      role: "user",
-      content:
-        typeof message.content === "string"
-          ? [{ type: "text", text: message.content }]
-          : message.content,
-      timestamp: message.timestamp,
-    };
-  });
-}

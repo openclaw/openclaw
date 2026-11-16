@@ -62,9 +62,9 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```
     If RPC is down, fall back to:
     ```bash
-    tail -f "/tmp/openclaw/openclaw-$(date +%F).log"
+    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/openclaw-$(date +%F).log"
     # Named profile example:
-    tail -f "/tmp/openclaw/openclaw-dev-$(date +%F).log"
+    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw-dev}/logs/openclaw-dev-$(date +%F).log"
     ```
     File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
   </Step>
@@ -101,7 +101,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
+Still stuck? For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible product or documentation bugs, use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). Report security vulnerabilities privately through the [security policy](https://github.com/openclaw/openclaw/blob/main/SECURITY.md).
 
 ## Where each section moved
 

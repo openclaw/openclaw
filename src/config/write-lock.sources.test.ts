@@ -36,11 +36,28 @@ beforeEach(() => {
   fileLocks.resetFileLockStateForTest();
 });
 
+const sourcePath = (name: string) => path.join(fixture.root, name);
+async function createSourceFile(name: string, content = "{}") {
+  const filename = sourcePath(name);
+  await fs.writeFile(filename, content);
+  return filename;
+}
+const writeLocked = (filename: string, content: string, onWrite?: () => void) =>
+  withConfigWriteLock(filename, async () => {
+    onWrite?.();
+    await fs.writeFile(filename, content);
+  });
+const lockOptions = {
+  retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
+  stale: 30_000,
+};
+const probeLock = (filename: string) =>
+  fileLocks.withFileLock(filename, lockOptions, async () => {});
+const sourceWriteError = "not allowed inside a config source scope";
+
 it("keeps root and include writers outside cleanup and closes captured source admission", async () => {
-  const root = path.join(fixture.root, "root.json");
-  const include = path.join(fixture.root, "plugins.json");
-  await fs.writeFile(root, '{"plugins":{"$include":"plugins.json"}}');
-  await fs.writeFile(include, '{"load":{"paths":[]}}');
+  const root = await createSourceFile("root.json");
+  const include = await createSourceFile("plugins.json", "original include");
   const entered = createDeferred();
   const finish = createDeferred();
   const afterScope = createDeferred();
@@ -51,61 +68,43 @@ it("keeps root and include writers outside cleanup and closes captured source ad
   const scope = withConfigSourceLocks([root, include], async (assertCurrent) => {
     captured = assertCurrent;
     includeGuard = captureConfigWriteLockGuard(include);
-    lateWrite = afterScope.promise.then(() =>
-      withConfigWriteLock(include, async () => fs.writeFile(include, "late")),
-    );
+    lateWrite = afterScope.promise.then(() => writeLocked(include, "late"));
     void lateWrite.catch(() => {});
-    await expect(
-      withConfigWriteLock(include, async () => fs.writeFile(include, "nested")),
-    ).rejects.toThrow("not allowed inside a config source scope");
-    expect(() => markActiveConfigMutationPath(root)).toThrow(
-      "not allowed inside a config source scope",
-    );
+    await expect(writeLocked(include, "nested")).rejects.toThrow(sourceWriteError);
+    expect(() => markActiveConfigMutationPath(root)).toThrow(sourceWriteError);
     entered.resolve();
     await finish.promise;
     assertCurrent();
     events.push("cleanup settled");
-    expect(await fs.readFile(include, "utf8")).toBe('{"load":{"paths":[]}}');
+    expect(await fs.readFile(include, "utf8")).toBe("original include");
   });
-  const writers: Promise<unknown>[] = [];
-  try {
-    await entered.promise;
-    for (const target of [root, include]) {
-      writers.push(
-        withConfigWriteLock(target, async () => {
-          events.push(path.basename(target));
-          await fs.writeFile(target, "changed");
-        }),
-      );
-    }
-  } finally {
-    finish.resolve();
-    await scope;
-    await Promise.all(writers);
-    afterScope.resolve();
-  }
+  await entered.promise;
+  const writers = [root, include].map((target) =>
+    writeLocked(target, "changed", () => events.push(path.basename(target))),
+  );
+  finish.resolve();
+  await scope;
+  await Promise.all(writers);
+  afterScope.resolve();
   expect(events[0]).toBe("cleanup settled");
   expect(events.slice(1).toSorted()).toEqual(["plugins.json", "root.json"]);
   expect(captured).toThrow("ownership has closed");
   expect(includeGuard).toThrow("no live source ownership");
-  await expect(lateWrite).rejects.toThrow("not allowed inside a config source scope");
+  await expect(lateWrite).rejects.toThrow(sourceWriteError);
 });
 
 it("releases partial source locks before waiting on an inverted include writer", async () => {
-  const root = path.join(fixture.root, "root.json");
-  const first = path.join(fixture.root, "a.json");
-  const second = path.join(fixture.root, "b.json");
-  await Promise.all([root, first, second].map((filename) => fs.writeFile(filename, "{}")));
-  const options = {
-    retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
-    stale: 30_000,
-  };
+  const [root, first, second] = await Promise.all([
+    createSourceFile("root.json"),
+    createSourceFile("a.json"),
+    createSourceFile("b.json"),
+  ]);
   // This peer participates through the sidecar, as another config process would.
-  const peer = await fileLocks.acquireFileLock(second, options);
+  const peer = await fileLocks.acquireFileLock(second, lockOptions);
   const firstAcquired = createDeferred();
   const acquire = fileLocks.acquireFileLock;
-  vi.spyOn(fileLocks, "acquireFileLock").mockImplementation(async (filename, lockOptions) => {
-    const lock = await acquire(filename, lockOptions);
+  vi.spyOn(fileLocks, "acquireFileLock").mockImplementation(async (filename, options) => {
+    const lock = await acquire(filename, options);
     if (filename === first) {
       firstAcquired.resolve();
     }
@@ -120,10 +119,7 @@ it("releases partial source locks before waiting on an inverted include writer",
   let released = false;
   try {
     await firstAcquired.promise;
-    writer = withConfigWriteLock(first, async () => {
-      events.push("peer writer");
-      await fs.writeFile(first, "updated include");
-    });
+    writer = writeLocked(first, "updated include", () => events.push("peer writer"));
     await writer;
     await peer.release();
     released = true;
@@ -138,13 +134,11 @@ it("releases partial source locks before waiting on an inverted include writer",
 });
 
 it.each(["regular", "symlink"])("locks every case spelling of %s config sources", async (kind) => {
-  const lower = path.join(fixture.root, "config.json");
-  const upper = path.join(fixture.root, "CONFIG.json");
+  const lower = sourcePath("config.json");
+  const upper = sourcePath("CONFIG.json");
   const createSource = async (filename: string, targetName: string) => {
-    if (kind === "regular") {
-      await fs.writeFile(filename, "{}");
-    } else {
-      await fs.writeFile(path.join(fixture.root, targetName), "{}");
+    await fs.writeFile(kind === "regular" ? filename : sourcePath(targetName), "{}");
+    if (kind === "symlink") {
       await fs.symlink(targetName, filename);
     }
   };
@@ -158,38 +152,31 @@ it.each(["regular", "symlink"])("locks every case spelling of %s config sources"
     await createSource(upper, "upper-target.json");
   }
   const sources = [...new Set([lower, upper, await fs.realpath(lower), await fs.realpath(upper)])];
-  const options = {
-    retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
-    stale: 30_000,
-  };
   const attempted = new Set<string>();
   const acquire = fileLocks.acquireFileLock;
   const acquisition = vi
     .spyOn(fileLocks, "acquireFileLock")
-    .mockImplementation(async (filename, lockOptions) => {
-      if (attempted.has(filename)) {
-        throw new Error(`Uncontended source acquisition repeated: ${filename}`);
-      }
+    .mockImplementation(async (filename, options) => {
+      expect(attempted.has(filename)).toBe(false);
       attempted.add(filename);
-      return await acquire(filename, lockOptions);
+      return await acquire(filename, options);
     });
   await withConfigSourceLocks(sources, async (assertCurrent) => {
     acquisition.mockRestore();
     assertCurrent();
     for (const source of sources) {
-      await expect(fileLocks.withFileLock(source, options, async () => {})).rejects.toMatchObject({
+      await expect(probeLock(source)).rejects.toMatchObject({
         code: fileLocks.FILE_LOCK_TIMEOUT_ERROR_CODE,
       });
     }
   });
   for (const source of sources) {
-    await fileLocks.withFileLock(source, options, async () => {});
+    await probeLock(source);
   }
 });
 
 it("keeps caller revocation live while releasing its source locks", async () => {
-  const root = path.join(fixture.root, "root.json");
-  await fs.writeFile(root, "{}");
+  const root = await createSourceFile("root.json");
   const refused = new Error("plugin cleanup owner revoked");
   let current = true;
   await expect(
@@ -207,14 +194,14 @@ it("keeps caller revocation live while releasing its source locks", async () => 
       },
     ),
   ).rejects.toBe(refused);
-  await withConfigWriteLock(root, async () => fs.writeFile(root, "replacement"));
+  await writeLocked(root, "replacement");
   expect(await fs.readFile(root, "utf8")).toBe("replacement");
 });
 
 it("refuses a parent alias redirected after config source ownership begins", async () => {
-  const original = path.join(fixture.root, "original");
-  const replacement = path.join(fixture.root, "replacement");
-  const alias = path.join(fixture.root, "active");
+  const original = sourcePath("original");
+  const replacement = sourcePath("replacement");
+  const alias = sourcePath("active");
   await Promise.all([original, replacement].map((directory) => fs.mkdir(directory)));
   await fs.writeFile(path.join(original, "config.json"), "original");
   await fs.writeFile(path.join(replacement, "config.json"), "replacement");
@@ -226,9 +213,10 @@ it("refuses a parent alias redirected after config source ownership begins", asy
       assertCurrent();
     }),
   ).rejects.toMatchObject({ code: "path-mismatch" });
-  await withConfigWriteLock(path.join(alias, "config.json"), async () => {
-    await fs.writeFile(path.join(alias, "config.json"), "later writer");
-  });
-  expect(await fs.readFile(path.join(original, "config.json"), "utf8")).toBe("original");
-  expect(await fs.readFile(path.join(replacement, "config.json"), "utf8")).toBe("later writer");
+  await writeLocked(path.join(alias, "config.json"), "later writer");
+  expect(
+    await Promise.all(
+      [original, replacement].map((dir) => fs.readFile(path.join(dir, "config.json"), "utf8")),
+    ),
+  ).toEqual(["original", "later writer"]);
 });

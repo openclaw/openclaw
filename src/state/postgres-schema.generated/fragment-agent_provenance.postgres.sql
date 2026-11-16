@@ -6,5 +6,5 @@ CREATE TABLE "agent_provenance" (
   "creator_agent_id" text COLLATE "C",
   "created_at_ms" bigint NOT NULL,
   PRIMARY KEY ("agent_id"),
-  CHECK (("created_via" IN ('operator', 'agent', 'claw')))
+  CHECK (("created_via" IN ('operator', 'agent', 'template')))
 );

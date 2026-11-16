@@ -1,16 +1,18 @@
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
-import { renderAttachmentRemove } from "./chat-attachment-file.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { AttachmentRemove } from "./chat-attachment-file.tsx";
+import { ChatPastedText } from "./chat-pasted-text.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
@@ -43,10 +45,9 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   }
   removeDraftAttachment(att, props);
   props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
-  props.onRequestUpdate?.();
 }
 
-function ComposerPastedText(componentProps: {
+export function ComposerPastedText(componentProps: {
   attachment: ChatAttachment;
   controls: ChatAttachmentControlsProps;
 }) {
@@ -81,7 +82,15 @@ function ComposerPastedText(componentProps: {
       {t("chat.attachments.showInTextField")}
     </button>
   );
-  const renderRestoreAction = () => solidTemplate(restoreAction, {});
+  // Peer attachment updates must preserve the composer's focused action nodes.
+  const composerAction = restoreAction();
+  const composerRemoveAction = (
+    <AttachmentRemove
+      label={removeLabel()}
+      disabled={componentProps.controls.disabled}
+      onClick={remove}
+    />
+  );
   const open = () => {
     if (!current()) {
       return;
@@ -103,45 +112,30 @@ function ComposerPastedText(componentProps: {
           ? { status: "ready", src, sizeBytes: attachment.sizeBytes }
           : { status: "unavailable" };
       },
-      renderActions: () =>
-        solidTemplate(
-          () => (
-            <>
-              {restoreAction()}
-              <button
-                class="btn btn--sm"
-                type="button"
-                aria-label={removeLabel()}
-                disabled={componentProps.controls.disabled}
-                onClick={remove}
-              >
-                <LitContent value={icons.trash} />
-              </button>
-            </>
-          ),
-          {},
-        ),
+      renderActions: () => (
+        <>
+          {restoreAction()}
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label={removeLabel()}
+            disabled={componentProps.controls.disabled}
+            onClick={remove}
+          >
+            <Icon name="trash" />
+          </button>
+        </>
+      ),
     });
   };
   return (
-    <openclaw-chat-pasted-text
-      prop:src={getChatAttachmentDataUrl(componentProps.attachment) ?? undefined}
-      prop:sizeBytes={componentProps.attachment.sizeBytes}
-      prop:scope={componentProps.attachment.id}
-      prop:onOpen={open}
-      prop:composerAction={renderRestoreAction()}
-      prop:composerRemoveAction={renderAttachmentRemove(
-        removeLabel(),
-        componentProps.controls.disabled,
-        remove,
-      )}
-    ></openclaw-chat-pasted-text>
+    <ChatPastedText
+      src={getChatAttachmentDataUrl(componentProps.attachment) ?? undefined}
+      sizeBytes={componentProps.attachment.sizeBytes}
+      scope={componentProps.attachment.id}
+      onOpen={open}
+      composerAction={composerAction}
+      composerRemoveAction={composerRemoveAction}
+    />
   );
-}
-
-export function renderComposerPastedText(
-  attachment: ChatAttachment,
-  controls: ChatAttachmentControlsProps,
-) {
-  return solidTemplate(ComposerPastedText, { attachment, controls });
 }

@@ -1,5 +1,4 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Imessage plugin module owns persisted approval reaction poll targets.
 import { readApprovalReactionDecisionList } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -253,9 +252,4 @@ export async function listPendingIMessageApprovalReactionPollTargets(params: {
     });
   }
   return [...targetByApprovalAndMessage.values()];
-}
-
-export function clearIMessageApprovalReactionPollTargetsForTest(): void {
-  pendingReactionPollTargets.clear();
-  pendingReactionPollTargetStore = undefined;
 }

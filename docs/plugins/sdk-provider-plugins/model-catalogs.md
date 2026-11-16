@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+`normalizeOpenRouterModelFamilyId` strips the optional `openrouter/` qualifier
+and leading `~` alias prefix for family detection, without changing the API model ID.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
 model-version and local quantization suffixes.
 
@@ -42,8 +44,19 @@ provider requests.
 
 ## Live model discovery
 
+For interactive setup of an OpenAI-compatible custom endpoint, reuse
+`discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
+Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`
+to list models without updating the runtime catalog. The optional
+`configuredProvider: { config, id }` resolves only that provider row's header and
+transport SecretRefs and applies its existing private-network, proxy, and TLS policy.
+The authored configuration keeps its original secret references.
+
 If your provider exposes an OpenAI-compatible `/models` API, opt the
-single-provider helper into shared discovery:
+single-provider helper into shared discovery. Bundled providers with such an
+API must list models live, through this option or a `buildProvider` that
+discovers, so the account's listing decides which models appear and new vendor
+models need no OpenClaw release:
 
 ```typescript
 catalog: {
@@ -64,30 +77,41 @@ catalog: {
 `liveModelDiscovery: true` is a public Plugin SDK contract with these
 behaviors:
 
-| Area           | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Credentials    | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme.                                                                                                                                                                                                                                                                                                                          |
-| Endpoint       | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor.                                                                                                                                                                                                |
-| Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect.                                                                                                                                                                                                                                                                                                                                                                      |
-| Cache          | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata; every other listed chat ID becomes a conservative text/chat row, so new models appear without an OpenClaw release. Disabled, archived, deprecated, past-`shutdown_date`, explicitly non-chat, embedding, reranking, moderation, speech, transcription, realtime, audio, image, video, and legacy completions rows are excluded, including static IDs. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                   |
-| Admission      | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and reject the row when it carries no capability data. |
-| Failure        | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Area           | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credentials    | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Endpoint       | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Cache          | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata. Disabled, archived, deprecated, and past-`shutdown_date` rows are excluded. A row is declared non-chat when it declares non-text output, disabled chat support, or a non-chat kind (`type`, `mode`, `model_type`, `pipeline_tag`, `metadata.tags`, or a `capabilities` list such as `embedding` or `reranking`), even if it also lists text output; it gets `inference.chat: false`, chat pickers hide it, and a turn on it is refused before any request. A row with no capability evidence is unknown and treated as chat. Weak evidence makes a row the static catalog does not publish unlikely chat (`inference: { chat: true, chatEvidence: "unlikely" }`): an ID naming a non-text family (for example `embed`, `tts`, or `whisper`), a value in a field that other rows of the same listing use for a chat kind (`chat` or `text`), or the plugin's `unknownModelChatEvidence` prior. Unlikely rows stay out of default pickers and setup choices, appear in `all` views, and run when typed or configured (#198288 stored every row without evidence as non-chat and hid listed chat models; #199998 made those rows unknown). Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog. |
+| Admission      | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and reject the row when it carries no capability data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Prior          | Optional. Set `unknownModelChatEvidence: "unlikely"` when your listing carries IDs only and is known to mix in non-chat models, so an ID your static catalog does not publish stays out of default pickers until the catalog describes it. Rows that declare chat or non-chat support, and IDs your catalog publishes, are unaffected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Failure        | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
+Expired response-cache payloads are released even when the account is no longer
+queried; catalogs already published to callers keep their own lifetime.
 Pending loads retain their initial expiry so stalled work can be replaced.
 An explicit refresh through the prepared catalog owner bypasses completed
 response-cache entries only for the keys acquired by that request. Repeated
 reads within the same acquisition share the refreshed value; concurrent callers
 share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
+Setup menus also use the projected chat capability. For example, oMLX's declared
+`llm`/`vlm` types and Bifrost's architecture output modalities qualify chat rows.
+Rows without capability metadata follow the filtering rule for unknown rows above.
+Provider-specific capability trees, such as Anthropic's Messages thinking and
+effort metadata, are translated by the provider projection before shared admission.
+
 Passive model-list reads that wait for a configuration replacement resume against
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
-Bundled providers set `discoveryMode: "strict"` in their catalog options.
-This code option keeps successful empty results empty and reports failed
+Bundled providers also set `discoveryMode: "strict"` in their catalog options.
+It changes only how discovery reports results and never enables discovery:
+with a static or manifest-backed `buildProvider` and no `liveModelDiscovery`
+or custom `run`, the provider serves its static rows. This code option keeps successful empty results empty and reports failed
 acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.
@@ -206,8 +230,21 @@ provider-auth headers, cache admission, and static fallback.
 Use `buildLiveModelProviderConfig` when the plugin builds the provider config
 itself. Without `projectRows`, the listing decides which models exist: every
 listed chat model is published, static `models` rows only enrich matching IDs,
-and non-chat rows are filtered by the same rules as `liveModelDiscovery`. To
-restrict the list, pass `readModelId(row)` and return `undefined` for rows the
+and non-chat rows are filtered by the same rules as `liveModelDiscovery`.
+Saved selections remain pinned to rows that declare non-chat support (see
+Filtering above); the next turn asks the user to pick another model before making
+an inference request. Projections must preserve `inference`, including
+`chatEvidence`, so chat listings hide those rows and saved pins keep a useful
+diagnosis.
+A listed model can still fail its first chat request. When the provider answers
+with a 400, 403 or 404 that says the model does not exist, is not supported on
+that endpoint, needs other response modalities or cannot be sampled, and the
+successful listing made with the same credential returned that model ID, the
+turn reports that the provider lists the model but rejected a chat request. It
+moves to the next configured fallback without a retry, another login or a
+compaction, and records nothing. The listing comes from the outcome's
+`listedModelIds` or `modelIdCatalog`.
+To restrict the list, pass `readModelId(row)` and return `undefined` for rows the
 provider does not support; the returned string also becomes the model ID. Pass
 `projectRows` when the live API publishes richer model metadata:
 
@@ -315,6 +352,12 @@ Stop awaited acquisition when it aborts and finish resource cleanup before the
 hook settles. OpenClaw discards cancelled results and joins cleanup before a
 replacement can acquire the same agent resources.
 
+A native-login synthetic auth result can include optional `nativeAuth.display`
+metadata: `kind: "subscription" | "api" | "native"` and a validated `plan` label.
+Use only non-secret facts reported by the native runtime. This display metadata
+travels with the prepared auth generation; it does not grant authority, create
+a saved profile, or change the native runtime's token/refresh ownership.
+
 For a separate authoritative metadata feed, the same
 `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
 each entry pairs a runtime model with its lifecycle status.
@@ -415,22 +458,30 @@ OpenClaw also filters returned identities to that scope. An absent scope
 means the caller requested the full catalog.
 
 If the upstream provider uses different control tokens than OpenClaw, add a
-small bidirectional text transform instead of replacing the stream path:
+small bidirectional `textTransforms` declaration on that provider instead of replacing the stream path:
 
 ```typescript
-api.registerTextTransforms({
-  input: [
-    { from: /red basket/g, to: "blue basket" },
-    { from: /paper ticket/g, to: "digital ticket" },
-    { from: /left shelf/g, to: "right shelf" },
-  ],
-  output: [
-    { from: /blue basket/g, to: "red basket" },
-    { from: /digital ticket/g, to: "paper ticket" },
-    { from: /right shelf/g, to: "left shelf" },
-  ],
+api.registerProvider({
+  id: "my-provider",
+  label: "My provider",
+  auth: [],
+  textTransforms: {
+    input: [
+      { from: /red basket/g, to: "blue basket" },
+      { from: /paper ticket/g, to: "digital ticket" },
+      { from: /left shelf/g, to: "right shelf" },
+    ],
+    output: [
+      { from: /blue basket/g, to: "red basket" },
+      { from: /digital ticket/g, to: "paper ticket" },
+      { from: /right shelf/g, to: "left shelf" },
+    ],
+  },
 });
 ```
+
+These transforms apply only to this provider. The removed
+`api.registerTextTransforms(...)` global overlay has no equivalent replacement.
 
 `input` rewrites the final system prompt and text message content before
 transport. `output` rewrites assistant text deltas and final text before

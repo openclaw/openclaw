@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -8,7 +7,6 @@ import {
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
-import { resolveExecutable } from "../infra/executable-path.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -23,11 +21,18 @@ export const DEFAULT_GMAIL_SERVE_PORT = 8788;
 export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
+export const GMAIL_WATCH_PUSH_TOKEN_ENV = "OPENCLAW_GOG_WATCH_PUSH_TOKEN";
+export const GMAIL_WATCH_HOOK_TOKEN_ENV = "OPENCLAW_GOG_WATCH_HOOK_TOKEN";
+export const GMAIL_INSECURE_TOKEN_ARGS_WARNING =
+  "Gmail is using legacy Gog token arguments. Other local users may read both the Gmail push token " +
+  "and the OpenClaw hook token and send authenticated requests to enabled OpenClaw hooks. " +
+  "Upgrade Gog to v0.48.0 or a build supporting --token-env and --hook-token-env, then restart the watcher. " +
+  "Run `openclaw doctor --repair` to upgrade an eligible Homebrew installation.";
+export type GmailTokenTransport = "env" | "legacy-argv";
 const DEFAULT_HOOKS_PATH = "/hooks";
 // OpenClaw handles inbound mail; override gog's narrower SPAM,TRASH default.
 const GMAIL_WATCH_EXCLUDED_LABELS = "SPAM,TRASH,DRAFT,SENT";
 const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
-let gogBin: string | undefined;
 
 export type GmailHookOverrides = Partial<Omit<GmailHookRuntimeConfig, "serve" | "tailscale">> & {
   serveBind?: string;
@@ -60,10 +65,6 @@ export type GmailHookRuntimeConfig = {
     target?: string;
   };
 };
-
-export function generateHookToken(bytes = 24): string {
-  return randomBytes(bytes).toString("hex");
-}
 
 /** Resolve the per-message body byte bound gog is provisioned with (`--max-bytes`). */
 export function resolveGmailHookMaxBytes(raw: number | undefined): number {
@@ -215,7 +216,10 @@ export function buildGogWatchStartArgs(
   ];
 }
 
-export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
+export function buildGogWatchServeArgs(
+  cfg: GmailHookRuntimeConfig,
+  transport: GmailTokenTransport = "env",
+): string[] {
   const args = [
     "gmail",
     "watch",
@@ -228,12 +232,12 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
     String(cfg.serve.port),
     "--path",
     cfg.serve.path,
-    "--token",
-    cfg.pushToken,
+    transport === "env" ? "--token-env" : "--token",
+    transport === "env" ? GMAIL_WATCH_PUSH_TOKEN_ENV : cfg.pushToken,
     "--hook-url",
     cfg.hookUrl,
-    "--hook-token",
-    cfg.hookToken,
+    transport === "env" ? "--hook-token-env" : "--hook-token",
+    transport === "env" ? GMAIL_WATCH_HOOK_TOKEN_ENV : cfg.hookToken,
   ];
   if (cfg.includeBody) {
     args.push("--include-body");
@@ -245,25 +249,26 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   return args;
 }
 
-export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
-  return buildGogWatchServeArgs(cfg).filter(
+export function buildGogWatchServeLogArgs(
+  cfg: GmailHookRuntimeConfig,
+  transport: GmailTokenTransport = "env",
+): string[] {
+  return buildGogWatchServeArgs(cfg, transport).filter(
     (arg, index, args) =>
       !GMAIL_WATCH_SENSITIVE_FLAGS.has(arg) &&
       !GMAIL_WATCH_SENSITIVE_FLAGS.has(args[index - 1] ?? ""),
   );
 }
 
-export function resolveGogExecutable(): string {
-  return (gogBin ??= resolveExecutable("gog"));
-}
-
-export function resolveGogServeInvocation(args: string[]): {
+export function resolveGogServeInvocation(
+  args: string[],
+  command: string,
+): {
   args: string[];
   command: string;
   windowsHide?: true;
   windowsVerbatimArguments?: true;
 } {
-  const command = resolveGogExecutable();
   if (!isWindowsBatchCommand(command)) {
     return { command, args, windowsHide: process.platform === "win32" ? true : undefined };
   }

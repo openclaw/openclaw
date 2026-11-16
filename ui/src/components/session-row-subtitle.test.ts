@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import {
+  resolveSidebarSessionRowSubtitle,
+  resolveSidebarSessionSubtitle,
+} from "./session-row-subtitle.ts";
 
 function workSession(): SidebarRecentSession {
   return {
@@ -114,7 +117,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         attention: { kind: "approval", requests: [] },
         agentStatusNote: "Waiting for deployment",
       }),
-    ).toBe("Waiting for approval");
+    ).toBeUndefined();
   });
 
   it("hides error details and ambient text when previews are hidden", () => {
@@ -156,6 +159,53 @@ describe("resolveSidebarSessionSubtitle", () => {
       hidden({ ...workSession(), lastMessagePreview: "The final reply is durable." }),
       hidden(workSession()),
     ]).toEqual([undefined, undefined, undefined, undefined, undefined]);
+  });
+});
+
+describe("resolveSidebarSessionRowSubtitle", () => {
+  it("keeps preview-independent status lines to the agent-first roster", () => {
+    const session = {
+      ...workSession(),
+      hasActiveRun: true,
+      activeRunIds: ["run-1"],
+      status: "running",
+      attention: { kind: "agent", icon: "hourglass", note: "Unable to read the job snapshot" },
+    } as unknown as SidebarRecentSession;
+    const stuck = {
+      ...session,
+      attention: { kind: "none" },
+      observerDigest: {
+        runId: "run-1",
+        headline: "Stuck on a missing credential",
+        health: "stuck",
+        updatedAt: 2_000,
+        revision: 1,
+      },
+    } as unknown as SidebarRecentSession;
+    const subtitle = (
+      row: SidebarRecentSession,
+      sidebarAgentsMode: "chip" | "roster",
+      sessionsShowPreview = false,
+    ) =>
+      resolveSidebarSessionRowSubtitle(
+        {
+          sidebarAgentsMode,
+          sessionsShowPreview,
+          sidebarLiveActivity: true,
+          sidebarTools: new Map(),
+          sessionProjection: { resolveSubtitle: resolveSidebarSessionSubtitle },
+          sidebarNarrationLines: new Map(),
+          sidebarObserverDigests: new Map(),
+        },
+        row,
+      ).subtitle;
+
+    expect([subtitle(session, "chip"), subtitle(stuck, "chip")]).toEqual([undefined, undefined]);
+    expect([subtitle(session, "roster"), subtitle(stuck, "roster")]).toEqual([
+      "Unable to read the job snapshot",
+      "Stuck on a missing credential",
+    ]);
+    expect(subtitle(session, "chip", true)).toBe("Unable to read the job snapshot");
   });
 });
 

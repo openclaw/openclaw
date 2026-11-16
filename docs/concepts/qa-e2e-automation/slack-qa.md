@@ -247,7 +247,7 @@ reaction handling yet.
 {
   "display_information": {
     "name": "OpenClaw QA SUT",
-    "description": "OpenClaw QA SUT connector for OpenClaw"
+    "description": "OpenClaw QA SUT app for OpenClaw"
   },
   "features": {
     "bot_user": {

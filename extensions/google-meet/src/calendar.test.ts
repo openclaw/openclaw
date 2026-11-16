@@ -6,16 +6,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const meetingUri = "https://meet.google.com/abc-defg-hij";
+
 async function resolveCalendarMeetingUri(event: Record<string, unknown>) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ items: [event] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    ),
+    vi.fn(async () => Response.json({ items: [event] })),
   );
   const result = await listGoogleMeetCalendarEvents({
     accessToken: "test-token",
@@ -24,58 +20,55 @@ async function resolveCalendarMeetingUri(event: Record<string, unknown>) {
 }
 
 describe("Google Meet calendar URL extraction", () => {
-  it("normalizes Calendar HTTP links before applying the runtime Meet URL contract", async () => {
-    for (const [hangoutLink, expected] of [
-      ["http://meet.google.com/abc-defg-hij", "https://meet.google.com/abc-defg-hij"],
-      ["https://example.com/abc-defg-hij", undefined],
-      ["https://meet.google.com/not-a-code", undefined],
-      ["https://meet.google.com/lookup/classroom-alias", undefined],
-      ["https://user@meet.google.com/abc-defg-hij", undefined],
-      ["https://meet.google.com:444/abc-defg-hij", undefined],
-      [
-        "https://meet.google.com/abc-defg-hij?authuser=0",
-        "https://meet.google.com/abc-defg-hij?authuser=0",
-      ],
-    ]) {
-      await expect(resolveCalendarMeetingUri({ hangoutLink })).resolves.toBe(expected);
-    }
-  });
-
-  it("ignores malformed conference entrypoints before selecting and upgrading a valid one", async () => {
-    await expect(
-      resolveCalendarMeetingUri({
+  it.each([
+    [{ hangoutLink: "http://meet.google.com/abc-defg-hij" }, meetingUri],
+    ...[
+      "https://example.com/abc-defg-hij",
+      "https://meet.google.com/not-a-code",
+      "https://meet.google.com/lookup/classroom-alias",
+      "https://user@meet.google.com/abc-defg-hij",
+      "https://meet.google.com:444/abc-defg-hij",
+    ].map((hangoutLink) => [{ hangoutLink }, undefined] as const),
+    [{ hangoutLink: `${meetingUri}?authuser=0` }, `${meetingUri}?authuser=0`],
+    [
+      {
         conferenceData: {
           entryPoints: [
-            {
-              entryPointType: "video",
-              uri: "https://example.com/abc-defg-hij",
-            },
-            {
-              entryPointType: "video",
-              uri: "http://meet.google.com/abc-defg-hij",
-            },
+            { entryPointType: "video", uri: "https://example.com/abc-defg-hij" },
+            { entryPointType: "video", uri: "http://meet.google.com/abc-defg-hij" },
           ],
         },
-      }),
-    ).resolves.toBe("https://meet.google.com/abc-defg-hij");
+      },
+      meetingUri,
+    ],
+    [{ location: `Old https://meet.google.com/not-a-code, join ${meetingUri}` }, meetingUri],
+    [{ location: "Join https://meet.google.com/not-a-code" }, undefined],
+    [{ description: `Join ${meetingUri}` }, meetingUri],
+  ] as const)("applies the Meet URL contract to %j", async (event, expected) => {
+    await expect(resolveCalendarMeetingUri(event)).resolves.toBe(expected);
   });
 
-  it("applies the Meet URL contract to calendar text fallbacks", async () => {
-    await expect(
-      resolveCalendarMeetingUri({
-        location:
-          "Old https://meet.google.com/not-a-code, join https://meet.google.com/abc-defg-hij",
-      }),
-    ).resolves.toBe("https://meet.google.com/abc-defg-hij");
-    await expect(
-      resolveCalendarMeetingUri({
-        location: "Join https://meet.google.com/not-a-code",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveCalendarMeetingUri({
-        description: "Join https://meet.google.com/abc-defg-hij",
-      }),
-    ).resolves.toBe("https://meet.google.com/abc-defg-hij");
+  it("includes later events after an empty page without changing query filters", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json({ items: [], nextPageToken: "second" }))
+      .mockResolvedValueOnce(Response.json({ items: [], nextPageToken: "third" }))
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [{ id: "target", hangoutLink: meetingUri }],
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const result = await listGoogleMeetCalendarEvents({
+      accessToken: "test-token",
+      eventQuery: "target",
+    });
+    expect(result.events).toMatchObject([{ event: { id: "target" }, selected: true }]);
+    const urls = fetch.mock.calls.map(([url]) => new URL(url instanceof Request ? url.url : url));
+    expect(urls.map((url) => url.searchParams.get("pageToken"))).toEqual([null, "second", "third"]);
+    for (const url of urls) {
+      url.searchParams.delete("pageToken");
+      expect(url.toString()).toBe(urls[0]?.toString());
+    }
   });
 });

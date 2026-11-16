@@ -1,4 +1,8 @@
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+import {
+  buildLaunchAgentEnvironmentWrapper,
+  isGeneratedLaunchAgentEnvironmentWrapper,
+} from "./launchd-env-wrapper.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
@@ -7,8 +11,6 @@ import {
   decodeLaunchdPlistMetadata,
 } from "./launchd-plist.js";
 import {
-  buildLaunchAgentEnvironmentWrapper,
-  isGeneratedLaunchAgentEnvironmentWrapper,
   readExistingLaunchAgentPlist,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,

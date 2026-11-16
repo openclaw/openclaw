@@ -4,15 +4,21 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import {
   commandError,
   listGitWorktrees,
   requireGit,
+  requireGitPath,
   resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
@@ -160,13 +166,16 @@ export async function removeManagedCheckout(
             await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
             const argv = [
               process.execPath,
-              "-e",
-              'require("node:fs").rmSync(process.argv[1], { recursive: true, force: true })',
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
+              ),
               retired,
             ];
-            const deleted = await runCommandWithTimeout(
-              process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
-              { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
+            const deleted = await withChildProcessOperation("worktree.cleanup", () =>
+              runCommandWithTimeout(
+                process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
+                { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
+              ),
             );
             if (deleted.termination !== "exit" || deleted.code !== 0) {
               throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
@@ -356,12 +365,7 @@ export async function requireExactWorktreeRepository(
 ) {
   const commonAt = async (cwd: string) =>
     await canonicalPathKey(
-      path.resolve(
-        cwd,
-        normalizeGitPathForFilesystem(
-          await requireGit(cwd, ["rev-parse", "--git-common-dir"], options),
-        ),
-      ),
+      path.resolve(cwd, await requireGitPath(cwd, ["rev-parse", "--git-common-dir"], options)),
     );
   if ((await commonAt(sourcePath)) !== (await commonAt(record.repoRoot))) {
     throw new Error("Retained exact-state repository changed; source preserved");

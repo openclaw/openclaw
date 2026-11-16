@@ -1,8 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
@@ -12,7 +13,11 @@ import { normalizeProgressCardWrite } from "./progress-card-values.js";
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
 
-function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
+// Reads run in the transcript/progress workers; the native reset path only clears rows.
+function selectProgressCard(
+  db: EngineConnection,
+  sessionKey: string,
+): StoredProgressCardRow | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
   return (
     executeSqliteQueryTakeFirstSync(
@@ -27,7 +32,7 @@ function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgres
 }
 
 function clearProgressCardInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   expectedRevision?: number,
 ): boolean {
@@ -40,18 +45,22 @@ function clearProgressCardInTransaction(
       updated_at: Date.now(),
     }))
     .where("session_key", "=", sessionKey);
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      (expectedRevision === undefined
-        ? query
-        : query
-            .where("revision", "=", expectedRevision)
-            .where((eb) =>
-              eb.or([eb("markdown", "is not", null), eb("steps_json", "is not", null)]),
-            )
-      ).returning(["revision", "created_at"]),
-    ) !== undefined
+  // Card payloads do not change session entries or transcripts, including during reset.
+  return withSqliteDatabaseWriteScope(
+    db,
+    [],
+    () =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        (expectedRevision === undefined
+          ? query
+          : query
+              .where("revision", "=", expectedRevision)
+              .where((eb) =>
+                eb.or([eb("markdown", "is not", null), eb("steps_json", "is not", null)]),
+              )
+        ).returning(["revision", "created_at"]),
+      ) !== undefined,
   );
 }
 
@@ -90,7 +99,10 @@ function readStoredSteps(value: string): ProgressCardStep[] {
   });
 }
 
-export function readSessionProgressCard(db: DatabaseSync, sessionKey: string): ProgressCard | null {
+export function readSessionProgressCard(
+  db: EngineConnection,
+  sessionKey: string,
+): ProgressCard | null {
   if (!tableExists(db, "session_progress_cards")) {
     return null;
   }
@@ -99,7 +111,10 @@ export function readSessionProgressCard(db: DatabaseSync, sessionKey: string): P
 }
 
 /** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
-export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
+export function clearSessionProgressCardForReset(
+  db: EngineConnection,
+  sessionKey: string,
+): boolean {
   if (!tableExists(db, "session_progress_cards")) {
     return false;
   }
@@ -111,7 +126,7 @@ export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: s
 }
 
 export function writeSessionProgressCard(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
 ): { card: ProgressCard | null } | { cleared: true } {
@@ -132,8 +147,9 @@ export function prepareSessionProgressCardWrite(input: {
   };
 }
 
+/** The progress-card worker owns writes; native lifecycle reset uses the separate clearer. */
 export function writePreparedSessionProgressCard(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   input: ReturnType<typeof prepareSessionProgressCardWrite>,
 ): { card: ProgressCard | null } | { cleared: true } {
@@ -151,27 +167,29 @@ export function writePreparedSessionProgressCard(
       return { cleared: true };
     }
     const now = Date.now();
-    const written = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .insertInto("session_progress_cards")
-        .values({
-          session_key: sessionKey,
-          markdown: markdown ?? null,
-          steps_json: stepsJson,
-          revision: 1,
-          created_at: now,
-          updated_at: now,
-        })
-        .onConflict((conflict) =>
-          conflict.column("session_key").doUpdateSet((eb) => ({
+    const written = withSqliteDatabaseWriteScope(db, [], () =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .insertInto("session_progress_cards")
+          .values({
+            session_key: sessionKey,
             markdown: markdown ?? null,
             steps_json: stepsJson,
-            revision: eb("session_progress_cards.revision", "+", 1),
+            revision: 1,
+            created_at: now,
             updated_at: now,
-          })),
-        )
-        .returning(["revision", "created_at"]),
+          })
+          .onConflict((conflict) =>
+            conflict.column("session_key").doUpdateSet((eb) => ({
+              markdown: markdown ?? null,
+              steps_json: stepsJson,
+              revision: eb("session_progress_cards.revision", "+", 1),
+              updated_at: now,
+            })),
+          )
+          .returning(["revision", "created_at"]),
+      ),
     );
     return {
       card: {

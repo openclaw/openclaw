@@ -208,10 +208,8 @@ export async function searchRemoteProjects(
     });
   searchCaches.set(fetchImpl, cache);
   let stale = false;
-  const request: GitHubSearchRequest = async (
-    url,
-    { optionalAuth = true, optional, single } = {},
-  ) => {
+  const request: GitHubSearchRequest = async (url, requestOptions = {}) => {
+    const { optionalAuth = true, optional, single } = requestOptions;
     const identity = {
       assertSelected: assertTransportCurrent,
       revalidate: async () => assertTransportCurrent(),
