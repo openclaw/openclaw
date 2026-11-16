@@ -59,7 +59,6 @@ const runtimeOnlyUnitFiles = new Set([
   "src/flows/doctor-health.readonly-filesystem.test.ts",
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
-  "src/gateway/server-methods/session-catalog-privacy.test.ts",
   "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/server.plugin-reload-send-continuation.product.test.ts",

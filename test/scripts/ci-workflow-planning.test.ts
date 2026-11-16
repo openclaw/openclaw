@@ -120,6 +120,8 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
+  // Exercise legacy server*.ts admission without current PostgreSQL test ownership.
+  const legacyGatewayTest = "src/gateway/server.auth.guest-dictation.test.ts";
   it("runs three balanced shards independently under the existing aggregate gate", () => {
     const workflow = readCiWorkflow();
     const job = workflow.jobs["postgres-conformance"];
@@ -298,19 +300,15 @@ describe("PostgreSQL conformance selection", () => {
     [["test/scripts/generate-postgres-schema.test.ts"], true],
     [["extensions/logbook/src/postgres-store.test.ts"], true],
     [["extensions/team-reports/src/postgres-store.test.ts"], true],
-    [["src/gateway/server.hooks.test.ts"], false],
+    [[legacyGatewayTest], false],
     [["src/config/sessions/artifacts.test.ts"], false],
     [["extensions/memory-core/src/config.test.ts"], false],
     [["extensions/team-reports/src/store-read-budget.test.ts"], false],
     [["src/agents/harness/context-engine-turn-outbox.test.ts"], false],
     [["src/state/openclaw-agent-db-disposal.test.ts"], false],
     [["src/gateway/server-test-support.ts"], true],
-    [["src/gateway/server.hooks.test.ts", "src/gateway/server.ts"], true],
-    [
-      ["src/gateway/server.hooks.test.ts"],
-      false,
-      { eventName: "workflow_dispatch", releaseGate: true },
-    ],
+    [[legacyGatewayTest, "src/gateway/server.ts"], true],
+    [[legacyGatewayTest], false, { eventName: "workflow_dispatch", releaseGate: true }],
     [
       ["src/infra/exec-approvals-native.test.ts"],
       true,
@@ -378,7 +376,7 @@ describe("PostgreSQL conformance selection", () => {
         bundledPlanner: true,
         runNode: false,
         eventName: "pull_request",
-        changedPaths: ["src/gateway/server.hooks.test.ts"],
+        changedPaths: [legacyGatewayTest],
         targetFiles: ["scripts/test-database-conformance.mjs"],
         changedPlannerSource: `
         import { writeFileSync } from "node:fs";
