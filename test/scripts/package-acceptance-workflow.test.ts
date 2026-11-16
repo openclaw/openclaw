@@ -13993,10 +13993,29 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       });
       expect(Boolean(result), compatibilityResult).toBe(admitted);
     }
-    expect(jobNeeds(evidenceReuseJob)).toContain("plugin_compatibility_readiness");
+    expect(jobNeeds(evidenceReuseJob)).toEqual(["resolve_target"]);
     expect(evidenceReuseJob.if).toContain("always()");
     expect(evidenceReuseJob.if).toContain("needs.resolve_target.result == 'success'");
-    expect(evidenceReuseJob.if).toContain("needs.plugin_compatibility_readiness.result");
+    expect(evidenceReuseJob.if).not.toContain("plugin_compatibility_readiness");
+    const summaryReadiness = workflowStep(summaryJob, "Require successful source readiness");
+    expect(summaryJob.steps?.[0]).toBe(summaryReadiness);
+    expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"))).toContain(
+      "plugin_compatibility_readiness",
+    );
+    expect(summaryReadiness.env?.SOURCE_READINESS_RESULT).toBe(
+      "${{ needs.plugin_compatibility_readiness.result }}",
+    );
+    for (const readiness of ["success", "failure", "cancelled", "skipped"]) {
+      const result = spawnSync(
+        "bash",
+        ["--noprofile", "--norc", "-c", summaryReadiness.run ?? ""],
+        {
+          env: { ...process.env, SOURCE_READINESS_RESULT: readiness },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, readiness).toBe(readiness === "success" ? 0 : 1);
+    }
     expect(resolveTargetJob.outputs?.trusted_workflow_json).toBe(
       "${{ steps.tooling_identity.outputs.json }}",
     );
