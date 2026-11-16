@@ -122,7 +122,15 @@ export const TemplatesCatalogDetailSchema = closedObject({
   mcpServers: Type.Integer({ minimum: 0 }),
   scheduledJobs: Type.Integer({ minimum: 0 }),
   contents: Type.Optional(TemplatesCatalogContentsSchema),
-  scanStatus: Type.Optional(NonEmptyString),
+  createdAtMs: Type.Optional(Type.Number({ minimum: 0 })),
+  categories: Type.Optional(Type.Array(NonEmptyString)),
+  /** The exact release's ClawHub audit; absent when no report describes this release. */
+  security: Type.Optional(
+    closedObject({
+      verdict: Type.Optional(NonEmptyString),
+      auditUrl: NonEmptyString,
+    }),
+  ),
 });
 export const TemplatesCatalogDetailResultSchema = closedObject({
   detail: TemplatesCatalogDetailSchema,
@@ -285,15 +293,18 @@ export const TemplatesAddPlanParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
+/** Add from a reviewed plan. The setup helper installs through exactly this shape. */
+export const TemplatesAddReviewedApplyParamsSchema = closedObject({
+  source: TemplateCatalogCoordinateSchema,
+  agentId: Type.Optional(NonEmptyString),
+  planIntegrity: Type.Optional(NonEmptyString),
+  acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+  acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
+  acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
+});
+
 export const TemplatesAddApplyParamsSchema = Type.Union([
-  closedObject({
-    source: TemplateCatalogCoordinateSchema,
-    agentId: Type.Optional(NonEmptyString),
-    planIntegrity: Type.Optional(NonEmptyString),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
-    acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
-    acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
-  }),
+  TemplatesAddReviewedApplyParamsSchema,
   // Chat-based Add has no reviewed plan: the Gateway creates the agent and the
   // agent's own conversation continues setup. agentId is the preferred id; the
   // Gateway answers with the unused id it chose.
@@ -566,6 +577,7 @@ export type TemplateResourceStatus = Static<typeof TemplateResourceStatusSchema>
 export type TemplateStatusEntry = Static<typeof TemplateStatusEntrySchema>;
 export type TemplatesStatusResult = Static<typeof TemplatesStatusResultSchema>;
 export type TemplatesAddApplyParams = Static<typeof TemplatesAddApplyParamsSchema>;
+export type TemplatesAddReviewedApplyParams = Static<typeof TemplatesAddReviewedApplyParamsSchema>;
 export type TemplatesAddPlanParams = Static<typeof TemplatesAddPlanParamsSchema>;
 export type TemplatesUpdatePlanParams = Static<typeof TemplatesUpdatePlanParamsSchema>;
 export type TemplatesUpdateApplyParams = Static<typeof TemplatesUpdateApplyParamsSchema>;

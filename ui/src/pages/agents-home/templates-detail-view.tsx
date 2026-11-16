@@ -7,8 +7,13 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
-import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
+import {
+  renderPackageMetadata,
+  renderPluginCapabilitySection,
+  renderPublisherIdentity,
+} from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
@@ -164,6 +169,27 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   );
 }
 
+/** The plugin page's rail; the catalog entry fills what it knows until the release arrives. */
+function TemplateMetadata(props: {
+  entry: TemplateCatalogEntry;
+  detail?: TemplateCatalogDetail | null;
+  loading?: boolean;
+}) {
+  return (
+    <>
+      {renderPackageMetadata({
+        loading: props.loading,
+        security: props.detail?.security,
+        version: props.detail?.version ?? props.entry.latestVersion,
+        updatedAt: props.entry.updatedAtMs,
+        createdAt: props.detail?.createdAtMs,
+        downloads: props.entry.downloads,
+        categories: props.detail?.categories,
+      })}
+    </>
+  );
+}
+
 export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) {
   return (
     <openclaw-templates-detail-view>
@@ -202,6 +228,17 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                       onInstall={() => void view().onConfirm()}
                     />
                   </span>
+                }
+                sidebar={
+                  <For each={[view().detailRequest]}>
+                    {() => (
+                      <Errored fallback={() => <TemplateMetadata entry={selected()} />}>
+                        <Loading fallback={<TemplateMetadata entry={selected()} loading />}>
+                          <TemplateMetadata entry={selected()} detail={view().readDetail()} />
+                        </Loading>
+                      </Errored>
+                    )}
+                  </For>
                 }
                 panel={
                   <>
