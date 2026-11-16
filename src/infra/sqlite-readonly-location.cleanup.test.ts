@@ -22,6 +22,7 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
   SqliteSnapshotCleanupError,
+  withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
@@ -256,6 +257,30 @@ it.each([false, true])(
     expect(fs.readFileSync(sibling, "utf8")).toBe("not owned by snapshot");
   },
 );
+it.each([false, true])(
+  "keeps the read result only for best-effort callers when removal fails (best-effort: %s)",
+  async (bestEffortCleanup) => {
+    const report = vi.fn();
+    const { ownedRoot, prepared } = fixture(false, report);
+    {
+      using _ = vi.spyOn(fs.promises, "rm").mockRejectedValue(busyError());
+      const read = withPreparedSqliteSnapshot(
+        prepared,
+        (location) => fs.readFileSync(location, "utf8"),
+        { bestEffortCleanup },
+      );
+      await (bestEffortCleanup
+        ? expect(read).resolves.toBe("private synthetic snapshot")
+        : expect(read).rejects.toThrow(`SQLite snapshot cleanup failed: ${ownedRoot}`));
+      // Either way the failure is reported once and the copy waits for a later sweep.
+      expect(report).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prepared.location)).toBe(true);
+    }
+    await cleanupSnapshotOperations();
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+  },
+);
+
 it("keeps a best-effort lease read successful when shared removal stays busy", async () => {
   const report = vi.fn();
   const { ownedRoot, prepared } = fixture(false, report);
