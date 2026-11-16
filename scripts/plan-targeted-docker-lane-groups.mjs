@@ -300,7 +300,7 @@ if (isMain) {
     }
     const { checkUpgradeSurvivorBaselines } =
       await import("./lib/upgrade-survivor-baseline-check.mjs");
-    groups = checkUpgradeSurvivorBaselines(groups, {
+    groups = await checkUpgradeSurvivorBaselines(groups, {
       evidenceDir: process.argv[3],
       baseline: options.upgradeSurvivorBaseline,
       baselines: options.upgradeSurvivorBaselines,
