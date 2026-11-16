@@ -19,6 +19,14 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText(input)).toBe(input);
   });
 
+  it("strips deeply nested non-convertible tags in linear time", () => {
+    const depth = 32_000;
+    const input = `${"<a>".repeat(depth)}x${"</a>".repeat(depth)}`;
+    const started = performance.now();
+    expect(sanitizeForPlainText(input)).toBe("x");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("converts attributed inline tags without matching tag-name prefixes", () => {
     const attributed = `<strong title="b>"><em title='i>'><del data-note="s>"><code class='c>'>x</code></del></em></strong>`;
     expect(sanitizeForPlainText(attributed)).toBe("*_~`x`~_*");

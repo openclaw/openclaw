@@ -27,8 +27,43 @@ const CODE_PLACEHOLDER = "\u0000p";
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
   /<(b|strong|i|em|s|strike|del|code|h[1-6]|li|p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 // br, p, and div own line structure, so they stay outside the inert-tree removal pass.
-const EMPTY_HTML_ELEMENT_RE =
-  /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
+const INERT_TAG_SOURCE =
+  /<(\/?)((?!(?:br|p|div)(?=[\s/>]))[a-z][a-z0-9_.:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>/
+    .source;
+const INERT_RUN_RE = new RegExp(`(?:[^\\S\\r\\n\\u2028\\u2029]|${INERT_TAG_SOURCE})+`, "gi");
+const INERT_TAG_RE = new RegExp(INERT_TAG_SOURCE, "gi");
+const HTML_OPEN_TAG_RE = /^<[^\s/>]+(?:[\s>])/;
+const HTML_CLOSE_TAG_RE = /^<\/[^\s>]+\s*>$/;
+
+// Within a run of whitespace and inert tags, an opener pairs with the last
+// matching closer, so one scan replaces a regex that rescanned the run per opener.
+// Accepted edge: a tag quoted inside another tag's attribute is no longer removed alone.
+function removeEmptyElementsInRun(run: string): string {
+  const tags = [...run.matchAll(INERT_TAG_RE)].map((match, order) => ({
+    order,
+    start: match.index,
+    end: match.index + match[0].length,
+    name: (match[2] ?? "").toLowerCase(),
+    opens: match[1] === "" && HTML_OPEN_TAG_RE.test(match[0]),
+    closes: HTML_CLOSE_TAG_RE.test(match[0]),
+  }));
+  const lastCloser = new Map<string, (typeof tags)[number]>();
+  for (const tag of tags) {
+    if (tag.closes) {
+      lastCloser.set(tag.name, tag);
+    }
+  }
+  let result = "";
+  let cursor = 0;
+  for (const tag of tags) {
+    const closer = tag.opens ? lastCloser.get(tag.name) : undefined;
+    if (closer && closer.order > tag.order && tag.start >= cursor) {
+      result += run.slice(cursor, tag.start);
+      cursor = closer.end;
+    }
+  }
+  return result + run.slice(cursor);
+}
 
 function removeMatchesUntilStable(
   input: string,
@@ -86,7 +121,8 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
       .replace(LABELED_ANGLE_LINK_RE, "$1")
       // Normalize attributes once; conversions below only need exact bare tag names.
       .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>"),
-    EMPTY_HTML_ELEMENT_RE,
+    INERT_RUN_RE,
+    removeEmptyElementsInRun,
   )
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/?(p|div)>/gi, "\n")
