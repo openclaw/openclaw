@@ -7,9 +7,18 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { runGatewayCloseSteps } from "../../gateway/server-shutdown.js";
+import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
+import { LegacyPluginSdkResourceHost } from "../../plugins/legacy-sdk-resource-host.js";
+import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -155,6 +164,71 @@ describe("worktree run lease", () => {
     const lease = await acquire();
     await lease.release();
     expect(live()).toBe(false);
+  });
+
+  it("releases received work's run lease before shutdown closes plugin state admission", async () => {
+    const host = new LegacyPluginSdkResourceHost();
+    const scheduler = new GatewayScheduler();
+    host.bindScheduler(scheduler);
+    const instance = createOwnedTestInstance("worktree-drain-fixture");
+    const connectionWork = new AsyncWorkScope();
+    const held = createDeferred();
+    const release = createDeferred();
+    const runEnd = prepareWorktreeRunEndClose();
+    const work = connectionWork.track(() =>
+      host.run(() =>
+        instance.run(async () => {
+          const lease = await acquire();
+          held.resolve();
+          await release.promise;
+          await lease.release();
+        }),
+      ),
+    );
+    const outcome = work.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await Promise.race([held.promise, work]);
+      await expectCustody(true);
+      markGatewayRestartDraining("stop (SIGTERM)");
+      runEnd.beginClose();
+      scheduler.beginClose();
+      connectionWork.beginClose();
+      const close = runGatewayCloseSteps({
+        owner: {
+          connectionWork,
+          stopConnectionDependentSidecars: async () => {
+            release.resolve();
+          },
+          stopRegisteredGatewayLifetimeSidecars: async () => {},
+          stopRegisteredPostReadySidecars: async () => {},
+          runClosePrelude: async () => {},
+          sealAndJoinRegisteredSidecarStops: async () => {},
+        },
+        close: async () => {
+          await runEnd.drain();
+          await host.drainWork();
+          await scheduler.stop();
+          await host.close();
+        },
+        onError: () => {},
+      });
+      await expect(close).resolves.toBeUndefined();
+      expect(await outcome).toBeUndefined();
+      await expectCustody(false);
+      expect(() => host.assertSharedStateAdmission()).toThrow("admission is closed");
+    } finally {
+      release.resolve();
+      await outcome;
+      // A baseline failure retains real custody; release it outside the retired plugin frame.
+      await runLeaseTesting.drainPendingCleanupsForTest();
+      await runEnd.drain().catch(() => {});
+      await host.close();
+      await scheduler.stop();
+      resetGatewayWorkAdmission();
+    }
   });
 
   it.each([

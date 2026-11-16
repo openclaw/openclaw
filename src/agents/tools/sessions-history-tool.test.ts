@@ -296,6 +296,7 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
     runId: "do-not-expose-correlation",
     state: "interrupted",
     acceptedAt: 1_700_000_000_000,
+    steerNow: { status: "available", tools: ["exec"] },
     message: {
       role: "user",
       content: `OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ${"queued input ".repeat(1000)}`,
@@ -321,6 +322,7 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
   expect(Buffer.byteLength(JSON.stringify(details.pendingInputs))).toBeLessThanOrEqual(4096);
   expect(JSON.stringify(details.pendingInputs)).not.toContain("sk-or-v1-abcdef0123456789");
   expect(JSON.stringify(details.pendingInputs)).not.toContain("do-not-expose-correlation");
+  expect(JSON.stringify(details.pendingInputs)).not.toContain("steerNow");
   expect(details.contentRedacted).toBe(false);
   expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);
@@ -606,9 +608,14 @@ it.each([
     );
 
     await tool.execute("owned-history", { sessionKey: requested });
+    // A qualified key implies its owner; repeating the same id would re-gate
+    // the read against the fixed-store owner (#164847).
     expect(requests).toContainEqual({
       method: "chat.history",
-      params: expect.objectContaining({ sessionKey: resolved, agentId }),
+      params:
+        requested === "current"
+          ? { sessionKey: resolved }
+          : expect.objectContaining({ sessionKey: resolved, agentId }),
     });
     if (requested === "current") {
       expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);

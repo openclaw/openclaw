@@ -394,6 +394,52 @@ function optionalImportMemberEdges(source, consumerFile) {
   return edges;
 }
 
+function typedCheckoutImportEdges(source, consumerFile) {
+  const edges = new Map();
+  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  traverse(ast, {
+    VariableDeclarator(declaration) {
+      const { id, init } = declaration.node;
+      const query = id.typeAnnotation?.typeAnnotation;
+      if (
+        id.type !== "ObjectPattern" ||
+        query?.type !== "TSTypeQuery" ||
+        query.exprName.type !== "TSImportType" ||
+        !query.exprName.source.value.startsWith(".") ||
+        init?.type !== "AwaitExpression" ||
+        init.argument.type !== "ImportExpression"
+      ) {
+        return;
+      }
+      // The type names the current checkout; the runtime selects the same module in a measured checkout.
+      const runtime = init.argument.source;
+      const selected = source
+        .slice(runtime.start, runtime.end)
+        .match(
+          /^pathToFileURL\(\s*path\.join\(\s*[A-Za-z_$][\w$]*\s*,\s*(["'])([^"'\r\n]+)\1\s*\)\s*\)\.href$/u,
+        )?.[2];
+      const targetFile = path.resolve(path.dirname(consumerFile), query.exprName.source.value);
+      const withoutExtension = (file) => file.replace(/\.[cm]?[jt]s$/u, "");
+      if (!selected || withoutExtension(path.resolve(selected)) !== withoutExtension(targetFile)) {
+        return;
+      }
+      const names = id.properties.flatMap((property) =>
+        property.type === "ObjectProperty" &&
+        !property.computed &&
+        property.key.type === "Identifier" &&
+        property.value.type === "Identifier" &&
+        declaration.scope.getBinding(property.value.name)?.referenced
+          ? [property.key.name]
+          : [],
+      );
+      if (names.length) {
+        edges.set(targetFile, names);
+      }
+    },
+  });
+  return edges;
+}
+
 function sideEffectImport(targetFile, consumerFile) {
   return `import ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
 }
@@ -668,6 +714,14 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     anchorPath,
   )) {
     addNamedImport([...names], targetFile);
+  }
+
+  const generationBenchmarkPath = "scripts/perf/update-doctor-generation-measure.ts";
+  for (const [targetFile, names] of typedCheckoutImportEdges(
+    fs.readFileSync(generationBenchmarkPath, "utf8"),
+    generationBenchmarkPath,
+  )) {
+    addNamedImport(names, targetFile);
   }
 
   return `${source}\n${imports.join("\n")}`;

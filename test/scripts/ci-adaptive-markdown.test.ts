@@ -17,6 +17,38 @@ const changedTest = `${root}frontmatter.test.ts`;
 const unchanged = `${root}fences.test.ts`;
 const source = `${root}fences.ts`;
 
+it("keeps Markdown worker inputs independent of another lane's test inventory", () => {
+  const cwd = tempDirs.make("markdown-worker-inputs-");
+  const inputs = [
+    "test/vitest/vitest.node-policy.global-setup.ts",
+    "scripts/lib/vitest-node-args.mts",
+    "scripts/lib/vitest-process-env.mts",
+    "scripts/lib/arg-utils.mts",
+    "scripts/lib/vitest-cli-mode.mts",
+    "scripts/lib/vitest-local-scheduling.mts",
+    "test/vitest/vitest.agents-paths.mjs",
+    "test/vitest/vitest.cli-process-paths.mjs",
+    "test/vitest/vitest.database-worker-core-paths.mjs",
+  ];
+  for (const file of inputs) {
+    const original = new URL(`../../${file}`, import.meta.url);
+    // The old flag owner is copied too, so this exercises the pre-fix import chain.
+    if (fs.existsSync(original)) {
+      const destination = path.join(cwd, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(original, destination);
+    }
+  }
+  const roots = ["test/vitest/vitest.node-policy.global-setup.ts"];
+  const before = createTestInputFingerprint(cwd)(roots);
+  expect(before).not.toBeNull();
+  fs.appendFileSync(
+    path.join(cwd, "test/vitest/vitest.database-worker-core-paths.mjs"),
+    "\nexport const unrelatedInventoryChange = true;\n",
+  );
+  expect(createTestInputFingerprint(cwd)(roots)).toBe(before);
+});
+
 function fixture() {
   const cwd = tempDirs.make("adaptive-markdown-");
   const contents: Record<string, string> = {
@@ -51,8 +83,9 @@ function fixture() {
       createTestInputFingerprint(cwd),
       qualification,
       isIndependentCompanion,
+      cwd,
     )([changedTest, unchanged]);
-  return { cwd, select };
+  return { cwd, select, qualification };
 }
 
 it("omits only qualified unchanged inputs, retaining changed and unqualified tests", () => {
@@ -100,6 +133,45 @@ it("admits qualified companions and allocations only alongside a Markdown source
   expect(select([changed, changedTest])).toEqual([changedTest, unchanged]);
   expect(select([changed, `${root}companion.spec.ts`])).toEqual([changedTest, unchanged]);
   expect(select([companion, allocation], independent)).toEqual([changedTest, unchanged]);
+});
+
+it("admits regular production companions but keeps helpers, fixtures and missing inputs conservative", () => {
+  const { cwd, select } = fixture();
+  const companions = [
+    "src/runtime.ts",
+    "extensions/example/src/runtime.ts",
+    "packages/example/runtime.mjs",
+  ];
+  const excluded = [
+    "src/test-utils/runtime.ts",
+    "src/runtime.test-support.ts",
+    "src/fixtures/runtime.ts",
+    "packages/example/vitest.config.ts",
+    "packages/example/scripts/generate.ts",
+    "scripts/runtime.ts",
+  ];
+  for (const file of [...companions, ...excluded]) {
+    fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    fs.writeFileSync(path.join(cwd, file), "export const value = 1;");
+    expect(select([changed, file])).toEqual(
+      companions.includes(file) ? [changedTest] : [changedTest, unchanged],
+    );
+  }
+  expect(select([changed, "src/missing.ts"])).toEqual([changedTest, unchanged]);
+  fs.symlinkSync(path.join(cwd, companions[0]!), path.join(cwd, "src/linked.ts"));
+  expect(select([changed, "src/linked.ts"])).toEqual([changedTest, unchanged]);
+});
+
+it("retains a qualified test when a production companion changes its input closure", () => {
+  const { cwd, select, qualification } = fixture();
+  const companion = "src/runtime.ts";
+  fs.mkdirSync(path.join(cwd, "src"));
+  fs.writeFileSync(path.join(cwd, companion), "export const value = 1;");
+  fs.appendFileSync(path.join(cwd, unchanged), '\nimport "../../../src/runtime.js";');
+  qualification.tests[unchanged] = createTestInputFingerprint(cwd)([unchanged]) ?? "";
+  expect(select([changed, companion])).toEqual([changedTest]);
+  fs.writeFileSync(path.join(cwd, companion), "export const value = 2;");
+  expect(select([changed, companion])).toEqual([changedTest, unchanged]);
 });
 
 it("shares the qualification graph with selection when changes include a non-source input", () => {

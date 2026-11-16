@@ -1,15 +1,13 @@
 import { expect, it } from "vitest";
 import { chunkText, chunkTextRanges } from "./chunk-text.js";
 
-it("normalizes positive fractional limits without emitting empty chunks", () => {
-  expect(chunkText("abc", 0.5)).toEqual(["a", "b", "c"]);
-  expect(chunkText("😀😀", 0.5)).toEqual(["😀", "😀"]);
-});
-
-it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
+it("keeps grapheme boundaries and progress for fractional and NaN limits in each mode", () => {
   const common = [
     { text: "aaaaaaaaaa👨‍👩‍👧‍👦Z", limit: 12, expected: ["aaaaaaaaaa", "👨‍👩‍👧‍👦Z"] },
     { text: "👨‍👩‍👧‍👦", limit: 4, expected: ["👨‍", "👩‍", "👧‍", "👦"] },
+    { text: "abc", limit: 0.5, expected: ["a", "b", "c"] },
+    { text: "😀😀", limit: 0.5, expected: ["😀", "😀"] },
+    { text: "abc", limit: Number.NaN, expected: ["abc"] },
   ];
   for (const mode of ["plain", "hard", "preferred"] as const) {
     const whitespace =

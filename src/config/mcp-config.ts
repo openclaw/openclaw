@@ -148,8 +148,10 @@ export function redactMcpServersForDisplay(
   return redactedRoot.mcp.servers;
 }
 
-export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
-  return resolveConfiguredMcpServers(await readSourceConfigSnapshot());
+export async function listConfiguredMcpServers(options?: {
+  observe?: boolean;
+}): Promise<ConfigMcpReadResult> {
+  return resolveConfiguredMcpServers(await readSourceConfigSnapshot(options));
 }
 
 type McpServerMutationRequest =

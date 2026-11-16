@@ -39,8 +39,7 @@ import {
   PLUGIN_MANIFEST_FILENAME,
   type PluginManifest,
 } from "./manifest.js";
-import { checkMinHostVersion } from "./min-host-version.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
+import { checkOpenClawPackageCompatibility } from "./package-compat.js";
 import {
   pluginCacheExistsSync,
   pluginCacheRealpathSync,
@@ -328,46 +327,30 @@ export function buildPluginManifestRegistry(
           env,
           installRecords: getInstallRecords(),
         });
-      const minHostVersionCheck = checkMinHostVersion({
-        currentVersion: currentHostVersion,
-        minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+      const compatibility = checkOpenClawPackageCompatibility({
+        currentHostVersion,
+        packageMetadata: candidate.packageManifest,
         allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
-      if (!minHostVersionCheck.ok) {
+      if (!compatibility.ok) {
         diagnostics.push({
-          level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
+          level:
+            compatibility.kind === "invalid" || compatibility.kind === "invalid_plugin_api"
+              ? "error"
+              : "warn",
+          ...(compatibility.kind === "incompatible_plugin_api"
+            ? { configDisposition: "preserve" as const }
+            : {}),
           pluginId: effectivePluginId,
           source: packageManifestSource,
           message:
-            minHostVersionCheck.kind === "invalid"
-              ? `plugin manifest invalid | ${minHostVersionCheck.error}`
-              : minHostVersionCheck.kind === "unknown_host_version"
-                ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-                : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
-        });
-        continue;
-      }
-      const packagePluginApiRangeCheck = resolvePackagePluginApiRange(candidate.packageManifest);
-      if (!packagePluginApiRangeCheck.ok) {
-        diagnostics.push({
-          level: "error",
-          pluginId: effectivePluginId,
-          source: packageManifestSource,
-          message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
-        });
-        continue;
-      }
-      const packagePluginApiRange = packagePluginApiRangeCheck.range;
-      if (
-        packagePluginApiRange &&
-        !satisfiesPluginApiRange(currentHostVersion, packagePluginApiRange)
-      ) {
-        diagnostics.push({
-          level: "warn",
-          configDisposition: "preserve",
-          pluginId: effectivePluginId,
-          source: packageManifestSource,
-          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
+            compatibility.kind === "invalid" || compatibility.kind === "invalid_plugin_api"
+              ? `plugin manifest invalid | ${compatibility.error}`
+              : compatibility.kind === "unknown_host_version"
+                ? `plugin requires OpenClaw >=${compatibility.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+                : compatibility.kind === "incompatible"
+                  ? `plugin requires OpenClaw >=${compatibility.requirement.minimumLabel}, but this host is ${compatibility.currentVersion}; skipping load`
+                  : `plugin requires plugin API ${compatibility.range}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
         });
         continue;
       }

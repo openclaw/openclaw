@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadModelProvidersData } from "./load.ts";
+import { startModelProvidersData } from "./load.ts";
 
 const emptyAuth = { ts: 1, providers: [] };
 const model = { id: "configured", name: "Configured", provider: "test-provider" };
@@ -29,8 +29,11 @@ function harness(
     : createTestGatewayClient(request);
   return {
     request,
-    load: (refresh = false, signal?: AbortSignal) =>
-      loadModelProvidersData(client, { agentId: "main", refresh, signal }),
+    load: async (refresh = false, signal?: AbortSignal) => {
+      const read = startModelProvidersData(client, { agentId: "main", refresh, signal });
+      const [authData, catalogData] = await Promise.all([read.auth, read.catalog]);
+      return { ...authData, ...catalogData };
+    },
     cached: (allowStale = false) => peekModelCatalog(client, { agentId: "main" }, { allowStale }),
   };
 }
@@ -150,8 +153,6 @@ it("retries a missing auth-status response without discarding other provider dat
   expect(result).toMatchObject({
     providerOutcomes: [],
     catalogError: null,
-    providerUsage: null,
-    providerUsageFailed: false,
     error: null,
   });
   expect(h.cached()?.models).toEqual([]);

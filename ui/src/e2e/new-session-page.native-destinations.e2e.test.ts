@@ -208,8 +208,9 @@ suite.define(() => {
 
       await gateway.setMethodResponse("sessions.catalog.list", result([local]));
       await gateway.emitGatewayEvent("presence", {
-        presence: [{ deviceId: "builder", reason: "disconnect" }],
+        presence: [{ deviceId: "builder", roles: ["node"], reason: "disconnect" }],
       });
+      await pollDisabled(destination.locator(`option[value="${node.hostId}"]`)).toBe(true);
       await pollCount(destination.locator("option")).toBe(2);
       await pollValue(destination).toBe(node.hostId);
       await pollValue(folder).toBe("/workspace/native-project");

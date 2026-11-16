@@ -571,7 +571,6 @@ describe("successful update finalization ordering", () => {
           env: serviceEnv,
         };
         const clock = { origin: Date.now(), elapsed: 1_000 };
-        vi.spyOn(Date, "now").mockImplementation(() => clock.origin + clock.elapsed);
         const events: string[] = [];
         const windowsEvents: string[] = [];
         const oldRecovery = taskRecovery((phase) => {
@@ -590,7 +589,7 @@ describe("successful update finalization ordering", () => {
             return "restart-health-failed";
           }
           recordVerifiedGatewayRun(run);
-          params.onVerified?.(Date.now());
+          params.onVerified?.(clock.origin + clock.elapsed);
           return "ok";
         });
         const plugins = { ...successfulPluginUpdate, changed };
@@ -641,7 +640,7 @@ describe("successful update finalization ordering", () => {
                       },
               },
               rolledBack: outcome === "rolled-back",
-              ...(outcome === "rolled-back" ? { verifiedAtMs: Date.now() } : {}),
+              ...(outcome === "rolled-back" ? { verifiedAtMs: clock.origin + clock.elapsed } : {}),
             };
           },
         );

@@ -17,7 +17,7 @@ import { prepareRemoteSkillConnections } from "./remote-skills.js";
 import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
-// Completed projections are reusable only for the same persisted selection.
+// Fresh sessions rebuild eligibility before sharing an equal completed projection.
 const skillSnapshotCache = new Map<string, SkillSnapshot>();
 const pendingSkillSnapshots = new Map<
   string,
@@ -231,10 +231,12 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       };
       const promise = buildSnapshot(assertLiveWaiter).then((snapshot) => {
         assertLiveWaiter();
+        const sharedSnapshot =
+          cachedSnapshot && isDeepStrictEqual(cachedSnapshot, snapshot) ? cachedSnapshot : snapshot;
         // Mid-build catalog changes are picked up by the next request's revision key.
-        skillSnapshotCache.set(snapshotCacheKey, snapshot);
+        skillSnapshotCache.set(snapshotCacheKey, sharedSnapshot);
         pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
-        return snapshot;
+        return sharedSnapshot;
       });
       pending = { promise, waiters };
       pendingSkillSnapshots.set(snapshotCacheKey, pending);

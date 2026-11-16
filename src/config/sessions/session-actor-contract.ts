@@ -39,6 +39,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
+import type { AgentToolUsageAppend } from "./tool-usage.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -82,6 +83,8 @@ export type SessionActorAppend = (
   header?: SessionMetadataOperations["session.metadata.append"]["input"];
   /** Final prompt text joins its runtime-context carrier at the same durable point. */
   modelPromptProjection?: { anchor: TranscriptEntryAnchor; text: string };
+  /** Tool-only mutations share this append's transaction and final authority grant. */
+  toolUsage?: AgentToolUsageAppend;
 };
 
 /** The original snapshot preserves canonical adopted IDs, parents, bytes, and versions. */
@@ -96,6 +99,7 @@ export type SessionActorAppendCommitted = (
     }
 ) & {
   initialEntry?: InitialSessionEntryCommit;
+  toolUsageGeneration?: number;
   header?: SessionMetadataOperations["session.metadata.append"]["output"];
   modelPromptProjection?: {
     result: NonNullable<SessionMessageRewriteCommitted["result"]> & {

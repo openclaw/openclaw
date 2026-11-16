@@ -44,7 +44,7 @@ type ChatSendRetryParams = Pick<
 > & {
   request: Pick<
     ChatSendPreAdmissionParams["request"],
-    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext"
+    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],

@@ -82,6 +82,14 @@ export function assertMaintenancePreservationCompatible(
         .filter(Boolean);
     }),
   );
+  // A provider that became pending after planning may not yet name a row this plan archives.
+  if (
+    current.archivingDeferred &&
+    !sent.archivingDeferred &&
+    (!plans || plans.some((plan) => plan.archivedEntries.length > 0))
+  ) {
+    throw new SqliteSessionMutationConflictError("session maintenance");
+  }
   // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
   if (added.size === 0) {
     return;

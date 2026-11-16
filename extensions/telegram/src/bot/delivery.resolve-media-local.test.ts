@@ -15,10 +15,13 @@ import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof Dns>()),
-  lookup,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof Dns & { default: typeof Dns }>();
+  const overrides = {
+    lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 describe("Telegram media acquisition through grammY and the media store", () => {
   const fixture = useTelegramHttpFixture();

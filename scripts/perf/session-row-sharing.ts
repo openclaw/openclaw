@@ -14,6 +14,11 @@
 // thread; host load is reported. Byte parity is mandatory; judge paired CPU/allocation
 // deltas against matched A/A controls before attributing an adverse result.
 // --warmup 1000 --iterations 5000 extends short, noisy small-page passes.
+// --churn <0..rows> selects an exact replacement count. --request full (default),
+// delta, unchanged or mixed selects the response. Mixed cycles two unknown-base full
+// reads, one delta and one unchanged read: a sensitivity case, not an observed day mix.
+// Conditional reads include full packing for publication accounting before the reply.
+// Discard the entire paired pass if either arm reports measurementValid: false.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { loadavg } from "node:os";
@@ -35,6 +40,7 @@ const { values } = parseArgs({
     passes: { type: "string", default: "5" },
     rows: { type: "string", default: "500" },
     churn: { type: "string", default: "1" },
+    request: { type: "string", default: "full" },
     iterations: { type: "string", default: "400" },
     mode: { type: "string", default: "timing" },
   },
@@ -63,9 +69,11 @@ const count = Number(values.rows);
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(count) && count > 1);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
-assert(["1", "many"].includes(values.churn));
 assert(["timing", "allocation", "parity"].includes(values.mode));
-const changed = values.churn === "many" ? Math.max(1, Math.floor(count / 4)) : 1;
+assert(["full", "delta", "unchanged", "mixed"].includes(values.request));
+const changed = values.churn === "many" ? Math.max(1, Math.floor(count / 4)) : Number(values.churn);
+assert(Number.isSafeInteger(changed) && changed >= 0 && changed <= count);
+const mixedRequests = ["unknown-base", "unknown-base", "delta", "unchanged"];
 
 function fixture(index: number, rowMode: GatewaySessionRow["rowMode"]): GatewaySessionRow {
   const row: GatewaySessionRow = {
@@ -94,9 +102,12 @@ function fixture(index: number, rowMode: GatewaySessionRow["rowMode"]): GatewayS
 }
 let rows = Array.from({ length: count }, (_, index) => fixture(index, "sidebar"));
 let sequence = 0;
-function churn(shape = false) {
+function churn(shape = false, replacements = changed) {
+  if (replacements === 0) {
+    return;
+  }
   rows = rows.slice();
-  for (let offset = 0; offset < changed; offset++) {
+  for (let offset = 0; offset < replacements; offset++) {
     const index = (sequence + offset) % rows.length;
     const previous = rows[index]!;
     const next = {
@@ -111,13 +122,36 @@ function churn(shape = false) {
   }
   sequence++;
 }
-function run(size: number, share: typeof shareSidebarSessionRows) {
-  let resultRows = 0;
-  for (let index = 0; index < size; index++) {
-    churn();
-    resultRows += share(rows).sessions.length;
+function request(
+  share: typeof shareSidebarSessionRows,
+  kind: string,
+  index: number,
+  replacements = changed,
+  shape = false,
+) {
+  const responseKind = kind === "mixed" ? mixedRequests[index % mixedRequests.length]! : kind;
+  const before = responseKind === "delta" ? captureSessionRowGeneration(rows) : undefined;
+  if (responseKind !== "unchanged") {
+    churn(shape, replacements);
   }
-  assert.equal(resultRows, count * size);
+  // list() prepares the full response before cache admission, even for a delta reply.
+  const full = share(rows);
+  if (before) {
+    return share(rows, `${SESSION_ROWS_DELTA_PREFIX}${before.revision}`, [before]);
+  }
+  if (responseKind === "unchanged") {
+    return share(rows, full.rowsRevision);
+  }
+  return responseKind === "unknown-base" ? share(rows, "unknown-base") : full;
+}
+function run(size: number, share: typeof shareSidebarSessionRows) {
+  for (let index = 0; index < size; index++) {
+    const response = request(share, values.request, index);
+    assert.equal(
+      response.sessions.length,
+      response.rowsUnchanged ? 0 : response.rowsDelta ? changed : count,
+    );
+  }
 }
 
 let baselineDigest: string | undefined;
@@ -155,6 +189,7 @@ for (let pass = 0; pass < (values.mode === "parity" ? 1 : passes); pass++) {
           assert.equal(unchanged.sessions.length, 0);
           record(unchanged);
           churn(true);
+          rows = rows.slice();
           const changedIndex = (index * 17) % rows.length;
           const changedRow = rows[changedIndex]!;
           const next = {
@@ -183,6 +218,17 @@ for (let pass = 0; pass < (values.mode === "parity" ? 1 : passes); pass++) {
           }
         }
       }
+      const originalResponses = responses;
+      // Keep the original differential intact, then vary replacement rates and response
+      // kinds independently: telemetry does not expose the production joint distribution.
+      for (const mode of [undefined, "compact", "sidebar", "dashboard"] as const) {
+        rows = Array.from({ length: count }, (_, index) => fixture(index, mode));
+        for (const replacements of [0, 1, Math.max(1, Math.floor(count / 4)), count]) {
+          for (let index = 0; index < 4; index++) {
+            record(request(share, "mixed", index, replacements, true));
+          }
+        }
+      }
       const digest = hash.digest("hex");
       if (baselineDigest !== undefined) {
         assert.equal(digest, baselineDigest);
@@ -195,6 +241,7 @@ for (let pass = 0; pass < (values.mode === "parity" ? 1 : passes); pass++) {
           mode: values.mode,
           count,
           changed,
+          originalResponses,
           responses,
           bytes,
           sha256: digest,
@@ -214,6 +261,7 @@ for (let pass = 0; pass < (values.mode === "parity" ? 1 : passes); pass++) {
       run(iterations, share);
       const wallMs = performance.now() - start;
       const cpu = process.threadCpuUsage(startCpu);
+      const hostLoadEnd = loadavg();
       const allocation =
         allocationStart === undefined
           ? undefined
@@ -225,12 +273,15 @@ for (let pass = 0; pass < (values.mode === "parity" ? 1 : passes); pass++) {
           mode: values.mode,
           count,
           changed,
+          request: values.request,
           iterations,
           warmup,
           wallMs,
           cpuUsPerList: (cpu.user + cpu.system) / iterations,
           allocatedBytesPerList: allocation,
           hostLoad,
+          hostLoadEnd,
+          measurementValid: hostLoad[0]! <= 40 && hostLoadEnd[0]! <= 40,
           memory: process.memoryUsage(),
           node: process.version,
         }),

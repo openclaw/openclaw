@@ -4,6 +4,7 @@
  * each owner in a fresh process, counterbalancing order (at least five per side):
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-search-lexical-measure.ts
  *   --owner .local/baseline-ranking.ts [--allocations]
+ * Add --token-arrays when the saved owner predates frequency-map documents.
  * --lifecycle models 64 sessions searching each minute for an hour, with catalog
  * revisions at minutes 20 and 40. --index-owner selects the matching saved index
  * module (its imports must resolve to --owner). Each modeled minute scores real
@@ -42,6 +43,7 @@ const { values } = parseArgs({
   options: {
     owner: { type: "string", default: "src/agents/tool-search-ranking.ts" },
     allocations: { type: "boolean", default: false },
+    "token-arrays": { type: "boolean", default: false },
     lifecycle: { type: "boolean", default: false },
     views: { type: "boolean", default: false },
     catalogs: { type: "boolean", default: false },
@@ -323,13 +325,35 @@ if (values.views) {
   );
   process.exit(0);
 }
-const documents = [...skills, ...tools].map((text, value) => {
-  const terms = new Map<string, number>();
-  for (const term of tokenizeDocument(text)) {
-    terms.set(term, (terms.get(term) ?? 0) + 1);
-  }
-  return { value, terms };
-});
+// Saved owners keep their original input contract; select it explicitly for comparisons.
+type TokenArrayOwner = {
+  buildLexicalIndex: (
+    documents: Array<{ value: number; terms: string[] }>,
+  ) => ReturnType<typeof buildLexicalIndex<number>>;
+};
+const input = values["token-arrays"]
+  ? {
+      format: "tokens" as const,
+      owner: (await import(pathToFileURL(path.resolve(values.owner)).href)) as TokenArrayOwner,
+      documents: [...skills, ...tools].map((text, value) => ({
+        value,
+        terms: tokenizeDocument(text),
+      })),
+    }
+  : {
+      format: "frequencies" as const,
+      documents: [...skills, ...tools].map((text, value) => {
+        const terms = new Map<string, number>();
+        for (const term of tokenizeDocument(text)) {
+          terms.set(term, (terms.get(term) ?? 0) + 1);
+        }
+        return { value, terms };
+      }),
+    };
+const buildIndex = () =>
+  input.format === "tokens"
+    ? input.owner.buildLexicalIndex(input.documents)
+    : buildLexicalIndex(input.documents);
 if (values.lifecycle) {
   const { getTextLexicalIndex } = (await import(
     pathToFileURL(path.resolve(values["index-owner"])).href
@@ -394,13 +418,13 @@ const observer = new PerformanceObserver((list) => {
 });
 const profiler = values.allocations ? new inspector.Session() : undefined;
 for (let i = 0; i < 5; i++) {
-  scoreLexical(buildLexicalIndex(documents), queries[2]!);
+  scoreLexical(buildIndex(), queries[2]!);
 }
 global.gc();
 await yieldTurn();
 const before = process.memoryUsage();
 for (let i = 0; i < 16; i++) {
-  retained.push(buildLexicalIndex(documents));
+  retained.push(buildIndex());
 }
 global.gc();
 await yieldTurn();
@@ -421,7 +445,7 @@ observer.observe({ entryTypes: ["gc"] });
 const start = performance.now();
 const buildCpuStart = process.threadCpuUsage();
 for (let i = 0; i < 100; i++) {
-  retained[i % retained.length] = buildLexicalIndex(documents);
+  retained[i % retained.length] = buildIndex();
   if (i % 10 === 0) {
     await yieldTurn();
   }
@@ -462,12 +486,15 @@ console.log(
   JSON.stringify({
     owner: values.owner,
     sampled: values.allocations,
-    documents: documents.length,
+    documents: input.documents.length,
     skillBodies: skills.length,
-    terms: documents.reduce(
-      (n, doc) => n + [...doc.terms.values()].reduce((sum, frequency) => sum + frequency, 0),
-      0,
-    ),
+    terms:
+      input.format === "tokens"
+        ? input.documents.reduce((n, doc) => n + doc.terms.length, 0)
+        : input.documents.reduce(
+            (n, doc) => n + [...doc.terms.values()].reduce((sum, frequency) => sum + frequency, 0),
+            0,
+          ),
     retainedIndexes: retained.length,
     retainedHeapBytes: after.heapUsed - before.heapUsed,
     retainedExternalBytes: after.external - before.external,

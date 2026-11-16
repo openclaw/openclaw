@@ -129,18 +129,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return executablePath;
   }
 
-  function strictInlinePlan(prefix: string): SystemRunApprovalPlan {
+  async function strictInlinePlan(prefix: string): Promise<SystemRunApprovalPlan> {
     const tempDir = fixtureDir(prefix);
     const executablePath = executable(tempDir, "gawk");
     const scriptPath = path.join(tempDir, "library.awk");
     fs.writeFileSync(scriptPath, "{ print }\n");
-    const prepared = prepareSession(
+    const prepared = await prepareSession(
       [executablePath, "-f", scriptPath, '--source=BEGIN{print "safe"}'],
       "agent:main:main",
     );
-    if (!prepared.ok) {
-      throw new Error(prepared.message);
-    }
+    requireApprovalPlan(prepared);
     return prepared.plan;
   }
 
@@ -158,24 +156,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   function requireApprovalPlan(
-    prepared: ReturnType<typeof buildSystemRunApprovalPlan>,
-    message: string,
-  ): asserts prepared is Extract<ReturnType<typeof buildSystemRunApprovalPlan>, { ok: true }> {
+    prepared: Awaited<ReturnType<typeof buildSystemRunApprovalPlan>>,
+    message?: string,
+  ): asserts prepared is Extract<
+    Awaited<ReturnType<typeof buildSystemRunApprovalPlan>>,
+    { ok: true }
+  > {
     if (!prepared.ok) {
-      throw new Error(message);
+      throw new Error(message ?? prepared.message);
     }
   }
 
-  function prepareSession(command: string[], sessionKey: string) {
-    return buildSystemRunApprovalPlan({ command, sessionKey });
+  async function prepareSession(command: string[], sessionKey: string) {
+    return await buildSystemRunApprovalPlan({ command, sessionKey });
   }
 
-  function prepareCwd(command: string[], cwd: string) {
-    return buildSystemRunApprovalPlan({ command, cwd });
+  async function prepareCwd(command: string[], cwd: string) {
+    return await buildSystemRunApprovalPlan({ command, cwd });
   }
 
-  function prepareCwdSession(command: string[], cwd: string, sessionKey: string) {
-    return buildSystemRunApprovalPlan({ command, cwd, sessionKey });
+  async function prepareCwdSession(command: string[], cwd: string, sessionKey: string) {
+    return await buildSystemRunApprovalPlan({ command, cwd, sessionKey });
   }
 
   function createMutableScriptOperandFixture(tmp: string): {
@@ -258,9 +259,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return `=command:${crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16)}`;
   }
 
-  function durableFixture(options: { payload?: string; fallback?: boolean } = {}) {
+  async function durableFixture(options: { payload?: string; fallback?: boolean } = {}) {
     const tempDir = fixtureDir("openclaw-durable-");
-    const prepared = prepareCwdSession(
+    const prepared = await prepareCwdSession(
       ["/bin/sh", "-c", options.payload ?? "/bin/ls"],
       tempDir,
       "agent:main:main",
@@ -405,16 +406,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       : undefined;
     if (forwardsDelayedApproval && params.bindApproval !== false) {
       if (!systemRunPlan) {
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command,
           rawCommand: params.rawCommand,
           cwd: params.cwd,
           agentId: dispatchAgentId,
           sessionKey: "agent:main:main",
         });
-        if (!prepared.ok) {
-          throw new Error(prepared.message);
-        }
+        requireApprovalPlan(prepared);
         systemRunPlan = prepared.plan;
         dispatchCommand = prepared.plan.argv;
         dispatchRawCommand = prepared.plan.commandText;
@@ -626,7 +625,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }));
       const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
       const runCommand = vi.fn(async () => localResult("auto-reviewed"));
-      const prepared = prepareCwd([executablePath, "security.audit.suppressions"], tmp);
+      const prepared = await prepareCwd([executablePath, "security.audit.suppressions"], tmp);
       expect(prepared.ok).toBe(true);
       requireApprovalPlan(prepared, "unreachable");
       const invoke = await runLocal({
@@ -757,7 +756,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         risk: "medium",
       }));
       const runCommand = vi.fn(async () => localResult("should-not-run"));
-      const prepared = prepareCwd([executablePath], tmp);
+      const prepared = await prepareCwd([executablePath], tmp);
       expect(prepared.ok).toBe(true);
       requireApprovalPlan(prepared, "unreachable");
       const invoke = await runLocal({
@@ -1001,14 +1000,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     "checks executable identity for $approval approval when resolution is $driftAt",
     async ({ approval, driftAt }) => {
       const tmp = fixtureDir("openclaw-approval-executable-identity-");
-      const prepared = prepareCwd(["/bin/sh", "-c", "ls *.ts"], tmp);
+      const prepared = await prepareCwd(["/bin/sh", "-c", "ls *.ts"], tmp);
       requireApprovalPlan(prepared, "expected a bound shell command plan");
       const resolveCommand = commandResolution.resolveCommandResolutionFromArgv;
       let changed = false;
       const resolutionSpy = vi
         .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
-        .mockImplementation((...args) => {
-          const resolution = resolveCommand(...args);
+        .mockImplementation(async (...args) => {
+          const resolution = await resolveCommand(...args);
           if (!changed || args[0][0] !== "ls" || !resolution) {
             return resolution;
           }
@@ -1072,7 +1071,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.scriptPath, 0o755);
     }
-    const prepared = prepareCwd(fixture.command, tmp);
+    const prepared = await prepareCwd(fixture.command, tmp);
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
     const commitAuthorization: typeof commitExecAuthorizationLocked = async (params) => {
@@ -1101,7 +1100,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const tmp = fixtureDir("openclaw-approval-tsx-script-drift-");
       const fixture = createTsxScriptOperandFixture(tmp);
       fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-      const prepared = prepareCwd(fixture.command, tmp);
+      const prepared = await prepareCwd(fixture.command, tmp);
       expect(prepared.ok).toBe(true);
       requireApprovalPlan(prepared, "unreachable");
 
@@ -1121,11 +1120,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const missingBindingTmp = fixtureDir("openclaw-approval-tsx-missing-binding-");
       const missingBindingFixture = createTsxScriptOperandFixture(missingBindingTmp);
       fs.writeFileSync(missingBindingFixture.scriptPath, missingBindingFixture.initialBody);
-      const missingBindingPrepared = prepareCwd(missingBindingFixture.command, missingBindingTmp);
+      const missingBindingPrepared = await prepareCwd(
+        missingBindingFixture.command,
+        missingBindingTmp,
+      );
       expect(missingBindingPrepared.ok).toBe(true);
-      if (!missingBindingPrepared.ok) {
-        throw new Error("unreachable");
-      }
+      requireApprovalPlan(missingBindingPrepared, "unreachable");
 
       const planWithoutBinding = { ...missingBindingPrepared.plan };
       delete planWithoutBinding.mutableFileOperand;
@@ -1387,7 +1387,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it("preserves exact-plan forwarded auto-review for strict inline eval", async () => {
-    const plan = strictInlinePlan("openclaw-forwarded-inline-");
+    const plan = await strictInlinePlan("openclaw-forwarded-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
     approvalsStore.saveExecApprovals(policy("full", "on-miss", "deny"));
     const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
@@ -1436,7 +1436,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("revalidates timeout fallback against the current askFallback policy", async () => {
-    const prepared = prepareSession(["echo", "ok"], "agent:main:main");
+    const prepared = await prepareSession(["echo", "ok"], "agent:main:main");
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
     approvalsStore.saveExecApprovals(policy("full", "always", "full", {}));
@@ -1489,7 +1489,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("requires a prepared policy snapshot for forwarded delayed approval", async () => {
-    const prepared = prepareSession(["echo", "ok"], "agent:main:main");
+    const prepared = await prepareSession(["echo", "ok"], "agent:main:main");
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
     const invoke = await runLocal({
@@ -1515,7 +1515,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       }),
     );
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -1547,7 +1547,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it.runIf(process.platform !== "win32").each([false, true])(
     "revalidates durable exact-command timeout fallback (revoked=%s)",
     async (revoked) => {
-      const { tempDir, prepared, commandPattern } = durableFixture({ fallback: true });
+      const { tempDir, prepared, commandPattern } = await durableFixture({ fallback: true });
       const commitAuthorization = revoked
         ? mutatePolicyOnCommit((current) => {
             current.agents = {
@@ -1583,7 +1583,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it("preserves source-only fallback across the authenticated Mac app bridge", async () => {
-    const prepared = prepareSession(["echo", "ok"], "agent:main:main");
+    const prepared = await prepareSession(["echo", "ok"], "agent:main:main");
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
     approvalsStore.saveExecApprovals(policy("full", "always", "full", {}));
@@ -1602,7 +1602,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("does not let timeout fallback satisfy strict inline review", async () => {
-    const plan = strictInlinePlan("openclaw-fallback-inline-");
+    const plan = await strictInlinePlan("openclaw-fallback-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
     approvalsStore.saveExecApprovals(policy("full", "always", "full", {}));
     const invoke = await runLocal({
@@ -1673,7 +1673,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const executablePath = executable(tempDir, "make");
     const makefilePath = path.join(tempDir, "Makefile");
     fs.writeFileSync(makefilePath, "all:\n\t@echo inline-eval-ok\n");
-    const prepared = prepareCwd([executablePath, "-f", makefilePath], tempDir);
+    const prepared = await prepareCwd([executablePath, "-f", makefilePath], tempDir);
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
 
@@ -1737,7 +1737,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const commandName = "check_mail.cmd";
       const command = ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", `${commandName} --limit 5`];
       const ordinaryPattern = "*";
-      const prepared = buildSystemRunApprovalPlan({ command, cwd: tempDir });
+      const prepared = await buildSystemRunApprovalPlan({ command, cwd: tempDir });
       expect(prepared.ok).toBe(true);
       requireApprovalPlan(prepared, "unreachable");
       const commandPattern = createExactCommandPattern(prepared.plan.commandText);
@@ -1789,7 +1789,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it.runIf(process.platform !== "win32")(
     "rejects durable trust when its approved directory is replaced before execution",
     async () => {
-      const { tempDir, prepared } = durableFixture();
+      const { tempDir, prepared } = await durableFixture();
       const movedDir = `${tempDir}-moved`;
       const commitAuthorization: typeof commitExecAuthorizationLocked = async (params) => {
         const assertCurrent = await commitExecAuthorizationLocked(params);
@@ -1819,7 +1819,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       return;
     }
 
-    const { tempDir, prepared } = durableFixture({ payload: "cd ." });
+    const { tempDir, prepared } = await durableFixture({ payload: "cd ." });
     const commitAuthorization = mutatePolicyOnCommit((current) => {
       current.agents = { ...current.agents, main: { allowlist: [] } };
     });

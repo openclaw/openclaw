@@ -32,6 +32,8 @@ declare module "qrcode" {
   export type QrCodeSymbol = {
     modules: {
       data: ArrayLike<boolean | number>;
+      /** Function modules reserved by qrcode during symbol construction. */
+      reservedBit: ArrayLike<boolean | number>;
       size: number;
     };
   };

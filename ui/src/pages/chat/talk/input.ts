@@ -100,6 +100,13 @@ export function realtimeTalkDeviceIssueMessage(
   return t(kind === "audioinput" ? microphoneKey : cameraKey);
 }
 
+/** Browser microphone access problems are recoverable in place, so they warn rather than fail. */
+export function isRealtimeTalkMicrophoneIssueMessage(detail: string): boolean {
+  return Object.values(deviceIssueMessageKeys).some(
+    ([microphoneKey]) => t(microphoneKey) === detail,
+  );
+}
+
 // The picker owns the subscription and releases it when its surface closes.
 export function observeRealtimeTalkDevices(onChange: () => void): () => void {
   const devices = globalThis.navigator?.mediaDevices;

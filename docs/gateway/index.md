@@ -138,10 +138,12 @@ Admin HTTP RPC (`POST /api/v1/admin/rpc`) is a separate, default-off plugin rout
 
 ### Port and bind precedence
 
-| Setting      | Resolution order                                                     |
-| ------------ | -------------------------------------------------------------------- |
-| Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789`        |
-| Bind mode    | CLI/override → `gateway.bind` → `loopback` (or `auto` in containers) |
+| Setting      | Resolution order                                                                      |
+| ------------ | ------------------------------------------------------------------------------------- |
+| Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → named-profile default → `18789` |
+| Bind mode    | CLI/override → `gateway.bind` → `loopback` (or `auto` in containers)                  |
+
+The named-profile default is `19001` for `dev` and a port derived from the profile name for other named profiles (`--profile <name>` or `OPENCLAW_PROFILE`). When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 
 Installed gateway services record the resolved `--port` in supervisor metadata. After changing `gateway.port`, run `openclaw doctor --fix` or `openclaw gateway install --force` so launchd/systemd/schtasks starts the process on the new port.
 

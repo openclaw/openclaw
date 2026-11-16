@@ -1,9 +1,8 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isRestrictedSessionGuest } from "../app/operator-access.ts";
-import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -19,7 +18,6 @@ export class SessionOwnerFilter {
   };
   private userIntent = false;
   private ownerFacet: { agentId: string; multiple: boolean } | null = null;
-  private admittedHello: ApplicationGateway["snapshot"]["hello"] = null;
 
   constructor(
     private readonly getGateway: () => ApplicationGateway | undefined,
@@ -56,15 +54,6 @@ export class SessionOwnerFilter {
         scope,
       };
     }
-    // Admit restored/prior-authority choices once per authenticated hello. Explicit
-    // choices within that hello retain their visible server denial instead of resetting.
-    if (gateway && hello && (scopeChanged || hello !== this.admittedHello)) {
-      this.admittedHello = hello;
-      if (typeof viewerId === "string" && value.ownerId && value.ownerId !== viewerId) {
-        value = { ownerId: null, involvingMe: true, scope };
-        storeSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, viewerId, value);
-      }
-    }
     if (value !== this.value) {
       this.userIntent = false;
       this.ownerFacet = null;
@@ -96,14 +85,14 @@ export class SessionOwnerFilter {
     return intent;
   }
 
-  set(ownerId: string | null, involvingMe = false, options?: { automatic: true }): void {
+  set(ownerId: string | null, involvingMe = false): void {
     this.read();
     this.value = {
       ownerId: involvingMe ? null : ownerId?.trim() || null,
       involvingMe,
       scope: this.value.scope,
     };
-    this.userIntent ||= !options?.automatic;
+    this.userIntent = true;
     const gateway = this.getGateway();
     const selfUserId = this.selfUserId;
     if (gateway && selfUserId) {
@@ -113,7 +102,7 @@ export class SessionOwnerFilter {
   }
 }
 
-/** Solid owns query refresh observation; the session capability owns reads and admission. */
+/** Solid observes query changes; the session capability owns reads and admission. */
 export function createSessionOwnerFilterQuery(
   filter: SessionOwnerFilter,
   getHost: () => {
@@ -125,27 +114,21 @@ export function createSessionOwnerFilterQuery(
       scheduleSidebarSessions(): Promise<void>;
     };
   },
-  getFacet: () => Omit<SessionListSnapshot, "agentId"> | undefined,
 ) {
   let previous: string | undefined;
-  let pending: Promise<void> | null = null;
-  const [settled, setSettled] = createSignal(0);
   createEffect(
     () => {
-      settled();
       const host = getHost();
       const query = host.sidebarSessionOwnerFilter();
       return {
         host,
         current: JSON.stringify([query.ownerId, query.involvingMe, filter.read().scope]),
-        facet: getFacet(),
       };
     },
-    ({ host, current, facet }) => {
+    ({ host, current }) => {
       const userIntent = filter.takeUserIntent();
       if (!host.isConnected) {
         previous = undefined;
-        pending = null;
         return;
       }
       const prior = previous;
@@ -154,38 +137,12 @@ export function createSessionOwnerFilterQuery(
         if (prior) {
           host.sessionData.resetSessionList();
         }
-        const request = userIntent
+        // Empty owner facets never replace an explicit selection with a broader query.
+        void (userIntent
           ? host.sessionData.refreshSidebarSessions()
-          : host.sessionData.scheduleSidebarSessions();
-        pending = request;
-        void request.finally(() => {
-          if (pending === request) {
-            pending = null;
-            setSettled((value) => value + 1);
-          }
-        });
-      } else if (
-        !pending &&
-        facet &&
-        !facet.loading &&
-        !facet.startupPending &&
-        !facet.error &&
-        facet.readSucceeded !== false &&
-        facet.result?.owners
-      ) {
-        const ownerId = filter.read().ownerId;
-        if (
-          ownerId &&
-          ownerId !== filter.selfUserId &&
-          !facet.result.owners.some((owner) => owner.id === ownerId)
-        ) {
-          filter.set(null, false, { automatic: true });
-        }
+          : host.sessionData.scheduleSidebarSessions());
       }
     },
   );
-  onCleanup(() => {
-    pending = null;
-    filter.takeUserIntent();
-  });
+  onCleanup(() => filter.takeUserIntent());
 }

@@ -5,6 +5,22 @@ export type MediaUnderstandingKind =
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
+export type MediaUnderstandingProviderMetadata = {
+  capabilities?: MediaUnderstandingCapability[];
+  defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
+  autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
+  nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<
+    Record<
+      "pdf",
+      {
+        textExtraction?: string;
+        image?: string | false;
+      }
+    >
+  >;
+};
+
 export type MediaUnderstandingCapabilityRegistry = Map<
   string,
   {

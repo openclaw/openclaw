@@ -5,7 +5,7 @@ import {
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
-import { iconData, type IconName } from "../components/icon-data.ts";
+import { isIconName, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { formatUiError } from "../lib/format-error.ts";
@@ -116,16 +116,14 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
     const icon = entry.value.icon;
-    const name = icon && Object.hasOwn(iconData, icon) ? icon : fallback;
-    // SAFETY: the own-key check admits only names from the fixed icon registry.
-    return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
+    const name = isIconName(icon) ? icon : fallback;
+    return isIconName(name) ? name : "plug";
   };
   // Destinations may carry an emoji appearance instead of an icon name (Workboard boards);
   // show it as the board page does instead of the fallback icon.
   const emojiIcon = (entry: Navigation["entry"]) => {
     const icon = entry.value.icon;
-    const appearance =
-      icon && !Object.hasOwn(iconData, icon) ? normalizeSessionIconValue(icon) : null;
+    const appearance = icon && !isIconName(icon) ? normalizeSessionIconValue(icon) : null;
     return appearance?.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ? null : appearance;
   };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {

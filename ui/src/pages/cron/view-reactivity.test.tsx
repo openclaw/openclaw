@@ -240,7 +240,7 @@ it("keeps retained row controls current across pending queries and access change
   expect(run.disabled).toBe(false);
   expect(toggle.getAttribute("aria-disabled")).toBeNull();
   run.click();
-  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
+  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job);
   expect(initialRun).not.toHaveBeenCalled();
 
   canManage = false;

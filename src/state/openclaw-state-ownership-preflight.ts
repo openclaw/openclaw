@@ -90,6 +90,7 @@ async function assertWriteAllowed(options: StateWriteAdmissionOptions): Promise<
     : await prepareSqliteReadOnlyLocation(databasePath, {
         preserveSourceArtifacts: true,
         signal: options.signal,
+        reuse: true,
       });
   let readSucceeded = false;
   try {

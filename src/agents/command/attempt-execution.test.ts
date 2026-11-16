@@ -113,10 +113,7 @@ describe("formatClaudeCliFallbackPrelude", () => {
 
 it("returns empty string when the Claude session loader finds no seed", async () => {
   mocks.readClaudeCliFallbackSeed.mockReset();
-  const params = {
-    cliSessionId: "missing-session",
-    homeDir: "/tmp/test-home",
-  };
+  const params = { cliSessionId: "missing-session" };
   expect(await buildClaudeCliFallbackContextPrelude(params)).toBe("");
   expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith(params);
 });

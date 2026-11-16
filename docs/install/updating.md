@@ -53,6 +53,157 @@ backup.
 
 ## Update implementation contract
 
+Gateway update handoff preparation and its parent-side lease reads, identity checks,
+and cleanup run in the existing handoff worker. Slow coordinator filesystem work
+does not block the serving Gateway. Parking and terminal commit still await exact
+lease ownership; signal admission uses the already-owned local lifecycle. The
+installed Gateway must contain this repair. Detached helpers keep their existing
+lease format, synchronous store owner, and recovery behavior.
+
+A newer Doctor recognizes retained update captures whose state directory used
+an older Windows short-path spelling. Scope comparison resolves the recorded
+state directory and configuration parent without changing sealed capture bytes
+or following the final configuration entry. A different selected state directory
+or configuration entry remains rejected.
+
+On Gateway startup, an older supported SQLite schema is upgraded by copy and
+swap: Doctor runs on a private copy, then a durable plan publishes the changed
+files. Chain failure retains the generic rebuild and pins the previous files;
+invalid upgraded config still refuses publication. No live file is replaced or
+removed unless the upgrade copied it. If Doctor creates a template over an
+uncopied workspace file, startup leaves the original alone and reports a warning.
+
+The copy excludes managed worktrees, configured agent workspaces, nested mounts
+and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
+Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
+migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
+exec approvals, audit logs, config, and installed extensions remain available.
+SQLite files above 64 MiB are copied only when their schema needs upgrading or
+they are the shared state database; smaller ancillary stores remain available for
+legacy imports. SQLite and retained WAL/journal content use byte copies, with
+NOCOW directories on btrfs, so the new database does not share extents with its
+preserved original. Committed WAL is recovered in the private copy.
+
+Before copying, startup checks free space against the selected file bytes plus
+an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
+that budget because a filesystem can decline reflinking. Insufficient space
+reports the exact required, available, and missing bytes. Copies of at least
+256 MiB log their byte count, file count, elapsed time, and throughput.
+
+Replaced files remain as `<file>.pre-<version>`. Startup prunes older unpinned
+generations only for files it owns. It leaves retired startup-migration backups,
+SQLite `.bak` files, and media-persistence recovery images in place, reporting
+file counts and bytes within the inspected copy scope. These are operator or
+Doctor retention decisions: deleting large shared clones during startup can
+stall a copy-on-write filesystem. Skipped bulk trees are never walked to count
+or prune their contents.
+
+Offline Doctor prepares no extra inspection image when its existing maintenance
+owner proves custody and the database has no WAL frames or rollback journal.
+These drained SQLite families use immutable reads. Retained WAL, journals, and
+unowned sources keep private snapshots so inspections preserve recovery receipts.
+Stopped-update backup inventory verification reads registrations from
+the completed backup image while retaining filesystem inventory and source-change
+checks. The candidate must contain these changes; backup publication, integrity
+checks, migrations, and rollback rules are unchanged.
+
+Lazy SQLite schema catalogs load through the retained updater's module loader.
+An updater that first needs a catalog after Git activation therefore reads its
+own generation, not the candidate's replacement JSON. This fix must be present
+in the running updater; a newer candidate cannot repair an older updater's
+filesystem-based loader. If an older Git updater fails with a catalog `tables`
+TypeError after activation, preserve its recovery artifacts and use the
+[manual source update procedure](/install/updating/update-methods#source-checkout-servers-reference-script)
+to install a corrected updater before retrying.
+
+After candidate Doctor migrates runtime-pin metadata, activation reads that
+completed intent before rebinding the managed Gateway. Missing metadata at the
+start of an update no longer forces a restart of the old installation against
+newly migrated state. Existing native definition and runtime-intent checks still
+protect operator changes. This requires the installed updater to contain the fix.
+
+Private plugin projection materializes eligible external data-suffixed file links
+at their logical in-package filenames before recording the final code-link
+inventory. Both the alias and its inventoried canonical target must have one of
+the case-sensitive extensions `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.ini`,
+`.cfg`, `.csv`, or `.xml`; the target must be a non-executable regular file
+outside the alias's nearest package root with a regular inventoried `package.json`
+(symlink manifests do not establish this boundary). The existing guarded copy
+checks source identity, bounds bytes, refuses occupied destinations, and creates
+an independent private file. Each alias is included in snapshot space accounting.
+
+This is not general symlink flattening or file-content classification. Package
+scope metadata (`package.json`), relocation-owned files (`.modules.yaml` and
+`.bin` launchers), executable targets, code/native/unknown extensions, internal
+links, directory/dependency/host links, and dangling links keep their existing
+handling. A data-looking alias to a target with a code/native/unknown suffix is
+not eligible. Non-executable binary bytes (including ELF) with allowed data
+suffixes are eligible: this is a path/mode contract, not native-content detection.
+Data that requires symlink identity, shared writes, canonical-parent sibling lookup,
+or a suffix outside this list is not supported by this normalization. Files
+mislabeled as ordinary data are not identified by inspecting their contents.
+
+Projection uses only already inventoried entries and edges; it does not discover
+new paths or grant Doctor additional filesystem authority. Ordinary generation
+capture already detaches file aliases, so resource bytes and logical filenames,
+not original `lstat`, `readlink`, inode, or shared-write identity, are the supported
+data contract. Fix representation at this producer boundary instead of carrying
+exceptions through Doctor and each runtime consumer. Recognized native files
+retain separate identity and admission rules. After binding validation, a late
+alias retarget cannot redirect the copy: it uses the inventoried canonical target
+path, with source identity rechecked by the guarded copier. The runtime performing
+plugin projection must contain this fix; an older projector does not gain it from a receipt or new
+environment variable. Existing update/Doctor admission and rollback checks are
+unchanged.
+
+Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
+recovery owner before converting them to automations, while holding offline
+maintenance custody. Live or unproved runtime ownership leaves the conversion and
+configuration pending with an update warning. Runs needing startup notifications
+are converted with their original run marker, history, and receipt intact so the
+Gateway can recover them and deliver their notifications without quarantining the
+retired payload. Conversion preserves pending execution facts even when it disables
+the monitor; startup still restores the recorded result without re-enabling it.
+The candidate must contain this fix; published updaters need no
+new marker or schema change.
+
+Candidate Doctor repairs retained ISO-8601 session `endedAt` strings before
+canonical session admission, preserving the original database backup and updating
+indexed timing together. This repair must be present in the candidate Doctor;
+the installed updater needs no protocol or schema change.
+
+Engine identification reads the committed SQLite engine anchor in an isolated
+read-only transaction without copying a healthy live database. Hot rollback
+journals and incomplete WAL families retain private recovery, and unreadable or
+invalid anchors still refuse admission. Artifact-preserving inspection scopes and
+offline maintenance or exclusive source locks also retain private reads so engine identification cannot
+change retained SHM bytes or borrow another process's native custody.
+This applies to conditional update
+capture, engine admission, and version-zero candidate validation probes. The
+binary performing the probe must contain this fix; a candidate cannot repair an
+older installed updater's preflight. Strict recovery captures keep their separate
+artifact-preservation requirements. No schema or worker-version bump is required.
+
+Git-source and immutable updates probe support before passing `--no-lazy-fetch`.
+Older Git runs the same inspection commands without that option; partial clones
+may fetch promised objects. This fix must be present in the installed updater;
+a downloaded candidate cannot repair an older updater's preflight.
+
+Interactive failed-update triage preserves the invoking operator's `PATH`, home,
+and authentication environment before candidate admission enters the managed
+Gateway environment. Repair agents still receive the latest target installation's
+state, config, and workspace selectors and require launch confirmation. The
+installed updater must contain this fix; a downloaded candidate cannot repair
+the older updater's already-captured environment. No schema or config migration
+is required.
+
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. A probe batch that misses its 10-second deadline now
+splits and retries, so slow or cold storage gets an answer; a path that cannot
+answer alone still refuses the backup. Backup refusal and rollback safety are
+unchanged. These changes require the updater performing discovery to contain the
+fix; a candidate cannot change an older installed updater's probe.
+
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
 post-plugin Doctor without an unprepared-source refusal blocking later state
@@ -324,6 +475,12 @@ initiating process; only serializable options cross the migrated-update handoff.
 
 Native `openclaw update migrate` reports progress while inspecting configuration
 and schemas, capturing its database backup, and verifying the migrated schemas.
+Before reporting migration complete, the candidate checks configured and discovered
+nonheld agent databases against its schema and ownership requirements using the
+post-Doctor configuration. This includes stores startup can reopen after their
+registry entries were lost. A refusal retains the recovery backup and prevents
+the supervisor from switching to the candidate. Held deleted-agent databases stay
+outside this check and remain untouched until explicit restoration.
 Update Doctor omits the standalone pre-shutdown transcript archive warmup because
 the updater already owns the stopped-Gateway window. Required archive migrations
 and their integrity and recovery checks still run under maintenance custody.
@@ -368,10 +525,13 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Under the native updater's stopped-writer handoff, backup checkpoints committed WAL
+frames once before recording source identities and taking the recovery image. The
+same integrity and foreign-key checks run on that image without another copy.
 For checkpointed databases under stopped-update custody, backup identifies the
 database engine from the retained backup image instead of acquiring a second
-whole-store image for classification. WAL and rollback-journal captures retain
-their pre-capture engine inspection. Backup digests, PostgreSQL exports, and
+whole-store image for classification. A reader-pinned WAL or rollback journal retains
+private recovery and pre-capture engine inspection. Backup digests, PostgreSQL exports, and
 source-change refusal still apply. The candidate backup worker must contain this change.
 
 Candidate Doctor also accepts an empty WAL index appearing or disappearing
@@ -400,10 +560,20 @@ pass. An explicit `openclaw doctor` continues to run the full pass. This correct
 must be in the candidate Doctor; the installed updater must already support
 retirement-only requests. Older updaters keep their existing full-pass selection.
 
+Standing advice about a custom Codex executable, enabled Computer Use, or authored
+native Codex request parameters that Doctor cannot migrate remains
+visible in Doctor output and update warnings without preventing that narrow pass.
+Invalid inline command arguments, unfinished repairs, and access-policy warnings
+still require the full pass, as do redundant service-tier parameters that Doctor
+can remove. This distinction must be in the candidate Doctor;
+it does not require another updater change.
+
 When a retirement-only request needs the full pass, the candidate Doctor writes a
-fixed `Retirement-only Doctor widened:` reason to stderr. Updated updaters retain
-that reason in the step diagnostics and compacted update history. The candidate
-and installed updater must both contain this diagnostic fix to retain it there;
+fixed `Retirement-only Doctor widened:` reason to stderr for every config blocker,
+including the specific model-retirement condition and Codex warning source.
+Updated updaters retain these reasons in step diagnostics and compacted update
+history. The candidate and installed updater must both contain this diagnostic
+fix to retain every reason there;
 older updaters still run the same repairs.
 
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
@@ -626,6 +796,14 @@ stopped by its operator stays stopped. A recorded named data risk prevents
 automatic startup. The repairing CLI must contain this fix; older managed-service
 activation records can establish the stop without a new stop-time receipt.
 
+Explicit repair also settles version-2 triage/repair leases left in `closing`
+after their owners die, even without recovery metadata. Native triage still
+requires proof that its systemd scope is closed. Repair warns when reclaiming a
+lease; if an owner, descendant, or scope remains live or unverified, it fails with
+the retained lease's owner, version, phase, last activity, and recovery guidance.
+The repairing CLI must contain this fix; a downloaded update candidate cannot
+repair an older updater's blocked admission.
+
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
 the running build. If the replacement never starts, `openclaw update repair`
@@ -701,6 +879,15 @@ Before Doctor admits the installed updater's database capture, plugin rollback
 journal discovery preserves the original SQLite WAL/SHM family. Older updaters
 can then verify their physical fingerprints without a false source-change refusal.
 
+Plugin rollback reservation acquires its lease against the existing shared-state
+schema, then database capture records the settled reservation writes. Credential
+migration remains owned by candidate Doctor's backed-up maintenance.
+Starting or restarting an unchanged service does not require migrating runtime-pin
+metadata; definition rewrites still preserve existing runtime intent.
+Failed split-install activation also keeps recovery results valid when restoring
+the original service is unverified. These fixes must be in the installed updater;
+downloading a candidate cannot change the older driver's reservation or reporting.
+
 After Doctor backs up and admits shared-state maintenance reads, native Codex
 assignment detection reads one database transaction snapshot. Lease renewals and
 other maintenance writes can continue without requiring the database files to
@@ -722,6 +909,16 @@ Windows removes only the junction or symlink before recreating and verifying it.
 A failed link leaves that plugin unprepared with a named error. Doctor retains
 its pending migration obligation while other plugins' migrations continue.
 This repair applies when the candidate loads plugin contracts during Doctor.
+
+Before judging an npm destination whose package path is empty, the updater
+restores a package link that a killed update left under
+`.openclaw.package-backup-<pid>-<time>`, but only when that link resolves to the
+checkout running the update. The destination is then inspected as usual and the
+update continues as an ordinary switch from a dev checkout to a package. Links to
+other checkouts and retained package directories are not moved. The installed
+updater must contain this fix; without it the retry is refused as an
+uninspectable destination until the link is moved back by hand. No journal,
+schema, or protocol change is involved.
 
 ### Migration integrity checks
 
@@ -913,6 +1110,33 @@ the Node executable in a service definition does not update its OpenClaw package
 ```bash
 openclaw update
 ```
+
+### Host prerequisites
+
+Before it stages anything, `openclaw update` checks the host. On a failure it
+prints one `Update refused: ...` line that names what to install or free, and
+changes nothing. The saved report keeps the details.
+
+- **Node:** the target's `engines.node` must accept the Node that the Gateway
+  service runs. The updater reads it from the launchd plist, systemd unit, or
+  Windows task, not from the shell's `PATH`. If the updater's own Node
+  qualifies, the update moves an owned service to it. Otherwise install the
+  named Node (for example `nvm install 24.22.1`) and run the update with it.
+- **Git (Git checkouts):** Git 2.31 or newer. Older Git misreads
+  `git rev-parse --path-format=absolute` instead of failing. The updater looks
+  for Git next to its Node first, then in system directories such as
+  `/usr/bin`, so the refusal names the Git it found.
+- **Disk (package installs):** the install volume must hold about 4.4 times the
+  target's registry `dist.unpackedSize` (the package, its dependencies and npm's
+  cache). Registries that omit `dist.unpackedSize` skip this check. The state
+  snapshot has its own measured check.
+
+Every attempt ends with one update run record. Its `cause` is one of `none`,
+`node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
+`network`, `config-invalid`, `install-failed`, `state-migration-failed`,
+`plugin-failed`, `service-failed`, `interrupted`, `refused` or `unknown`.
+Reports print it as `Cause:`. It is a closed set, so redaction never hides it.
+`openclaw update status --json` shows it as `lastRun.origin.cause`.
 
 Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),
 package updates privately stage the target and let its code judge configuration,
@@ -1107,7 +1331,30 @@ a stopped service stays stopped until repaired. On Linux, regeneration preserves
 the order of retained `PATH` entries and prepends newly added managed entries.
 Paths carried over solely from the old definition still pass the existing safety
 filters. If the definition cannot be preserved, reconciliation requires manual repair.
+Named environment-only overrides do not prevent this convergence: the updater
+rewrites the managed base definition and leaves the operator's drop-ins in place,
+including when restoring the original service after a failed update. Launcher
+overrides, environment resets, and overrides that cannot be fully inspected keep
+the service-root update route. The installed updater must contain this selection
+fix; downloading a newer candidate cannot change an older updater's initial target.
 Deployment-owned definitions retain their existing installation owner.
+
+If a service override keeps the Gateway on a different installation, only that
+installation is updated. Your shell CLI stays unchanged and may no longer support
+the shared config or plugins. Use the Gateway's CLI, or update your shell CLI to
+the same version.
+
+Reinstalling cannot replace a custom launcher override. Doctor reports this even
+when it cannot begin repairs. To change a systemd `ExecStart` override:
+
+1. Run `openclaw gateway status --deep` to find the service.
+2. Inspect it with `systemctl --user cat openclaw-gateway.service`.
+3. Update or remove the launcher override, keeping unrelated settings.
+4. Run `systemctl --user daemon-reload`. If needed, reinstall from the CLI you
+   want the Gateway to use, then check its launcher and health with `openclaw gateway status --deep`.
+
+For system services, omit `--user`; for profiles, use the reported unit name.
+These warnings require an updated CLI; an older updater still uses its old routing.
 
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the
@@ -1280,11 +1527,17 @@ After an upgrade, check the [FreeBSD model-runtime limitation](/install/installe
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
 
-Plugin maintenance does not fail an otherwise successful core update. If a plugin
-cannot be updated, OpenClaw continues with the remaining plugins, keeps the previous
-installation where possible, and prints a short next action. A running updated
-Gateway can also report a plugin that did not load without turning the core update
-into a failure. Individual plugin outcomes remain available in `--json` output.
+Plugin failures never fail an update. If a plugin cannot be updated, OpenClaw
+continues with the remaining plugins, keeps the previous installation where possible,
+and prints a short next action. A plugin that cannot load (for example, one built
+against an older plugin SDK) stays off for that Gateway boot while the Gateway
+serves; its config and data are kept, and the next start or update retries it.
+`openclaw status` shows it in a **Plugins not loaded** row and `openclaw doctor`
+names the load error. Gateway restart and readiness checks, including the
+`gateway restart` an updater runs, never count plugin load errors as unhealthy, and
+plugin-owned Doctor checks do not gate the post-plugin readiness pass. Pending plugin
+data migrations stay warnings. Individual plugin outcomes remain available in
+`--json` output.
 When ClawHub has not published a version-matched official runtime plugin, the
 updater tries its declared trusted npm source for that same version, honoring
 catalog pins. Security and integrity refusals do not permit a source fallback.
@@ -1338,6 +1591,12 @@ contention alone preserves automatic Gateway recovery; an actual data-at-risk
 refusal still blocks recovery. Doctor publishes its completion result only after
 its maintenance resources have been released.
 
+Gateway process respawn and launchd restart scheduling respect active offline
+maintenance ownership. During Doctor restoration, a busy port still refuses an
+unverified listener, but the preserved LaunchAgent is reloaded so launchd can
+retry after that listener exits. This requires the Gateway and restoring CLI to
+contain the fix; an already scheduled restart helper is not cancelled by it.
+
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained
 `.artifacts/dist-artifacts.lock` refuses the update with the recorded owner,
@@ -1355,7 +1614,11 @@ to another volume. Database snapshots use its physical directory so the backup's
 parent-directory durability check can complete. The installed updater must
 contain this fix; a newer candidate cannot repair an older updater's capture.
 
-The canary uses a temporary loopback Gateway port and suppresses background
+Current updaters do not boot a candidate canary before activation; they load
+the candidate's recovery runtime and prove Doctor and Gateway startup after
+activation, with rollback (see [How updates run](/cli/update/how-updates-run#validation-and-activation)).
+Older installed updaters still run the canary described here against this
+version. The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
 Doctor and policy checks use the copied deployment settings, so an accepted
@@ -1504,9 +1767,13 @@ installation records, and matching settings until candidate activation is verifi
 If activation fails, rollback restores that cohort before restarting the previous
 Gateway. Backups precede plugin maintenance. After an interrupted update,
 `openclaw update repair` resumes the recorded plugin settlement under current
-ownership. It preserves later independent changes; conflicting records, settings,
-or artifacts leave recovery unfinished instead of overwriting those changes or
-reporting the old Gateway ready. The updater performing the operation must contain
+ownership. It preserves later independent changes. When a plugin's install
+record, data/settings upgrade obligation, package files, source snapshot, or a
+config file the update wrote changed after the update, rollback keeps that later
+change, restores everything that still matches, and completes. It records the
+kept items in an update warning that repair prints and `openclaw doctor` shows.
+Recovery still stops for a config file whose path was replaced, for config that
+fails validation or secret resolution, and for a corrupt recovery journal. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
 When recovery stays pending, the update prints the first failure below the
 unfinished-recovery refusal and names `openclaw update repair` when it can settle
@@ -1870,6 +2137,11 @@ upstream source, respecting the repository's ref mappings and exclusions. It doe
 not download unrelated branches or change the repository's shallow boundary.
 Stable and beta target inspection fetches release tags only, without refreshing
 remote branches.
+An implicit dev-channel switch from a detached release-tag checkout can use the
+fetched `main` commit even when the configured fetch refspecs only map tags. The
+updater leaves those mappings unchanged and still honors explicit branch exclusions.
+When it creates `main`, it records the selected remote and merge source so later
+dev updates remain managed. It does not take over an existing unmanaged `main`.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so
@@ -1952,7 +2224,9 @@ Update confirmation belongs to the Gateway and profile that opened it. Switching
 Gateways or profiles retires the pending confirmation; open it again on the
 intended Gateway. Native updates also check current administrator access when you
 confirm and show an access error if it was revoked. Once an update starts, its
-progress report remains available through that Gateway's restart.
+progress report remains available through that Gateway's restart. The dialog shows
+"Starting update…" until the progress report arrives and "Reconnecting…" during
+a temporary disconnect.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's

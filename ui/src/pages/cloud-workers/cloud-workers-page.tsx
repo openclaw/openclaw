@@ -7,16 +7,21 @@ import {
   createStore,
   Errored,
   Loading,
+  Match,
+  Switch,
   onSettled,
   Show,
   For,
 } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
   SettingsEmpty,
+  SettingsLoadingSkeleton,
+  RetryAction,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
@@ -609,7 +614,7 @@ export function CloudWorkersPage() {
           machines={() => (
             <>
               <Show when={!hasManageAccess()}>
-                <div class="callout warning" role="note">
+                <InlineAlert tone="warning" role="note">
                   {t(
                     !gateway.connected
                       ? "cloudWorkersPage.reconnectRequired"
@@ -624,21 +629,21 @@ export function CloudWorkersPage() {
                         ? "cloudWorkersPage.unavailableAccess"
                         : "cloudWorkersPage.adminRequired",
                   )}
-                </div>
+                </InlineAlert>
               </Show>
               <Errored
                 fallback={(error) => (
-                  <div class="callout warning" role="status">
+                  <InlineAlert tone="warning" role="status">
                     {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
-                  </div>
+                  </InlineAlert>
                 )}
               >
                 <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
               </Errored>
               <Show when={saveState().error && !view.editor}>
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   {saveState().error}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={saveState().notice}>
                 <div class="callout" role="status">
@@ -647,7 +652,7 @@ export function CloudWorkersPage() {
               </Show>
               <SettingsSection
                 title={t("cloudWorkersPage.environments.machines")}
-                count={profiles().length}
+                count={editableConfig() ? profiles().length : undefined}
                 actions={
                   <Show when={!saving() && canManage()}>
                     <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
@@ -658,7 +663,27 @@ export function CloudWorkersPage() {
               >
                 <For
                   each={profiles()}
-                  fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+                  fallback={
+                    <Switch>
+                      <Match when={editableConfig()}>
+                        <SettingsEmpty message={t("cloudWorkersPage.empty")} />
+                      </Match>
+                      <Match when={configProjection.read().state.configLoading}>
+                        <SettingsLoadingSkeleton rows={1} />
+                      </Match>
+                      <Match when={configProjection.read().state.lastError}>
+                        {(error) => (
+                          <InlineAlert tone="warning" role="alert">
+                            {error()}{" "}
+                            <RetryAction
+                              disabled={!gateway.connected}
+                              onRetry={() => void context.runtimeConfig.refresh()}
+                            />
+                          </InlineAlert>
+                        )}
+                      </Match>
+                    </Switch>
+                  }
                 >
                   {(profile) => renderProfile(profile)}
                 </For>

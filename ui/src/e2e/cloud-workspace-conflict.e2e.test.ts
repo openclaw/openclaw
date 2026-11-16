@@ -263,7 +263,7 @@ suite.define(() => {
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
           const summary = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-          const diagnostic = alert.locator("pre");
+          const diagnostic = alert.locator(".lazy-view-error__detail");
           const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. Check its device and try again. "}${workerFailureDiagnostic}`;
           expect(await summary.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
@@ -298,21 +298,11 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
-            const compact = width === 320 && failedState !== "request";
-            const firstAction = compact
-              ? alert.getByRole("button", { name: "Refresh", exact: true })
-              : copy;
-            await page.keyboard.press("Tab");
-            expect(await firstAction.evaluate((node) => node === document.activeElement)).toBe(
-              true,
-            );
             await page.keyboard.press("Tab");
             expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
-            if (compact) {
-              await page.keyboard.press("Tab");
-              expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
-              await page.keyboard.press("Shift+Tab");
-            }
+            await page.keyboard.press("Tab");
+            expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+            await page.keyboard.press("Shift+Tab");
             await page.keyboard.press("PageDown");
             await expect
               .poll(() => diagnostic.evaluate((node) => node.scrollTop))

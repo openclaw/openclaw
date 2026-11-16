@@ -110,18 +110,22 @@ it("retries a rejected catalog read through the current owner", async () => {
 });
 
 it.each([
-  { name: "guest click", writable: true, advertised: true, enter: false },
-  { name: "guest Enter", writable: true, advertised: true, enter: true },
+  { name: "writer click", writable: true, advertised: true, enter: false },
+  { name: "writer Enter", writable: true, advertised: true, enter: true },
   { name: "IME Enter", writable: true, advertised: true, enter: true, composing: "flag" },
   { name: "WebKit IME Enter", writable: true, advertised: true, enter: true, composing: "end" },
-  { name: "read-only Enter", writable: false, advertised: true, enter: true },
+  { name: "guest Enter", writable: false, advertised: true, enter: true },
   { name: "unadvertised create", writable: true, advertised: false, enter: true },
 ])(
   "gates pasted Git URL selection for $name",
   async ({ writable, advertised, enter, composing }) => {
     const cloneUrl = "https://github.com/openclaw/openclaw.git";
     const f = createDraftFixture({
-      scopes: ["operator.sessions.read", ...(writable ? ["operator.sessions.write"] : [])],
+      scopes: [
+        "operator.sessions.read",
+        "operator.sessions.write",
+        ...(writable ? ["operator.write"] : []),
+      ],
       methods: ["projects.add", ...(advertised ? ["sessions.create"] : [])],
     });
     f.place.browser.popoverCallbacks("project").onPopoverShow();

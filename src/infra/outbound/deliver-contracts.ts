@@ -211,7 +211,7 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Producer-specific durable recovery attempt budget. */
   maxRetries?: number;
-  /** @internal Only the ordinary inbound final dispatcher grants bounded text replay. */
+  /** @internal Marks an ordinary agent final; the channel's durableFinal adapter grants bounded text replay. */
   retryAmbiguousFinalText?: true;
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;
@@ -235,12 +235,8 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   transcriptDeliveryId?: string;
   /** @internal State root captured for this delivery; history never follows a later ambient root. */
   transcriptStateDir?: string;
-  /** Pins destination history to the conversation generation the caller observed. */
-  transcriptExpectedGeneration?: {
-    sessionKey?: string;
-    sessionId: string;
-    lifecycleRevision?: string;
-  };
+  /** Pins destination history to the caller's conversation when several share an address. */
+  transcriptExpectedGeneration?: { sessionKey?: string };
   /** Background producer recorded on destination history rows. */
   transcriptProvenance?: BackgroundSessionResultProvenance;
   /** Receives warnings when a confirmed send could not be added to history. */

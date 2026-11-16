@@ -221,6 +221,11 @@ export async function runWithGatewayRequestEnvelope<T>(
       return await options.reject(postAdmissionRateLimitError);
     }
     const releaseForegroundWork = retainSessionListForegroundWork();
+    let interactiveStateRead =
+      client?.internal?.authenticatedControlUi === true &&
+      !client.internal.agentRuntimeIdentity &&
+      !client.internal.syntheticClient &&
+      (method === "themes.list" || method === "users.prefs.get" || method === "agents.list");
     try {
       const pluginRegistry =
         (options.methodRegistry.pluginRegistry as PluginRegistry | undefined) ??
@@ -233,6 +238,9 @@ export async function runWithGatewayRequestEnvelope<T>(
           // Detached turn admission needs the live instance resolver, not a captured request context.
           resolveGatewayContext: options.context.resolveGatewayContext,
           client,
+          ...(interactiveStateRead
+            ? { canUseInteractiveStateReadCapacity: () => interactiveStateRead }
+            : {}),
           signal: options.signal,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,
           isWebchatConnect: options.isWebchatConnect,
@@ -252,6 +260,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }
       throw error;
     } finally {
+      interactiveStateRead = false;
       releaseForegroundWork();
     }
   }
@@ -271,6 +280,7 @@ export async function handleGatewayRequest(
     extraHandlers?: GatewayRequestHandlers;
     admission?: "continuation";
     requestEntry?: GatewayRequestEntry;
+    onHandlerStart?: () => void;
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
@@ -609,18 +619,22 @@ export async function handleGatewayRequest(
         }
         return GatewayRpcDiagnostics.runHandler(
           req.method,
-          () =>
-            sharing
-              ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
-                  runtimeAuthority?.assertCurrent();
-                  profileBinding?.assertCurrent();
-                  assertOperatorCurrent();
-                  requestMutationAuthority.assertCurrent();
-                  authorization.sessionAccessAuthority?.assertCurrent();
-                  sessionMutationAuthorization?.assertCurrent();
-                  signal?.throwIfAborted();
-                })
-              : preparedHandler(handlerOptions),
+          () => {
+            if (sharing) {
+              // Shared reads cannot commit a write; their failed delivery stays retryable.
+              return dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
+                runtimeAuthority?.assertCurrent();
+                profileBinding?.assertCurrent();
+                assertOperatorCurrent();
+                requestMutationAuthority.assertCurrent();
+                authorization.sessionAccessAuthority?.assertCurrent();
+                sessionMutationAuthorization?.assertCurrent();
+                signal?.throwIfAborted();
+              });
+            }
+            opts.onHandlerStart?.();
+            return preparedHandler(handlerOptions);
+          },
           diagnostics,
         );
       };

@@ -247,15 +247,25 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
       policy: "configured",
       permissionMode: undefined,
       operatorHint: "workspace-contained by configuration",
+      recoveryHint:
+        "Keep file paths within the bound root. For an authorized task in another repository, " +
+        "when session and sender policy permit, use a worker bound to that repository; when " +
+        "starting one with sessions_spawn, set cwd to that repository. Changing exec workdir " +
+        "does not rebind file tools.",
     },
     {
       policy: "guarded",
       permissionMode: "guarded" as const,
       operatorHint: "workspace-contained by this session's permission mode",
+      recoveryHint:
+        "Keep file paths within this session's recorded root. A hidden native sessions_spawn child with only " +
+        "a different cwd inherits this root and will also be blocked. Do not use that as recovery. " +
+        "For an authorized task outside it, the operator must use a " +
+        "session whose recorded root includes the target repository.",
     },
   ])(
     "reports the $policy worker apply_patch containment owner without changing the rejection",
-    async ({ permissionMode, operatorHint }) => {
+    async ({ permissionMode, operatorHint, recoveryHint }) => {
       const { gateway, workspaceDir, launch } = await setup({
         inferencePlans: [
           {
@@ -295,15 +305,13 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
         const failure = {
           status: "error",
           tool: "apply_patch",
-          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
+          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt. ${recoveryHint}`,
         };
         const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
           (message) => message.role === "toolResult",
         );
         expect(toolResult).toMatchObject({ toolName: "apply_patch", details: failure });
-        expect(toolResult?.content).toEqual([
-          { type: "text", text: JSON.stringify(failure, null, 2) },
-        ]);
+        expect(toolResult?.content).toEqual([{ type: "text", text: JSON.stringify(failure) }]);
         expect(JSON.stringify(toolResult)).not.toContain(operatorHint);
         const operatorLogs = logError.mock.calls
           .map(([message]) => message)

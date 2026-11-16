@@ -145,35 +145,42 @@ async function fetchGoogleCalendarEvents(params: GoogleMeetCalendarQuery) {
   const now = new Date();
   const defaultTimeMax = new Date(now);
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
-  return requestGoogleApi(
-    {
-      url: `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
-      query: {
-        maxResults: 50,
-        orderBy: "startTime",
-        q: params.eventQuery?.trim() || undefined,
-        showDeleted: false,
-        singleEvents: true,
-        timeMin: params.timeMin ?? now.toISOString(),
-        timeMax: params.timeMax ?? defaultTimeMax.toISOString(),
+  const events: GoogleMeetCalendarEvent[] = [];
+  let pageToken: string | undefined;
+  do {
+    pageToken = await requestGoogleApi(
+      {
+        url: `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
+        query: {
+          maxResults: 50,
+          orderBy: "startTime",
+          q: params.eventQuery?.trim() || undefined,
+          showDeleted: false,
+          singleEvents: true,
+          timeMin: params.timeMin ?? now.toISOString(),
+          timeMax: params.timeMax ?? defaultTimeMax.toISOString(),
+          pageToken,
+        },
+        accessToken: params.accessToken,
+        allowedHostname: GOOGLE_CALENDAR_API_HOST,
+        auditContext: "google-meet.calendar.events.list",
+        prefix: "Google Calendar events.list",
+        scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
       },
-      accessToken: params.accessToken,
-      allowedHostname: GOOGLE_CALENDAR_API_HOST,
-      auditContext: "google-meet.calendar.events.list",
-      prefix: "Google Calendar events.list",
-      scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
-    },
-    async (response) => {
-      const payload = await readProviderJsonResponse<{ items?: unknown }>(
-        response,
-        "Google Calendar events.list",
-      );
-      if (payload.items !== undefined && !Array.isArray(payload.items)) {
-        throw new Error("Google Calendar events.list response had non-array items");
-      }
-      return { calendarId, events: (payload.items ?? []) as GoogleMeetCalendarEvent[], now };
-    },
-  );
+      async (response) => {
+        const payload = await readProviderJsonResponse<{ items?: unknown; nextPageToken?: string }>(
+          response,
+          "Google Calendar events.list",
+        );
+        if (payload.items !== undefined && !Array.isArray(payload.items)) {
+          throw new Error("Google Calendar events.list response had non-array items");
+        }
+        events.push(...((payload.items ?? []) as GoogleMeetCalendarEvent[]));
+        return payload.nextPageToken;
+      },
+    );
+  } while (pageToken);
+  return { calendarId, events, now };
 }
 
 export async function listGoogleMeetCalendarEvents(params: GoogleMeetCalendarQuery) {

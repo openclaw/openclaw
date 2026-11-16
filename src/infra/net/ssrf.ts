@@ -1,5 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
-import { lookup as dnsLookup } from "node:dns/promises";
+import dns from "node:dns/promises";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -567,7 +567,7 @@ export async function resolvePinnedHostnameWithPolicy(
     params.policy,
   );
 
-  const lookupFn: LookupFn = params.lookupFn ?? dnsLookup;
+  const lookupFn: LookupFn = params.lookupFn ?? dns.lookup;
   const results = normalizeLookupResults(
     await racePromiseWithAbortSignal(
       () => lookupFn(normalized, { all: true }),
@@ -606,7 +606,7 @@ export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFP
 
 export async function resolvePinnedHostname(
   hostname: string,
-  lookupFn: LookupFn = dnsLookup,
+  lookupFn: LookupFn = dns.lookup,
 ): Promise<PinnedHostname> {
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
