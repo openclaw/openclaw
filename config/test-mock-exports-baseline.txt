@@ -5774,7 +5774,6 @@
 ["src/process/supervisor/supervisor.readiness.test.ts","./adapters/child.js","6a9b936069872cc6392ebb029b6f561168223c5bc1315bea12a968056544f4bd",1]
 ["src/process/supervisor/supervisor.test.ts","./adapters/child.js","29213530c8191593fe2df3b44c1d607ba19d165e1265dab2ec3faca5ba430bb6",1]
 ["src/process/supervisor/supervisor.test.ts","./adapters/pty.js","7ef3fb87d26a48b22ff453cceefe21428cf215fc5b5711d855288465f8cc78e0",1]
-["src/process/terminal-pty-node.failure.test.ts","../infra/node-runtime-executable.js","94eb9009dcea003110e1030141625c99e106a3e11b3caef7cbd22754afb5a082",1]
 ["src/process/terminal-pty.test.ts","./kill-tree.js","8b0e39ccf95d2edf6157ff8b256dbbe2b43d725b8e8e95e6b4edc9781b3a04f6",1]
 ["src/projects/project-environment.test.ts","../agents/agent-scope-config.js","4ecca40d9590d67cf7af9fcbf82d4aa36c977d5b89563560707fe659208738e6",1]
 ["src/projects/project-environment.test.ts","../agents/agent-scope.js","528b4d5a7dc219df95da745bc97ea96248bba7ec695bd5798525da7a7784d237",1]
