@@ -150,6 +150,7 @@ function prepareActivityGroup(
     currentActivity.length ? currentActivity : rawHeadlineActivity,
     summaryByCard,
     opts.subagents?.subagentSessions,
+    opts.subagents?.recordedStopNames,
   );
   const codeExecutions = new Set<string>();
   const executedCommands = new Set<string>();
@@ -302,6 +303,7 @@ function prepareActivityGroup(
         recorded ? [recorded] : [],
         summaryByCard,
         opts.subagents?.subagentSessions,
+        opts.subagents?.recordedStopNames,
       );
     },
     groupSummaryLabel,

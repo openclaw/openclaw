@@ -11,6 +11,7 @@ import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts"
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
+import { indexRecordedSubagentStopNames } from "../chat-subagent-history.ts";
 import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
@@ -77,6 +78,9 @@ export function projectChatTranscript(
     props,
   );
   const actionProps = merge(props, actions);
+  const recordedStopNames = indexRecordedSubagentStopNames(props.messages);
+  const recordedStopNamesKey = JSON.stringify([...recordedStopNames]);
+  const subagentActions = merge(actionProps, { recordedStopNames });
   const asyncQuestionGeneration = state.asyncQuestionGeneration;
   const realtimeConversation = projectRealtimeTalkConversation(props);
   const { asyncQuestions, selectedSession: activeSession } = props;
@@ -347,7 +351,7 @@ export function projectChatTranscript(
       onToggleAssistantMessageExpanded: recovery.expand,
       isToolExpanded: (id: string, card?: ToolCard) => toolExpanded(id, card) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
-      subagents: actionProps,
+      subagents: subagentActions,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
       assistantTextAvatar: assistantIdentity.textAvatar,
@@ -526,6 +530,7 @@ export function projectChatTranscript(
         hasTools ? presented : undefined,
         hasTools ? sharedMessageRenderOptions.toolMessageSource : undefined,
         readsRoster ? subagents.rowsKey : undefined,
+        hasTools ? recordedStopNamesKey : undefined,
       ];
     },
   );

@@ -26,53 +26,55 @@ export function ChatSubagentCompletion(props: {
     return t("chat.toolCards.agentsFinished", { names: marker }).split(marker);
   });
   return (
-    <div
-      class="chat-tool-msg-summary chat-tool-row chat-tool-row--subagent"
-      aria-label={t("chat.toolCards.agentsFinished", { names: names() })}
-    >
-      <span class="chat-tool-msg-summary__icon" aria-hidden="true">
-        <Icon name="bot" />
-      </span>
-      <span class="chat-tool-disclosure__content" style={{ gap: "0" }}>
-        <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
-          {sentence()[0]}
+    <div class="chat-tool-msg-collapse">
+      <div
+        class="chat-tool-msg-summary chat-tool-row chat-tool-row--subagent"
+        aria-label={t("chat.toolCards.agentsFinished", { names: names() })}
+      >
+        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+          <Icon name="bot" />
         </span>
-        <span class="chat-tool-row__title" title={names()}>
-          <For each={parts()} keyed={(part) => part.type + part.value}>
-            {(part) => (
-              <Show when={part().type === "element"} fallback={part().value}>
-                <Show
-                  when={part().value !== "more"}
-                  fallback={t("chat.toolCards.lifecycleMoreCount", {
-                    count: String(props.completions.length - 2),
-                  })}
-                >
+        <span class="chat-tool-disclosure__content" style={{ gap: "0" }}>
+          <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
+            {sentence()[0]}
+          </span>
+          <span class="chat-tool-row__title" title={names()}>
+            <For each={parts()} keyed={(part) => part.type + part.value}>
+              {(part) => (
+                <Show when={part().type === "element"} fallback={part().value}>
                   <Show
-                    when={props.onOpenSession}
-                    fallback={props.completions[Number(part().value)]?.label}
+                    when={part().value !== "more"}
+                    fallback={t("chat.toolCards.lifecycleMoreCount", {
+                      count: String(props.completions.length - 2),
+                    })}
                   >
-                    <button
-                      type="button"
-                      class="chat-tool-row__subagent-link"
-                      onClick={() => {
-                        const entry = props.completions[Number(part().value)];
-                        if (entry) {
-                          props.onOpenSession?.(entry.sessionKey);
-                        }
-                      }}
+                    <Show
+                      when={props.onOpenSession}
+                      fallback={props.completions[Number(part().value)]?.label}
                     >
-                      {props.completions[Number(part().value)]?.label}
-                    </button>
+                      <button
+                        type="button"
+                        class="chat-tool-row__subagent-link"
+                        onClick={() => {
+                          const entry = props.completions[Number(part().value)];
+                          if (entry) {
+                            props.onOpenSession?.(entry.sessionKey);
+                          }
+                        }}
+                      >
+                        {props.completions[Number(part().value)]?.label}
+                      </button>
+                    </Show>
                   </Show>
                 </Show>
-              </Show>
-            )}
-          </For>
+              )}
+            </For>
+          </span>
+          <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
+            {sentence()[1]}
+          </span>
         </span>
-        <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
-          {sentence()[1]}
-        </span>
-      </span>
+      </div>
     </div>
   );
 }

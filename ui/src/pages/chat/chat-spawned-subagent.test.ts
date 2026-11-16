@@ -1,12 +1,12 @@
-/* @vitest-environment jsdom */
-
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+/* @vitest-environment jsdom */
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
+import { indexRecordedSubagentStopNames } from "./chat-subagent-history.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { ActivityGroup } from "./components/chat-message-group-view.tsx";
 import { createActivityGroupHarness } from "./components/chat-message-native.test-support.tsx";
@@ -509,36 +509,40 @@ it.each(["launch", "failed stop", "skipped stop", "confirmed stop"] as const)(
             sessionKey: worker.key,
             targetState: { task: { status: kind === "confirmed stop" ? "cancelled" : "running" } },
           });
-    root.render(
+    const operation = createAssistantMessage(
       [
-        createToolGroup("intrinsic", [
-          createMessageEntry(
-            "intrinsic-entry",
-            createAssistantMessage(
-              [
-                createToolCall(
-                  "intrinsic-call",
-                  name,
-                  kind === "launch" ? { task: "Work" } : { action: "cancel", runId: "child-run" },
-                ),
-                createToolResultBlock("intrinsic-call", name, result, {
-                  isError: kind === "failed stop",
-                  ...(kind === "skipped stop"
-                    ? { details: { status: "skipped", deniedReason: "steering" } }
-                    : {}),
-                }),
-              ],
-              { runId: "parent" },
-            ),
-          ),
-        ]),
+        createToolCall(
+          "intrinsic-call",
+          name,
+          kind === "launch" ? { task: "Work" } : { action: "cancel", runId: "child-run" },
+        ),
+        createToolResultBlock("intrinsic-call", name, result, {
+          isError: kind === "failed stop",
+          ...(kind === "skipped stop"
+            ? { details: { status: "skipped", deniedReason: "steering" } }
+            : {}),
+        }),
       ],
-      {
-        showReasoning: false,
-        showToolCalls: true,
-        subagents: { subagentSessions: [worker], onOpenSession },
-      },
+      { runId: "parent", __openclaw: { id: "stop-result" } },
     );
+    const render = (
+      message: typeof operation,
+      roster: GatewaySessionRow[],
+      history: unknown[] = [],
+    ) =>
+      root.render(
+        [createToolGroup("intrinsic", [createMessageEntry("intrinsic-entry", message)])],
+        {
+          showReasoning: false,
+          showToolCalls: true,
+          subagents: {
+            subagentSessions: roster,
+            onOpenSession,
+            recordedStopNames: indexRecordedSubagentStopNames(history),
+          },
+        },
+      );
+    render(operation, [worker]);
     await settleToolBridges(container);
     const row = container.querySelector(".chat-tool-row")!;
     expect(row.textContent).toContain("Cinder");
@@ -552,6 +556,88 @@ it.each(["launch", "failed stop", "skipped stop", "confirmed stop"] as const)(
       );
       if (kind === "confirmed stop") {
         expect(row.querySelector(".chat-tool-failure, .chat-tool-skipped")).toBeNull();
+        const prior = createAssistantMessage(
+          [
+            createToolCall("launch", "sessions_spawn", { label: "Cinder" }),
+            createToolResultBlock(
+              "launch",
+              "sessions_spawn",
+              JSON.stringify({
+                status: "accepted",
+                childSessionKey: worker.key,
+                runId: "child-run",
+                label: "Cinder",
+              }),
+            ),
+          ],
+          { runId: "parent", __openclaw: { id: "launch-result" } },
+        );
+        const differentRun = createAssistantMessage(
+          [
+            createToolCall("launch", "sessions_spawn", { label: "Other run" }),
+            createToolResultBlock(
+              "launch",
+              "sessions_spawn",
+              JSON.stringify({
+                status: "accepted",
+                childSessionKey: worker.key,
+                runId: "older-child-run",
+                label: "Other run",
+              }),
+            ),
+          ],
+          { runId: "parent", __openclaw: { id: "older-launch-result" } },
+        );
+        const currentRunStop = createAssistantMessage(
+          [
+            createToolCall("intrinsic-call", "sessions", {
+              action: "stop",
+              sessionKey: worker.key,
+            }),
+            createToolResultBlock(
+              "intrinsic-call",
+              "sessions",
+              JSON.stringify({
+                ok: true,
+                status: "aborted",
+                abortedRunId: "child-run",
+              }),
+            ),
+          ],
+          { runId: "parent", __openclaw: { id: "stop-current-result" } },
+        );
+        const otherParent = { ...operation, runId: "other-parent" };
+        const positionedStop = {
+          ...operation,
+          __openclaw: {
+            id: "stop-result",
+            transcriptPosition: { source: "history", rawSeq: 35 },
+          },
+        };
+        const futureLaunch = {
+          ...prior,
+          __openclaw: {
+            id: "future-launch",
+            transcriptPosition: { source: "history", rawSeq: 40 },
+          },
+        };
+        for (const scenario of [
+          { message: operation, history: [prior, operation], label: "Stopped Cinder" },
+          { message: operation, history: [differentRun, operation], label: "Stopped an agent" },
+          { message: operation, history: [operation, prior], label: "Stopped an agent" },
+          {
+            message: positionedStop,
+            history: [futureLaunch, positionedStop],
+            label: "Stopped an agent",
+          },
+          { message: operation, history: [operation], label: "Stopped an agent" },
+          { message: currentRunStop, history: [prior, currentRunStop], label: "Stopped Cinder" },
+          { message: otherParent, history: [prior, operation], label: "Stopped an agent" },
+        ]) {
+          render(scenario.message, [], scenario.history);
+          await settleToolBridges(container);
+          expect(container.querySelector(".chat-tool-row")?.textContent).toBe(scenario.label);
+        }
       }
     }
     expect(container.querySelector(".chat-activity-group__summary")).toBeNull();

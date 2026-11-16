@@ -17,6 +17,7 @@ export function selectActivityHeadline(
   activity: readonly AgentActivityItem[],
   preparedByCard: ReadonlyMap<ToolCard, AgentActivityItem>,
   subagentSessions?: readonly GatewaySessionRow[],
+  recordedStopNames?: ReadonlyMap<string, string>,
 ): ActivityHeadline | undefined {
   const latest = activity.at(-1);
   const urgent = latest?.status === "failed" || latest?.status === "blocked";
@@ -37,7 +38,7 @@ export function selectActivityHeadline(
         continue;
       }
       hasRawCard = true;
-      const addressed = addressedSession(card, subagentSessions);
+      const addressed = addressedSession(card, subagentSessions, recordedStopNames);
       const toolName = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
       operationLabel =
         addressed &&

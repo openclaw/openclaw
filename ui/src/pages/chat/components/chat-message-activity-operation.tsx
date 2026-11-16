@@ -129,7 +129,8 @@ export function LifecycleOperations(props: {
         name:
           props.kind === "launch"
             ? launch?.label
-            : addressedSession(card, subagents?.subagentSessions)?.name,
+            : addressedSession(card, subagents?.subagentSessions, subagents?.recordedStopNames)
+                ?.name,
         key: launch?.childKey,
         open: (child?.session?.listed && subagents?.onOpenSubagent) || subagents?.onOpenSession,
       };
@@ -204,7 +205,11 @@ export function LifecycleOperations(props: {
       ? resolveToolOperationLabel(
           first().group.card,
           resolveToolCardOutcome(first().group.card, first().options.runActive),
-          addressedSession(first().group.card, first().options.subagents?.subagentSessions),
+          addressedSession(
+            first().group.card,
+            first().options.subagents?.subagentSessions,
+            first().options.subagents?.recordedStopNames,
+          ),
         )
       : [verb(), ...entries().map((entry) => entry.name)].filter(Boolean).join(" "));
   return (

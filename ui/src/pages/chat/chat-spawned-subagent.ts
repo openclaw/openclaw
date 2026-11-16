@@ -50,11 +50,12 @@ export type SubagentRowContext = Pick<
   onOpenSubagent?: (sessionKey: string) => void;
   /** Opens a session; any other subagent opens this way. */
   onOpenSession?: (sessionKey: string) => void;
+  recordedStopNames?: ReadonlyMap<string, string>;
 };
 
 export type SpawnedSubagent = NonNullable<ReturnType<typeof resolveSpawnedSubagent>>;
 
-type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText">;
+type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText" | "runId" | "callId">;
 
 /**
  * What one `sessions_spawn` call started. It opened a session in its own right,
@@ -119,6 +120,7 @@ export function resolveSessionLaunchPresentation(
     kind,
     label: launch.label ?? text(result?.label) ?? text(row?.label) ?? text(row?.displayName),
     childKey: launch.childKey,
+    runId: text(result?.runId),
     phase,
   } as const;
 }
@@ -136,15 +138,16 @@ export function readSubagentCancellation(card: LaunchCard & Pick<ToolCard, "isEr
     const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
     const runId = text(args.runId);
     const abortedRunId = text(result.abortedRunId);
+    const stopped =
+      card.isError !== true &&
+      result.ok === true &&
+      result.status === "aborted" &&
+      abortedRunId !== undefined &&
+      (runId === undefined || abortedRunId === runId);
     return {
-      runId,
+      runId: runId ?? (stopped ? abortedRunId : undefined),
       sessionKey,
-      stopped:
-        card.isError !== true &&
-        result.ok === true &&
-        result.status === "aborted" &&
-        abortedRunId !== undefined &&
-        (runId === undefined || abortedRunId === runId),
+      stopped,
     };
   }
   if (name !== "subagents" || args?.action !== "cancel") {
@@ -202,6 +205,7 @@ function readAddressedSessionKey(card: LaunchCard): string | undefined {
 export function addressedSession(
   card: LaunchCard,
   rows: readonly GatewaySessionRow[] | undefined,
+  recordedStopNames?: ReadonlyMap<string, string>,
 ): { name?: string; names?: string[] } | undefined {
   const call = unwrapToolCallForDisplay(card);
   const cancellation = readSubagentCancellation(card);
@@ -215,7 +219,7 @@ export function addressedSession(
       name:
         row && (text(row.label) || text(row.displayName) || text(row.derivedTitle))
           ? resolveSessionDisplayName(row.key, row)
-          : undefined,
+          : recordedStopNames?.get(subagentStopIdentity(card) ?? ""),
     };
   }
   if (call.name.trim().toLowerCase() === "agents_wait") {
@@ -373,4 +377,9 @@ export function subagentCompletionNames(entries: readonly SubagentCompletion[]):
       ? [t("chat.toolCards.lifecycleMoreCount", { count: String(entries.length - 2) })]
       : []),
   ]);
+}
+
+/** A historical name belongs to this exact parent invocation, not another use of its ID. */
+export function subagentStopIdentity(card: Pick<ToolCard, "runId" | "callId">) {
+  return card.runId && card.callId ? JSON.stringify([card.runId, card.callId]) : undefined;
 }

@@ -177,7 +177,11 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
               {resolveToolOperationLabel(
                 props.card,
                 outcome(),
-                addressedSession(props.card, props.options.subagents?.subagentSessions),
+                addressedSession(
+                  props.card,
+                  props.options.subagents?.subagentSessions,
+                  props.options.subagents?.recordedStopNames,
+                ),
               )}
             </span>
           }

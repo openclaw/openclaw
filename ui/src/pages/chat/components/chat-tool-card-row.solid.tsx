@@ -262,7 +262,11 @@ export function ToolCardRow(props: ToolCardProps) {
               view={view()}
               outcome={outcome()}
               running={running()}
-              addressed={addressedSession(card(), props.options.subagents?.subagentSessions)}
+              addressed={addressedSession(
+                card(),
+                props.options.subagents?.subagentSessions,
+                props.options.subagents?.recordedStopNames,
+              )}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
             />
