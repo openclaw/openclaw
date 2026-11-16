@@ -617,8 +617,15 @@ export class SidebarSessionProjection {
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
-      const { initialLimit, key } = sidebarSessionPagination(grouping, section.id);
-      const visibleLimit = input.visibleSessionLimits.get(key) ?? initialLimit;
+      const { initialLimit: pageLimit, key } = sidebarSessionPagination(grouping, section.id);
+      // Other already windows its rows to the sidebar viewport. Let the list
+      // scroll rather than hiding loaded sessions behind another local page.
+      const initialLimit =
+        grouping !== "none" && section.id === "ungrouped" ? totalRowCount : pageLimit;
+      const visibleLimit = Math.max(
+        initialLimit,
+        input.visibleSessionLimits.get(key) ?? initialLimit,
+      );
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.containsActiveDescendant || row.pinned),
         0,

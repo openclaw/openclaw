@@ -13,7 +13,7 @@ import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
-  it("paginates each expanded section independently", async () => {
+  it("shows every Other session while named sections keep independent pages", async () => {
     const threadKeys = Array.from({ length: 17 }, (_, index) => `agent:main:thread-${index}`);
     const categoryKeys = Array.from({ length: 17 }, (_, index) => `agent:main:alpha-${index}`);
     const sessions = createSessionsHarness("main", [...threadKeys, ...categoryKeys]);
@@ -30,20 +30,20 @@ describe("AppSidebar session section visibility", () => {
     const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
 
     expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
+    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
     expect(threads?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
       "Other",
     );
     expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
-    expect(threads?.querySelector('[aria-label="Show more"]')).not.toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(2);
+    expect(threads?.querySelector(".sidebar-session-pagination")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(1);
 
-    threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
+    category?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
     await settleLitElement(sidebar);
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
+    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
     expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
-    expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
+    expect(category?.querySelector('[aria-label="Show more"]')).toBeNull();
     expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
   });
 

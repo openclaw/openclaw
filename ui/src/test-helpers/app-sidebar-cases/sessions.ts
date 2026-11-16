@@ -126,7 +126,7 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
   });
 
-  it("keeps session pages scoped to grouping and collapses to each initial window", async () => {
+  it("keeps flat pages scoped to grouping while grouped Other stays unpaged", async () => {
     const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
@@ -143,7 +143,13 @@ describe("AppSidebar session pagination", () => {
     for (const grouping of ["none", "category", "person", "project"] as const) {
       setSessionsGrouping(sidebar.sessionOrganizer, grouping);
       await settleLitElement(sidebar);
-      const initial = grouping === "none" ? 30 : 15;
+      if (grouping !== "none") {
+        expect(rows()).toHaveLength(61);
+        expect(button("Show more")).toBeNull();
+        expect(button("Collapse")).toBeNull();
+        continue;
+      }
+      const initial = 30;
       expect(rows()).toHaveLength(initial);
       expect(button("Collapse")).toBeNull();
       await click("Show more");

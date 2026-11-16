@@ -286,6 +286,10 @@ describe("sidebar session feedback", () => {
       (_, i) => "agent:main:thread-" + i,
     );
     const harness = createSessionsHarness("main", keys);
+    // Exercise local paging in a named section; Other uses natural scrolling.
+    harness.result.sessions.forEach((row) => {
+      row.category = "Review";
+    });
     const first = { ...harness.sessions.state.result!, hasMore: true, nextOffset: keys.length };
     harness.list.mockResolvedValue(first);
     const { sidebar } = await mountSidebar(
@@ -337,7 +341,7 @@ describe("sidebar session feedback", () => {
       ...first,
       hasMore: false,
       nextOffset: keys.length + 1,
-      sessions: [{ key: "agent:main:last", kind: "direct", updatedAt: 1 }],
+      sessions: [{ key: "agent:main:last", kind: "direct", category: "Review", updatedAt: 1 }],
     });
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).toBeNull());
     expect(sidebar.querySelector('[data-session-key="agent:main:last"]')).not.toBeNull();
@@ -346,6 +350,10 @@ describe("sidebar session feedback", () => {
   it("does not expand a new grouping when a previous grouping's roster page settles", async () => {
     const keys = Array.from({ length: 40 }, (_, index) => `agent:main:page-${index}`);
     const harness = createSessionsHarness("main", keys);
+    // Exercise local paging in a named section; Other uses natural scrolling.
+    harness.result.sessions.forEach((row) => {
+      row.category = "Review";
+    });
     harness.list.mockResolvedValue({
       ...harness.sessions.state.result!,
       hasMore: true,
@@ -369,7 +377,7 @@ describe("sidebar session feedback", () => {
       ...harness.sessions.state.result!,
       hasMore: false,
       nextOffset: 41,
-      sessions: [{ key: "agent:main:page-last", kind: "direct", updatedAt: 1 }],
+      sessions: [{ key: "agent:main:page-last", kind: "direct", category: "Review", updatedAt: 1 }],
     });
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).toBeNull());
     expect(

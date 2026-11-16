@@ -131,6 +131,8 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   ]);
   wide.result!.sessions.forEach((row, index) => {
     row.updatedAt = 100 - index;
+    // Named sections still page; Other now exposes every loaded row.
+    row.category = "Work";
   });
   sessions.publishList(wide);
   await settleRoster(sidebar);
