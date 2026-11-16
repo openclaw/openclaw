@@ -23,6 +23,7 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
+  messageStartsProjectedTurnBoundary,
   readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
@@ -434,7 +435,7 @@ function groupChatItemSegment(
     const startsProjectedTurn =
       item.startsTurn === true ||
       rowsAfterHiddenTurn?.has(item.key) === true ||
-      asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
+      messageStartsProjectedTurnBoundary(item.message);
     const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&

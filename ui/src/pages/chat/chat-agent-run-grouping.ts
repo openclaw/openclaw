@@ -9,6 +9,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
+import { readContinuationDisplay, type ContinuationDisplay } from "./chat-sessions-yield.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   chatItemStartsDisplayTurn,
@@ -71,6 +72,13 @@ export function chatItemGroups(
     return item.groups;
   }
   return [];
+}
+
+/** The Resumed rule a part opens with, when it continues work after a hidden wake. */
+export function partContinuation(
+  item: AgentRunFrameInput | ChatItem,
+): ContinuationDisplay | undefined {
+  return readContinuationDisplay(chatItemGroups(item)[0]?.messages[0]?.message);
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
@@ -216,11 +224,12 @@ export function coalesceAgentRunFrames(
   // row; `resuming` lets exactly the next run in.
   let opened: { runId: string; boundaryId: string | undefined } | undefined;
   let resuming = false;
-  // No row marks a handoff, so operations on either side of one are one log.
+  // Without a Resumed rule marking the handoff, operations on either side of it are one log.
   let afterHandoff = false;
   const addPart = (item: AgentRunFramePart) => {
     const last = parts.at(-1);
-    const joined = afterHandoff && last ? joinActivityRuns(last, item) : undefined;
+    const joined =
+      afterHandoff && last && !partContinuation(item) ? joinActivityRuns(last, item) : undefined;
     afterHandoff = false;
     if (joined) {
       parts[parts.length - 1] = joined;

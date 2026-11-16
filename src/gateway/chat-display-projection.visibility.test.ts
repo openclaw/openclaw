@@ -157,14 +157,18 @@ it.each([
       ]
     : [];
   const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
-  expectProjection([completion, ...controls, answer], [...controls, answer]);
+  const continued =
+    sourceTool === "subagent_settle"
+      ? { ...answer, __openclaw: { ...answer["__openclaw"], continuation: { source: "subagent" } } }
+      : answer;
+  expectProjection([completion, ...controls, answer], [...controls, continued]);
   expect(completion).toEqual(original);
 });
 
 it.each([
   ["heartbeat", { role: "user", content: [{ type: "text", text: HEARTBEAT_PROMPT }] }],
   ["exec completion", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 2)],
-])("keeps a %s boundary on a tool-shaped user row", (_name, hidden) => {
+])("keeps a %s boundary on a tool-shaped user row", (name, hidden) => {
   const toolResult = {
     role: "user",
     content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
@@ -175,23 +179,55 @@ it.each([
   for (const toolRow of [toolResult, toolEnvelope]) {
     expectProjection(
       [hidden, toolRow, answer],
-      [{ ...toolRow, __openclaw: { ...toolRow["__openclaw"], turnBoundary: true } }, answer],
+      [
+        {
+          ...toolRow,
+          __openclaw: {
+            ...toolRow["__openclaw"],
+            turnBoundary: true,
+            ...(name === "heartbeat" ? {} : { continuation: { source: "exec" } }),
+          },
+        },
+        answer,
+      ],
     );
   }
 });
 
-it("starts a new turn after a hidden exec completion so the earlier answer stays its own reply", () => {
-  const earlier = assistantTextMessage("long final answer", 2);
-  const completion = {
-    ...internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 3),
-    timestamp: 100,
-  };
-  const followUp = assistantTextMessage("should I fix points 1-4?", 4);
-  expectProjection(
-    [earlier, completion, followUp],
-    [earlier, { ...followUp, __openclaw: { seq: 4, turnBoundary: true } }],
-  );
-});
+it.each([
+  ["exec", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 3), true],
+  ["restart", internalMessage("Gateway restarted; continue.", "restart", 3), true],
+  [
+    "subagent",
+    {
+      ...userTextMessage("child finished", 3),
+      provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+    },
+    false,
+  ],
+  ["heartbeat", userTextMessage(HEARTBEAT_PROMPT, 3), true],
+] as const)(
+  "marks the row after a hidden %s wake as continuing or starting a turn",
+  (source, wake, turnBoundary) => {
+    const earlier = assistantTextMessage("long final answer", 2);
+    const followUp = assistantTextMessage("should I fix points 1-4?", 4);
+    // The earlier answer stays its own row; only the wake's own work continues the turn.
+    expectProjection(
+      [earlier, { ...wake, timestamp: 100 }, followUp],
+      [
+        earlier,
+        {
+          ...followUp,
+          __openclaw: {
+            seq: 4,
+            ...(turnBoundary ? { turnBoundary: true } : {}),
+            ...(source === "heartbeat" ? {} : { continuation: { source } }),
+          },
+        },
+      ],
+    );
+  },
+);
 
 it.each(["no_r", "NO_R", "No_Repl"])("keeps ordinary %s replies visible", (text) => {
   const messages = [
