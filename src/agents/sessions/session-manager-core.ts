@@ -4,10 +4,6 @@ import type {
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
-import {
-  resolveOpaqueSessionFirstKeptEntryId,
-  SessionEntryNavigation,
-} from "../../config/sessions/session-entry-navigation.js";
 import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
 import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import {
@@ -37,12 +33,12 @@ import {
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { SessionManagerNavigation } from "./session-manager-navigation.js";
 import { consumeSessionManagerReload } from "./session-manager-reload.js";
 import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 import type {
   FileEntry,
   NewSessionOptions,
-  PreservedOpaqueFileEntry,
   SessionEntry,
   SessionHeader,
   SessionInfoEntry,
@@ -77,20 +73,15 @@ export const sessionManagerReleaseTranscript = Symbol.for(
   "openclaw.session-manager.release-transcript",
 );
 
-export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
-  migrated = false;
+export class SessionManagerCore extends SessionManagerNavigation {
   protected sessionId = "";
   protected transcriptVersion: SessionTranscriptContextVersion | undefined;
   private transcriptViewFailure: Error | undefined;
   private hydrationRevision = 0;
   protected cwd: string;
-  protected fileEntries: FileEntry[] = [];
   protected pendingWritableTranscriptEntries = new Set<object>();
-  protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   protected boundedParentIds = new Map<string, string | null>();
-  private boundedFirstKeptById = new Map<string, string>();
   protected cacheTtlProjectionPrefixes: SessionTranscriptBoundedActiveContext["cacheTtlProjectionPrefixes"];
-  protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
   protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
@@ -329,21 +320,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  protected adoptSelectedTranscriptPath(
-    appendParentId: string | null,
-    parents: Iterable<readonly [string, string | null]>,
-  ): void {
-    // Selected payloads omit navigation controls. Use their resolved ancestry,
-    // not the side-append parent guesses made while indexing those payloads.
-    this.logicalParentsById.clear();
-    for (const [id, parentId] of parents) {
-      this.logicalParentsById.set(id, this.resolveCanonicalParentId(parentId));
-    }
-    this.appendParentId = appendParentId;
-    this.leafId = this.resolveOpaqueLeafTargetId(appendParentId);
-    this.appendMode = undefined;
-  }
-
   /** The loaded view only: bounded managers must never hydrate inactive history for a rewrite. */
   protected captureTranscriptView() {
     this.assertTranscriptViewAvailable();
@@ -482,56 +458,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.boundedParentIds.clear();
     this.pendingDeliberateAppend = false;
     return this.persistenceTarget ? this.sessionId : undefined;
-  }
-
-  protected buildIndex(): void {
-    this.clearNavigation();
-    this.pendingDeliberateAppend = false;
-    let opaqueIndex = 0;
-    for (let index = 0; index <= this.fileEntries.length; index += 1) {
-      while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
-        this.appendOpaqueNavigationRecord(this.opaqueFileEntries[opaqueIndex]?.record);
-        opaqueIndex += 1;
-      }
-      const entry = this.fileEntries[index];
-      // Current entries were validated by partition/append. Legacy imports retain readable rows
-      // through migration, so only those need the final shape check before indexing.
-      if (!entry || entry.type === "session" || (this.migrated && !isIndexedSessionEntry(entry))) {
-        continue;
-      }
-      this.appendCanonicalNavigationEntry(entry);
-    }
-    this.finishNavigation();
-  }
-
-  protected override normalizeEntryParent(entry: SessionEntry): SessionEntry {
-    let normalized = super.normalizeEntryParent(entry);
-    const boundedFirstKept = this.boundedFirstKeptById.get(normalized.id);
-    if (
-      boundedFirstKept !== undefined &&
-      (normalized.type === "compaction" || normalized.type === "reset")
-    ) {
-      normalized = { ...normalized, firstKeptEntryId: boundedFirstKept };
-    }
-    if (
-      (normalized.type === "compaction" || normalized.type === "reset") &&
-      normalized.firstKeptEntryId !== undefined &&
-      !this.byId.has(normalized.firstKeptEntryId) &&
-      this.opaqueParentsById.has(normalized.firstKeptEntryId)
-    ) {
-      const firstKeptEntryId = resolveOpaqueSessionFirstKeptEntryId({
-        firstKeptEntryId: normalized.firstKeptEntryId,
-        parentId: normalized.parentId,
-        fallbackParentId: this.resolveEntryParentId(entry),
-        byId: this.byId,
-        opaqueParentsById: this.opaqueParentsById,
-        entries: () => this.fileEntries.filter(isIndexedSessionEntry),
-      });
-      if (firstKeptEntryId && firstKeptEntryId !== normalized.firstKeptEntryId) {
-        normalized = { ...normalized, firstKeptEntryId };
-      }
-    }
-    return normalized;
   }
 
   protected resolveBranchTargetId(branchFromId: string): string | null | undefined {
