@@ -176,6 +176,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const principal = ingress.resolvePrincipal();
     return {
       authenticatedUserProfile: principal.authenticatedUserProfile,
+      openclawIdPrincipal: principal.openclawIdPrincipal,
       preparedSessionProfile: principal.preparedSessionProfile,
       operatorRolePolicy: principal.operatorRolePolicy,
       operatorRoleActor: principal.operatorRoleActor,

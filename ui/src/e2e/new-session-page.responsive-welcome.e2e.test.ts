@@ -31,7 +31,7 @@ const sessionList = (sessions: ReturnType<typeof recent>[], ts = Date.now()) => 
 });
 
 suite.define(() => {
-  it.each([1, 2])("keeps phone setup compact with %s agents", async (agentCount) => {
+  it.each([1, 2])("keeps phone pickers aligned with %s agents", async (agentCount) => {
     const page = await openPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
     await installMockGateway(page, {
       workspace: "/workspace/openclaw",
@@ -119,6 +119,14 @@ suite.define(() => {
         await pollAttribute(page.locator("html"), "data-theme-mode").toBe("dark");
 
         await evaluateControlUiContext(page, (context) => context.theme.setMode("light"));
+      }
+      if (width <= 768) {
+        const chevrons = await triggerRow
+          .locator(".new-session-page__picker-chevron")
+          .evaluateAll((elements) =>
+            elements.map((element) => element.getBoundingClientRect().right),
+          );
+        expect(Math.max(...chevrons) - Math.min(...chevrons)).toBeLessThan(1);
       }
       const layout = await triggerRow.locator(".new-session-page__trigger").evaluateAll((buttons) =>
         buttons.map((button) => {

@@ -45,6 +45,7 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
+  isAnnounceSavedStateConflict,
   isIncompleteAnnounceAgentResultError,
   isPermanentAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
@@ -185,23 +186,16 @@ async function sendSubagentAnnounceDirectlyBound(
       params.targetRequesterSessionKey,
       requester,
     );
-    // Settlement and private findings bind to the captured requester incarnation,
-    // including a visible continuation after the spawning turn has yielded.
+    // Settlement and private findings go to the requester chat, also after a reset or a
+    // compaction successor, including a visible continuation after the spawning turn yielded.
     const requesterSessionBound =
-      parentOnly ||
-      ((sourceToolId === "subagent_settle" || agentMediatedCompletion) &&
-        params.completionRequesterSessionId !== undefined);
-    if (
-      requesterSessionBound &&
-      (!params.completionRequesterSessionId ||
-        requesterActivity.sessionId !== params.completionRequesterSessionId ||
-        requesterEntry?.lifecycleRevision !== params.completionRequesterLifecycleRevision)
-    ) {
+      parentOnly || sourceToolId === "subagent_settle" || agentMediatedCompletion;
+    if (requesterSessionBound && !requesterActivity.sessionId) {
       return {
         delivered: false,
         path: "none",
         reason: "completion_handoff_unavailable",
-        error: "completion requester session is unavailable or replaced",
+        error: "completion requester session is unavailable",
         terminal: true,
         disposition: "intentional_non_delivery",
       };
@@ -408,10 +402,9 @@ async function sendSubagentAnnounceDirectlyBound(
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
-    // Public completions bind the selected requester, including a nested fallback.
-    // Private and settle completions keep their captured incarnation checked above.
+    // Completions bind the current requester chat, including a nested fallback.
     const boundRequesterSessionId = requesterSessionBound
-      ? params.completionRequesterSessionId
+      ? requesterActivity.sessionId
       : isSubagentCompletion
         ? requesterSessionId
         : undefined;
@@ -419,10 +412,7 @@ async function sendSubagentAnnounceDirectlyBound(
       directAgentParams = bindInProcessSessionRun(directAgentParams, {
         sessionKey: canonicalRequesterSessionKey,
         sessionId: boundRequesterSessionId,
-        lifecycleRevision:
-          (requesterSessionBound
-            ? params.completionRequesterLifecycleRevision
-            : requesterLifecycleRevision) ?? null,
+        lifecycleRevision: requesterLifecycleRevision ?? null,
         runId: params.directIdempotencyKey,
       });
     }
@@ -451,6 +441,7 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       directAnnounceResponse = await runAnnounceAgentCall({
         agentParams: directAgentParams,
+        subagentCompletions: params.subagentCompletions,
         controllerInput: params.controllerInput,
         replyExpectation: inputReplyExpectation,
         // A resumed parent has no inbound channel dispatcher to keep activity visible.
@@ -552,7 +543,11 @@ async function sendSubagentAnnounceDirectlyBound(
       directFailure = {
         delivered: false,
         path: "direct",
-        ...(retryTranscriptConflict ? { reason: "requester_transcript_conflict" as const } : {}),
+        ...(retryTranscriptConflict
+          ? { reason: "requester_transcript_conflict" as const }
+          : isAnnounceSavedStateConflict(err)
+            ? { reason: "requester_state_conflict" as const }
+            : {}),
         error: summarizeDeliveryError(err),
         disposition:
           !retryTranscriptConflict && isPermanentAnnounceDeliveryError(err)

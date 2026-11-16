@@ -13,7 +13,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestor } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -27,10 +27,7 @@ import {
 } from "./auth-profiles/sqlite.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import type { PluginModelCatalogAuthSnapshot } from "./plugin-model-catalog-auth.js";
-import {
-  withPluginModelCatalogPublicationLocks,
-  withPluginModelCatalogWorker,
-} from "./plugin-model-catalog-execution.js";
+import { withPluginModelCatalogWorker } from "./plugin-model-catalog-execution.js";
 import {
   readLegacyPluginModelCatalog,
   PLUGIN_MODEL_CATALOG_FILE,
@@ -614,7 +611,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
     ...pluginModelCatalogDatabaseOptions(params.agentDir),
     env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
   };
-  options.path = resolvePathViaExistingAncestorSync(options.path);
+  options.path = await resolveIdentityPathViaExistingAncestor(options.path);
   const planned = new Map<string, string>();
   for (const [relativePath, contents] of Object.entries(params.pluginCatalogWrites)) {
     const pluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
@@ -633,17 +630,15 @@ export async function replacePersistedPluginModelCatalogs(params: {
       throw error;
     }
   }
-  return await withPluginModelCatalogPublicationLocks([options.path], () =>
-    withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
-      scope.execute({
-        type: "catalog.replace",
-        input: {
-          planned: [...planned],
-          authSnapshot: params.authSnapshot,
-          env: { ...options.env, OPENCLAW_STATE_DIR: resolveStateDir(options.env) },
-        },
-      }),
-    ),
+  return await withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
+    scope.execute({
+      type: "catalog.replace",
+      input: {
+        planned: [...planned],
+        authSnapshot: params.authSnapshot,
+        env: { ...options.env, OPENCLAW_STATE_DIR: resolveStateDir(options.env) },
+      },
+    }),
   );
 }
 
@@ -660,7 +655,7 @@ export async function pruneRemovedProviderPluginModelCatalogs(params: {
     path.join(params.agentDir, "models.json"),
     async () => {
       const options = pluginModelCatalogDatabaseOptions(params.agentDir);
-      options.path = resolvePathViaExistingAncestorSync(options.path);
+      options.path = await resolveIdentityPathViaExistingAncestor(options.path);
       try {
         await stat(options.path);
       } catch (error) {
@@ -669,13 +664,11 @@ export async function pruneRemovedProviderPluginModelCatalogs(params: {
         }
         throw error;
       }
-      return await withPluginModelCatalogPublicationLocks([options.path], () =>
-        withPluginModelCatalogWorker(options, false, (scope) =>
-          scope.execute({
-            type: "catalog.pruneRemovedProviders",
-            input: { removedProviderBaseUrls: { ...params.removedProviderBaseUrls } },
-          }),
-        ),
+      return await withPluginModelCatalogWorker(options, false, (scope) =>
+        scope.execute({
+          type: "catalog.pruneRemovedProviders",
+          input: { removedProviderBaseUrls: { ...params.removedProviderBaseUrls } },
+        }),
       );
     },
   );

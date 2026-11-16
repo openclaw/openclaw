@@ -70,7 +70,7 @@ const gpt56SolModel = {
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
-const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const reasoningReplayIdentity = { sessionId: "session-a" };
 
 type LifecycleParams = Parameters<typeof runResponsesStreamLifecycle>[0];
 type RequestOptions = Parameters<
@@ -312,9 +312,9 @@ describe("convertResponsesMessages", () => {
       };
       const golden = `[${[
         '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
-        '{"id":"rs_prior","type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
-        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","id":"msg_prior","phase":"commentary"}',
-        String.raw`{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
+        '{"type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
+        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","phase":"commentary"}',
+        String.raw`{"type":"function_call","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
         '{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"result"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
       ].join(",")}]`;
       const build = (target = model, options = reasoningReplayIdentity) =>
@@ -323,7 +323,6 @@ describe("convertResponsesMessages", () => {
       expect(JSON.stringify(first)).toBe(golden);
       for (const [target, options] of [
         [model, { ...reasoningReplayIdentity, sessionId: "other" }],
-        [model, { ...reasoningReplayIdentity, authProfileId: "other" }],
         [{ ...model, id: "other-model" }, reasoningReplayIdentity],
         [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
       ] as const) {
@@ -474,10 +473,9 @@ describe("convertResponsesMessages", () => {
       const model = { ...nativeOpenAIModel, api };
       const summary =
         api === "openai-chatgpt-responses" ? [{ type: "summary_text", text: "safe summary" }] : [];
-      const content =
-        api === "openai-chatgpt-responses"
-          ? [{ type: "reasoning_text", text: "safe content" }]
-          : undefined;
+      const content = summary.length
+        ? [{ type: "reasoning_text", text: "safe content" }]
+        : undefined;
       const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
       const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
         ...reasoningReplayIdentity,
@@ -518,7 +516,7 @@ describe("convertResponsesMessages", () => {
           expect(item).toEqual(
             preservesCiphertext
               ? {
-                  ...(replayIds ? { id: "rs_route_fenced" } : {}),
+                  ...(replayIds && api !== "openai-responses" ? { id: "rs_route_fenced" } : {}),
                   type: "reasoning",
                   summary,
                   ...(content ? { content } : {}),
