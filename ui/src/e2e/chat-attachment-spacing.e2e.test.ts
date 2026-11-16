@@ -97,9 +97,16 @@ function attachment(index = 0) {
 }
 
 async function gap(above: Locator, below: Locator) {
-  const upper = (await above.boundingBox())!;
-  const lower = (await below.boundingBox())!;
-  return lower.y - upper.y - upper.height;
+  const lowerHandle = await below.evaluateHandle((element) => element);
+  try {
+    // Both edges must share a layout snapshot while the transcript moves.
+    return await above.evaluate((element, lower) => {
+      const upperRect = element.getBoundingClientRect();
+      return lower.getBoundingClientRect().top - upperRect.bottom;
+    }, lowerHandle);
+  } finally {
+    await lowerHandle.dispose();
+  }
 }
 
 async function expectGap(above: Locator, below: Locator, reference: number) {

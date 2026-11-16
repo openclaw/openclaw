@@ -56,6 +56,8 @@ export type TemplatePackagePreflightResult = {
   snapshot?: import("./dependency-directory.js").TemplateDirectorySnapshot;
   code?: string;
   message?: string;
+  /** Runtime plugin id to add to plugins.allow when only the allowlist blocks the plugin. */
+  allowlistPluginId?: string;
   requirements?: TemplateLocalPrerequisite[];
   detectedFormat?: TemplateExtensionFormat;
   mapped?: string[];

@@ -8,7 +8,7 @@ type CreatedSession = { key?: string; runError?: { message?: string } };
 // The editable request shown to the operator; the record reference is added when sending.
 function initialRequest(record: AskRecord, correct: boolean, candidate?: Candidate) {
   if (candidate) {
-    return `Is "${record.title}" the same person as "${candidate.title}"? Check the evidence on both pages. Link them only if it supports that; don't merge on the handle alone.`;
+    return `Do "${record.title}" and "${candidate.title}" refer to the same subject? Check the evidence on both pages. Link them only if it supports that; don't merge on the handle alone.`;
   }
   return correct
     ? "Please check this saved claim against its evidence and correct or withdraw it if the evidence supports that.\n\nWhat I think is wrong: "

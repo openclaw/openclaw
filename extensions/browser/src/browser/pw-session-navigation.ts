@@ -144,6 +144,7 @@ export async function withPageNavigationRequestGuard<T>(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   if (
     !navigationPolicy.ssrfPolicy &&
@@ -375,6 +376,7 @@ export async function gotoPageWithNavigationGuard(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
     allowOperatorPages: opts.allowOperatorPages,
   });
   let blockedError: unknown = null;

@@ -208,7 +208,10 @@ describe("login gate failure recovery", () => {
       "unauthorized: bootstrap token invalid",
       Codes.AUTH_BOOTSTRAP_TOKEN_INVALID,
     );
+    element.props = { ...element.props, gatewayUrl: "wss://home.example.test" };
+    await element.updateComplete;
     const failure = part(element, "failure");
+    expectText(failure, "hero-label", true).toBe("Run on the computer running OpenClaw");
     expectText(failure, "failure-title", true).toBe("Pairing link is no longer valid");
     expectText(failure, "failure-summary").toMatch(/expired|already been used/);
     expectText(failure, "command--hero code", true).toBe("openclaw dashboard");

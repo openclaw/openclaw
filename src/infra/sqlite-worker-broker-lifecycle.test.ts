@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { serialize } from "node:v8";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, onTestFinished } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
@@ -247,7 +247,8 @@ it.each([
         }
       } finally {
         wait.mockRestore();
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       }
     }
     expect(caller.getStore()).toBeUndefined();

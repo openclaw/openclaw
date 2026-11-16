@@ -173,6 +173,11 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const result = await reports.run("failure", { entry, finalIndexFailure: true });
       expect(result, result.stderr).toMatchObject({ code: 2, signal: null });
       expect(result.stderr).toContain("owned final index write failure");
+      if (entry === "batch-cli") {
+        expect(text(reports.root, "batch-plan-used")).toBe("used");
+      } else if (entry === undefined) {
+        expect(text(reports.root, "shim-entry-used")).toBe("used");
+      }
       expect(inventory(json(result.output))).toEqual(failedCases("beta/one"));
       const attempted = json(result.reportSet!, "index.json.final-write-attempt");
       expect(attempted).toMatchObject({

@@ -98,6 +98,7 @@ export function createUsageFilterFields(ctx: UsageFilterContext) {
       key,
       label: () => t(`usage.filters.${key}`),
       multiple: true,
+      optionsReady: () => ctx.props.data.filterOptions !== undefined,
       options: createMemo(() =>
         usageQueryFieldOptions(ctx.filterOptions()[key], ctx.counts(key), selected()),
       ),

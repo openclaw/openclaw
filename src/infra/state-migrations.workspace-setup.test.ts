@@ -125,7 +125,7 @@ async function readContent(file: string) {
 }
 
 function assertReady() {
-  assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir });
+  return assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir });
 }
 
 function expectRetained(source: string) {
@@ -175,7 +175,7 @@ describe("legacy workspace Doctor migration", () => {
     await migrateOk(aliasContext);
     fs.unlinkSync(workspaceAlias);
     fs.symlinkSync(targetB, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
-    await deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
+    await deleteWorkspaceState(await prepareWorkspaceStateDeletion(workspaceAlias));
     const attestedAtB = await writeAttestation(sourcePath, "", "2026-07-15T12:00:00.000Z");
     await migrateOk(aliasContext);
     for (const [workspace, mtime] of [
@@ -260,12 +260,12 @@ describe("legacy workspace Doctor migration", () => {
       if (kind === "invalid-bootstrap-timestamp") {
         const original = await fsp.readFile(sourcePath);
         const retainedPath = `${sourcePath}.rejected-2026-07-15T11-00-00`;
-        expect(assertReady).toThrow(/requires migration/);
+        await expect(assertReady()).rejects.toThrow(/requires migration/);
         await fsp.rename(sourcePath, retainedPath);
         expect(await fsp.readFile(retainedPath)).toEqual(original);
         expect((await detect(context)).hasLegacy).toBe(false);
         expect(await migrate(context)).toEqual({ changes: [], warnings: [] });
-        expect(assertReady).not.toThrow();
+        await expect(assertReady()).resolves.toBeUndefined();
       }
     },
   );
@@ -274,12 +274,12 @@ describe("legacy workspace Doctor migration", () => {
     const attestationPath = attestationPathFor();
     await write(attestationPath, "");
     expect((await detect(context)).hasLegacy).toBe(true);
-    expect(assertReady).toThrow(/requires migration/);
+    await expect(assertReady()).rejects.toThrow(/requires migration/);
     const result = await migrateOk(context);
     expect(result.changes[0]).toContain(attestationPath);
     expectFilesRemoved(attestationPath);
     expect((await detect(context)).hasLegacy).toBe(false);
-    expect(assertReady).not.toThrow();
+    await expect(assertReady()).resolves.toBeUndefined();
     expect(readSetup("workspace_key")).toBeUndefined();
   });
 
@@ -310,7 +310,7 @@ describe("legacy workspace Doctor migration", () => {
     expect((await detect(context)).hasLegacy).toBe(false);
     await migrateOk(context);
     expect(fs.existsSync(siblingPath)).toBe(true);
-    expect(assertReady).not.toThrow();
+    await expect(assertReady()).resolves.toBeUndefined();
   });
 
   it("rejects attestation beneath a symlinked parent", async () => {
@@ -490,7 +490,9 @@ describe("legacy workspace Doctor migration", () => {
         setup: milestones,
         attestation: { attestedAtMs: mtime.getTime() },
       });
-      expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: workspace })).not.toThrow();
+      await expect(
+        assertNoUnmigratedWorkspaceState({ workspaceDir: workspace }),
+      ).resolves.toBeUndefined();
     }
     expect(
       get(
@@ -519,7 +521,7 @@ describe("legacy workspace Doctor migration", () => {
       ]);
       expect(fs.readFileSync(source, "utf8")).toBe(raw);
       expect(fs.existsSync(`${source}.doctor-importing`)).toBe(false);
-      expect(assertReady).toThrow();
+      await expect(assertReady()).rejects.toThrow();
       pin.mockRestore();
       await migrateOk(context);
       expect(fs.existsSync(source)).toBe(false);
@@ -549,7 +551,7 @@ describe("legacy workspace Doctor migration", () => {
       }
       await migrateOk(context);
       expectFilesRemoved(source);
-      expect(assertReady).not.toThrow();
+      await expect(assertReady()).resolves.toBeUndefined();
       expect(await readWorkspaceStateSnapshot(context.workspaceDir)).toMatchObject({
         setup: { setupCompletedAt: COMPLETED_AT },
       });

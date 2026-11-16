@@ -50,7 +50,7 @@ type WorkspaceFileRead = {
   maxBytes: number | ((openedSize: number) => number);
   root?: string;
   signal?: AbortSignal;
-  onIdentity?: (identity: string) => void;
+  onIdentity?: (identity: string, reusable: boolean) => void;
 };
 
 export function isPortableRootContainedSymlink(
@@ -75,7 +75,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
   maxBytes: number | ((openedSize: number) => number),
   root?: string,
   signal?: AbortSignal,
-  onIdentity?: (identity: string) => void,
+  onIdentity?: (identity: string, reusable: boolean) => void,
 ): Promise<WorkspaceFileSnapshot> {
   return await readWorkspaceFile({
     expectedPath,
@@ -172,7 +172,7 @@ async function readWorkspaceFile(
     if (reusable) {
       hashMemo?.set(identity, sha256);
     }
-    params.onIdentity?.(identity);
+    params.onIdentity?.(identity, reusable);
     const snapshot = {
       type: "file" as const,
       mode: gitFileMode(Number(after.mode & 0o777n)),
@@ -201,7 +201,7 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
-    onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
+    onEntry: (entry: ActualWorkspaceNode, identity?: string, reusable?: boolean) => void;
     // Only repair candidates authenticated against a saved root may retain this former input.
     includeLegacyPnpmStore?: boolean;
     unchangedProbe?: boolean;
@@ -255,7 +255,12 @@ export async function scanActualWorkspaceManifest(
       throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
     }
   };
-  const addEntry = (entry: ActualWorkspaceNode, bytes = 0, identity?: string): void => {
+  const addEntry = (
+    entry: ActualWorkspaceNode,
+    bytes = 0,
+    identity?: string,
+    reusable?: boolean,
+  ): void => {
     addBytes(bytes);
     manifestPathBytes += Buffer.byteLength(entry.path);
     if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
@@ -265,7 +270,7 @@ export async function scanActualWorkspaceManifest(
     if (entryCount > MAX_WORKSPACE_INVENTORY_ENTRIES) {
       throw new Error("Gateway workspace manifest has too many entries");
     }
-    params.onEntry(entry, identity);
+    params.onEntry(entry, identity, reusable);
   };
   const scanController = new AbortController();
   const scanSignal = params.signal
@@ -342,6 +347,7 @@ export async function scanActualWorkspaceManifest(
   };
   const addFile = async (relative: string): Promise<void> => {
     let identity: string | undefined;
+    let reusable: boolean | undefined;
     const snapshot = await readWorkspaceFileSnapshotWithLimit(
       path.join(root, relative),
       (size) => {
@@ -350,12 +356,13 @@ export async function scanActualWorkspaceManifest(
       },
       root,
       scanSignal,
-      (value) => {
+      (value, canReuse) => {
         identity = value;
+        reusable = canReuse;
       },
     );
     if (snapshot.type === "file") {
-      addEntry({ path: relative, ...snapshot }, 0, identity);
+      addEntry({ path: relative, ...snapshot }, 0, identity, reusable);
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
@@ -560,17 +567,21 @@ export async function scanActualWorkspaceManifest(
 export async function readActualWorkspaceManifestImpl(
   params: ActualWorkspaceManifestOptions,
   reuseFile?: Parameters<typeof scanActualWorkspaceManifest>[0]["reuseFile"],
+  observeFile?: (path: string, identity: string, reusable?: boolean) => void,
 ): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const directories: string[] = [];
   await scanActualWorkspaceManifest({
     ...params,
     reuseFile,
-    onEntry(entry) {
+    onEntry(entry, identity, reusable) {
       if (entry.type === "directory") {
         directories.push(entry.path);
       } else {
         entries.push(entry);
+      }
+      if (identity !== undefined) {
+        observeFile?.(entry.path, identity, reusable);
       }
     },
   });
