@@ -1,11 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DtmfElevationGate, type DtmfElevationOutcome } from "./realtime-dtmf-elevation.js";
+import {
+  DtmfElevationGate,
+  type DtmfElevationOutcome,
+  resolveElevationConsultPolicy,
+} from "./realtime-dtmf-elevation.js";
 
 const INTER_DIGIT_TIMEOUT_MS = 3_000;
 
 const PIN = "4321";
-const inbound = { direction: "inbound" as const, from: "+1 (555) 000-1234", to: "+15550007777" };
-const outbound = { direction: "outbound" as const, from: "+15550007777", to: "+15550001234" };
+const inbound = {
+  callId: "call-in",
+  direction: "inbound" as const,
+  from: "+1 (555) 000-1234",
+  to: "+15550007777",
+};
+const outbound = {
+  callId: "call-out",
+  direction: "outbound" as const,
+  from: "+15550007777",
+  to: "+15550001234",
+};
 
 function open(
   gate = new DtmfElevationGate({
@@ -13,7 +27,7 @@ function open(
     config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 3, lockoutMs: 60_000 },
     allowFrom: ["+15550001234"],
   }),
-  call: { direction: "inbound" | "outbound"; from: string; to: string } = inbound,
+  call: { callId: string; direction: "inbound" | "outbound"; from: string; to: string } = inbound,
 ) {
   const outcomes: DtmfElevationOutcome[] = [];
   const session = gate.openCall(call, (outcome) => outcomes.push(outcome));
@@ -30,6 +44,32 @@ afterEach(() => {
 });
 
 describe("DtmfElevationGate", () => {
+  it("keeps a call marked elevated across rebinding while its tool policy resets", () => {
+    const gate = new DtmfElevationGate({
+      pin: PIN,
+      config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 3, lockoutMs: 60_000 },
+      allowFrom: ["+15550001234"],
+    });
+    const first = open(gate, inbound);
+    first.press(`*${PIN}#`);
+    expect(first.session?.toolPolicy).toBe("owner");
+    first.session?.close();
+
+    const reconnected = open(gate, inbound);
+    expect(reconnected.session?.toolPolicy).toBeUndefined();
+    expect(reconnected.session?.wasElevated).toBe(true);
+    expect(resolveElevationConsultPolicy(reconnected.session, "safe-read-only")).toEqual({
+      toolPolicy: "safe-read-only",
+      elevated: true,
+    });
+    // Another call from the same number starts unmarked.
+    const otherCall = open(gate, { ...inbound, callId: "call-later" });
+    expect(otherCall.session?.wasElevated).toBe(false);
+    expect(resolveElevationConsultPolicy(otherCall.session, "safe-read-only")).toEqual({
+      toolPolicy: "safe-read-only",
+    });
+  });
+
   it("opens only when the other party is allowlisted, in either direction", () => {
     expect(open().session).toBeDefined();
     expect(open(undefined, { ...inbound, from: "+15550009999" }).session).toBeUndefined();

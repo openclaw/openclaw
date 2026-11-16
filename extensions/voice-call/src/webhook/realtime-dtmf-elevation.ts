@@ -7,6 +7,7 @@ import type { VoiceCallRealtimeConfig, VoiceCallRealtimeElevationConfig } from "
 import type { CallRecord, ToolHandlerContext } from "../types.js";
 
 const PIN_MAX_DIGITS = 12;
+const ELEVATED_CALL_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const DTMF_ELEVATION_INTER_DIGIT_TIMEOUT_MS = 3_000;
 
 export type DtmfElevationOutcome =
@@ -19,6 +20,11 @@ export type DtmfElevationCall = {
   readonly collecting: boolean;
   /** Elevated consult policy, once granted. */
   readonly toolPolicy: RealtimeVoiceAgentConsultToolPolicy | undefined;
+  /**
+   * True once this call id was elevated on any binding. A reconnect resets `toolPolicy`, but the
+   * call's transcript still holds elevated answers, so its consults must stay isolated.
+   */
+  readonly wasElevated: boolean;
   acceptDigit(digit: string): void;
   close(): void;
 };
@@ -32,6 +38,17 @@ export type DtmfElevationCall = {
 export class DtmfElevationGate {
   private readonly lockedUntilByCaller = new Map<string, number>();
   private readonly failuresByCaller = new Map<string, { count: number; firstAt: number }>();
+  /** Call ids that were elevated, with when; pruned after a day (calls are capped far shorter). */
+  private readonly elevatedAtByCallId = new Map<string, number>();
+
+  private markElevated(callId: string, now: number): void {
+    for (const [id, at] of this.elevatedAtByCallId) {
+      if (now - at > ELEVATED_CALL_RETENTION_MS) {
+        this.elevatedAtByCallId.delete(id);
+      }
+    }
+    this.elevatedAtByCallId.set(callId, now);
+  }
 
   private recordFailure(callerKey: string, now: number): number {
     const existing = this.failuresByCaller.get(callerKey);
@@ -54,7 +71,7 @@ export class DtmfElevationGate {
 
   /** Undefined unless the other party (caller inbound, callee outbound) is allowlisted. */
   openCall(
-    call: Pick<CallRecord, "direction" | "from" | "to">,
+    call: Pick<CallRecord, "callId" | "direction" | "from" | "to">,
     onOutcome: (outcome: DtmfElevationOutcome) => void,
   ): DtmfElevationCall | undefined {
     const caller = normalizePhoneNumber(elevationCounterparty(call));
@@ -62,6 +79,7 @@ export class DtmfElevationGate {
       return undefined;
     }
     const { pin, config } = this.params;
+    const elevatedAtByCallId = this.elevatedAtByCallId;
     const callerKey = redactIdentifier(caller);
     // undefined while idle; a string while collecting digits after the prefix.
     let entered: string | undefined;
@@ -88,6 +106,7 @@ export class DtmfElevationGate {
       if (!locked && safeEqualSecret(value, pin)) {
         this.failuresByCaller.delete(callerKey);
         elevated = config.elevatedToolPolicy;
+        this.markElevated(call.callId, now);
         onOutcome({ kind: "elevated", toolPolicy: elevated });
         return;
       }
@@ -122,6 +141,9 @@ export class DtmfElevationGate {
       },
       get toolPolicy() {
         return elevated;
+      },
+      get wasElevated() {
+        return elevated !== undefined || elevatedAtByCallId.has(call.callId);
       },
       acceptDigit(digit) {
         if (closed || elevated) {
@@ -223,17 +245,19 @@ export function elevationCounterparty(
   return call.direction === "inbound" ? call.from : call.to;
 }
 
-/** Consult context fields for one call: its tool policy, and `elevated` once its PIN was accepted. */
+/** Consult context fields for one call: its tool policy, and `elevated` once its PIN was accepted on any binding. */
 export type ElevationConsultPolicy = Pick<ToolHandlerContext, "toolPolicy" | "elevated">;
 
-/** This call's consult policy; `elevated` is set only when keypad elevation granted it. */
+/**
+ * This call's consult policy. `elevated` (session isolation) stays set after a reconnect resets
+ * the tool policy, because the call's transcript still carries answers from owner tools.
+ */
 export function resolveElevationConsultPolicy(
-  call: Pick<DtmfElevationCall, "toolPolicy"> | undefined,
+  call: Pick<DtmfElevationCall, "toolPolicy" | "wasElevated"> | undefined,
   fallback: VoiceCallRealtimeConfig["toolPolicy"],
 ): ElevationConsultPolicy {
-  return call?.toolPolicy
-    ? { toolPolicy: call.toolPolicy, elevated: true }
-    : { toolPolicy: fallback };
+  const toolPolicy = call?.toolPolicy ?? fallback;
+  return call?.wasElevated ? { toolPolicy, elevated: true } : { toolPolicy };
 }
 
 /** Consult policy for the binding that owns `bridge`; any other bridge gets the configured policy. */
