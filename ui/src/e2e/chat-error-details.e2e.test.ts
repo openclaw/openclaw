@@ -78,8 +78,7 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const notice = page.locator(".chat-run-failure");
-      await notice.locator(".chat-run-failure__toggle").click();
-      const details = notice.locator(".chat-run-failure__log");
+      const details = notice.locator(".chat-run-failure__summary");
       await details.waitFor();
       expect(await details.textContent()).toBe(summary);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -89,11 +88,10 @@ suite.define(() => {
         });
         await writeFile(path.join(directory, "startup-failure.png"), frame.png);
       }
-      expect(await notice.locator(".chat-run-failure__summary").count()).toBe(0);
+      expect(await notice.locator("button.chat-run-failure__toggle").count()).toBe(0);
       expect(await notice.textContent()).not.toContain("Check any completed work");
       expect(await notice.textContent()).not.toContain("Automatic recovery has stopped");
       await page.reload();
-      await notice.locator(".chat-run-failure__toggle").click();
       await details.waitFor();
       expect(await details.textContent()).toBe(summary);
     });

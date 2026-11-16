@@ -186,7 +186,7 @@ suite.define(() => {
     "keeps failure details reachable with suggested tasks at $width×$height",
     async ({ width, height }) => {
       const failureDetail =
-        "The request was interrupted because storage is busy. Check the retained input before trying again.";
+        "The request was interrupted because storage is busy.\nCheck the retained input before trying again.\nFirst attempt failed.\nSecond attempt failed.\nThird attempt failed.";
       const { page, gateway } = await openTasks(
         [makeTask({ id: "recovery_first" }), makeTask({ id: "recovery_second" })],
         {
@@ -213,10 +213,10 @@ suite.define(() => {
       const failure = page.locator(".chat-run-failure__toggle");
       await failure.click({ timeout: 3_000 });
       await page
-        .locator(".chat-run-failure__panel:popover-open")
+        .locator('.chat-run-failure[data-open="true"] .chat-run-failure__summary')
         .getByText(failureDetail, { exact: true })
         .waitFor(visible);
-      await page.keyboard.press("Escape");
+      await failure.click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const draft = "Keep this draft while reviewing the failure.";
       await composer.fill(draft);
@@ -234,10 +234,10 @@ suite.define(() => {
       await findButton(card, startLabel).click({ trial: true });
       await failure.click({ timeout: 3_000 });
       await page
-        .locator(".chat-run-failure__panel:popover-open")
+        .locator('.chat-run-failure[data-open="true"] .chat-run-failure__summary')
         .getByText(failureDetail, { exact: true })
         .waitFor(visible);
-      await page.keyboard.press("Escape");
+      await failure.click();
       await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
       for (const taskId of ["recovery_first", "recovery_second"]) {
         await gateway.emitGatewayEvent("task.suggestion", {
@@ -248,7 +248,9 @@ suite.define(() => {
       }
       await tray.waitFor({ state: "detached" });
       await failure.click({ timeout: 3_000 });
-      await page.locator(".chat-run-failure__panel:popover-open").waitFor(visible);
+      await page
+        .locator('.chat-run-failure[data-open="true"] .chat-run-failure__summary')
+        .waitFor(visible);
       expect(await composer.inputValue()).toBe(draft);
       expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
       expect(await gateway.getRequests("taskSuggestions.dismiss")).toHaveLength(0);

@@ -39,8 +39,8 @@ export default function ChatFailedMessageEditButton(props: {
               }
             }}
           >
-            <Icon name="refresh" />
-            {label()}
+            <Icon name="pencil" />
+            <span class="chat-failed-message-edit-label">{label()}</span>
           </button>
         </openclaw-tooltip>
       </span>

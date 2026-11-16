@@ -1,79 +1,86 @@
-/* A system event between two hairlines; its details float out of flow. */
+/* A neutral system card, separate from assistant prose. */
 .chat-run-failure {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: grid;
   min-width: 0;
-  margin: var(--space-7) 0;
-  color: var(--muted);
+  margin: var(--space-6) 0;
+  padding: 6px 8px 12px 14px;
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   font-family: var(--font-body);
-  font-size: calc(12px * var(--control-ui-text-scale));
-}
-
-.chat-run-failure::before,
-.chat-run-failure::after {
-  content: "";
-  flex: 1 1 0;
-  min-width: 8px;
-  height: 1px;
-  background: var(--border);
 }
 
 .chat-run-failure__toggle {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  height: 26px;
-  padding-block: 0;
-  padding-inline: 8px 6px;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 28px;
+  column-gap: 10px;
+  align-items: start;
+  width: 100%;
+  margin: 0;
+  padding: 6px 0 0;
   border: 0;
-  border-radius: calc(13px * var(--openclaw-corner-radius-scale));
-  background: transparent;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: none;
   color: inherit;
   font: inherit;
-  white-space: nowrap;
+  letter-spacing: normal;
+  text-align: start;
   cursor: var(--cursor-action);
-}
-
-.chat-run-failure__toggle:is(:hover, [aria-expanded="true"]) {
-  background: var(--bg-hover);
 }
 
 .chat-run-failure__toggle:focus-visible {
   outline: var(--control-ui-focus-ring);
-  outline-offset: var(--control-ui-focus-ring-offset);
-}
-
-.chat-run-failure__icon,
-.chat-run-failure__chevron {
-  display: inline-flex;
-  flex: none;
+  outline-offset: 2px;
 }
 
 .chat-run-failure__icon {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   color: var(--danger);
 }
 
 .chat-run-failure__icon svg,
 .chat-run-failure__chevron svg {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
 }
 
 .chat-run-failure__title {
-  min-width: 0;
-  overflow: hidden;
+  padding: 5px 0;
   color: var(--text);
-  text-overflow: ellipsis;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  line-height: 18px;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
 }
 
 .chat-run-failure__repeat {
-  flex: none;
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .chat-run-failure__chevron {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+  color: var(--muted);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.chat-run-failure__toggle:hover .chat-run-failure__chevron {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+.chat-run-failure__chevron svg {
   transition: rotate var(--duration-fast) var(--ease-out);
 }
 
@@ -81,139 +88,103 @@
   scale: -1 1;
 }
 
-/* The chevron points at the panel, whichever side it opened on. */
-.chat-run-failure__toggle[aria-expanded="true"] .chat-run-failure__chevron {
+.chat-run-failure__toggle[aria-expanded="true"] .chat-run-failure__chevron svg {
   rotate: 90deg;
 }
 
-.chat-run-failure[data-placement="top"]
-  .chat-run-failure__toggle[aria-expanded="true"]
-  .chat-run-failure__chevron {
+.chat-run-failure__toggle[aria-expanded="true"] .chat-run-failure__chevron:dir(rtl) svg {
   rotate: -90deg;
 }
 
-.chat-run-failure__toggle[aria-expanded="true"] .chat-run-failure__chevron:dir(rtl) {
-  rotate: -90deg;
+.chat-run-failure__summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  max-width: 68ch;
+  margin: 0;
+  margin-inline: 24px 34px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 19px;
+  text-wrap: pretty;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.chat-run-failure[data-placement="top"]
-  .chat-run-failure__toggle[aria-expanded="true"]
-  .chat-run-failure__chevron:dir(rtl) {
-  rotate: 90deg;
+.chat-run-failure__summary code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  font: 0.92em var(--mono);
 }
 
-.chat-run-failure .chat-run-failure__retry {
+.chat-run-failure__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 12px 0 0;
+  margin-inline: 24px 6px;
+}
+
+.chat-run-failure__actions .btn.btn--sm {
   flex: none;
   gap: 5px;
   height: 26px;
   padding-block: 0;
-  padding-inline: 8px 10px;
+  padding-inline: 10px;
   border-radius: calc(13px * var(--openclaw-corner-radius-scale));
   font-size: calc(12px * var(--control-ui-text-scale));
+  white-space: nowrap;
 }
 
-.chat-run-failure .chat-run-failure__retry svg {
+.chat-run-failure__actions .btn.btn--sm svg {
   width: 12px;
   height: 12px;
   stroke-width: 2px;
 }
 
-.oc-popover.chat-run-failure__panel {
-  --oc-overlay-distance: 6px;
-  --oc-popover-padding: 12px;
-
-  width: min(460px, 100%);
-  gap: 10px;
-  white-space: normal;
+.chat-run-failure__actions .report-issue-link {
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: calc(13px * var(--openclaw-corner-radius-scale));
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 400;
+  text-decoration: none;
+  white-space: nowrap;
 }
 
-.chat-run-failure__summary {
-  margin: 0;
-  padding: 2px 4px 0;
+.chat-run-failure__actions .report-issue-link:hover {
+  background: var(--bg-hover);
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18 / 13);
-  text-wrap: pretty;
-  overflow-wrap: anywhere;
 }
 
-.chat-run-failure__well {
-  --chat-run-failure-copy-size: 26px;
-  --chat-run-failure-copy-clearance: calc(var(--chat-run-failure-copy-size) + 10px);
-
-  position: relative;
-  flex: none;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-
-@media (hover: none) {
-  .chat-run-failure__well {
-    --chat-run-failure-copy-size: 32px;
-  }
-}
-
-.chat-run-failure__log {
-  --chat-run-failure-fade-top: 0px;
-  --chat-run-failure-fade-bottom: 0px;
-
-  max-height: 170px;
-  margin: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding-block: 10px;
-  padding-inline: 12px calc(var(--chat-run-failure-copy-size) + 4px);
-  color: var(--text);
-  font: calc(11.5px * var(--control-ui-text-scale)) / 1.65 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  scrollbar-gutter: stable;
-}
-
-.chat-run-failure__log[data-fade-top] {
-  --chat-run-failure-fade-top: 28px;
-}
-
-.chat-run-failure__log[data-fade-bottom] {
-  --chat-run-failure-fade-bottom: 36px;
-}
-
-/* The fade stops at the scrollbar column, so the thumb is never dimmed. */
-.chat-run-failure__log:is([data-fade-top], [data-fade-bottom]) {
-  mask:
-    linear-gradient(
-        to bottom,
-        transparent,
-        black var(--chat-run-failure-fade-top),
-        black calc(100% - var(--chat-run-failure-fade-bottom)),
-        transparent
-      )
-      left top / calc(100% - var(--scrollbar-size)) 100% no-repeat,
-    linear-gradient(black, black) right top / var(--scrollbar-size) 100% no-repeat;
-}
-
-@supports selector(::-webkit-scrollbar) {
-  .chat-run-failure__log::-webkit-scrollbar-track {
-    margin-block: var(--chat-run-failure-copy-clearance) 6px;
-  }
+.chat-run-failure[data-open="true"] .chat-run-failure__summary {
+  display: block;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+  overflow: visible;
 }
 
 .chat-run-failure__copy {
-  position: absolute;
-  inset-block-start: 5px;
-  inset-inline-end: 5px;
   display: inline-flex;
+  margin-inline-start: auto;
 }
 
 .chat-run-failure__copy .chat-copy-btn {
   display: inline-grid;
   place-items: center;
-  width: var(--chat-run-failure-copy-size);
-  height: var(--chat-run-failure-copy-size);
+  width: 28px;
+  height: 26px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: calc(13px * var(--openclaw-corner-radius-scale));
   background: transparent;
+  color: var(--muted);
   cursor: var(--cursor-action);
 }
 
@@ -232,38 +203,49 @@
   color: var(--danger);
 }
 
-.chat-run-failure__copy svg {
-  width: 14px;
-  height: 14px;
+.chat-run-failure__copy .chat-copy-btn__icon {
+  width: 13px;
+  height: 13px;
 }
 
-/* Phone columns give the cause its own line; actions wrap below it. */
+/* Keep all recovery actions on one row in phone columns. */
 @media (max-width: 560px) {
   .chat-run-failure {
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 6px;
+    padding: 4px 6px 12px 12px;
   }
 
-  .chat-run-failure::before,
-  .chat-run-failure::after {
+  .chat-run-failure__summary {
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    margin-inline-end: 6px;
+  }
+
+  .chat-run-failure__actions .chat-confirm-wrap .btn {
+    justify-content: center;
+    width: 28px;
+  }
+
+  .chat-run-failure__actions .chat-failed-message-edit-label {
     display: none;
   }
 
-  .chat-run-failure__toggle {
-    flex-basis: 100%;
-    justify-content: center;
-    gap: 4px;
-    padding-inline: 6px 4px;
+  .chat-run-failure__actions .chat-confirm-wrap svg {
+    width: 13px;
+    height: 13px;
   }
 
-  .chat-run-failure .chat-run-failure__retry {
-    padding-inline: 6px 8px;
+  .chat-run-failure__actions .report-issue-link {
+    justify-content: center;
+    gap: 0;
+    width: 28px;
+    padding: 0;
+    font-size: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-run-failure__chevron {
+  .chat-run-failure__chevron,
+  .chat-run-failure__chevron svg {
     transition: none;
   }
 }
