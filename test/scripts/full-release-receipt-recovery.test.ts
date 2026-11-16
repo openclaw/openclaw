@@ -28,8 +28,8 @@ import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-too
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { recoveryConsumptionFixture } from "./release-evidence-consumption.test-support.js";
 
-function fixture() {
-  const test = recoveryConsumptionFixture();
+function fixture(independentQ = false) {
+  const test = recoveryConsumptionFixture(independentQ);
   return { ...test, old: { ...test.direct, client: test.client } };
 }
 
@@ -140,215 +140,220 @@ describe("receipt-backed aggregate recovery", () => {
     );
   });
 
-  it("bounds transfers and verifies adopted child receipts", async () => {
-    const test = fixture();
-    const { old, recovery } = test;
-    const selected = expectDefined(recovery.children.normalCi, "normal CI");
-    selected.sourceParentRunId = "800";
-    selected.workflowRef = "release-ci/earlier-same-candidate";
-    vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
-    const verifyChild = vi
-      .fn<typeof childReuse.validateReusableReleaseChild>()
-      .mockImplementation(async (_, request) => {
-        const coverage = expectDefined(
-          old.admission.receipt.coverage.children.find((child) => child.key === request.role),
-          "child coverage",
-        );
-        const selection = {
-          ...request,
-          runId: expectDefined(recovery.children[request.role], "recovery child").runId,
-          runAttempt: 1,
-          workflowRef: old.branch,
-          displayTitle: "fixture",
-          sourceParentRunId: old.runId,
-          sourceParentAttempt: 1,
-          url: "https://github.com/openclaw/openclaw/actions/runs/910",
-          artifact: {
-            id: "1",
-            name: "fixture",
-            digest: "a".repeat(64),
-            expiresAt: "2030-01-01",
-            sizeInBytes: 1,
-          },
-          receiptSha256: "a".repeat(64),
-          inputs: {},
-        };
-        return {
-          selection,
-          run: { status: "completed", conclusion: "success" },
-          jobs: [],
-          receipt: {
-            jobs: coverage.requiredJobs.map((name) => ({
-              name,
-              status: "completed",
-              conclusion: "success",
-            })),
-          },
-        };
+  it.each([false, true])(
+    "bounds transfers and verifies adopted child receipts with independent Q=%s",
+    async (independentQ) => {
+      const test = fixture(independentQ);
+      const { old, recovery } = test;
+      const selected = expectDefined(recovery.children.normalCi, "normal CI");
+      selected.sourceParentRunId = "800";
+      selected.workflowRef = "release-ci/earlier-same-candidate";
+      vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
+      const verifyChild = vi
+        .fn<typeof childReuse.validateReusableReleaseChild>()
+        .mockImplementation(async (_, request) => {
+          const coverage = expectDefined(
+            old.admission.receipt.coverage.children.find((child) => child.key === request.role),
+            "child coverage",
+          );
+          const selection = {
+            ...request,
+            runId: expectDefined(recovery.children[request.role], "recovery child").runId,
+            runAttempt: 1,
+            workflowRef: old.branch,
+            displayTitle: "fixture",
+            sourceParentRunId: old.runId,
+            sourceParentAttempt: 1,
+            url: "https://github.com/openclaw/openclaw/actions/runs/910",
+            artifact: {
+              id: "1",
+              name: "fixture",
+              digest: "a".repeat(64),
+              expiresAt: "2030-01-01",
+              sizeInBytes: 1,
+            },
+            receiptSha256: "a".repeat(64),
+            inputs: {},
+          };
+          return {
+            selection,
+            run: { status: "completed", conclusion: "success" },
+            jobs: [],
+            receipt: {
+              jobs: coverage.requiredJobs.map((name) => ({
+                name,
+                status: "completed",
+                conclusion: "success",
+              })),
+            },
+          };
+        });
+      const verifyPayloads = vi
+        .spyOn(publicationArtifacts, "verifyRetainedPublicationArtifacts")
+        .mockRejectedValue(new Error("publication verification reached"));
+      const dispatches = old.admission.receipt.coverage.children.map((child, index) => ({
+        id: 10_000 + index,
+        name: child.parentJobName,
+        status: "completed",
+        conclusion: "success",
+        runId: expectDefined(recovery.children[child.key], "recovery child").runId,
+      }));
+      const parentJobs = [
+        ...(await old.client.getRunAttemptJobs(old.runId)).filter(
+          (job) => !dispatches.some((dispatch) => dispatch.name === job.name),
+        ),
+        ...dispatches,
+      ];
+      const client = {
+        ...old.client,
+        validateChildReuse: verifyChild,
+        verifyRetainedPublicationArtifacts: verifyPayloads,
+        getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
+        getRunAttemptJobs: async () => parentJobs,
+        getJobLog: async (id: number) => {
+          const child = expectDefined(
+            dispatches.find((entry) => entry.id === id),
+            "dispatch job",
+          );
+          const witness =
+            child.runId === selected.runId
+              ? `FRV_CHILD_REUSE_SHA256=${releaseChildReuseSha256(selected)}\n`
+              : "";
+          return `${witness}TARGET_SHA: ${old.c}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
+        },
+      };
+      const adoptedLog = client.getJobLog;
+      client.getJobLog = async (id) =>
+        (await adoptedLog(id)).replace(/FRV_CHILD_REUSE_SHA256=[a-f0-9]{64}/u, "");
+      await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
+        "reuse adoption witness mismatch",
+      );
+      expect(verifyPayloads).not.toHaveBeenCalled();
+      client.getJobLog = adoptedLog;
+      await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
+        "publication verification reached",
+      );
+      expect(verifyPayloads).toHaveBeenCalledOnce();
+      expect(verifyPayloads.mock.calls[0]?.[2]).toMatchObject({
+        verifyPayloads: true,
+        dockerArchiveTimeoutMs: 240_000,
       });
-    const verifyPayloads = vi
-      .spyOn(publicationArtifacts, "verifyRetainedPublicationArtifacts")
-      .mockRejectedValue(new Error("publication verification reached"));
-    const dispatches = old.admission.receipt.coverage.children.map((child, index) => ({
-      id: 10_000 + index,
-      name: child.parentJobName,
-      status: "completed",
-      conclusion: "success",
-      runId: expectDefined(recovery.children[child.key], "recovery child").runId,
-    }));
-    const parentJobs = [
-      ...(await old.client.getRunAttemptJobs(old.runId)).filter(
-        (job) => !dispatches.some((dispatch) => dispatch.name === job.name),
-      ),
-      ...dispatches,
-    ];
-    const client = {
-      ...old.client,
-      validateChildReuse: verifyChild,
-      verifyRetainedPublicationArtifacts: verifyPayloads,
-      getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
-      getRunAttemptJobs: async () => parentJobs,
-      getJobLog: async (id: number) => {
-        const child = expectDefined(
-          dispatches.find((entry) => entry.id === id),
-          "dispatch job",
-        );
-        const witness =
-          child.runId === selected.runId
-            ? `FRV_CHILD_REUSE_SHA256=${releaseChildReuseSha256(selected)}\n`
-            : "";
-        return `${witness}TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
-      },
-    };
-    const adoptedLog = client.getJobLog;
-    client.getJobLog = async (id) =>
-      (await adoptedLog(id)).replace(/FRV_CHILD_REUSE_SHA256=[a-f0-9]{64}/u, "");
-    await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
-      "reuse adoption witness mismatch",
-    );
-    expect(verifyPayloads).not.toHaveBeenCalled();
-    client.getJobLog = adoptedLog;
-    await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
-      "publication verification reached",
-    );
-    expect(verifyPayloads).toHaveBeenCalledOnce();
-    expect(verifyPayloads.mock.calls[0]?.[2]).toMatchObject({
-      verifyPayloads: true,
-      dockerArchiveTimeoutMs: 240_000,
-    });
 
-    // Reuse the immutable archives from the consumer fixture; the retained
-    // publication owner is covered separately, so isolate recovery's extra inventory.
-    verifyPayloads.mockImplementation(async () => ({
-      outputs: {
-        publication_artifacts_reused: "true",
-        prepared_bundle_json: "",
-        qualified_preflight_bundle_json: "",
-        npm_run_id: old.runId,
-        npm_run_attempt: "1",
-        descriptor_json: "",
-      },
-      payloads: [],
-    }));
-    const binding = recovery.candidateBinding;
-    const packageMetadata = expectDefined(test.metadata.get("408"), "plugin package");
-    const pluginPackage = {
-      ...recovery.publicationArtifacts.pluginNpm,
-      artifactId: packageMetadata.id,
-      artifactName: packageMetadata.name,
-      artifactDigest: packageMetadata.digest,
-      artifactSizeBytes: packageMetadata.size_in_bytes,
-    };
-    const expectedPayloads = [
-      {
-        kind: "plugin-npm-package",
-        artifact: pluginPackage,
-        sha256: packageMetadata.digest.slice(7),
-      },
-      ...(
-        [
-          ["candidate-shared-image", binding.sharedImage.artifact],
-          ["candidate-plugin-registry", binding.prepublishPluginRegistry.artifact],
-        ] as const
-      ).map(([kind, artifact]) => ({ kind, artifact, sha256: artifact.digest })),
-    ];
-    const downloads: string[] = [];
-    const fetchArtifact = globalThis.fetch;
-    vi.stubGlobal("fetch", (input: string | URL | Request) => {
-      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
-      if (path.endsWith("/zip")) {
-        downloads.push(path.split("/")[6]!);
-      }
-      return fetchArtifact(input);
-    });
-    const inventoryClient = {
-      ...client,
-      getRunArtifacts: vi.fn(test.client.getRunArtifacts),
-      getArtifact: vi.fn(test.client.getArtifact),
-      downloadArtifactArchive: (
-        request: Parameters<typeof test.client.downloadArtifactArchive>[0],
-      ) => {
-        const expected = request.expected;
-        if (!expected || typeof expected !== "object" || !("artifactId" in expected)) {
-          throw new Error("Missing expected download identity");
+      // Reuse the immutable archives from the consumer fixture; the retained
+      // publication owner is covered separately, so isolate recovery's extra inventory.
+      verifyPayloads.mockImplementation(async () => ({
+        outputs: {
+          publication_artifacts_reused: "true",
+          prepared_bundle_json: "",
+          qualified_preflight_bundle_json: "",
+          npm_run_id: old.runId,
+          npm_run_attempt: "1",
+          descriptor_json: "",
+        },
+        payloads: [],
+      }));
+      const binding = recovery.candidateBinding;
+      const packageMetadata = expectDefined(test.metadata.get("408"), "plugin package");
+      const pluginPackage = {
+        ...recovery.publicationArtifacts.pluginNpm,
+        artifactId: packageMetadata.id,
+        artifactName: packageMetadata.name,
+        artifactDigest: packageMetadata.digest,
+        artifactSizeBytes: packageMetadata.size_in_bytes,
+      };
+      const expectedPayloads = [
+        {
+          kind: "plugin-npm-package",
+          artifact: pluginPackage,
+          sha256: packageMetadata.digest.slice(7),
+        },
+        ...(
+          [
+            ["candidate-shared-image", binding.sharedImage.artifact],
+            ["candidate-plugin-registry", binding.prepublishPluginRegistry.artifact],
+          ] as const
+        ).map(([kind, artifact]) => ({ kind, artifact, sha256: artifact.digest })),
+      ];
+      const downloads: string[] = [];
+      const fetchArtifact = globalThis.fetch;
+      vi.stubGlobal("fetch", (input: string | URL | Request) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if (path.endsWith("/zip")) {
+          downloads.push(path.split("/")[6]!);
         }
-        downloads.push(String(expected.artifactId));
-        return test.client.downloadArtifactArchive(request);
-      },
-    };
-    const result = await verifyOriginalReceiptQualification(recovery, {
-      client: inventoryClient,
-      authenticatedPayloads: expectedPayloads,
-    });
-    expect(result.children[0]?.sourceParentRunId).toBe("800");
-    expect(result.publication.payloads).toEqual(expectedPayloads);
-    expect(downloads).toEqual(["407"]);
-    expect(inventoryClient.getArtifact.mock.calls.map(([id]) => String(id))).toEqual([
-      "407",
-      "103",
-      "102",
-      "101",
-    ]);
-    expect(inventoryClient.getRunArtifacts).toHaveBeenCalledOnce();
-    for (const authenticatedPayloads of [
-      expectedPayloads.slice(1),
-      [...expectedPayloads, expectedPayloads[0]],
-      expectedPayloads.map((payload) => ({ ...payload, sha256: "0".repeat(64) })),
-    ]) {
-      await expect(
-        verifyOriginalReceiptQualification(recovery, {
-          client: inventoryClient,
-          authenticatedPayloads,
-        }),
-      ).rejects.toThrow("original publication payload inventory changed");
-    }
-    for (const [id, changed] of [
-      ["408", { digest: "sha256:" + "0".repeat(64) }],
-      ["101", { expired: true }],
-    ] as const) {
-      const metadata = expectDefined(test.metadata.get(id), "retained metadata");
-      const original = { ...metadata };
-      Object.assign(metadata, changed);
-      await expect(
-        verifyOriginalReceiptQualification(recovery, {
-          client: inventoryClient,
-          authenticatedPayloads: expectedPayloads,
-        }),
-      ).rejects.toThrow("metadata does not match the immutable publication tuple");
-      Object.assign(metadata, original);
-    }
-    downloads.length = 0;
-    const produced = await verifyOriginalReceiptQualification(recovery, {
-      client: inventoryClient,
-    });
-    expect(produced.publication.payloads).toEqual(expectedPayloads);
-    expect(downloads).toEqual(["407", "408", "103", "102", "101"]);
-  });
+        return fetchArtifact(input);
+      });
+      const inventoryClient = {
+        ...client,
+        getRunArtifacts: vi.fn(test.client.getRunArtifacts),
+        getArtifact: vi.fn(test.client.getArtifact),
+        downloadArtifactArchive: (
+          request: Parameters<typeof test.client.downloadArtifactArchive>[0],
+        ) => {
+          const expected = request.expected;
+          if (!expected || typeof expected !== "object" || !("artifactId" in expected)) {
+            throw new Error("Missing expected download identity");
+          }
+          downloads.push(String(expected.artifactId));
+          return test.client.downloadArtifactArchive(request);
+        },
+      };
+      const result = await verifyOriginalReceiptQualification(recovery, {
+        client: inventoryClient,
+        authenticatedPayloads: expectedPayloads,
+      });
+      expect(result.children[0]?.sourceParentRunId).toBe("800");
+      expect(result.publication.payloads).toEqual(expectedPayloads);
+      expect(downloads).toEqual(["407"]);
+      expect(inventoryClient.getArtifact.mock.calls.map(([id]) => String(id))).toEqual([
+        "407",
+        "103",
+        "102",
+        "101",
+      ]);
+      expect(inventoryClient.getRunArtifacts).toHaveBeenCalledOnce();
+      for (const authenticatedPayloads of [
+        expectedPayloads.slice(1),
+        [...expectedPayloads, expectedPayloads[0]],
+        expectedPayloads.map((payload) => ({ ...payload, sha256: "0".repeat(64) })),
+      ]) {
+        await expect(
+          verifyOriginalReceiptQualification(recovery, {
+            client: inventoryClient,
+            authenticatedPayloads,
+          }),
+        ).rejects.toThrow("original publication payload inventory changed");
+      }
+      for (const [id, changed] of [
+        ["408", { digest: "sha256:" + "0".repeat(64) }],
+        ["101", { expired: true }],
+      ] as const) {
+        const metadata = expectDefined(test.metadata.get(id), "retained metadata");
+        const original = { ...metadata };
+        Object.assign(metadata, changed);
+        await expect(
+          verifyOriginalReceiptQualification(recovery, {
+            client: inventoryClient,
+            authenticatedPayloads: expectedPayloads,
+          }),
+        ).rejects.toThrow("metadata does not match the immutable publication tuple");
+        Object.assign(metadata, original);
+      }
+      downloads.length = 0;
+      const produced = await verifyOriginalReceiptQualification(recovery, {
+        client: inventoryClient,
+      });
+      expect(produced.publication.payloads).toEqual(expectedPayloads);
+      expect(downloads).toEqual(["407", "408", "103", "102", "101"]);
+    },
+  );
 
   it("retains original selection, baselines and Q artifacts under a distinct P admission", () => {
-    const { old, source, recovery, manifest, producer } = fixture();
+    const { old, source, recovery, manifest, producer } = fixture(true);
+    expectDefined(recovery.children.normalCi, "normal CI selection").workflowRef =
+      "release-ci/earlier-normal-ci";
     expect(validateReceiptRecoveryRequest(recovery)).toBe(recovery);
-    expect(source.candidateSha).toBe(old.q);
+    expect(source.candidateSha).toBe(old.c);
     expect(source.workflow).toEqual({ ref: producer.fullRef, sha: producer.sha });
     expect(source.publicationSelection).toEqual(old.source.publicationSelection);
     expect(source.coverage).toEqual(old.source.coverage);
@@ -359,7 +364,7 @@ describe("receipt-backed aggregate recovery", () => {
       repository: old.repository,
       runId: producer.runId,
       runAttempt: 1,
-      sourceSha: old.q,
+      sourceSha: old.c,
       toolingSha: producer.sha,
     };
     expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(
@@ -437,16 +442,17 @@ describe("receipt-backed aggregate recovery", () => {
   });
 
   it("rechecks every current producer tuple and rejects a superseding attempt", async () => {
-    const { recovery, old } = fixture();
+    const { recovery, old } = fixture(true);
     const calls: string[] = [];
     let attempt = 1;
+    let childSha = old.q;
     const client = {
       getRun: async (id: string) => {
         calls.push(id);
         return {
           id: Number(id),
           run_attempt: attempt,
-          head_sha: old.q,
+          head_sha: id === recovery.children.normalCi?.runId ? childSha : old.q,
           status: "completed",
           conclusion: "success",
         };
@@ -468,8 +474,14 @@ describe("receipt-backed aggregate recovery", () => {
     await expect(revalidateReceiptRecoveryRuns(recovery, failedClient)).rejects.toThrow(
       "current attempt changed",
     );
-    const verifiedChildren = [{ runId: waivedRun, conclusion: "failure" }];
+    childSha = "d".repeat(40);
+    const verifiedChildren = [{ runId: waivedRun, conclusion: "failure", workflowSha: childSha }];
     await revalidateReceiptRecoveryRuns(recovery, failedClient, verifiedChildren);
+    await expect(
+      revalidateReceiptRecoveryRuns(recovery, failedClient, [
+        { ...verifiedChildren[0], workflowSha: old.q },
+      ]),
+    ).rejects.toThrow("current attempt changed");
     attempt = 2;
     await expect(revalidateReceiptRecoveryRuns(recovery, client)).rejects.toThrow(
       "current attempt changed",
@@ -549,7 +561,9 @@ describe("receipt recovery CLI", () => {
       );
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Receipt recovery: original candidate must retain C=Q");
+      expect(result.stderr).toContain(
+        "Receipt recovery: original candidate and qualification must identify commits",
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

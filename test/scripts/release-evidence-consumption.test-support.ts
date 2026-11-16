@@ -39,9 +39,11 @@ const artifactWorkflow = ".github/workflows/full-release-artifacts.yml";
 const childPublisher = "Seal full release child evidence / Seal child receipt";
 
 // Only external transport is replaced; validation runs through production owners.
-export function recoveryConsumptionFixture() {
-  const direct = candidatePublicationFixture();
-  const { q, p, repository, branch } = direct;
+export function recoveryConsumptionFixture(independentQ = false) {
+  const direct = candidatePublicationFixture(
+    independentQ ? { qualificationSha: "b".repeat(40) } : {},
+  );
+  const { c, q, p, repository, branch } = direct;
   const metadata = new Map<string, ReturnType<typeof addArtifact>>();
   const archives = new Map<string, Buffer>();
   const runs = new Map<string, ReturnType<typeof run>>();
@@ -127,7 +129,7 @@ export function recoveryConsumptionFixture() {
       .qualification_baselines_json,
   );
   const candidate = fullReleaseCandidateManifestFixture({
-    targetSha: q,
+    targetSha: c,
     toolingSha: q,
     releaseProfile: "beta",
     releaseSoak: false,
@@ -234,7 +236,7 @@ export function recoveryConsumptionFixture() {
       schema: "openclaw.full-release-child-evidence/v1",
       repository,
       role,
-      targetSha: q,
+      targetSha: c,
       workflowSha: q,
       workflowRef: branch,
       workflowPath: ".github/workflows/" + spec.workflow,
@@ -253,14 +255,14 @@ export function recoveryConsumptionFixture() {
     const receipt = { ...payload, sha256: hash(JSON.stringify(payload)) };
     const meta = archive(
       id,
-      "full-release-child-evidence-" + q + "-" + role + "-" + id + "-1",
+      "full-release-child-evidence-" + c + "-" + role + "-" + id + "-1",
       id,
       { "full-release-child-evidence.json": JSON.stringify(receipt) },
     );
     return {
       repository,
       role,
-      targetSha: q,
+      targetSha: c,
       workflowSha: q,
       workflowRef: branch,
       runId: id,
@@ -293,7 +295,7 @@ export function recoveryConsumptionFixture() {
     logs.set(
       dispatch.id,
       "TARGET_SHA: " +
-        q +
+        c +
         "\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/" +
         repository +
         "/actions/runs/" +
@@ -320,7 +322,7 @@ export function recoveryConsumptionFixture() {
   };
   const raw = {
     schema: "openclaw.prepared-npm-bundle/v1",
-    source: { sha: q },
+    source: { sha: c },
     producer: npmProducer,
     artifact: {
       id: "401",
@@ -334,7 +336,7 @@ export function recoveryConsumptionFixture() {
       version: "2026.8.28-beta.1",
       fileName: binding.package.fileName,
       sha256: binding.package.packageSha256,
-      sourceSha: q,
+      sourceSha: c,
     },
     corePackages: [],
     manifestSha256: "a".repeat(64),
@@ -343,7 +345,7 @@ export function recoveryConsumptionFixture() {
     schema: "openclaw.npm-package-bundle/v1",
     packageName: raw.package.name,
     packageVersion: raw.package.version,
-    releaseSha: q,
+    releaseSha: c,
     tarballName: raw.package.fileName,
     tarballSha256: raw.package.sha256,
     producer: raw.producer,
@@ -359,7 +361,7 @@ export function recoveryConsumptionFixture() {
       jobId: "802",
       jobName: "Prepare npm artifacts / Qualify prepared npm package",
     },
-    artifact: { ...raw.artifact, id: "402", name: "openclaw-npm-preflight-" + q },
+    artifact: { ...raw.artifact, id: "402", name: "openclaw-npm-preflight-" + c },
     preparedBundle: raw,
     manifestSha256: hash(direct.npmManifestBytes),
   };
@@ -409,7 +411,7 @@ export function recoveryConsumptionFixture() {
     stage,
     dispatchId: "full-release-validation-" + direct.runId + "-1-artifacts-" + stage,
     repository,
-    sourceSha: q,
+    sourceSha: c,
     toolingSha: q,
     workflowRef: branch,
     releaseTag: "v2026.8.28-beta.1",
@@ -456,7 +458,7 @@ export function recoveryConsumptionFixture() {
   const pluginManifest = {
     schema: "openclaw.plugin-npm-prepared/v1",
     runtimeQualification: "packed-runtime-v1",
-    sourceSha: q,
+    sourceSha: c,
     npmDistTag: "default",
     selectionMode: "all-publishable",
     publisherPolicySha256: hash(sourceFile(q, pluginRun.path)),
@@ -481,7 +483,7 @@ export function recoveryConsumptionFixture() {
       },
     ],
   };
-  const pluginMeta = archive("407", "plugin-npm-prepared-" + q + "-92-1", "92", {
+  const pluginMeta = archive("407", "plugin-npm-prepared-" + c + "-92-1", "92", {
     "plugin-npm-prepared.json": JSON.stringify(pluginManifest),
   });
   const plugin = {

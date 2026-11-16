@@ -466,7 +466,6 @@ function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualifica
   const qualification = evidence.qualification;
   if (
     qualification.kind === "historical" ||
-    candidateSha !== qualificationSha ||
     qualification.candidateSha !== candidateSha ||
     qualification.qualificationSha !== qualificationSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
