@@ -272,14 +272,13 @@ describe("persisted subagent requester wakes", () => {
         status: "failed",
         disposition: "permanent_failure",
       });
-      const notices = (await loadTranscriptEvents(scope)).filter(
-        (event) =>
-          event.type === "custom_message" && event.customType === "run-failed-before-reply",
+      const notices = (await loadTranscriptEvents(scope)).filter((event) =>
+        JSON.stringify(event).includes("The child result couldn't be delivered"),
       );
       expect(notices).toHaveLength(1);
       expect(notices[0]).toMatchObject({
+        customType: "run-failed-before-reply",
         display: true,
-        content: expect.stringContaining("The child result couldn't be delivered"),
       });
     },
   );
