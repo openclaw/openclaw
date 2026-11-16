@@ -90,7 +90,7 @@ export function hasForwardedSource(group: MessageGroup): boolean {
 
 export type ProjectedContinuationSource = "exec" | "restart" | "subagent";
 
-/** A row that resumes this session's own work after a hidden wake, such as a finished command. */
+/** What woke a row that resumes this session's own work after a hidden wake. */
 export function readProjectedContinuation(
   message: unknown,
 ): ProjectedContinuationSource | undefined {

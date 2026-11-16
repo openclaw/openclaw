@@ -16,7 +16,6 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { persistedMessageEntryId } from "./chat-thread-item-identity.ts";
 import {
   buildMessageItems,
   hasRenderableNormalizedMessage,
@@ -25,11 +24,7 @@ import {
 } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import {
-  chatItemStartsUserTurn,
-  readProjectedContinuation,
-  type ProjectedContinuationSource,
-} from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn, readProjectedContinuation } from "./chat-turn-boundary.ts";
 
 function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
   const details = asRecord(card.details);
@@ -41,11 +36,6 @@ function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
     openers: ["{"],
   });
   return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
-}
-
-function yieldAcknowledgment(card: ToolCard | undefined): string {
-  const acknowledgment = card ? readYieldReceipt(card)?.acknowledgment : undefined;
-  return typeof acknowledgment === "string" ? acknowledgment.trim() : "";
 }
 
 function isConfirmedYield(card: ToolCard): boolean {
@@ -148,43 +138,6 @@ function spokenAcknowledgment(
   return message;
 }
 
-/** Where work resumed after a hidden wake, and what woke it. */
-export type ContinuationDisplay = HandoffDisplay & {
-  resumedAt: number;
-  source: ProjectedContinuationSource;
-};
-
-export function readContinuationDisplay(message: unknown): ContinuationDisplay | undefined {
-  const display = asRecord(asRecord(message)?.openclawContinuation);
-  const source = readProjectedContinuation(message);
-  return source && typeof display?.yieldedAt === "number" && typeof display.resumedAt === "number"
-    ? { yieldedAt: display.yieldedAt, resumedAt: display.resumedAt, source }
-    : undefined;
-}
-
-// Rows memoize on message identity; reuse the marked copy while its times hold.
-const continuedMessages = new WeakMap<
-  object,
-  { display: HandoffDisplay; message: Record<string, unknown> }
->();
-
-function continuedMessage(message: unknown, display: HandoffDisplay & { resumedAt: number }) {
-  const record = asRecord(message);
-  if (!record) {
-    return message;
-  }
-  const cached = continuedMessages.get(record);
-  if (
-    cached?.display.yieldedAt === display.yieldedAt &&
-    cached.display.resumedAt === display.resumedAt
-  ) {
-    return cached.message;
-  }
-  const continued = { ...record, openclawContinuation: display };
-  continuedMessages.set(record, { display, message: continued });
-  return continued;
-}
-
 /** The latest confirmed handoff that nothing has resumed yet. */
 export type PendingSessionsYield = {
   timestamp: number | null;
@@ -258,7 +211,9 @@ function scanSessionsYieldItems(
       ) {
         handoffRunIds.unshift(handoffRunId);
       }
-      const acknowledgment = yieldAcknowledgment(lastYield);
+      const facts = readYieldReceipt(lastYield);
+      const acknowledgment =
+        typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
       if (acknowledgment) {
         // The confirmed result echoes only the public acknowledgment, never the
         // private continuation context, and it stays after the run resumes.
@@ -362,51 +317,7 @@ function scanSessionsYieldItems(
           ]
         : [];
     }
-    // A row that resumes this session's own work after a hidden wake, such as a
-    // finished background command, continues the block before it like a handoff.
-    const continuation = message ? readProjectedContinuation(message) : undefined;
-    const resume: ChatItem[] = [];
-    if (message && continuation) {
-      // Rows split from the resumed message share its mark; the row before
-      // them is where the work stopped.
-      const entryId = persistedMessageEntryId(message);
-      let firstRow = true;
-      let earlier = index - 1;
-      for (; earlier >= 0; earlier -= 1) {
-        const candidate = items[earlier]!;
-        if (candidate.kind !== "message") {
-          continue;
-        }
-        if (entryId === null || persistedMessageEntryId(candidate.message) !== entryId) {
-          break;
-        }
-        firstRow = false;
-      }
-      const previous = items[earlier];
-      const previousCards =
-        previous?.kind === "message" ? extractToolCardsCached(previous.message) : [];
-      const previousYield = previousCards.findLast(isConfirmedYield);
-      if (firstRow && !previousYield && !previousCards.some(isConfirmedPublicHandoff)) {
-        resume.push({
-          kind: "notice",
-          key: `resume:${item.key}`,
-          handoffBoundary: true,
-          text: "",
-          timestamp: rawMessageTimestamp(message) ?? 0,
-        });
-      }
-      const yieldedAt = previous?.kind === "message" ? rawMessageTimestamp(previous.message) : null;
-      const resumedAt = rawMessageTimestamp(message);
-      // A spoken acknowledgment already marks where its handoff resumed.
-      if (yieldedAt !== null && resumedAt !== null && !yieldAcknowledgment(previousYield)) {
-        remaining = remaining.map((row) =>
-          row.kind === "message"
-            ? { ...row, message: continuedMessage(row.message, { yieldedAt, resumedAt }) }
-            : row,
-        );
-      }
-    }
-    const slot = [...resume, ...remaining, ...boundary];
+    const slot = [...remaining, ...boundary];
     projected.push(slot);
     if (isTurnStatus(item)) {
       working = { slot, item };
@@ -504,8 +415,41 @@ function keepsRowWithToolsHidden(item: ChatItem): boolean {
     cards.length === 0 ||
     hasContent ||
     hasHandoffToolCall(item.message) ||
+    // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
+    readProjectedContinuation(item.message) !== undefined ||
     cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
   );
+}
+
+/**
+ * Work that resumes after a hidden wake, such as a finished background command,
+ * continues the block before it like a handoff. Rows split from one resumed
+ * message share its mark, so only the first opens the handoff.
+ */
+function projectContinuations(items: ChatItem[]): ChatItem[] {
+  // The run of the previous row when it carried the mark; null when it did not.
+  let continued: string | undefined | null = null;
+  return items.flatMap<ChatItem>((item) => {
+    if (item.kind !== "message") {
+      return [item];
+    }
+    const runId = transcriptRunId(item.message);
+    const marked = readProjectedContinuation(item.message) !== undefined;
+    const opens = marked && continued !== runId;
+    continued = marked ? runId : null;
+    return opens
+      ? [
+          {
+            kind: "notice",
+            key: `resume:${item.key}`,
+            handoffBoundary: true,
+            text: "",
+            timestamp: rawMessageTimestamp(item.message) ?? 0,
+          },
+          item,
+        ]
+      : [item];
+  });
 }
 
 export function projectSessionsYieldItems(
@@ -514,7 +458,7 @@ export function projectSessionsYieldItems(
   complete?: readonly ChatItem[],
 ): ChatItem[] {
   const shown = showToolCalls ? items : items.filter(keepsRowWithToolsHidden);
-  const projected = scanSessionsYieldItems(shown, showToolCalls).items;
+  const projected = scanSessionsYieldItems(projectContinuations(shown), showToolCalls).items;
   const status = complete?.find(isTurnStatus);
   const completeKeys = complete && new Set(complete.map((item) => item.key));
   const visible = completeKeys

@@ -64,10 +64,12 @@ const controlUiPerformanceBudgets = {
   // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
   // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
   // (+1,215 B over main 97dd78cc) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_313_246,
+  // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
+  chatBootJsGzipBytes: 1_314_350,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
-  newBootJsGzipBytes: 815_806,
+  // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
+  newBootJsGzipBytes: 816_160,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -81,7 +83,8 @@ const controlUiPerformanceBudgets = {
   // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
   // Same #198491 approval, absorbing inherited debt: measured 572,080 B (+1,010 B over main)
   // plus 64 B headroom.
-  largestJsGzipBytes: 572_144,
+  // Continuation wakes (#200056): measured 572,376 B plus 64 B.
+  largestJsGzipBytes: 572_440,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,

@@ -9,13 +9,13 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
-import { readContinuationDisplay, type ContinuationDisplay } from "./chat-sessions-yield.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
   assistantGroupIsIndependentBoundary,
+  readProjectedContinuation,
 } from "./chat-turn-boundary.ts";
 import {
   joinActivityRuns,
@@ -74,11 +74,9 @@ export function chatItemGroups(
   return [];
 }
 
-/** The Resumed rule a part opens with, when it continues work after a hidden wake. */
-export function partContinuation(
-  item: AgentRunFrameInput | ChatItem,
-): ContinuationDisplay | undefined {
-  return readContinuationDisplay(chatItemGroups(item)[0]?.messages[0]?.message);
+/** What woke the work a part resumes, which opens it with a Resumed rule. */
+export function partContinuation(item: AgentRunFrameInput | ChatItem) {
+  return readProjectedContinuation(chatItemGroups(item)[0]?.messages[0]?.message);
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {

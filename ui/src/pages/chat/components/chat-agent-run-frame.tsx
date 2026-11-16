@@ -22,11 +22,14 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
-  partContinuation,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import type { ContinuationDisplay } from "../chat-sessions-yield.ts";
+import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import {
+  readProjectedContinuation,
+  type ProjectedContinuationSource,
+} from "../chat-turn-boundary.ts";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
@@ -271,18 +274,36 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
         sessionPublicOrigin: opts.sessionPublicOrigin,
       })
     : [];
-  // Work that resumed after a hidden wake marks where it picked up again.
-  // Rows split from one resumed message share its mark; only the first draws it.
-  const resumes = new Map<string, ContinuationDisplay>();
-  const marked = new Set<number>();
-  for (const [index, part] of bodyParts.entries()) {
-    const display = partContinuation(part);
-    if (display && !marked.has(display.resumedAt) && (index > 0 || (fragment && !fragment.first))) {
-      resumes.set(`${part.kind}:${part.key}`, display);
+  // Work that resumed after a hidden wake marks where it picked up again. Rows
+  // split from one resumed message share its time, so only the first draws it.
+  // A virtualized fragment scans its whole run: work may stop in an earlier one.
+  const resumes = new Map<
+    string,
+    { yieldedAt: number; resumedAt: number; source: ProjectedContinuationSource }
+  >();
+  let stopped: unknown;
+  const runParts = fragment
+    ? fragment.source.parts.flatMap<BodyPart>((part) =>
+        part.kind === "stream-run" ? part.parts : [part],
+      )
+    : bodyParts;
+  for (const part of runParts) {
+    const partGroups = chatItemGroups(part);
+    const first = partGroups[0]?.messages[0]?.message;
+    const wokenBy = readProjectedContinuation(first);
+    const resumedAt = rawMessageTimestamp(first);
+    const yieldedAt = rawMessageTimestamp(stopped);
+    // A spoken acknowledgment already marks where its handoff resumed.
+    if (
+      wokenBy &&
+      resumedAt &&
+      yieldedAt &&
+      yieldedAt < resumedAt &&
+      !readHandoffDisplay(stopped)
+    ) {
+      resumes.set(`${part.kind}:${part.key}`, { yieldedAt, resumedAt, source: wokenBy });
     }
-    if (display) {
-      marked.add(display.resumedAt);
-    }
+    stopped = partGroups.at(-1)?.messages.at(-1)?.message ?? stopped;
   }
   return {
     shell,

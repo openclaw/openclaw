@@ -230,16 +230,38 @@ describe("self-woken continuation projection", () => {
       ["group", "settle"],
       ["group", "settle"],
     ]);
-    expect(first!.parts.map((part) => partContinuation(part)?.source)).toEqual([
+    expect(first!.parts.map((part) => partContinuation(part))).toEqual([
       undefined,
       "exec",
       "subagent",
       undefined,
     ]);
-    expect(partContinuation(first!.parts[1]!)).toMatchObject({
-      yieldedAt: 2 * 60_000,
-      resumedAt: 3 * 60_000,
-    });
     expect(second!.runId).toBe("next");
+  });
+
+  it("keeps the Resumed rule when tool calls hide the row that carries it", () => {
+    const sessionKey = "agent:main:dashboard:continuation-hidden-tools";
+    const messages = [
+      row("ask", 1, "ask", { role: "user", content: "Review the change" }),
+      row("answer", 2, "ask", { content: "Long final answer", stopReason: "stop" }),
+      wake("exec", 3, "late"),
+      result(4, "late"),
+      row("late-answer", 5, "late", { content: "Command finished.", stopReason: "stop" }),
+    ];
+    const items = buildChatItems(createProps({ sessionKey, messages, showToolCalls: false }));
+    const chain = projectTranscriptChain(items, {
+      sessionKey,
+      messages,
+      runWorking: false,
+      searchActive: false,
+    });
+    const [first, ...rest] = frames(chain);
+    expect(rest).toEqual([]);
+    // The hidden tool row stays as the part that opens with the Resumed rule.
+    expect(first!.parts.map((part) => partContinuation(part))).toEqual([
+      undefined,
+      "exec",
+      undefined,
+    ]);
   });
 });

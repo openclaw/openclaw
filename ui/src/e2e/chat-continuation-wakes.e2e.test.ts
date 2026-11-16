@@ -209,9 +209,9 @@ suite.define(() => {
           text.replace(/\s+/gu, " ").trim(),
         ),
       ).toEqual([
-        "Resumed · 3m 30s later · Background command finished",
-        "Resumed · 4m 20s later · Background command finished",
-        "Resumed · 4m 30s later · Agent finished",
+        "Resumed · 3m 40s later · Background command finished",
+        "Resumed · 4m 30s later · Background command finished",
+        "Resumed · 4m 40s later · Agent finished",
         "Resumed · 1m 40s later · Background command finished",
       ]);
       await thread.getByText(ANSWER, { exact: true }).waitFor();
