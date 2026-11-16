@@ -287,10 +287,7 @@ suite.define(() => {
 
         await page.setViewportSize({ width: 390, height: 844 });
         await navigationDrawerToggle(page).click();
-        await page.locator(".sidebar-panel-header #sidebar-people-presence").click();
-        await page
-          .locator('openclaw-select-picker:has(#sidebar-people-presence) [data-value="all"]')
-          .click();
+        await choosePresence("all");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(3);
         await page.setViewportSize({ width: 1280, height: 800 });
         await choosePresence("online");
