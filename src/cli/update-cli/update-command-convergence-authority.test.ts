@@ -232,6 +232,30 @@ describe("candidate convergence Doctor dispatch authority", () => {
     expect(persist).toHaveBeenCalledWith(expect.objectContaining({ requestedChannel: "beta" }));
     expect(mocks.convergeCandidate).not.toHaveBeenCalled();
   });
+  it("completes an already-current rerun from the checkout of a converted install", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(await fs.realpath(tempDirs.make("git-release-")), "git-install");
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+    const { resultWithPostUpdate } = await converge({
+      root: gitReleaseSlot(prefix),
+      // The CLI ran from the preserved checkout; the runner reports the release link.
+      previousInstallRoot: tempDirs.make("checkout-"),
+      coreAlreadyCurrent: true,
+      result: {
+        status: "skipped",
+        reason: "already-current",
+        root: gitReleaseSlot(prefix),
+        sourceRuntimePrepared: true,
+      },
+    });
+    expect(resultWithPostUpdate.reason).not.toBe("post-core-update-failed");
+    expect(mocks.convergeCandidate).toHaveBeenCalled();
+  });
   it("records the failed post-core child even without supplied failure facts", async () => {
     vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
       resumed: false,

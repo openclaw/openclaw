@@ -241,7 +241,13 @@ export async function convergeUpdatePlugins(params: {
           postCorePluginUpdate = freshProcessResult.pluginUpdate;
         }
 
-        if (retainedDifferentRuntime && !params.candidateRuntime && !targetRuntimeConverged) {
+        // A switched Git release converges here, in the updater, by design.
+        if (
+          retainedDifferentRuntime &&
+          !params.candidateRuntime &&
+          !targetRuntimeConverged &&
+          !gitRelease
+        ) {
           return {
             resultWithPostUpdate: failedTargetRuntime(),
             detail:
