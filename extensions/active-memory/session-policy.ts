@@ -321,10 +321,18 @@ export function isAllowedChatId(
   // the trusted hook chat id so allow/deny lists still apply.
   const conversationId =
     (resolveConversationId(ctx) ?? ctx.channelId?.trim())?.toLowerCase() || undefined;
-  if (hasAllowlist && (!conversationId || !config.allowedChatIds.includes(conversationId))) {
+  // Telegram includes topics in its peer id. Parent rules also apply, while
+  // exact-topic exclusions and other providers' opaque peer ids stay intact.
+  const parentConversationId = parseAgentSessionKey(ctx.sessionKey)?.rest.startsWith("telegram:")
+    ? conversationId?.match(/^(-?\d+):(?:topic|direct-topic):\d+$/)?.[1]
+    : undefined;
+  const matchesConversation = (ids: readonly string[]) =>
+    (conversationId !== undefined && ids.includes(conversationId)) ||
+    (parentConversationId !== undefined && ids.includes(parentConversationId));
+  if (hasAllowlist && !matchesConversation(config.allowedChatIds)) {
     return false;
   }
-  if (hasDenylist && conversationId && config.deniedChatIds.includes(conversationId)) {
+  if (hasDenylist && matchesConversation(config.deniedChatIds)) {
     return false;
   }
   return true;

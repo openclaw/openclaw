@@ -119,6 +119,11 @@ case-insensitive. If `allowedChatIds` is non-empty and OpenClaw cannot
 resolve a conversation id for the session, active memory skips the turn
 instead of guessing.
 
+For Telegram, a chat id such as `-1001234567890` matches the chat and its
+topics. Use `-1001234567890:topic:42` to match only one forum topic, or
+`123456789:direct-topic:42` for one direct-message topic. A deny entry for
+either the parent chat or the exact topic wins over an allow entry for either.
+
 ```json5
 allowedChatTypes: ["direct", "group"],
 allowedChatIds: ["ou_operator_open_id", "oc_small_ops_group"],

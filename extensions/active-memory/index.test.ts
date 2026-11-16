@@ -1401,6 +1401,45 @@ describe("active-memory plugin", () => {
         messageProvider: "telegram",
         channelId: "-100123:topic:77",
       }, "untrusted", "telegram", { allowedChatTypes: ["direct", "group"] }, "what wings should we order?"],
+    ["matches a Telegram forum topic against its parent chat allowlist", undefined, {
+        sessionKey: "agent:main:telegram:group:-100123:topic:77",
+        messageProvider: "telegram",
+        channelId: "-100123:topic:77",
+      }, "prepend-context", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["-100123"] }, undefined],
+    ["denies a Telegram forum topic when its parent chat is denied", undefined, {
+        sessionKey: "agent:main:telegram:group:-100123:topic:77",
+        messageProvider: "telegram",
+        channelId: "-100123:topic:77",
+      }, "skip", undefined, { allowedChatTypes: ["group"], deniedChatIds: ["-100123"] }, undefined],
+    ["keeps an exact-topic denial over a parent chat allowance", undefined, {
+        sessionKey: "agent:main:telegram:group:-100123:topic:77",
+        messageProvider: "telegram",
+        channelId: "-100123:topic:77",
+      }, "skip", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["-100123"], deniedChatIds: ["-100123:topic:77"] }, undefined],
+    ["keeps a parent chat denial over an exact-topic allowance", undefined, {
+        sessionKey: "agent:main:telegram:group:-100123:topic:77",
+        messageProvider: "telegram",
+        channelId: "-100123:topic:77",
+      }, "skip", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["-100123:topic:77"], deniedChatIds: ["-100123"] }, undefined],
+    ["keeps exact-topic allowlists narrow", undefined, {
+        sessionKey: "agent:main:telegram:group:-100123:topic:78",
+        messageProvider: "telegram",
+        channelId: "-100123:topic:78",
+      }, "skip", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["-100123:topic:77"] }, undefined],
+    ["matches Telegram topics under an account and a generic reply thread", undefined, {
+        sessionKey: "agent:main:telegram:work:group:-100123:topic:77:thread:reply-42",
+        messageProvider: "webchat",
+      }, "prepend-context", undefined, { allowedChatTypes: ["group"], allowedChatIds: ["-100123"] }, undefined],
+    ["denies Telegram direct-message topics by parent chat", undefined, {
+        sessionKey: "agent:main:telegram:direct:12345:direct-topic:77",
+        messageProvider: "telegram",
+        channelId: "12345:direct-topic:77",
+      }, "skip", undefined, { allowedChatTypes: ["direct"], deniedChatIds: ["12345"] }, undefined],
+    ["does not inherit a parent from another provider's colon-containing peer id", undefined, {
+        sessionKey: "agent:main:feishu:group:-100123:topic:77",
+        messageProvider: "feishu",
+        channelId: "-100123:topic:77",
+      }, "prepend-context", undefined, { allowedChatTypes: ["group"], deniedChatIds: ["-100123"] }, undefined],
     ["keeps explicit session classification when the opaque session id contains chat-type tokens", undefined, {
         sessionKey: "agent:main:explicit:portal-123:group:shadow",
         channelId: "webchat",
