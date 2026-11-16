@@ -10,7 +10,7 @@ import {
 } from "../infra/install-package-dir.js";
 import { withInstallActivity } from "../infra/install-progress.js";
 import { formatNpmCommandFailureOutput } from "../infra/install-source-utils.js";
-import { resolveNpmCommand } from "../infra/npm-command.js";
+import { resolveNonInteractiveNpmStdin, resolveNpmCommand } from "../infra/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
@@ -290,6 +290,7 @@ export async function installPluginFromManagedNpmRoot(
       cwd: npmRoot,
       timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
       signal: params.signal,
+      ...resolveNonInteractiveNpmStdin(),
       killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,

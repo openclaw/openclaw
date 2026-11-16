@@ -18,7 +18,7 @@ import { resolveUserPath, tryParseJson } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
-import { resolveNpmCommand } from "./npm-command.js";
+import { resolveNonInteractiveNpmStdin, resolveNpmCommand } from "./npm-command.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import {
@@ -75,6 +75,7 @@ export async function loadNpmPackageVersions({
     resolveNpmCommand(["view", packageName, "versions", "--json"]),
     {
       ...commandOptions,
+      ...resolveNonInteractiveNpmStdin(),
       timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
       env: createNpmMetadataEnv(),
     },
@@ -178,6 +179,7 @@ export async function resolveNpmSpecMetadata(params: {
     ]),
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      ...resolveNonInteractiveNpmStdin(),
       signal: params.signal,
       killProcessTree: true,
       env: createNpmMetadataEnv(),
@@ -339,6 +341,7 @@ export async function packNpmSpecToArchive(params: {
       signal: params.signal,
       killProcessTree: true,
       cwd: params.cwd,
+      ...resolveNonInteractiveNpmStdin(),
       env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
   );
@@ -395,6 +398,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
     resolveNpmCommand(["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"]),
     {
       timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      ...resolveNonInteractiveNpmStdin(),
       signal: params.signal,
       killProcessTree: true,
       env: createNpmMetadataEnv(),

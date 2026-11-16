@@ -124,14 +124,20 @@ it.each(["darwin", "linux", "win32"] as const)(
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
 
     mockPackCommandResult({ stdout: JSON.stringify(["1.2.3"]) });
-    expect(await loadNpmPackageVersions({ packageName: packFields.name, killProcessTree: true, signal }))
-      .toEqual(["1.2.3"]);
+    expect(
+      await loadNpmPackageVersions({ packageName: packFields.name, killProcessTree: true, signal }),
+    ).toEqual(["1.2.3"]);
     mockPackCommandResult({ stdout: JSON.stringify(packFields) });
-    expect(await resolveNpmSpecMetadata({ spec: packFields.name, signal })).toMatchObject({ ok: true });
+    expect(await resolveNpmSpecMetadata({ spec: packFields.name, signal })).toMatchObject({
+      ok: true,
+    });
     mockPackCommandResult({ stdout: JSON.stringify([packEntry]) });
-    expect(await packNpmSpecToArchive({ spec: packFields.name, timeoutMs: 1000, cwd, signal }))
-      .toMatchObject({ ok: true });
-    expect(await resolveNpmPackArchiveMetadata({ archivePath, signal })).toMatchObject({ ok: true });
+    expect(
+      await packNpmSpecToArchive({ spec: packFields.name, timeoutMs: 1000, cwd, signal }),
+    ).toMatchObject({ ok: true });
+    expect(await resolveNpmPackArchiveMetadata({ archivePath, signal })).toMatchObject({
+      ok: true,
+    });
 
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(4);
     for (const [, options] of runCommandWithTimeoutMock.mock.calls) {

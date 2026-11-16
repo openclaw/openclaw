@@ -11,7 +11,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { ignoreMissingPath } from "./errno.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
-import { resolveNpmCommand } from "./npm-command.js";
+import { resolveNonInteractiveNpmStdin, resolveNpmCommand } from "./npm-command.js";
 import {
   filterUnsupportedManagedNpmRootOverrides,
   readOverrideRecord,
@@ -581,10 +581,9 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   workTimeoutMs?: number | null;
   signal?: AbortSignal;
 }): Promise<Record<string, string>> {
-  const manifest = params.manifest;
-  const dependencies = readDependencyRecord(manifest.dependencies);
+  const dependencies = readDependencyRecord(params.manifest.dependencies);
   const previousManagedPeerDependencies = readManagedKeys(
-    manifest.openclaw,
+    params.manifest.openclaw,
     "managedPeerDependencies",
   );
   const fallbackPeerPins: Record<string, string> = {};
@@ -601,7 +600,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     await writeJson(
       path.join(tempRoot, "package.json"),
       {
-        ...manifest,
+        ...params.manifest,
         private: true,
         dependencies,
       },
@@ -618,9 +617,8 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
         .catch(ignoreMissingPath);
     }
 
-    const command = params.runCommand ?? runCommandWithTimeout;
     const runPeerPlan = (legacyPeerDeps: boolean) =>
-      command(
+      (params.runCommand ?? runCommandWithTimeout)(
         resolveNpmCommand([
           "install",
           "--package-lock-only",
@@ -640,6 +638,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
             params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
           ),
           signal: params.signal,
+          ...resolveNonInteractiveNpmStdin(),
           killProcessTree: true,
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps,
@@ -804,6 +803,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
         Math.max(params.timeoutMs ?? 300_000, 300_000),
       ),
       signal: params.signal,
+      ...resolveNonInteractiveNpmStdin(),
       killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
