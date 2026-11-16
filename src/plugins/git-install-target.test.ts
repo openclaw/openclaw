@@ -5,6 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePluginInstallPreflight } from "../cli/plugins-install-preflight.js";
+import {
+  parsePluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+} from "../config/plugin-install-record-map.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   createOpenClawTestState,
@@ -16,6 +21,7 @@ import {
   takePluginInstallTransaction,
 } from "./install-transaction.js";
 import { writeArtifacts } from "./public-surface.test-support.js";
+import { applyPluginUninstallDirectoryRemoval, planPluginUninstall } from "./uninstall.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
@@ -129,6 +135,82 @@ describe("git install target ownership", () => {
     const root = await install();
     expect(root.pluginId).toBe("demo");
     expect(root.targetDir).not.toBe(installed.targetDir);
+  });
+
+  it("preserves a whitespace-bearing selection through record round-trip, update and uninstall", async () => {
+    const root = await install();
+    const legacyRoot: PluginInstallRecord = {
+      source: "git",
+      spec,
+      installPath: root.targetDir,
+      gitUrl: root.git.url,
+      gitCommit: root.git.commit,
+    };
+    const directory = " plugins/nested";
+    const packageDir = path.join(sourceDir, directory);
+    await commitPlugin("nested", "2.0.0", packageDir);
+    const installed = await install({ directory, expectedPluginId: "nested" });
+    const records = expectDefined(
+      parsePluginInstallRecordMap(
+        JSON.parse(
+          serializePluginInstallRecordMap({
+            demo: legacyRoot,
+            nested: {
+              source: "git",
+              spec,
+              installPath: installed.targetDir,
+              gitUrl: installed.git.url,
+              gitCommit: installed.git.commit,
+              gitDirectory: installed.git.directory,
+            },
+          }),
+        ),
+      ),
+      "round-tripped Git install records",
+    );
+    expect(records.demo).toEqual(legacyRoot);
+    expect(records.demo).not.toHaveProperty("gitDirectory");
+    expect(records.nested?.gitDirectory).toBe(" plugins/nested");
+    const nextCommit = await commitPlugin("nested", "3.0.0", packageDir);
+    const updated = await install({
+      directory: records.nested?.gitDirectory,
+      expectedPluginId: "nested",
+      mode: "update",
+    });
+    expect(updated).toMatchObject({
+      targetDir: installed.targetDir,
+      version: "3.0.0",
+      git: { commit: nextCommit, directory: " plugins/nested" },
+    });
+    const plan = planPluginUninstall({
+      config: { plugins: { installs: records } },
+      pluginId: "nested",
+    });
+    if (!plan.ok) {
+      throw new Error(plan.error);
+    }
+    expect(await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval)).toEqual({
+      directoryRemoved: true,
+      warnings: [],
+    });
+    await expect(fs.access(path.resolve(installed.targetDir, "../.."))).rejects.toThrow();
+    await expect(read(root.targetDir, "index.js")).resolves.toBe('export default "1.0.0";\n');
+    const rootUpdated = await install({
+      spec: records.demo?.spec,
+      mode: "update",
+      expectedPluginId: "demo",
+    });
+    expect(rootUpdated).toMatchObject({ targetDir: root.targetDir, version: "1.0.0" });
+    expect(rootUpdated.git.directory).toBeUndefined();
+    const rootPlan = planPluginUninstall({ config: plan.config, pluginId: "demo" });
+    if (!rootPlan.ok) {
+      throw new Error(rootPlan.error);
+    }
+    expect(await applyPluginUninstallDirectoryRemoval(rootPlan.directoryRemoval)).toEqual({
+      directoryRemoved: true,
+      warnings: [],
+    });
+    await expect(fs.access(root.targetDir)).rejects.toThrow();
   });
 
   it("rejects invalid or absent package selectors without publishing a checkout", async () => {
