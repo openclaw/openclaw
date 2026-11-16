@@ -93,7 +93,10 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
             trigger: "manual",
             toolsAllow,
           });
-          expect(result).toMatchObject({ compacted: true, compactionKind: "server-endpoint" });
+          expect(result, JSON.stringify(result)).toMatchObject({
+            compacted: true,
+            compactionKind: "server-endpoint",
+          });
         };
 
         await compact();
