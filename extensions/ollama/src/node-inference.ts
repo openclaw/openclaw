@@ -1,6 +1,6 @@
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveNodeFromNodeList } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
@@ -311,18 +311,27 @@ export function createOllamaNodeHostCommands(options?: {
 }
 
 function findNode(nodes: NodeSummary[], query: string): NodeSummary {
-  const normalized = query.trim().toLowerCase();
-  const matches = nodes.filter(
-    (node) =>
-      node.nodeId.toLowerCase() === normalized || node.displayName?.toLowerCase() === normalized,
-  );
-  if (matches.length === 0) {
-    throw new Error(`node ${JSON.stringify(query)} is not connected with Ollama inference support`);
+  // Display names arrive from the node's own host, so a macOS host stores them
+  // decomposed while a typed or agent-supplied selector may be composed. The
+  // shared resolver owns that equivalence plus the ambiguity diagnostics.
+  try {
+    // The resolver returns a list entry for every accepted query shape.
+    return resolveNodeFromNodeList(nodes, query);
+  } catch (error) {
+    const reason = errorMessage(error);
+    if (reason.startsWith("unknown node:")) {
+      throw new Error(
+        `node ${JSON.stringify(query)} is not connected with Ollama inference support`,
+        { cause: error },
+      );
+    }
+    if (reason.startsWith("ambiguous node:")) {
+      throw new Error(`node ${JSON.stringify(query)} is ambiguous; use its nodeId`, {
+        cause: error,
+      });
+    }
+    throw error;
   }
-  if (matches.length > 1) {
-    throw new Error(`node ${JSON.stringify(query)} is ambiguous; use its nodeId`);
-  }
-  return expectDefined(matches[0], "single matching Ollama inference node");
 }
 
 function parseInvokePayload(raw: unknown): Record<string, unknown> {

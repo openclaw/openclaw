@@ -344,6 +344,59 @@ async function withAbortTestServer(
   );
 }
 
+describe("node-local Ollama node selection", () => {
+  // A macOS host reports its own display name decomposed; a typed or agent selector is composed.
+  const composed = "Café-Studio".normalize("NFC");
+  const decomposed = "Café-Studio".normalize("NFD");
+
+  it.each([
+    ["composed selector against a decomposed name", decomposed, composed],
+    ["decomposed selector against a composed name", composed, decomposed],
+  ])(
+    "matches a display name across Unicode composition (%s)",
+    async (_name, storedName, selector) => {
+      const invoke = vi.fn(async () => ({ payload: { models: [] } }));
+      const api = nodeApi([nodeRow("paired-node", undefined, storedName)], invoke);
+
+      const result = await createOllamaNodeInferenceTool(api).execute(
+        "nfc-discover",
+        { action: "discover", node: selector },
+        undefined,
+      );
+
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "paired-node" }));
+      expect(result).toBeDefined();
+    },
+  );
+
+  it("keeps the unsupported-node diagnostic for an unknown selector", async () => {
+    const api = nodeApi([nodeRow("paired-node", undefined, "Desk")], vi.fn());
+
+    await expect(
+      createOllamaNodeInferenceTool(api).execute(
+        "unknown-node",
+        { action: "discover", node: "not-a-node" },
+        undefined,
+      ),
+    ).rejects.toThrow(/is not connected with Ollama inference support/u);
+  });
+
+  it("keeps the ambiguous diagnostic when two names resolve to one key", async () => {
+    const api = nodeApi(
+      [nodeRow("first", undefined, "Desk"), nodeRow("second", undefined, "Desk")],
+      vi.fn(),
+    );
+
+    await expect(
+      createOllamaNodeInferenceTool(api).execute(
+        "ambiguous-node",
+        { action: "discover", node: "Desk" },
+        undefined,
+      ),
+    ).rejects.toThrow(/is ambiguous; use its nodeId/u);
+  });
+});
+
 describe("node-local Ollama inference cancellation", () => {
   it.each(["/api/tags", "/api/show", "/api/chat"])(
     "forwards agent cancellation through the paired node and closes %s",
