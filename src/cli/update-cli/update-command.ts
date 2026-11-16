@@ -323,7 +323,7 @@ async function updateCommandInternal(
     let releaseLayoutWarning: string | undefined;
     const gitRelease =
       updateInstallKind === "git" &&
-      usesGitReleases(switchToGit, (reason) => {
+      usesGitReleases(switchToGit, schemaPreflight.service, (reason) => {
         releaseLayoutWarning = `Git release layout unavailable (${reason}); updating the checkout in place. The next update tries the release layout again.`;
         defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
       });

@@ -41,6 +41,8 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
     env: { ...process.env, ...env },
   });
 
+const ownedService = { serviceUpdateVerdict: { kind: "owned" } };
+
 describe.skipIf(process.platform === "win32")("git releases", () => {
   it("switches back and restores upgraded state after two failed trial starts", async () => {
     const { stateDir, prefix } = await setup();
@@ -135,15 +137,28 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
   });
 
+  it("keeps a checkout without an owning Gateway service on the in-place runner", async () => {
+    const { stateDir } = await setup();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      // Nothing would start through the release link, so the next start would run the old commit.
+      expect(usesGitReleases(false, undefined)).toBe(false);
+      expect(usesGitReleases(false, { serviceUpdateVerdict: { kind: "absent" } })).toBe(false);
+      expect(usesGitReleases(false, ownedService)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("takes the in-place runner with a reason when the release link cannot be used", async () => {
     const { stateDir, prefix } = await setup();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      expect(usesGitReleases(false)).toBe(true);
+      expect(usesGitReleases(false, ownedService)).toBe(true);
       // Something other than a release link sits at the package path.
       await fs.mkdir(gitReleaseSlot(prefix), { recursive: true });
       const reasons: string[] = [];
-      expect(usesGitReleases(false, (reason) => reasons.push(reason))).toBe(false);
+      expect(usesGitReleases(false, ownedService, (reason) => reasons.push(reason))).toBe(false);
       expect(reasons).toEqual([`${gitReleaseSlot(prefix)} is not a release link`]);
     } finally {
       vi.unstubAllEnvs();

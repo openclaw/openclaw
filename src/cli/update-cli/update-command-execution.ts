@@ -597,6 +597,7 @@ export async function executeMutableUpdate(
         ...installOptions,
         sourceRuntimePrepared: prepared,
         switchToGit: params.switchToGit,
+        gitReleases: params.gitRelease,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
         devTarget: params.devTarget,

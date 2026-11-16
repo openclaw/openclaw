@@ -14,15 +14,22 @@ export const GIT_RELEASE_TRIAL = ".trial";
 
 /**
  * Whether a Git update runs from releases. POSIX only: #198835's link is POSIX-only, so
- * Windows checkouts and package-to-Git switches keep the in-place runner. The layout never
+ * Windows checkouts and package-to-Git switches keep the in-place runner. Only an installed
+ * Gateway service that owns this install starts through the release link; a checkout run
+ * by hand keeps the in-place runner, or its next start would run the old commit. The layout never
  * fails an update (#197949 decision 8): when it cannot be used, `onUnavailable` hears why
  * and the update takes the in-place runner. The next update tries the layout again.
  */
 export function usesGitReleases(
   switchToGit: boolean,
+  service: { serviceUpdateVerdict?: { kind: string } } | undefined,
   onUnavailable?: (reason: string) => void,
 ): boolean {
-  if (switchToGit || process.platform === "win32") {
+  if (
+    switchToGit ||
+    process.platform === "win32" ||
+    service?.serviceUpdateVerdict?.kind !== "owned"
+  ) {
     return false;
   }
   const prefix = resolveGitReleasePrefix();
