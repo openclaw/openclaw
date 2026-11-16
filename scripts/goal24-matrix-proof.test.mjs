@@ -62,5 +62,19 @@ for (const kind of ["wire", "owner"]) {
     });
   }
 }
+test("accepts repeated parameterized titles in complete SDK suite", () => {
+  const value = {
+    testResults: [
+      {
+        assertionResults: Array.from({ length: 97 }, () => ({
+          fullName: "parameterized title",
+          status: "passed",
+          failureMessages: [],
+        })),
+      },
+    ],
+  };
+  assert.equal(admit(value, 0, "sdk").length, 97);
+});
 test("rejects partial pinned suite", () =>
   assert.throws(() => admit(report("wire", false), 0, "sdk")));
