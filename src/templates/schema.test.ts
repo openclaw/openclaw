@@ -152,6 +152,18 @@ describe("parseTemplateManifest", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { exec: { mode: "full" } },
+    { message: { crossContext: { allowAcrossProviders: true } } },
+  ])("keeps operator-only tool authority out of Templates: %j", (authority) => {
+    const result = parseTemplateManifest({
+      ...minimalManifest,
+      agent: { id: "worker", tools: { profile: "full", allow: ["read"], ...authority } },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects extra dependency fields and retired configuration with migration guidance", () => {
     for (const field of ["kind", "source", "required", "integrity"]) {
       expect(
