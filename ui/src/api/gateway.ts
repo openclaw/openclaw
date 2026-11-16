@@ -62,6 +62,7 @@ const INBOUND_SILENCE_CHECK_INTERVAL_MS = 1_000;
 // Unanswered sends need a quicker liveness check even after their requests time out.
 const UNANSWERED_REQUEST_SILENCE_MS = 5_000;
 const INBOUND_SILENCE_PROBE_TIMEOUT_MS = 10_000;
+const INBOUND_SILENCE_PROBE_CLOSE_REASON = "inbound silence probe timeout";
 const STALE_OPENING_MS = 8_000;
 
 export class GatewayBrowserClient {
@@ -80,6 +81,7 @@ export class GatewayBrowserClient {
     activityAtMs: number;
     deadlineMs: number;
     abort: AbortController;
+    deadline: ReturnType<typeof setTimeout>;
   } | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
@@ -156,13 +158,22 @@ export class GatewayBrowserClient {
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
       onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
-      resolveClose: (context) =>
-        resolveBrowserGatewayClose(
+      resolveClose: (context) => {
+        const decision = resolveBrowserGatewayClose(
           context,
           this.nativeAuthError,
           this.pairingFailure,
           this.pendingDeviceTokenRetry,
-        ),
+        );
+        // A failed liveness probe already proved this socket dead, so replace it at once.
+        // The override spends no backoff attempt: a failing replacement backs off as usual.
+        return decision.retry &&
+          decision.reconnectDelayMs === undefined &&
+          context.code === 4000 &&
+          context.reason === INBOUND_SILENCE_PROBE_CLOSE_REASON
+          ? { ...decision, reconnectDelayMs: 0 }
+          : decision;
+      },
       onClose: (context, decision) => {
         this.retireConnectDispatch();
         this.catalogRetryAbort.abort();
@@ -534,7 +545,7 @@ export class GatewayBrowserClient {
     if (probe && lastActivityAtMs === probe.activityAtMs) {
       if (now >= probe.deadlineMs) {
         this.clearInboundActivity();
-        this.forceReconnect("inbound silence probe timeout");
+        this.forceReconnect(INBOUND_SILENCE_PROBE_CLOSE_REASON);
       }
       return;
     }
@@ -552,6 +563,8 @@ export class GatewayBrowserClient {
       activityAtMs: lastActivityAtMs,
       deadlineMs: now + INBOUND_SILENCE_PROBE_TIMEOUT_MS,
       abort,
+      // Act on the deadline itself; the once-a-second check would add up to a second.
+      deadline: setTimeout(() => this.checkInboundSilence(), INBOUND_SILENCE_PROBE_TIMEOUT_MS),
     };
     // Health is scope-independent; avoid active integration probes. Any inbound
     // frame, including an error response, proves liveness.
@@ -567,7 +580,10 @@ export class GatewayBrowserClient {
   private clearInboundSilenceProbe(): void {
     const probe = this.inboundSilenceProbe;
     this.inboundSilenceProbe = null;
-    probe?.abort.abort();
+    if (probe) {
+      clearTimeout(probe.deadline);
+      probe.abort.abort();
+    }
   }
 
   private clearInboundActivity(): void {

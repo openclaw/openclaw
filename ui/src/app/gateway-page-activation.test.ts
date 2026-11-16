@@ -208,7 +208,8 @@ it.each(["visibility", "focus"])(
       visibility.mockReturnValue("hidden");
       document.dispatchEvent(new Event("visibilitychange"));
     }
-    await vi.advanceTimersByTimeAsync(1_000);
+    // Return between the watchdog's once-a-second checks.
+    await vi.advanceTimersByTimeAsync(1_500);
     visibility.mockReturnValue("visible");
     if (trigger === "visibility") {
       document.dispatchEvent(new Event("visibilitychange"));
@@ -226,7 +227,7 @@ it.each(["visibility", "focus"])(
     expect(socket.lastClose).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     expect(socket.lastClose).toEqual({ code: 4000, reason: "inbound silence probe timeout" });
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0);
     expect(wsInstances).toHaveLength(2);
   },
 );
