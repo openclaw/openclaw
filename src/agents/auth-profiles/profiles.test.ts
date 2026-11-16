@@ -2,6 +2,7 @@ import "./external-auth.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { assertProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -284,9 +285,9 @@ describe("promoteAuthProfileInOrder", () => {
       ) => resolveApiKeyForProfile({ cfg: {}, store, profileId, agentDir });
       expect(brokenAfterRotation).toBeDefined();
       expect(healthyAfterRotation).toBeDefined();
-      await expect(resolveKey(brokenAfterRotation!, brokenAgentDir)).resolves.toMatchObject({
-        apiKey: "sk-shared-new",
-      });
+      const retained = await resolveKey(brokenAfterRotation!, brokenAgentDir);
+      expect(retained).toMatchObject({ apiKey: "sk-shared-new" });
+      assertProviderAuthAuthority(retained!);
       await expect(resolveKey(healthyAfterRotation!, healthyAgentDir)).resolves.toMatchObject({
         apiKey: "sk-shared-new",
       });
@@ -299,6 +300,7 @@ describe("promoteAuthProfileInOrder", () => {
 
       saveAuthProfileStore(sharedStore("openai:replacement", "sk-shared-replacement"));
 
+      expect(() => assertProviderAuthAuthority(retained!)).toThrow(/removed|replaced/);
       const brokenAfterDeletion = runtimeSnapshot(brokenAgentDir);
       expect(brokenAfterDeletion).toBeDefined();
       await expect(resolveKey(brokenAfterDeletion!, brokenAgentDir)).resolves.toBeNull();

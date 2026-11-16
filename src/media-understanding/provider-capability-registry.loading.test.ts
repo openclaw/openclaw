@@ -38,3 +38,35 @@ it("infers only untagged entries and lets runtime audio metadata override config
   expect([...registry.keys()]).toEqual(["google"]);
   expect(registry.get("google")?.capabilities).toEqual(["audio"]);
 });
+
+it("keeps shared entries and metadata on the declared model owner", () => {
+  const google = { id: "google", capabilities: ["video" as const] };
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.mediaUnderstandingProviders.push({
+    pluginId: "google",
+    source: "test",
+    provider: google,
+  });
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      { id: "google", contracts: { mediaUnderstandingProviders: ["google"] } },
+      {
+        id: "synthetic-owner",
+        providers: ["gemini"],
+        modelCatalog: {
+          providers: {
+            gemini: { models: [{ id: "synthetic-vision", input: ["image"] }] },
+          },
+        },
+      },
+    ],
+  });
+  const cfg: OpenClawConfig = {
+    tools: { media: { models: [{ provider: "gemini" }, { provider: "google" }] } },
+  };
+  const registry = withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () =>
+    buildMediaUnderstandingCapabilityRegistry(cfg),
+  );
+  expect(registry.get("gemini")?.capabilities).toEqual(["image"]);
+  expect(registry.get("google")?.capabilities).toEqual(["video"]);
+});

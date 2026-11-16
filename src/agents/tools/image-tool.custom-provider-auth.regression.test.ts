@@ -6,6 +6,9 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
@@ -231,7 +234,9 @@ function makeProvider(id: string, text = id): MediaUnderstandingProvider {
 
 async function executeImage(params: {
   fallbacks?: string[];
+  provider?: string;
   preparedProviders?: MediaUnderstandingProvider[];
+  metadataSnapshot?: PluginMetadataSnapshot;
   configuredProvider?: string;
   paths?: string[];
 }) {
@@ -239,7 +244,7 @@ async function executeImage(params: {
     agents: {
       defaults: {
         imageModel: {
-          primary: "selected/vision",
+          primary: `${params.provider ?? "selected"}/vision`,
           ...(params.fallbacks ? { fallbacks: params.fallbacks } : {}),
         },
       },
@@ -261,6 +266,7 @@ async function executeImage(params: {
     ...(params.preparedProviders
       ? {
           preparedModelRuntime: {
+            ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
             mediaCapabilityProviders: { mediaUnderstandingProviders: params.preparedProviders },
           } as never,
         }
@@ -323,6 +329,55 @@ describe("image tool provider loading", () => {
     expect(genericDescribe).not.toHaveBeenCalled();
     expect(resolveProvider).not.toHaveBeenCalled();
   });
+
+  it("prefers an exact prepared provider over a historical media alias", async () => {
+    const google = makeProvider("google");
+    const gemini = makeProvider("gemini");
+    const result = await executeImage({ provider: "gemini", preparedProviders: [google, gemini] });
+    expect(result.content).toEqual([{ type: "text", text: "gemini" }]);
+    expect(gemini.describeImage).toHaveBeenCalledOnce();
+    expect(google.describeImage).not.toHaveBeenCalled();
+    expect(genericDescribe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { capturedOwner: true, ambientOwner: true },
+    { capturedOwner: true, ambientOwner: false },
+    { capturedOwner: false, ambientOwner: false },
+    { capturedOwner: false, ambientOwner: true },
+  ])(
+    "keeps captured image ownership ($capturedOwner) independent of ambient ownership ($ambientOwner)",
+    async ({ capturedOwner, ambientOwner }) => {
+      const snapshot = (ownsIdentity: boolean) =>
+        createPluginMetadataSnapshotFixture({
+          plugins: ownsIdentity ? [{ id: "synthetic-owner", providers: ["gemini"] }] : [],
+        });
+      const captured = snapshot(capturedOwner);
+      const ambient = snapshot(ambientOwner);
+      const google = { ...makeProvider("google"), aliases: ["gemini"] };
+      const result = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
+        executeImage({
+          provider: "gemini",
+          preparedProviders: [google],
+          metadataSnapshot: captured,
+        }),
+      );
+      expect(result.content).toEqual([
+        { type: "text", text: capturedOwner ? "generic image" : "google" },
+      ]);
+      expect(google.describeImage).toHaveBeenCalledTimes(capturedOwner ? 0 : 1);
+      expect(genericDescribe).toHaveBeenCalledTimes(capturedOwner ? 1 : 0);
+      if (capturedOwner) {
+        expect(genericDescribe).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "gemini",
+            preparedModelRuntime: expect.objectContaining({ metadataSnapshot: captured }),
+          }),
+        );
+      }
+      expect(resolveProvider).not.toHaveBeenCalled();
+    },
+  );
 
   it("loads the next fallback owner only after the primary fails", async () => {
     const primary = makeProvider("selected");

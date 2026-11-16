@@ -59,6 +59,7 @@ type CredentialOwner = {
   cells: Map<string, CredentialCell>;
   pending: Set<string>;
   uncertain: boolean;
+  storePublication?: { readable: boolean; known: boolean };
   sources?: Set<string>;
   canonicalPath?: string;
   dispose?: () => void;
@@ -338,6 +339,7 @@ authProfileCredentialPublication.subscribeFacts((change) => {
   } else if (change.kind === "unknown") {
     for (const target of affected) {
       target.uncertain = true;
+      target.storePublication = { readable: false, known: false };
     }
   } else if (change.kind === "committed") {
     const fact = change.receipt.facts.get("store");
@@ -347,6 +349,7 @@ authProfileCredentialPublication.subscribeFacts((change) => {
     if (fact.kind === "unknown") {
       for (const target of affected) {
         target.uncertain = true;
+        target.storePublication = { readable: false, known: false };
         wakeCredentialWaiters(target);
       }
       return;
@@ -356,11 +359,16 @@ authProfileCredentialPublication.subscribeFacts((change) => {
     if (!profiles) {
       for (const target of affected) {
         target.uncertain = true;
+        target.storePublication = {
+          readable: false,
+          known: target.storePublication?.known ?? true,
+        };
         wakeCredentialWaiters(target);
       }
       return;
     }
     for (const target of affected) {
+      target.storePublication = { readable: true, known: target.storePublication?.known ?? true };
       for (const [id, cell] of target.cells) {
         cell.credential = profiles[id];
         cell.observed = true;
@@ -465,6 +473,7 @@ export function captureAuthProfileCredentialAuthority(
       path: source.databasePath,
       revoke: () => {
         owner.uncertain = true;
+        owner.storePublication = { readable: false, known: false };
         wakeCredentialWaiters(owner);
       },
       close: async () => {
@@ -527,6 +536,27 @@ export function captureAuthProfileCredentialAuthority(
   return {
     waitUntilCurrent,
     assertCurrent,
+    // A published derived owner may recover inherited selection without trusting malformed
+    // local credentials. Retain this source's publication lifetime, never its stale values.
+    retainPublishedLocalAbsence() {
+      const publication = owner.storePublication;
+      return () => {
+        context.admission.assertCurrent();
+        if (
+          owners.get(rootIdentity) !== root ||
+          owners.get(source.identity) !== owner ||
+          root.uncertain ||
+          owner.storePublication?.known === false ||
+          (owner.uncertain && !owner.storePublication) ||
+          root.pending.size ||
+          owner.pending.size ||
+          (owner.storePublication !== publication &&
+            (!owner.storePublication?.readable || !retained?.observed || retained.credential))
+        ) {
+          throw unavailable();
+        }
+      };
+    },
     observe(credential: AuthProfileCredential | undefined) {
       if (retained && !retained.observed) {
         retained.credential = credential && structuredClone(credential);

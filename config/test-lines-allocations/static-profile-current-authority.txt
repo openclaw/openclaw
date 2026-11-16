@@ -1,0 +1,4 @@
+# Exact new regression LF growth against e33d13d69b1447e7c4e402f8d6727431e67503a1.
+# Real local/shared static profile removal and replacement, unrelated owner changes,
+# and held provider dispatch prove current authority without repeating the image E2E.
+155

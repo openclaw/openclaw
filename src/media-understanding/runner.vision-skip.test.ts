@@ -11,6 +11,8 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { MediaAttachmentCache } from "./attachments.cache.js";
@@ -31,6 +33,9 @@ const loadModelCatalog = vi.hoisted(() => vi.fn(async (_params: unknown) => cata
 const discover = vi.hoisted(() => vi.fn());
 const imagePolicy = vi.hoisted(() => vi.fn<() => Promise<ImageCompressionModelPolicy>>());
 const selectionAuth = vi.mocked(checkAvailableAuth);
+const genericImage = vi.hoisted(() => vi.fn());
+// mock-isolation: Observe the selected generic inference owner without a network request.
+vi.mock("./image-runtime.js", () => ({ describeImageWithModel: genericImage }));
 
 // mock-isolation: Routing and resize cases use fixed policy without provider runtime bootstrap.
 vi.mock("../agents/image-compression-policy.js", () => ({
@@ -279,6 +284,78 @@ describe("automatic media selection", () => {
       expect(outcome).toMatchObject({ model: "selected-model", provider: "google" });
       expect(selectionAuth).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ provider: "google" }),
+      );
+    },
+  );
+
+  it.each(["native", "model-only"] as const)(
+    "keeps a %s alias owner's auth and image dispatch separate",
+    async (kind) => {
+      const describeImage = vi.fn(async ({ provider, model }: ImageDescriptionRequest) => ({
+        text: `owner:${provider}`,
+        model,
+      }));
+      genericImage.mockImplementation(describeImage);
+      const googleImage = vi.fn(async () => ({ text: "wrong owner" }));
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "synthetic-owner",
+            providers: ["gemini"],
+            modelCatalog: {
+              providers: {
+                gemini: { models: [{ id: "synthetic-vision", input: ["text", "image"] }] },
+              },
+            },
+          },
+        ],
+      });
+      const cfg: OpenClawConfig = {};
+      await withPluginMetadataSnapshotScope(
+        snapshot,
+        async () => {
+          discover.mockReturnValue([
+            imageProvider("google", googleImage),
+            ...(kind === "native" ? [imageProvider("gemini", describeImage)] : []),
+          ]);
+          const providerRegistry = buildProviderRegistry(undefined, cfg);
+          const selected = await resolveAutoImageModel({
+            cfg,
+            activeModel: { provider: " GEMINI ", model: "synthetic-vision" },
+          });
+          expect(selected).toEqual({ provider: "gemini", model: "synthetic-vision" });
+          expect(selectionAuth).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ provider: "gemini" }),
+          );
+          await withMediaFixture(
+            {
+              filePrefix: "media-provider-identity",
+              extension: "png",
+              mediaType: "image/png",
+              fileContents: createSolidPngBuffer(16, 16, { r: 30, g: 90, b: 180 }),
+            },
+            async ({ cache }) => {
+              const result = await runProviderEntry({
+                cfg,
+                capability: "image",
+                entry: { provider: "gemini", model: "synthetic-vision", profile: "owner-profile" },
+                attachmentIndex: 0,
+                cache,
+                agentDir: "/tmp",
+                providerRegistry,
+              });
+              expect(result).toMatchObject({
+                ok: true,
+                value: { provider: "gemini", model: "synthetic-vision", text: "owner:gemini" },
+              });
+              expect(describeImage).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({ provider: "gemini", profile: "owner-profile" }),
+              );
+              expect(googleImage).not.toHaveBeenCalled();
+            },
+          );
+        },
+        { config: cfg, trustConfigIdentity: true },
       );
     },
   );

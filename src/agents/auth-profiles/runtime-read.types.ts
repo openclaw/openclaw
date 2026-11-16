@@ -40,6 +40,7 @@ export type PreparedAuthProfileStoreReads = {
     ownerAgentDir: string | undefined,
     options: LoadAuthProfileStoreOptions,
   ) => Promise<AuthProfileStore>;
+  retainPublishedLocalAbsence?: () => () => void;
   assertCurrent: () => void;
   materializePersonalProfile: (store: AuthProfileStore) => Promise<AuthProfileStore>;
   readFreshStore: () => Promise<AuthProfileStore>;

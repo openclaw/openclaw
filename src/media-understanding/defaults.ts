@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -8,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { listImageCapableConfiguredProviders } from "./config-provider-models.js";
+import { buildMediaProviderIdentityRegistry } from "./provider-identities.js";
 import {
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
@@ -33,16 +35,17 @@ function buildMediaUnderstandingManifestMetadataRegistry(
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
   });
+  const identities = buildMediaProviderIdentityRegistry(cfg, workspaceDir);
   const cached = registriesByManifest.get(snapshot.manifestRegistry);
   if (cached) {
-    return cached;
+    return new Map([...identities, ...cached]);
   }
   const registry = new Map<string, MediaUnderstandingProvider>();
   for (const plugin of snapshot.plugins) {
     // Metadata only counts when the manifest also declares the provider contract.
     const declaredProviders = new Set(
       (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>
-        normalizeMediaProviderId(providerId),
+        normalizeProviderId(providerId),
       ),
     );
     for (const [providerId, metadata] of Object.entries(
@@ -50,7 +53,7 @@ function buildMediaUnderstandingManifestMetadataRegistry(
     )) {
       // Metadata is trusted only when the plugin also declares the corresponding
       // provider contract; stray manifest fields must not register providers.
-      const normalizedProviderId = normalizeMediaProviderId(providerId);
+      const normalizedProviderId = normalizeProviderId(providerId);
       if (!normalizedProviderId || !declaredProviders.has(normalizedProviderId)) {
         continue;
       }
@@ -65,16 +68,17 @@ function buildMediaUnderstandingManifestMetadataRegistry(
     }
   }
   registriesByManifest.set(snapshot.manifestRegistry, registry);
-  return registry;
+  return new Map([...identities, ...registry]);
 }
 
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
+  providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
-  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
+  const normalizedProviderId = normalizeMediaProviderId(params.providerId, params.providerRegistry);
   for (const [providerKey, providerCfg] of Object.entries(params.cfg?.models?.providers ?? {})) {
-    if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
+    if (normalizeMediaProviderId(providerKey, params.providerRegistry) !== normalizedProviderId) {
       continue;
     }
     const match = (providerCfg.models ?? []).find(
@@ -85,14 +89,22 @@ function resolveConfiguredImageProviderModel(params: {
   return undefined;
 }
 
-function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
+function resolveConfiguredImageProviderIds(
+  cfg: OpenClawConfig | undefined,
+  registry: Map<string, MediaUnderstandingProvider>,
+): string[] {
   return uniqueStrings(
-    listImageCapableConfiguredProviders(cfg).map(normalizeMediaExecutionProviderId),
+    listImageCapableConfiguredProviders(cfg).map((id) =>
+      normalizeMediaExecutionProviderId(id, registry),
+    ),
   );
 }
 
-function isExecutionAliasProvider(providerId: string): boolean {
-  return normalizeMediaProviderId(providerId) !== providerId;
+function isExecutionAliasProvider(
+  providerId: string,
+  registry: Map<string, MediaUnderstandingProvider>,
+): boolean {
+  return normalizeMediaProviderId(providerId, registry) !== providerId;
 }
 
 /** Resolves the default provider model for a media capability from config or manifest metadata. */
@@ -104,21 +116,22 @@ export function resolveDefaultMediaModel(params: {
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
   includeConfiguredImageModels?: boolean;
 }): string | undefined {
+  const registry =
+    params.providerRegistry ??
+    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   if (!params.providerRegistry && params.includeConfiguredImageModels !== false) {
     const configuredImageModel =
       params.capability === "image"
         ? resolveConfiguredImageProviderModel({
             cfg: params.cfg,
             providerId: params.providerId,
+            providerRegistry: registry,
           })
         : undefined;
     if (configuredImageModel) {
       return configuredImageModel;
     }
   }
-  const registry =
-    params.providerRegistry ??
-    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   return resolveDefaultMediaModelFromRegistry({
     providerId: params.providerId,
     capability: params.capability,
@@ -143,16 +156,16 @@ export function resolveAutoMediaKeyProviders(params: {
   if (params.providerRegistry || params.capability !== "image") {
     return prioritized;
   }
-  const configured = resolveConfiguredImageProviderIds(params.cfg);
-  for (const providerId of configured.filter(isExecutionAliasProvider)) {
-    const canonicalIndex = prioritized.indexOf(normalizeMediaProviderId(providerId));
+  const configured = resolveConfiguredImageProviderIds(params.cfg, registry);
+  for (const providerId of configured.filter((id) => isExecutionAliasProvider(id, registry))) {
+    const canonicalIndex = prioritized.indexOf(normalizeMediaProviderId(providerId, registry));
     if (canonicalIndex >= 0) {
       prioritized.splice(canonicalIndex, 0, providerId);
     } else {
       prioritized.unshift(providerId);
     }
   }
-  for (const providerId of configured.filter((id) => !isExecutionAliasProvider(id))) {
+  for (const providerId of configured.filter((id) => !isExecutionAliasProvider(id, registry))) {
     prioritized.push(providerId);
   }
   return uniqueStrings(prioritized);
@@ -165,7 +178,7 @@ export function providerSupportsNativePdfDocument(params: {
   workspaceDir?: string;
 }): boolean {
   const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const provider = registry.get(normalizeMediaProviderId(params.providerId, registry));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }
 
@@ -177,7 +190,7 @@ export function resolveDocumentMediaModel(params: {
   workspaceDir?: string;
 }): string | false | undefined {
   const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const provider = registry.get(normalizeMediaProviderId(params.providerId, registry));
   const value = provider?.documentModels?.pdf?.[params.mode];
   if (value === false) {
     return false;

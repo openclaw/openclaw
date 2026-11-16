@@ -113,6 +113,7 @@ export function buildModelDecision(params: {
   entryType: "provider" | "cli";
   outcome: MediaUnderstandingModelDecision["outcome"];
   reason?: string;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): MediaUnderstandingModelDecision {
   if (params.entryType === "cli") {
     const command = params.entry.command?.trim();
@@ -132,7 +133,9 @@ export function buildModelDecision(params: {
     };
   }
   const providerIdRaw = params.entry.provider?.trim();
-  const providerId = providerIdRaw ? normalizeMediaProviderId(providerIdRaw) : undefined;
+  const providerId = providerIdRaw
+    ? normalizeMediaProviderId(providerIdRaw, params.providerRegistry)
+    : undefined;
   return {
     type: "provider",
     provider: providerId ?? providerIdRaw,
@@ -197,8 +200,11 @@ export async function runProviderEntry(params: {
   if (!providerIdRaw) {
     throw new Error(`Provider entry missing provider for ${capability}`);
   }
-  const providerId = normalizeMediaProviderId(providerIdRaw);
-  const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
+  const providerId = normalizeMediaProviderId(providerIdRaw, params.providerRegistry);
+  const requestProviderId = normalizeMediaExecutionProviderId(
+    providerIdRaw,
+    params.providerRegistry,
+  );
   assertRuntimeMediaRequestSecretOwnerAvailable({ capability, entry });
   if (params.secretOwnerId) {
     assertSecretOwnerAvailable("capability", params.secretOwnerId);

@@ -73,6 +73,7 @@ export function measureRuntimeAuthProfileStores(): DiagnosticWorkerRetainedData[
 export const {
   invalidateRuntimeAuthProfileStoreSnapshotsForOwner,
   createPreparedRuntimeAuthProfileUsageReader,
+  retainPublishedInheritedCredential,
   getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,

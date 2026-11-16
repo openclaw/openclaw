@@ -17,12 +17,15 @@ export function listImageCapableConfiguredProviders(cfg?: OpenClawConfig): strin
 export function resolveConfiguredMediaProviderCapabilities(
   provider: MediaUnderstandingProvider,
   cfg?: OpenClawConfig,
+  registeredProviders?: { has(id: string): boolean },
 ) {
   if (
     provider.inheritConfiguredImageCapability &&
     !provider.capabilities?.includes("image") &&
     listImageCapableConfiguredProviders(cfg).some(
-      (id) => normalizeMediaProviderId(id) === normalizeMediaProviderId(provider.id),
+      (id) =>
+        normalizeMediaProviderId(id, registeredProviders) ===
+        normalizeMediaProviderId(provider.id, registeredProviders),
     )
   ) {
     return [...(provider.capabilities ?? []), "image" as const];

@@ -52,7 +52,7 @@ export async function resolveTalkFileTranscriptionConfig(
   const { isAudioModelEntryAvailable } =
     await import("../../media-understanding/provider-execution.js");
   const providers = new Map<string, { models: string[]; configured: boolean }>();
-  const providerId = (id: string) => registry.get(normalizeMediaProviderId(id))?.id ?? id;
+  const providerId = (id: string) => registry.get(normalizeMediaProviderId(id, registry))?.id ?? id;
   let ready = false;
   let maxBytes = 0;
   let selectedProvider: string | undefined;
