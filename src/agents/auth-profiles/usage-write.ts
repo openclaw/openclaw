@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
@@ -45,7 +44,7 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
 import {
   createAuthProfileUsageReceipt,
@@ -83,34 +82,33 @@ export async function withAuthProfileUsage<T>(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const selectedDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const context = captureOpenClawStateWorkerContext({ env });
+  const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
+    (value) => ({ ok: true, value }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
   const localPath = selectedDir ? resolveAuthProfileDatabasePath(selectedDir) : undefined;
   const legacyPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-  const readers = new Map<string, ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const readers = new Map<string, Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   const executions = new Map<
     string,
     Promise<Result<Awaited<ReturnType<typeof captureOpenClawAgentDatabaseExecutionAsync>>, unknown>>
   >();
-  let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
+  const preparation = reserveAuthProfileUsagePreparation([
+    context.admission.identity.key,
+    `path:${context.admission.identity.canonicalPath}`,
+    ...(mode ? [] : [`path:${legacyPath}`]),
+    ...(localPath ? [`path:${localPath}`] : []),
+  ]);
   let committed: AuthProfileUsageReceipt | undefined;
   const executeUsage = async (): Promise<T> => {
     for (const databasePath of new Set([
       ...(mode ? [] : [legacyPath]),
       ...(localPath ? [localPath] : []),
     ])) {
-      const target = {
-        path: databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-        env,
-      };
-      readers.set(
-        databasePath,
-        prepareAgentAuthProfileRowsRead({
-          databasePath,
-          agentId: target.agentId,
-          env,
-        }),
-      );
-      const identity = readers.get(databasePath)!.databaseIdentity;
+      const reader = await prepareAgentAuthProfileRowsRead({ databasePath, env });
+      readers.set(databasePath, reader);
+      const target = { path: databasePath, agentId: reader.agentId, env };
+      const identity = reader.databaseIdentity;
       if (!identity) {
         throw new Error("SQLite worker database path must identify a regular file");
       }
@@ -125,16 +123,6 @@ export async function withAuthProfileUsage<T>(
         ),
       );
     }
-    preparation = reserveAuthProfileUsagePreparation(
-      [
-        context.admission.identity,
-        ...[...readers.values()].map((reader) => reader.databaseIdentity!),
-      ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
-    );
-    const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
-      (value) => ({ ok: true, value }) as const,
-      (error: unknown) => ({ ok: false, error }) as const,
-    );
     await preparation.ready;
     const ownershipResult = await capturedOwnership;
     if (!ownershipResult.ok) {
@@ -274,11 +262,7 @@ export async function withAuthProfileUsage<T>(
               },
             );
           }
-          const target = {
-            path: databasePath,
-            agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-            env,
-          };
+          const target = { path: databasePath, agentId: execution!.agentId, env };
           return await runOpenClawAgentWriteAdmission(
             target,
             async () => {
@@ -397,7 +381,7 @@ export async function withAuthProfileUsage<T>(
         }
       }
     } finally {
-      preparation?.release();
+      preparation.release();
     }
   });
 }
