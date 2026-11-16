@@ -1,0 +1,2 @@
+# Exact net source regression-test lines for #196330: assert the ChatGPT plan connection note.
+2
