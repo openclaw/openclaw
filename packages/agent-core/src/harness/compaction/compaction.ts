@@ -272,6 +272,7 @@ export async function generateSummary(
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
   summaryPrompt?: CompactionSummaryPrompt,
+  sessionId?: string,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
@@ -297,6 +298,7 @@ export async function generateSummary(
     prompt: promptWithoutProvenance,
     customInstructions,
     previousSummary,
+    sessionId,
     model,
     maxTokens,
     apiKey,
@@ -558,6 +560,7 @@ export async function compact(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
+  sessionId?: string,
 ): Promise<Result<CompactionResult, CompactionError>> {
   const {
     firstKeptEntryId,
@@ -594,6 +597,7 @@ export async function compact(
       streamFn,
       runtime,
       summaryPrompt,
+      sessionId,
     );
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
   const historyResult =

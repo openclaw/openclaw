@@ -37,6 +37,9 @@ export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContex
  * through the normal `shared model runtime` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+  /** Owning conversation identity, when this call belongs to a session. */
+  sessionId?: string;
+  sessionKey?: string;
   /** Per-model params only, with agent-specific model params taking precedence. */
   modelParams?: Record<string, unknown>;
   /** Host-classified urgency; providers may translate it into native scheduling hints. */

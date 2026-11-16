@@ -68,6 +68,7 @@ export interface SummarizationCompletionParams {
   maxTokens: number;
   apiKey: string | undefined;
   headers?: ModelRequestHeaders;
+  sessionId?: string;
   signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
@@ -89,7 +90,13 @@ export async function runSummarizationCompletion(
     instructions += `\n\nAdditional focus: ${params.customInstructions}`;
   }
   const { model, thinkingLevel, maxTokens, signal, apiKey, headers } = params;
-  const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
+  const options: SimpleStreamOptions = {
+    maxTokens,
+    signal,
+    apiKey,
+    headers,
+    sessionId: params.sessionId,
+  };
   const fableReasoning =
     (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
     resolveClaudeFable5ModelIdentity(model) !== undefined;
