@@ -88,7 +88,7 @@ const SQLITE_PERF_INGRESS_QUEUE = JSON.stringify(["telegram", "bench-account"]);
 const SQLITE_PERF_PLUGIN_ID = "benchmark-plugin";
 const SQLITE_PERF_PLUGIN_NAMESPACE = "journal";
 const SQLITE_PERF_PLUGIN_NOW = 1_750_000_000_000;
-const SQLITE_PERF_CATALOG_SCOPE = "plugin-model-catalog-v2";
+const SQLITE_PERF_CATALOG_SCOPE = "plugin-model-catalog-v1";
 const SQLITE_PERF_PAGE_SIZE = 100;
 
 function applyScale(config: ProfileConfig): ProfileConfig {

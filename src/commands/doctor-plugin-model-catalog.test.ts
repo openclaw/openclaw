@@ -70,7 +70,7 @@ function overwriteCatalog(agentDir: string, pluginId: string, contents: string) 
   using database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
   database
     .prepare("UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?")
-    .run(contents, "plugin-model-catalog-v2", pluginId);
+    .run(contents, "plugin-model-catalog-v1", pluginId);
 }
 
 function prompter(shouldRepair: boolean): DoctorPrompter {
@@ -113,7 +113,7 @@ function readCatalogCacheRow(
   });
   const row = database
     .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
-    .get("plugin-model-catalog-v2", pluginId) as
+    .get("plugin-model-catalog-v1", pluginId) as
     | { value_json: string; updated_at: number }
     | undefined;
   if (!row) {
@@ -241,14 +241,14 @@ describe("doctor generated plugin model catalog migration", () => {
       .prepare(
         "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
       )
-      .run(malformed, "plugin-model-catalog-v2", "nvidia");
+      .run(malformed, "plugin-model-catalog-v1", "nvidia");
     // Inject the write rejection on Doctor's admitted connection without changing persisted schema.
     database.exec("CREATE TEMP TABLE catalog_repair_refresh (value_json TEXT NOT NULL)");
     database.prepare("INSERT INTO catalog_repair_refresh (value_json) VALUES (?)").run(refreshed);
     database.exec(`
         CREATE TEMP TRIGGER refresh_catalog_before_repair
         BEFORE UPDATE OF value_json ON cache_entries
-        WHEN OLD.scope = 'plugin-model-catalog-v2'
+        WHEN OLD.scope = 'plugin-model-catalog-v1'
           AND OLD.key = 'nvidia'
           AND NEW.value_json != (SELECT value_json FROM catalog_repair_refresh)
         BEGIN

@@ -130,7 +130,7 @@ export function createCatalogFixture(databasePath: string) {
     JSON.stringify(catalogFor({ models: { Authorization: "model-secret" } })),
     JSON.stringify(catalogFor({ models: ["model-secret"] })),
   ];
-  const scopes = ["plugin-model-catalog-v2", "plugin-model-catalog-migration-v1"];
+  const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
   using database = new DatabaseSync(databasePath);
   database.exec(`
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};

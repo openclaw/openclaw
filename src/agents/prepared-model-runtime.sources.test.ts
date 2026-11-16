@@ -166,7 +166,7 @@ function persistedFixture() {
   try {
     database
       .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("plugin-model-catalog-v2", pluginId, catalogs[0]!.contents, 1);
+      .run("plugin-model-catalog-v1", pluginId, catalogs[0]!.contents, 1);
   } finally {
     database.close();
   }

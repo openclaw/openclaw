@@ -302,7 +302,7 @@ if (isMainThread) {
         );
         for (let index = 0; index < 40; index++) {
           insert.run(
-            "plugin-model-catalog-v2",
+            "plugin-model-catalog-v1",
             `fixture-${index}`,
             JSON.stringify({
               generatedBy: "openclaw",

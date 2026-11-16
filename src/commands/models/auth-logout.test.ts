@@ -245,7 +245,7 @@ describe("models auth logout", () => {
           JSON.stringify({ ...catalog, providers: { fixture } }),
         ),
       ];
-      const scopes = ["plugin-model-catalog-v2", "plugin-model-catalog-migration-v1"];
+      const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
       for (const agentDir of [main, child]) {
         await catalogs.replacePersistedPluginModelCatalogs({
           agentDir,

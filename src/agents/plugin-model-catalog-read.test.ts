@@ -54,7 +54,7 @@ function createFixture(contents: string) {
   using database = openNodeSqliteDatabase(databasePath);
   database
     .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-    .run("plugin-model-catalog-v2", "fixture", contents, 1);
+    .run("plugin-model-catalog-v1", "fixture", contents, 1);
   const read = () => loadPersistedPluginModelCatalogs(agentDir, ["fixture"], env);
   return {
     root,
@@ -89,29 +89,6 @@ function observeCatalogWorkers(onMessage?: (message: unknown) => void) {
   });
   return workers;
 }
-
-it("ignores catalogs saved before listed models without metadata stopped being chat:false", async () => {
-  const fixture = createFixture(catalogContents("current"));
-  {
-    using database = openNodeSqliteDatabase(fixture.databasePath);
-    database
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run(
-        "plugin-model-catalog-v1",
-        "openai",
-        JSON.stringify({
-          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-          providers: {
-            openai: { models: [{ id: "listed-chat", name: "Listed", inference: { chat: false } }] },
-          },
-        }),
-        1,
-      );
-  }
-  await expect(
-    loadPersistedPluginModelCatalogs(fixture.agentDir, ["fixture", "openai"], fixture.env),
-  ).resolves.toEqual([{ pluginId: "fixture", contents: catalogContents("current") }]);
-});
 
 it.each(["read", "write"] as const)(
   "can %s model catalogs with a Windows environment Proxy",

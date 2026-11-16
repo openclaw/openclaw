@@ -143,7 +143,7 @@ it("returns committed rows when credential stripping skips invalid planned catal
       using database = new DatabaseSync(databasePath);
       database
         .prepare("UPDATE cache_entries SET value_json = NULL WHERE scope = ? AND key = ?")
-        .run("plugin-model-catalog-v2", "null-row");
+        .run("plugin-model-catalog-v1", "null-row");
     }
 
     const publication = await replaceCatalogs({
@@ -166,6 +166,6 @@ it("returns committed rows when credential stripping skips invalid planned catal
     expect(
       snapshot
         .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-        .get("plugin-model-catalog-v2", "null-row"),
+        .get("plugin-model-catalog-v1", "null-row"),
     ).toEqual({ value_json: null });
   }));

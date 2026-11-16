@@ -12,10 +12,7 @@ import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repai
 
 export type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 
-// v2: rows saved before #199998 recorded listed models without capability metadata as
-// `inference.chat: false`; the startup catalog would keep vetoing them until a second restart.
-// v1 rows stay for older builds after a downgrade; this build ignores them.
-export const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v2";
+export const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 export const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
