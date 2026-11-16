@@ -58,9 +58,15 @@ it("runs release tooling only from the trusted revision without persisted creden
     const sparseCheckout = checkout["sparse-checkout"];
     if (sparseCheckout !== undefined) {
       assert(typeof sparseCheckout === "string");
-      expect(sparseCheckout.split(/\s+/u)).toContain("scripts");
+      expect(sparseCheckout.split(/\s+/u).map((path) => path.replace(/^\/|\/$/gu, ""))).toContain(
+        "scripts",
+      );
     }
   }
+  expect(step("resolve_target", "Checkout trusted workflow helper").with).toMatchObject({
+    "sparse-checkout-cone-mode": false,
+    "sparse-checkout": expect.stringContaining("/extensions/*/package.json"),
+  });
   const targets = allSteps.filter((entry) => String(entry.name).startsWith("Checkout target"));
   expect(targets.length).toBeGreaterThan(0);
   for (const entry of targets) {
