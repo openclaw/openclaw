@@ -24,6 +24,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
+import { validateSetupWorkspacePath } from "../wizard/setup.workspace.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -432,6 +433,8 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
       const workspaceInput = await prompts.text({
         message: "Workspace directory",
         initialValue: target.workspaceDir,
+        validate: (value) =>
+          validateSetupWorkspacePath(normalizeOptionalString(value ?? "") || DEFAULT_WORKSPACE),
       });
       const workspaceDir = resolveUserPath(
         normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,

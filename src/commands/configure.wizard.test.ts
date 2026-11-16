@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +16,8 @@ import {
 } from "./configure.wizard.test-support.js";
 
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];
 const configureWeb = () => runConfigureWizard({ sections: ["web"] });
@@ -231,6 +236,33 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile.mock.invocationCallOrder[0]!).toBeLessThan(
       hook.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("rejects a non-directory workspace in the prompt before accepting a corrected path", async () => {
+    const root = tempDirs.make("configure-workspace-");
+    const file = path.join(root, "notes.txt");
+    const workspace = path.join(root, "workspace");
+    await fs.writeFile(file, "existing notes");
+    agentConfig({ agents: { entries: { ops: { workspace: root } } } });
+    mocks.clackText.mockImplementationOnce(async ({ validate }) => {
+      expect(validate?.(file)).toContain(file);
+      expect(validate?.(path.join(file, "child"))).toContain(file);
+      expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(validate?.(workspace)).toBeUndefined();
+      return workspace;
+    });
+
+    await runConfigureWizard({ sections: ["workspace"] });
+
+    expect(mocks.clackText).toHaveBeenCalledOnce();
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspace,
+      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    expect(written().agents?.entries?.ops?.workspace).toBe(workspace);
+    expect(await fs.readFile(file, "utf8")).toBe("existing notes");
   });
 
   it("does not persist an unprovisionable workspace", async () => {
