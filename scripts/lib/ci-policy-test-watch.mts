@@ -463,13 +463,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
-    testFile: "src/agents/agent-harness-completion-delivery.test.ts",
-    watchGlobs: [
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
-  {
     testFile: "src/agents/auth-profiles/store-owner-publication.test.ts",
     watchGlobs: [
       "src/agents/auth-profiles/store-scope-cwd.test-support.ts",
