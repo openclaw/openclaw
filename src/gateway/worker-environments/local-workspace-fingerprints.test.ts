@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -15,7 +17,10 @@ import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 type Baseline = {
@@ -69,6 +74,21 @@ async function capture(
 }
 
 function mockFileCtime(ctimeNs: bigint) {
+  const lstatSync = fsSync.lstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+    const stats = lstatSync(...args);
+    if (stats) {
+      Reflect.set(stats, "ctimeNs", ctimeNs);
+    }
+    return stats;
+  });
+  const fstatSync = fsSync.fstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) => {
+    const stats = fstatSync(...args);
+    Reflect.set(stats, "ctimeNs", ctimeNs);
+    return stats;
+  });
+  syncBuiltinESMExports();
   const lstat = fs.lstat.bind(fs);
   vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
     const stats = await lstat(...args);
@@ -138,6 +158,16 @@ it("keeps snapshot fingerprints usable by the live source after changed-file acc
     Reflect.set(stats, "ctimeNs", 1n);
     return stats;
   });
+  const lstatSync = fsSync.lstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+    const stats = lstatSync(...args);
+    if (stats) {
+      Reflect.set(stats, "dev", snapshotDev);
+      Reflect.set(stats, "ctimeNs", 1n);
+    }
+    return stats;
+  });
+  syncBuiltinESMExports();
   const unchanged = await capture(root, baseline, baseline.blob, source);
   expect(unchanged.metrics.contentHashCount).toBe(0);
   snapshots.mockRestore();

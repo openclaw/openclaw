@@ -15,6 +15,7 @@ import type {
   SessionArtifactReadResult,
 } from "./session-artifact-read.js";
 import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import type {
   ReadSessionMessagesAsyncOptions,
@@ -238,12 +239,19 @@ export async function readSessionTranscriptSummaryAsync(
   if (memory) {
     const { prepareSessionTranscriptSummaryReader } =
       await import("./session-transcript-summary.js");
-    const select = await prepareSessionTranscriptSummaryReader(query);
-    const messages: unknown[] = [];
-    await createSessionActorTranscriptReader(memory).visitSessionMessagesAsync(scope, (message) =>
-      messages.push(message),
+    const reader = createSessionActorTranscriptReader(memory);
+    const messages: Array<{ message: unknown; seq: number }> = [];
+    await reader.visitSessionMessagesAsync(scope, (message, seq) =>
+      messages.push({ message, seq }),
     );
-    return select((visit) => messages.forEach(visit));
+    if (query.kind === "skills-used") {
+      await reader.prepareVisibility(
+        messages.map(({ message, seq }) => attachOpenClawTranscriptMeta(message, { seq })),
+      );
+    }
+    const select = await prepareSessionTranscriptSummaryReader(query, reader.subagentCoordination);
+    memory.assertCurrent();
+    return select((visit) => messages.forEach(({ message, seq }) => visit(message, seq)));
   }
   const target = captureHistoryReadScope(scope);
   const { readSessionHistoryPageInWorker } =

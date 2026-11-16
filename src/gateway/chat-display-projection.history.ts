@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import {
   isCompletionReportInputProvenance,
   isCronExecutionInputProvenance,
@@ -452,34 +453,34 @@ function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
 }
 
-/** Hidden heartbeat, exec, or restart input keeps the next reply in its own turn. */
-export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean {
+export function projectedHistoryTurnBoundary(message: unknown): PendingTurnBoundary {
   if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
     return true;
   }
   const record = readRecord(message);
-  if (!record || isForwardedUserMessage(record)) {
+  if (!record || isForwardedUserMessage(record) || asRoleContentMessage(record)?.role !== "user") {
     return false;
   }
-  const roleContent = asRoleContentMessage(record);
-  const provenance = normalizeInputProvenance(record.provenance);
-  return (
-    roleContent?.role === "user" &&
-    provenance?.kind === "internal_system" &&
-    (provenance.sourceTool === "exec" || provenance.sourceTool === "restart")
-  );
+  const { kind, sourceTool } = normalizeInputProvenance(record.provenance) ?? {};
+  if (kind === "internal_system" && (sourceTool === "exec" || sourceTool === "restart")) {
+    return sourceTool;
+  }
+  return kind === "inter_session" && sourceTool === "subagent_settle" ? "subagent" : false;
 }
 
-function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
+function attachProjectedTurnBoundary(
+  message: Record<string, unknown>,
+  boundary: Exclude<PendingTurnBoundary, false>,
+): Record<string, unknown> {
   const metadata = readRecord(message["__openclaw"]);
-  if (metadata?.turnBoundary === true) {
-    return message;
-  }
   return {
     ...message,
     __openclaw: {
       ...metadata,
-      turnBoundary: true,
+      // Exec and restart rows kept `turnBoundary` for clients that read only it;
+      // the continuation fact tells the Control UI the turn goes on.
+      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
+      ...(boundary === true ? {} : { continuation: { source: boundary } }),
     },
   };
 }
@@ -559,10 +560,10 @@ export function toProjectedMessages(messages: unknown[]): Array<Record<string, u
 
 export function filterVisibleProjectedHistoryMessages(
   messages: Array<Record<string, unknown>>,
-  turnBoundaryPending = false,
+  turnBoundaryPending: PendingTurnBoundary = false,
 ): {
   messages: Array<Record<string, unknown>>;
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
 } {
   if (messages.length === 0) {
     return { messages, turnBoundaryPending };
@@ -601,7 +602,8 @@ export function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= isProjectedHistoryTurnBoundaryMessage(current);
+      // The latest wake decides: a heartbeat after a resumed command starts its own turn.
+      pendingTurnBoundary = projectedHistoryTurnBoundary(current) || pendingTurnBoundary;
       continue;
     }
     const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
@@ -621,7 +623,7 @@ export function filterVisibleProjectedHistoryMessages(
       pendingTurnBoundary = false;
       visible.push(current);
     } else if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
-      visible.push(attachProjectedTurnBoundary(current));
+      visible.push(attachProjectedTurnBoundary(current, pendingTurnBoundary));
       pendingTurnBoundary = false;
       changed = true;
     } else {

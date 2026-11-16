@@ -79,7 +79,7 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
 
-`maxEntries` counts unarchived session rows; archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions until the unarchived total reaches `maxEntries` or no eligible victims remain. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers such as group sessions and thread-scoped chat sessions remain protected, so protected rows can keep the unarchived total above the cap. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) remain disposable and can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run check retention.
+`maxEntries` counts unarchived session rows; archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions until the unarchived total reaches `maxEntries` or no eligible victims remain. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers such as group sessions and thread-scoped chat sessions remain protected, so protected rows can keep the unarchived total above the cap. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) remain disposable and can still be removed once they exceed the configured age, count, or disk budget. The exception is a sub-agent session whose run is still running or whose completion is still owed to its requester: it stays protected until the requester settles that completion, even after the child's own cleanup has finished. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run check retention.
 
 Every new archive records a structured reason automatically. Explicit archive actions record `manual`; count-cap and stale-dashboard maintenance record their respective causes; `pruneAfter` archives eligible durable sessions with `age-retention` while deleting disposable automation; recovery archives record `restart-recovery`. The Control UI renders a human-readable explanation. Missing or unrecognized reasons are treated as protected legacy state rather than inferred.
 
@@ -202,6 +202,9 @@ Selection reads window metadata and transcript endpoints. The worker checks even
 only when preparation reaches that window within the pass's byte budget, outside the
 batch selection transaction. Commit protection reads selected window owners and
 cross-generation references; unrelated canonical entries stay encoded.
+Cross-generation references are the previous session and compaction checkpoints.
+Usage-family lineage only groups usage reports, which read cold history, so idle
+past runs of an active rotating session (such as a frequent cron job) can cool.
 
 Before building an archive, the worker checks the largest original event. An event above
 64 MiB skips envelope preparation and leaves the transcript in SQLite, while

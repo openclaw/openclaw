@@ -462,6 +462,9 @@ describe("opencode provider plugin", () => {
       "fresh-claude-fixture",
       "fresh-gemini-fixture",
       "fresh-gpt-fixture",
+      "listed-only-fixture",
+      "listed-only-fixture-free",
+      "test",
     ]);
     expect(second.apiKey).toBe("other-runtime-key");
     expect(second.models.map((model) => model.id)).toEqual(first.models.map((model) => model.id));
@@ -482,19 +485,16 @@ describe("opencode provider plugin", () => {
     ]) {
       expect(first.models.find((model) => model.id === id)).toMatchObject({ api, baseUrl });
     }
-    for (const id of [
-      "listed-only-fixture",
-      "listed-only-fixture-free",
-      "test",
-      "text-embedding-3-small",
-    ]) {
+    for (const id of ["listed-only-fixture", "text-embedding-3-small"]) {
       expect(first.models.find((model) => model.id === id)).toMatchObject({
         api: "openai-completions",
         baseUrl: "https://opencode.ai/zen/v1",
         provider: "opencode",
-        inference: { chat: false },
       });
     }
+    expect(first.models.find((model) => model.id === "text-embedding-3-small")?.inference).toEqual({
+      chat: false,
+    });
     expect(dynamicModel("retired-zen-fixture")).toMatchObject({
       id: "retired-zen-fixture",
     });

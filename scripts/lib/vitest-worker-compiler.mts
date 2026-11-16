@@ -19,6 +19,7 @@ import {
 } from "./runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
+import { isCiLikeEnv } from "./vitest-local-scheduling.mts";
 import {
   hashVitestWorkerArtifact,
   verifyVitestWorkerArtifacts,
@@ -476,7 +477,13 @@ async function compileVitestWorkerArtifacts(
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
   if (preset === "runtime") {
     await compileShared();
-  } else if (preset === "full" && cache && process.availableMemory() >= 8 * 1024 ** 3) {
+  } else if (
+    preset === "full" &&
+    cache &&
+    !isCiLikeEnv(process.env) &&
+    process.availableMemory() >= 8 * 1024 ** 3
+  ) {
+    // CI cache opt-in must not also enable the larger overlapping compiler graphs.
     // These outputs occupy separate subtrees. Join both writers even if one fails.
     const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");

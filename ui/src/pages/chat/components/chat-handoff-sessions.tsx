@@ -5,6 +5,7 @@ import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { HandoffDisplay } from "../chat-sessions-yield.ts";
 import type { ChatHandoffSession, HandoffSessionLinks } from "../chat-subagent-wait.ts";
+import type { ProjectedContinuationSource } from "../chat-turn-boundary.ts";
 
 /** A child's name: a link to its session when this viewer can open it, else text. */
 function HandoffSessionName(props: { session: ChatHandoffSession; links?: HandoffSessionLinks }) {
@@ -54,23 +55,26 @@ function Chevron(props: { open: boolean }) {
 }
 
 /**
- * Where a resumed handoff picks up again: how long it waited, and the children
- * it waited on, closed until asked for.
+ * Where a resumed handoff picks up again: how long it waited, what woke it, and
+ * the children it waited on, closed until asked for.
  */
 export function ChatHandoffResume(props: {
   handoff: HandoffDisplay & { resumedAt: number };
   sessions: readonly ChatHandoffSession[];
   links?: HandoffSessionLinks;
+  source?: ProjectedContinuationSource;
 }) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
-  const label = () =>
-    t("chat.handoffResumed", {
+  const label = () => {
+    const resumed = t("chat.handoffResumed", {
       duration:
         formatDurationCompact(Math.max(1_000, props.handoff.resumedAt - props.handoff.yieldedAt), {
           includeSeconds: true,
         }) ?? "",
     });
+    return props.source ? `${resumed} · ${t(`chat.continuationSource.${props.source}`)}` : resumed;
+  };
   const count = () =>
     props.sessions.length === 1
       ? t("chat.handoffSessionsOne")

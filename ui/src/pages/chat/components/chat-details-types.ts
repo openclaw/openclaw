@@ -22,6 +22,7 @@ export type ChatDetailsDesktopSectionId =
   | "people"
   | "environment"
   | "context"
+  | "skills"
   | "pull-requests"
   | "automations"
   | "subagents"
@@ -91,6 +92,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "personActivity"
     | "onScrollPortRef"
   > & {
+    toolMessages?: unknown[];
+    skillLoads?: import("../../../../../src/chat/conversation-skills.js").ConversationSkillLoad[];
     cachedDetails?: ChatDetailsSnapshot;
     /** The session observation has accepted current facts; cached rows are display only. */
     sessionFactsReady?: boolean;
