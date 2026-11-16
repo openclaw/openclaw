@@ -290,10 +290,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
             markSlackStreamFallbackDelivered(session);
             await stopStream(session);
             state.observedReplyDelivery ||= session.delivered;
-          } else if (
-            error instanceof SlackStreamNotDeliveredError &&
-            !state.finalReplyDelivered
-          ) {
+          } else if (error instanceof SlackStreamNotDeliveredError && !state.finalReplyDelivered) {
             await deliverPendingStreamFallback(session, error);
           } else {
             throw error;
