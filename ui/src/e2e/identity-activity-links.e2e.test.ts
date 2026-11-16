@@ -150,7 +150,8 @@ suite.define(() => {
         await activityPage.locator(`[data-activity-session="${selectedSessionKey}"]`).count(),
       ).toBe(0);
 
-      await page.goBack();
+      // Reopen the session with its Sessions list; Activity shows the People list.
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
       await expect.poll(() => ownerTitle.getAttribute("aria-label")).toBe("Owners: All owners");
       await row.waitFor({ state: "visible" });
       await row.hover();
