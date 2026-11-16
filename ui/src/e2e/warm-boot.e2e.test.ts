@@ -621,7 +621,12 @@ suite.define(() => {
           modules.release();
           await gateway.waitForRequest("connect");
           await sidebar.locator("aside.sidebar").waitFor();
-          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+          // The rail keeps its default pins, not the legacy snapshot's order.
+          expect(
+            await sidebar
+              .locator(".sidebar-rail__pin")
+              .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry"))),
+          ).toEqual(["route:cron", "route:plugins", "route:usage"]);
           expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
             "live",
           );
