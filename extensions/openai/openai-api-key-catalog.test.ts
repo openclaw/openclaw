@@ -128,8 +128,11 @@ it.each([
       : Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
     { apiKey, profileId: "openai:api-key" },
   );
+  // Picker-offered rows: an embedding-named bare row is unlikely chat, listed but not offered.
   expect(
-    provider.models.filter((model) => model.inference?.chat !== false).map((model) => model.id),
+    provider.models
+      .filter((model) => model.inference?.chat !== false && !model.inference?.chatEvidence)
+      .map((model) => model.id),
   ).toEqual(
     status === "unavailable"
       ? manifest.modelCatalog.providers.openai.models.map((model) => model.id)
