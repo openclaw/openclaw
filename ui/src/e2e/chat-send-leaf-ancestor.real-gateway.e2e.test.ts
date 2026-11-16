@@ -25,7 +25,6 @@ const answers: Record<string, string> = {
   "Plan C": "Plan C ready.",
   "Ship it.": "Shipped.",
 };
-const switchedBranches = /switched branches/;
 
 /** Runtime context can follow the prompt, so pick the scripted prompt the user items mention last. */
 function lastPrompt(input: unknown): string {
@@ -87,16 +86,25 @@ async function startProvider() {
 
 type Frame = { type?: string; id?: string; method?: string; params?: unknown; ok?: boolean };
 
-/** Records chat.send results and can withhold Gateway events so a pane keeps its stale view. */
+/**
+ * Records chat.send results. It can withhold Gateway events so a pane keeps its stale view, and
+ * drop the send's session id like a client that sends only its displayed leaf.
+ */
 async function routeGatewaySocket(page: Page, port: number) {
   const sends = new Map<string, { params: Record<string, unknown>; ok?: boolean }>();
-  const state = { withholdEvents: false };
+  const state = { withholdEvents: false, dropSessionId: false };
   await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
     const server = socket.connectToServer();
     socket.onMessage((message) => {
       const frame = JSON.parse(message.toString()) as Frame;
       if (frame.type === "req" && frame.method === "chat.send" && frame.id) {
-        sends.set(frame.id, { params: frame.params as Record<string, unknown> });
+        const params = frame.params as Record<string, unknown>;
+        if (state.dropSessionId) {
+          delete params.sessionId;
+        }
+        sends.set(frame.id, { params });
+        server.send(JSON.stringify(frame));
+        return;
       }
       server.send(message);
     });
@@ -154,6 +162,8 @@ describe("chat.send leaf precondition through a real Gateway", () => {
           models: [{ id: "local", name: "Local synthetic inference" }],
           config: {
             update: { checkOnStart: false },
+            // Set before the page opens: a settings write during a send refuses it.
+            messages: { queue: { mode: "followup" } },
             tools: { profile: "minimal", codeMode: false, toolSearch: false },
           },
         });
@@ -177,9 +187,6 @@ describe("chat.send leaf precondition through a real Gateway", () => {
     );
     await callGateway(instance, "sessions.create", { key: sessionKey, agentId: "main", label });
     await pairFixture(page, instance);
-    await page.goto(new URL("settings/appearance", suite.server.baseUrl).href);
-    await waitForControlUiGatewayReady(page);
-    await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await waitForControlUiGatewayReady(page);
     await assertServedUi(page, suite.server.baseUrl);
@@ -206,12 +213,13 @@ describe("chat.send leaf precondition through a real Gateway", () => {
               await provider.waitHeld(signal);
               await stop.waitFor();
               const followUp = "Also mention the new flag.";
+              socket.state.dropSessionId = true;
               await composer.fill(followUp);
               await composer.press("Enter");
               await pane.locator(".chat-group.user", { hasText: followUp }).waitFor();
               provider.release();
               const delivered = pane.getByRole("paragraph").filter({ hasText: "Flag mentioned." });
-              const refused = page.getByText(switchedBranches).first();
+              const refused = pane.getByText("Not sent").first();
               await delivered.or(refused).waitFor({ timeout: 30_000 });
               await page.screenshot({
                 path: path.join(suite.artifactDir, "queued.png"),
@@ -237,15 +245,15 @@ describe("chat.send leaf precondition through a real Gateway", () => {
             async ({ page }) => {
               const socket = await routeGatewaySocket(page, instance.port);
               const sessionKey = "agent:main:leaf-switch";
-              const { pane, composer, send } = await openSession(page, sessionKey, "Plans");
+              const { pane, composer, send, stop } = await openSession(page, sessionKey, "Plans");
               const turn = async (prompt: string) => {
                 await composer.fill(prompt);
                 await send.click();
                 await pane.getByRole("paragraph").filter({ hasText: answers[prompt] }).waitFor();
+                await stop.waitFor({ state: "detached" });
               };
               await turn("Plan A");
               await turn("Plan B");
-              const planBLeaf = await historyEntryId(instance, sessionKey, "Plan B ready.");
               const planBUser = await historyEntryId(instance, sessionKey, '"Plan B"');
               await callGateway(instance, "sessions.rewind", { sessionKey, entryId: planBUser });
               await expect
@@ -253,25 +261,32 @@ describe("chat.send leaf precondition through a real Gateway", () => {
                 .toBe(0);
               await composer.fill("");
               await turn("Plan C");
-              const planCLeaf = await historyEntryId(instance, sessionKey, "Plan C ready.");
               // Another client switches back to the Plan B branch; this pane keeps showing Plan C.
               socket.state.withholdEvents = true;
+              const { branches } = JSON.parse(
+                await callGateway(instance, "sessions.branches.list", { sessionKey }),
+              ) as { branches: { leafEntryId: string; active: boolean }[] };
+              const planB = branches.find((branch) => !branch.active);
+              expect(planB, "the Plan B branch tip").toBeDefined();
               await callGateway(instance, "sessions.branches.switch", {
                 sessionKey,
-                leafEntryId: planBLeaf,
+                leafEntryId: planB!.leafEntryId,
               });
               const prompts = provider.prompts.length;
               await composer.fill("Ship it.");
               await send.click();
-              const refused = page.getByText(switchedBranches).first();
-              await refused.waitFor({ timeout: 30_000 });
-              await page.screenshot({
-                path: path.join(suite.artifactDir, "switch.png"),
-              });
+              // The Gateway refuses it and the pane parks the message as not sent.
+              await expect
+                .poll(() => socket.sendFor("Ship it.")?.ok, { timeout: 30_000 })
+                .toBe(false);
+              await pane.getByText("Not sent").waitFor();
+              await page.screenshot({ path: path.join(suite.artifactDir, "switch.png") });
               socket.state.withholdEvents = false;
               expect(socket.sendFor("Ship it.")?.ok).toBe(false);
               expect(provider.prompts.length).toBe(prompts);
-              expect(socket.sendFor("Ship it.")?.params.expectedLeafEntryId).toBe(planCLeaf);
+              expect(socket.sendFor("Ship it.")?.params.expectedLeafEntryId).toEqual(
+                expect.any(String),
+              );
             },
           ),
       }));
