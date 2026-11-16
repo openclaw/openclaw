@@ -22,14 +22,10 @@ export const GIT_RELEASE_TRIAL = ".trial";
  */
 export function usesGitReleases(
   switchToGit: boolean,
-  service: { serviceUpdateVerdict?: { kind: string } } | undefined,
+  serviceOwnsInstall: boolean,
   onUnavailable?: (reason: string) => void,
 ): boolean {
-  if (
-    switchToGit ||
-    process.platform === "win32" ||
-    service?.serviceUpdateVerdict?.kind !== "owned"
-  ) {
+  if (switchToGit || process.platform === "win32" || !serviceOwnsInstall) {
     return false;
   }
   const prefix = resolveGitReleasePrefix();

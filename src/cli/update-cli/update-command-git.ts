@@ -4,8 +4,10 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -63,7 +65,11 @@ import {
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
-import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
+import {
+  gatewayServiceCommandUsesRoot,
+  inspectManagedGatewayServiceBeforeUpdate,
+  readGatewayServiceStateForUpdate,
+} from "./update-command-service-plan.js";
 import { assessSnapshotCapacityOfferingCleanup } from "./update-snapshot-space-cleanup.js";
 
 export async function retireStandaloneGitWrapper(params: {
@@ -644,4 +650,27 @@ export async function updateGitInstall(params: {
   } finally {
     await exposure?.cancel();
   }
+}
+
+/**
+ * Whether an installed Gateway service starts this checkout or its release link. Only
+ * then can a release switch reach the next start; a checkout run by hand updates in place.
+ */
+export async function gatewayServiceOwnsGitInstall(root: string, timeoutMs?: number) {
+  try {
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      process.env,
+      timeoutMs,
+    );
+    for (const candidate of [root, gitReleaseSlot(resolveGitReleasePrefix())]) {
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: candidate, state });
+      if (verdict.kind === "owned") {
+        return true;
+      }
+    }
+  } catch {
+    // An unreadable service keeps the in-place runner, which needs no service.
+  }
+  return false;
 }
