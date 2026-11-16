@@ -247,6 +247,15 @@ export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): bool
   );
 }
 
+// The requester turn itself stopped; no answer exists to deliver.
+const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
+  "requester_aborted",
+  "requester_timed_out",
+  "requester_preparation_changed",
+  "requester_state_conflict",
+  "requester_transcript_conflict",
+]);
+
 /**
  * A committed result is delivered when its turn failed before answering. A turn that answered,
  * or ended for a recorded reason, keeps its own outcome: a missed send stays a failure.
@@ -256,7 +265,8 @@ export function resolveRequesterDeliveryOutcome(
   outcome: SubagentAnnounceDeliveryResult | undefined,
 ): SubagentAnnounceDeliveryResult | undefined {
   const turnFailedBeforeAnswer =
-    outcome?.reason === undefined && outcome?.finalAssistantVisibleText === undefined;
+    outcome?.finalAssistantVisibleText === undefined &&
+    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
   return outcome &&
     !outcome.delivered &&
     entries.length > 0 &&
