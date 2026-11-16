@@ -65,3 +65,5 @@ rank	removed_lines	file	keeper_files	reason
 # retained_main	b58996d69286d55d1bbbd9b5c03b4ad837baac45	src/gateway/server-plugin-reload.transcripts.test-support.ts	Required by retained server-plugin-reload.recovery.test.ts.
 # retained_main	b58996d69286d55d1bbbd9b5c03b4ad837baac45	src/gateway/server-plugin-reload.fixture-tools.test-support.ts	Required by retained server-plugin-reload.recovery.test.ts.
 # retained_main	b58996d69286d55d1bbbd9b5c03b4ad837baac45	src/gateway/server-plugin-reload.recovery.test-support.ts	Required by retained server-plugin-reload.recovery.test.ts.
+# validation_repair	src/agents/embedded-agent-runner/run/attempt-session-replay.test-support.ts	Restore withReplaySession and required imports for retained attempt-session-replay.steering.test.ts; keep two unused helper exports private.
+# validation_repair	test/scripts/ci-test-runtime.test.ts	Use existing both-host physical-cache suite in the runtime-selection fixture; preserve all assertions.
