@@ -7,13 +7,9 @@ import {
   type ResearchState,
 } from "./job-state.js";
 
+// A job belongs to its conversation key; edits and resets keep it visible.
 function belongs(job: ResearchJob, context: ResearchExecution) {
-  return (
-    job.sessionKey === context.sessionKey &&
-    job.sessionId === context.sessionId &&
-    job.lifecycleRevision === context.lifecycleRevision &&
-    job.agentId === context.agentId
-  );
+  return job.sessionKey === context.sessionKey && job.agentId === context.agentId;
 }
 
 export function assertResearchJobCurrent(
@@ -22,7 +18,7 @@ export function assertResearchJobCurrent(
 ): asserts job is ResearchJob {
   context.assertInvocationCurrent();
   if (!job || !belongs(job, context)) {
-    throw new Error("Research job not found in this conversation generation.");
+    throw new Error("Research job not found in this conversation.");
   }
 }
 

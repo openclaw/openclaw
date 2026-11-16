@@ -1874,6 +1874,7 @@
     "runtime:scripts:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs",
     "runtime:scripts:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs --check",
     "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
+    "check:session-identity-ratchet": "node --import ./scripts/tsx.mjs scripts/check-session-identity-ratchet.mts",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import ./scripts/tsx.mjs scripts/check-wrapper-shadowing.mts",
