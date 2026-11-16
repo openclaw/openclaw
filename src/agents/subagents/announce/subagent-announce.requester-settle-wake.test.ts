@@ -457,7 +457,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       requesterTurnRunId,
     ]);
   });
-  it.each([undefined, "ambiguous", "permanent_failure", "retryable"] as const)(
+  it.each([undefined, "ambiguous", "retryable"] as const)(
     "keeps a result the failed turn never committed owed: %s",
     async (disposition) => {
       const children = setChildren();
@@ -478,16 +478,27 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       });
     },
   );
-  it("keeps the real reason when the dispatched turn throws", async () => {
-    const children = setChildren();
+  it.each([
+    ["a permanent refusal", { delivered: false, path: "direct", disposition: "permanent_failure" }],
+    ["a closed-turn transcript rejection", "throw"],
+  ] as const)("withholds a result after %s, without dispatching it again", async (_, outcome) => {
+    setChildren();
     const error = "Session transcript keyed user is outside the current turn: old-input";
     deliverSpy.mockImplementationOnce(async (params) => {
       await prepareDispatch(params);
-      throw new Error(error);
+      if (outcome === "throw") {
+        throw new Error(error);
+      }
+      return { ...outcome };
     });
     expect(await wake()).toBe(false);
-    expect(completeBatchSpy).not.toHaveBeenCalled();
-    expect(children[0]?.requesterSettleWake).toMatchObject({ status: "pending", lastError: error });
+    expect(completeBatchSpy).toHaveBeenCalledOnce();
+    expect(completeBatchSpy.mock.calls[0]?.[2]).toMatchObject({
+      delivered: false,
+      disposition: "permanent_failure",
+    });
+    expect(await wake()).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
   });
   it("delivers a result that a failed turn already committed to the transcript", async () => {
     const children = setChildren();

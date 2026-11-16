@@ -657,7 +657,7 @@ describe("requester settle dispatch deadline", () => {
   });
 
   it.each(["unavailable", "admitted", "accepted replay", "ambiguous"] as const)(
-    "keeps a result no turn committed owed: %s",
+    "keeps a result no turn committed owed unless its refusal is permanent: %s",
     async (failure) => {
       const context = createContext();
       const createFacade = context.createAgentTurnFacade;
@@ -682,6 +682,16 @@ describe("requester settle dispatch deadline", () => {
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
+      if (failure === "admitted" || failure === "accepted replay") {
+        // A refusal after admission is permanent: withheld once, never dispatched again.
+        expect(completeBatch).toHaveBeenCalledOnce();
+        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
+          disposition: "permanent_failure",
+        });
+        await expect(run()).resolves.toBe(false);
+        expect(startTurn).toHaveBeenCalledOnce();
+        return;
+      }
       expect(completeBatch).not.toHaveBeenCalled();
       expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
       context.createAgentTurnFacade = createFacade;

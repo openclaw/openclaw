@@ -40,7 +40,7 @@ import { captureRequesterContinuationCaller } from "../requester-cron-authority.
 import { transferRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import { reserveSubagentControllerSource } from "./subagent-announce-controller-source.js";
-import { summarizeDeliveryError } from "./subagent-announce-delivery-retry.js";
+import { classifyAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -629,7 +629,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       if (await settleRevokedBatch()) {
         return false;
       }
-      delivery = { delivered: false, path: "none", error: summarizeDeliveryError(error) };
+      delivery = classifyAnnounceDeliveryError(error, {
+        path: "none",
+        beforeAdmission: !dispatchAccepted && !controllerInput?.custody.rpcAdopted,
+      });
     }
     if (delivery.disposition !== "session_queued") {
       retireUnadoptedInput();
@@ -645,7 +648,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {
       return false;
     }
-    // Results not in the transcript stay owed; the sweeper wakes them again. Nothing expires them.
+    // A permanent refusal withholds the result visibly; it stays readable in the child session.
+    if (delivery.disposition === "permanent_failure") {
+      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
+      return false;
+    }
+    // Any other uncommitted result stays owed; the sweeper wakes it again. Nothing expires it.
     await params.transitionBatch(
       settledBatch,
       {
