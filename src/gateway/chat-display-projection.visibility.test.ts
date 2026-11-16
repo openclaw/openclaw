@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
@@ -435,3 +436,68 @@ it.each(["state_contention", "unknown"])(
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
   },
 );
+
+it("projects recorded subagent completions without exposing the private continuation", () => {
+  const completion = { runId: "child-run", sessionKey: "agent:main:subagent:w", label: "W" };
+  const input = buildPersistedUserTurnMessage({
+    text: "PRIVATE CHILD RESULT",
+    timestamp: 10,
+    idempotencyKey: "completion-turn:user",
+    provenance: {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: completion.sessionKey,
+    },
+    subagentCompletions: [completion],
+    display: false,
+  });
+  const projected = projectChatDisplayMessages([input]);
+  expect(projected).toMatchObject([
+    { role: "assistant", phase: "commentary", subagentCompletions: [completion] },
+  ]);
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE");
+  expect(projectChatDisplayMessages(projected)).toEqual(projected);
+  // A settle wake's receipt keeps the wake's continuation, so the resumed run stays in its turn.
+  const settle = { ...input, provenance: { ...input.provenance, sourceTool: "subagent_settle" } };
+  expect(projectChatDisplayMessages([settle])).toMatchObject([
+    { subagentCompletions: [completion], __openclaw: { continuation: { source: "subagent" } } },
+  ]);
+  // The completion row follows activity nested under the preceding answer.
+  const at = (message: object, rawSeq: number, activity?: object) => ({
+    ...message,
+    __openclaw: {
+      ...(message as Record<string, object>)["__openclaw"],
+      id: rawSeq,
+      transcriptPosition: { source: "reader-generation", rawSeq, activity },
+    },
+  });
+  const positioned = projectChatDisplayMessages([
+    at({ role: "assistant", content: "Before." }, 1),
+    at(input, 2),
+    at({ role: "assistant", content: "After." }, 3),
+    at({ role: "toolResult", toolName: "read", content: "Nested." }, 4, {
+      afterRawSeq: 1,
+      scopeId: "nested-scope",
+      startOrder: 0,
+    }),
+  ]);
+  expect(
+    composeTranscriptDisplay(positioned).map((m) => (m["__openclaw"] as { id: number }).id),
+  ).toEqual([1, 4, 2, 3]);
+  // A direct agents_wait result keeps its completion facts but not the private child output.
+  const collected = { ...completion, status: "done", result: "private-result".repeat(4_000) };
+  const mixed = { completed: [collected], errors: [{ runId: "gone", error: "not_found" }] };
+  const direct = projectChatDisplayMessages([
+    {
+      role: "toolResult",
+      toolName: "agents_wait",
+      toolCallId: "direct-collect",
+      content: [{ type: "text", text: JSON.stringify(mixed) }],
+      details: mixed,
+    },
+  ])[0]!;
+  expect(direct.subagentCompletions).toEqual([completion]);
+  expect(direct.subagentCollectionErrors).toBe(1);
+  expect(JSON.stringify(direct)).not.toContain(collected.result);
+  expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);
+});
