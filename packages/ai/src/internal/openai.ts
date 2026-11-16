@@ -26,6 +26,22 @@ export {
   responsesPromptObserver,
   responsesServiceTierObserver,
 } from "../transports/openai-responses-contracts.js";
+export {
+  promptPresenceExpectations,
+  promptPresenceRequestToken,
+  runPromptPresenceCheck,
+  collectResponsesRegions,
+  collectCompletionsRegions,
+  normalizePromptPresenceExpectations,
+  DEFAULT_PROMPT_PRESENCE_LIMITS,
+  type PromptPresenceExpectation,
+  type PromptPresenceCheck,
+  type PromptPresenceCarrierValue,
+  type PromptPresenceRequestToken,
+  type PromptPresenceResult,
+  type PromptPresenceOutcome,
+  type PromptPresenceLimits,
+} from "../transports/prompt-presence-check.js";
 export type {
   ResponsesPromptObservation,
   ResponsesServiceTierObservation,

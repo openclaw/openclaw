@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core";
 import type { Context } from "@openclaw/llm-core";
 import type { EasyInputMessage } from "openai/resources/responses/responses.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
@@ -5,6 +6,12 @@ import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
+import {
+  collectCompletionsRegions,
+  collectResponsesRegions,
+  promptPresenceExpectations,
+  runPromptPresenceCheck,
+} from "./prompt-presence-check.js";
 
 type ResponsesPromptRequest = { instructions?: unknown; input?: unknown };
 type ResponsesPromptMetadata = Pick<ResponsesPromptObservation, "egress" | "payloadVariant">;
@@ -45,14 +52,59 @@ export function createResponsesPromptEgressObserver(options: object | undefined,
     context.systemPrompt ?? "",
     context.preparedSystemPrompt,
   ).instructions;
+  const carrier = options ? promptPresenceExpectations.get(options) : undefined;
+  const expectations = carrier?.expectations;
+  let attemptCounter = 0;
   return (request: ResponsesPromptRequest, metadata: ResponsesPromptMetadata) => {
     const [promptSource, observedPrompt] = readFinalResponsesPrompt(request);
+    const attemptIndex = attemptCounter++;
+    const presenceCheck = expectations
+      ? runPromptPresenceCheck({
+          collected: collectResponsesRegions(request),
+          expectations,
+          attemptIndex,
+        })
+      : undefined;
     observer({
       ...metadata,
       promptSource,
       expectedChars: expectedPrompt.length,
       observedChars: observedPrompt.length,
       matchesAssembledPrompt: promptSource !== "missing" && observedPrompt === expectedPrompt,
+      ...(presenceCheck
+        ? { presenceCheck: { ...presenceCheck, expectationsOverflow: carrier?.overflowCount } }
+        : {}),
+    });
+  };
+}
+
+export function createCompletionsPromptEgressObserver(options: object | undefined, context: Context) {
+  const observer = options ? responsesPromptObserver.get(options) : undefined;
+  if (!observer) {
+    return undefined;
+  }
+  const carrier = options ? promptPresenceExpectations.get(options) : undefined;
+  const expectations = carrier?.expectations;
+  const expectedPrompt = prepareSystemPrompt(
+    context.systemPrompt ?? "",
+    context.preparedSystemPrompt,
+  ).instructions;
+  return (params: unknown) => {
+    const collected = collectCompletionsRegions(params);
+    const firstLegal = collected.legal[0];
+    const presenceCheck = expectations
+      ? runPromptPresenceCheck({ collected, expectations, attemptIndex: 0 })
+      : undefined;
+    observer({
+      egress: "completions",
+      payloadVariant: "initial",
+      promptSource: firstLegal ? "input.system" : "missing",
+      expectedChars: expectedPrompt.length,
+      observedChars: firstLegal ? firstLegal.text.length : 0,
+      matchesAssembledPrompt: firstLegal !== undefined && firstLegal.text === expectedPrompt,
+      ...(presenceCheck
+        ? { presenceCheck: { ...presenceCheck, expectationsOverflow: carrier?.overflowCount } }
+        : {}),
     });
   };
 }
