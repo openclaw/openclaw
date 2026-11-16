@@ -1,0 +1,44 @@
+Shipped trajectory export path (#200077 proof)
+Built loader: dist/export-trajectory-Cdb4Fp_K.mjs (main @ a8a7ce94eb54 build)
+Harness: node 24.13.1, one injected ENOSPC on the transcript .jsonl bundle write,
+same synthetic session file and workspace for both runs.
+
+### BASE (unchanged writeSupportBundleDirectory)
+{
+  "mode": "base",
+  "FIRST_ERROR": "ENOSPC",
+  "LEFTOVER_AFTER_FAILURE": [
+    "events.jsonl",
+    "manifest.json"
+  ],
+  "RETRY_ERROR": "EEXIST",
+  "RETRY_OK": false,
+  "MANIFEST_AFTER_RETRY": {
+    "traceSchema": "openclaw-trajectory",
+    "sessionId": "session-1"
+  },
+  "FILES": null
+}
+
+### HEAD (bundled writeSupportBundleDirectory swapped to staged sibling + rename)
+{
+  "mode": "head",
+  "FIRST_ERROR": "ENOSPC",
+  "LEFTOVER_AFTER_FAILURE": null,
+  "RETRY_ERROR": null,
+  "RETRY_OK": true,
+  "MANIFEST_AFTER_RETRY": {
+    "traceSchema": "openclaw-trajectory",
+    "sessionId": "session-1"
+  },
+  "FILES": [
+    "manifest.json",
+    "events.jsonl",
+    "session-branch.json"
+  ]
+}
+
+### Focused regression (src/logging/diagnostic-support-bundle.test.ts), remote lexiflow container, Node v24.22.1
+BASE: 1 failed | 5 passed -- "releases the output directory when a bundle write fails partway":
+  AssertionError: expected [ 'bundle' ] to deeply equal []
+HEAD: 6 passed (6)
