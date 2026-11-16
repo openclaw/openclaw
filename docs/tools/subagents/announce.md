@@ -26,6 +26,11 @@ fact directly.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.
+Public settle turns also preserve the accepted input's sender attribution across
+restart. A matching restart-interrupted processing receipt resumes that same input
+and run, using its committed bytes without repeating transcript hooks or appending
+the child result again. Completed and intentionally stopped processing receipts
+remain final.
 
 A requester completion turn may finish with `NO_REPLY` or no visible text. That
 settles the child's completion without a retry, an extra model turn, or a blocked
