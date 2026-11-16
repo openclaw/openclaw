@@ -20,6 +20,7 @@ import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -632,8 +633,8 @@ function probeWindowsTasklistProcessState(pid: number): "alive" | "missing" | "u
 
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
   const probe = process.platform === "win32" ? probeWindowsTasklistProcessState : probeProcessState;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = monotonicDeadlineAfter(timeoutMs);
+  while (remainingMonotonicMs(deadline) > 0) {
     if (probe(pid) === "missing") {
       return true;
     }

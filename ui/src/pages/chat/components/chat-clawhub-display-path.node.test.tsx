@@ -179,7 +179,7 @@ it.each(["history", "live", "live-before-run-adoption"])(
     );
     expect(view.container.querySelector(".plugin-official-badge")).toBeNull();
     expect(view.container.querySelector(".chat-clawhub-card__install")?.textContent).toBe(
-      "View details",
+      "Install",
     );
     expect(view.container.textContent).toContain("Where would you like to go?");
     expect(view.container.textContent).not.toContain("Travel Themes: Available to install.");

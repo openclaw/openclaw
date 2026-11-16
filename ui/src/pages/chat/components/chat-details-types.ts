@@ -59,7 +59,7 @@ type ChatDetailsDesktopPresentation = {
   /** Localized section labels supplied by the host's copy owner. */
   peopleLabel: string;
   outputsLabel: string;
-  /** Localized Working, without the ellipsis in common.working. */
+  /** Localized Working label. */
   subagentsWorkingLabel: string;
 };
 

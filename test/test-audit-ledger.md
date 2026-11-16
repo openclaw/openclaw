@@ -1004,6 +1004,32 @@ observations, not speed-comparison data. Independent preservation and full local
 ClawSweeper review found no actionable issue. This closes the earlier channel
 and model fixture environment-restoration follow-up.
 
+### Startup fixture cleanup custody
+
+At `5dc8071931853986c9a924c2e99996b8b5753a71`, the startup metadata and
+command-timing fixtures empty their directory trackers before removal succeeds.
+A failed removal leaves the root untracked and unavailable to a later cleanup
+attempt. Delegate both hooks to the existing shared cleanup owner. Keep the
+timing fixture's synchronous timeline flush immediately before removal.
+All four declarations / four expanded cases remain; production and shared
+helper code are unchanged.
+
+Direct execution and actual Vitest `afterEach` fault/retry probes reproduce
+both original hooks forgetting the failed root. Neither retries it; metadata
+also leaves the healthy sibling behind. The candidate hooks preserve the exact
+error, remove the healthy sibling, retain the failed root, and remove it when
+the same hook runs again without the fault. Timing flush precedes both removal
+attempts. Each fault run intentionally reports two failed / two passed cases;
+all original case assertions execute. Temporary instrumentation was restored
+byte-for-byte.
+
+Clean baseline and candidate runs pass all four cases (5.66 s and 3.28 s wall
+time; Vitest durations 2.40 s and 0.779 s). These are qualification observations,
+not a performance comparison. Scoped CLI-test typecheck, lint, formatting,
+line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
+and local ClawSweeper report no actionable findings. The shared cleanup helper
+is unchanged and retains its prior 11-pass / one-Windows-skip proof.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

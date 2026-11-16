@@ -5,12 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
-import { writePlan } from "./state-upgrade-tree.js";
+import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
 import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -134,5 +135,155 @@ describe("upgradeStateDirectory resume", () => {
     expect(seenAtRelease).toEqual(["old"]);
     expect(fs.readFileSync(live, "utf8")).toBe("new");
     expect(fs.readFileSync(`${live}.pre-test`, "utf8")).toBe("old");
+  });
+});
+
+describe("startup copy ownership", () => {
+  it("skips bulk and large unrelated SQLite, retains legacy inputs and retired backups", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-scope-"));
+    dirs.push(root);
+    const stateDir = path.join(root, "state");
+    fs.cpSync(
+      fileURLToPath(
+        new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
+      ),
+      stateDir,
+      { recursive: true },
+    );
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        worktreeRoot: path.join(stateDir, "custom-checkouts"),
+        agents: { defaults: { workspace: path.join(stateDir, "custom-workspace") } },
+      }),
+    );
+    const bulk = [
+      "worktrees",
+      "custom-checkouts",
+      "custom-workspace",
+      "knowledge",
+      "media/inbound",
+      "media/outgoing/originals",
+      "browser",
+      "backups",
+      "cache",
+    ];
+    for (const dir of bulk) {
+      fs.mkdirSync(path.join(stateDir, dir), { recursive: true });
+      fs.writeFileSync(path.join(stateDir, dir, "keep.sqlite.bak"), "operator data");
+    }
+    const records = path.join(stateDir, "media/outgoing/records");
+    fs.mkdirSync(records, { recursive: true });
+    fs.writeFileSync(path.join(records, "legacy.json"), "{}");
+    const archived = path.join(stateDir, "archive.sqlite");
+    const db = new DatabaseSync(archived);
+    db.exec("CREATE TABLE payload (value TEXT)");
+    db.close();
+    fs.truncateSync(archived, 64 * 1024 * 1024 + 1);
+    const retired = path.join(stateDir, "state/openclaw.sqlite.pre-startup-migration-test.bak");
+    fs.writeFileSync(retired, "operator recovery");
+    const oldGeneration = path.join(stateDir, "state/openclaw.sqlite.pre-2026.1.1");
+    fs.writeFileSync(oldGeneration, "prior upgrade");
+    const calls = vi.spyOn(fs, "readdirSync");
+    const log = { info: vi.fn(), warn: vi.fn() };
+    let observed:
+      | { bulk: boolean[]; archive: boolean; records: string; agent: boolean }
+      | undefined;
+    const result = await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      log,
+      runChain: async ({ stateDir: shadow }) => {
+        observed = {
+          bulk: bulk.map((dir) => fs.existsSync(path.join(shadow, dir))),
+          archive: fs.existsSync(path.join(shadow, "archive.sqlite")),
+          records: fs.readFileSync(path.join(shadow, "media/outgoing/records/legacy.json"), "utf8"),
+          agent: fs.existsSync(path.join(shadow, "agents/main/agent/openclaw-agent.sqlite")),
+        };
+        throw new ChainStepError("injected", "exercise fallback retention");
+      },
+    });
+    expect(result.status).toBe("upgraded");
+    expect(observed).toEqual({
+      bulk: bulk.map(() => false),
+      archive: false,
+      records: "{}",
+      agent: true,
+    });
+    expect(fs.readFileSync(retired, "utf8")).toBe("operator recovery");
+    expect(fs.existsSync(oldGeneration)).toBe(false);
+    for (const dir of bulk) {
+      expect(
+        calls.mock.calls.some(([file]) => file === path.join(stateDir, dir)),
+        dir,
+      ).toBe(false);
+      expect(fs.readFileSync(path.join(stateDir, dir, "keep.sqlite.bak"), "utf8")).toBe(
+        "operator data",
+      );
+    }
+    const state = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"));
+    try {
+      const report = state
+        .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = 'upgrade.report'")
+        .get();
+      expect(JSON.parse(String(report?.payload_json)).retiredBackups).toEqual({
+        count: 1,
+        bytes: 17,
+      });
+    } finally {
+      state.close();
+    }
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("retained 1 retired backup file(s), 17 bytes"),
+    );
+  });
+
+  it("refuses insufficient space before copying with exact required and available bytes", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-space-"));
+    dirs.push(root);
+    const live = path.join(root, "live");
+    fs.mkdirSync(live);
+    fs.writeFileSync(path.join(live, "config.json"), "{}");
+    const statfs = fs.statfsSync(live, { bigint: true });
+    vi.spyOn(fs, "statfsSync").mockReturnValue({ ...statfs, bavail: 1n, bsize: 1n });
+    const shadow = path.join(root, "shadow");
+    await expect(copyTree(live, shadow, () => false, new Map())).rejects.toThrow(
+      "needs 2 bytes plus 268435456 bytes margin (268435458 bytes total); only 1 bytes available. Free 268435457 bytes",
+    );
+    expect(fs.existsSync(shadow)).toBe(false);
+    expect(fs.readdirSync(live)).toEqual(["config.json"]);
+    expect(fs.readFileSync(path.join(live, "config.json"), "utf8")).toBe("{}");
+  });
+
+  it("prunes only owned file generations and never descends into unrelated trees", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-prune-"));
+    dirs.push(root);
+    fs.mkdirSync(path.join(root, "worktrees"));
+    const owned = path.join(root, "openclaw.sqlite");
+    for (const name of [
+      "openclaw.sqlite",
+      "openclaw.sqlite.pre-1",
+      "openclaw.sqlite.pre-2",
+      "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.bak",
+      "operator.sqlite.pre-1",
+      "worktrees/openclaw.sqlite.pre-1",
+    ]) {
+      fs.writeFileSync(path.join(root, name), "kept");
+    }
+    const reads = vi.spyOn(fs, "readdirSync");
+    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned]))).toEqual([
+      "openclaw.sqlite.pre-1",
+    ]);
+    expect(reads.mock.calls.map(([file]) => file)).toEqual([root]);
+    for (const name of [
+      "openclaw.sqlite.pre-2",
+      "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.bak",
+      "operator.sqlite.pre-1",
+      "worktrees/openclaw.sqlite.pre-1",
+    ]) {
+      expect(fs.readFileSync(path.join(root, name), "utf8")).toBe("kept");
+    }
   });
 });
