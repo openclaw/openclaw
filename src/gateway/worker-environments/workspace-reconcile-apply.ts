@@ -193,7 +193,8 @@ export async function applyStagedWorkerWorkspace(params: {
         verifyLocalStable,
       };
     };
-    if (preflight.applyPaths.size === 0) {
+    // Conflicts need the journal's acceptance marker even when no file can change.
+    if (preflight.applyPaths.size === 0 && preflight.conflictPaths.length === 0) {
       await params.freezeTarget?.();
       return acceptance.kind === "exact-target"
         ? await acceptExactTarget(acceptance.verify)
