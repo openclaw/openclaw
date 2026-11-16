@@ -130,9 +130,8 @@ function TemplateCard(
           )}
         </button>
       </div>
-      <Show when={props.entry.summary}>
-        <p class="agents-home__template-summary">{props.entry.summary}</p>
-      </Show>
+      {/* Always present: a Template without a summary keeps the reserved lines. */}
+      <p class="agents-home__template-summary">{props.entry.summary}</p>
     </article>
   );
 }

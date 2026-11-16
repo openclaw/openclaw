@@ -51,6 +51,8 @@ const workflowOperator = {
   installs: 200,
   updatedAtMs: 1_790_000_000_000,
 } satisfies ClawHubTemplateCatalogEntry;
+const summaryFreeTemplate: ClawHubTemplateCatalogEntry = { ...workflowOperator };
+delete summaryFreeTemplate.summary;
 const researchTemplate = {
   ...workflowOperator,
   packageName: "@maker/release-scout",
@@ -220,8 +222,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     { name: "tall-desktop", width: 1440, height: 1200 },
     { name: "mobile", width: 390, height: 844 },
     { name: "tall-mobile", width: 390, height: 1200 },
+    { name: "summary-free-mobile", width: 390, height: 844, entry: summaryFreeTemplate },
   ])("loads the catalog into its placeholders at $name size", async (viewport) => {
-    const { page, gateway } = await fixture(viewport, undefined, undefined, true);
+    const { page, gateway } = await fixture(viewport, viewport.entry, undefined, true);
     const loading = page.getByRole("status", { name: "Loading templates…" });
     await loading.waitFor();
     await capture(page, `loading-${viewport.name}`, loading);
