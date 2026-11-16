@@ -9,6 +9,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { logVerbose } from "../../globals.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
+import { readReplyDispatchTyping } from "../../plugins/reply-dispatch-typing.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
@@ -292,7 +293,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const suppressReplyDispatchLifecycle =
     sourceReplyPolicy.suppressHookReplyLifecycle || startReplyDispatchLifecycleAtVisibleDelivery;
   const replyDispatchVisibleDeliveryStart = startReplyDispatchLifecycleAtVisibleDelivery
-    ? params.replyOptions?.onVisibleDeliveryStart
+    ? readReplyDispatchTyping(params.replyOptions ?? {})
     : undefined;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
   const commentaryPayloadsEnabled = params.replyOptions?.commentaryPayloadsEnabled === true;

@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import {
   isDeliveryRecoveryOwnedRetry,
@@ -20,7 +19,7 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayloadOutcome, type NormalizeReplyOutcome } from "./normalize-reply.js";
@@ -40,6 +39,10 @@ import {
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
 import {
+  createReplyDispatcherTypingLifecycle,
+  type ReplyDispatcherWithTypingOptions,
+} from "./reply-dispatcher-typing.js";
+import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatchKind,
@@ -49,11 +52,10 @@ import {
   type ReplyDispatcher,
   type ReplyDispatcherOptions,
 } from "./reply-dispatcher.types.js";
-import { runVisibleDeliveryTypingStart } from "./typing-visible-delivery.js";
-import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
 export type { ReplyDispatcherOptions } from "./reply-dispatcher.types.js";
+export type { ReplyDispatcherWithTypingOptions } from "./reply-dispatcher-typing.js";
 
 const DEFAULT_RANGE = { min: 800, max: 2500 };
 
@@ -176,29 +178,6 @@ function buildReplyDispatchRuntimeInfo(
     ...(participant ? { participant } : {}),
   };
 }
-
-export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
-  typingCallbacks?: TypingCallbacks;
-  typingStartPolicy?: GetReplyOptions["typingStartPolicy"];
-  suppressTyping?: boolean;
-  onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => Promise<void> | void;
-  onSettled?: () => unknown;
-  onFreshSettledDelivery?: () => unknown;
-  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
-  onCleanup?: () => void;
-};
-
-type ReplyDispatcherWithTypingResult = {
-  dispatcher: ReturnType<typeof createReplyDispatcher>;
-  replyOptions: Pick<
-    GetReplyOptions,
-    "onReplyStart" | "onVisibleDeliveryStart" | "onTypingController" | "onTypingCleanup"
-  >;
-  markDispatchIdle: () => void;
-  /** Signal that the model run is complete so the typing controller can stop. */
-  markRunComplete: () => void;
-};
 
 /** Normalize through a dispatcher's exact owner before TTS or other visible side effects. */
 export function prepareReplyPayloadForDispatcher(
@@ -682,78 +661,7 @@ export async function waitForReplyDispatcherIdle(
   }
 }
 
-export function createReplyDispatcherWithTyping(
-  options: ReplyDispatcherWithTypingOptions,
-): ReplyDispatcherWithTypingResult {
-  const {
-    typingCallbacks,
-    typingStartPolicy,
-    suppressTyping,
-    onReplyStart,
-    onIdle,
-    onSettled,
-    onFreshSettledDelivery: _onFreshSettledDelivery,
-    onCleanup,
-    ...dispatcherOptions
-  } = options;
-  const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
-  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
-  const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
-  let typingController: TypingController | undefined;
-  let startedVisibleDeliveryTyping = false;
-  // The channel deliverer owns visible-send decisions; this hook lets it start
-  // typing after hidden/suppressed payloads have already been filtered out.
-  const startVisibleDeliveryTyping = async () => {
-    if (
-      typingStartPolicy !== "visible_delivery" ||
-      suppressTyping === true ||
-      startedVisibleDeliveryTyping
-    ) {
-      return;
-    }
-    const visibleDeliveryTypingController = typingController;
-    startedVisibleDeliveryTyping = true;
-    if (visibleDeliveryTypingController) {
-      await runVisibleDeliveryTypingStart({
-        start: () => visibleDeliveryTypingController.startTypingForVisibleDelivery(),
-        onTimeout: () => visibleDeliveryTypingController.cleanup(),
-      });
-      return;
-    }
-    await runVisibleDeliveryTypingStart({
-      start: () => resolvedOnReplyStart?.(),
-      onTimeout: () => resolvedOnCleanup?.(),
-      onLateCompletion: () => resolvedOnCleanup?.(),
-    });
-  };
-  const dispatcher = createReplyDispatcher({
-    ...dispatcherOptions,
-    onIdle: async () => {
-      typingController?.markDispatchIdle();
-      const idle = resolvedOnIdle?.();
-      if (idle) {
-        await Promise.resolve(idle);
-      }
-      await onSettled?.();
-    },
-  });
-
-  return {
-    dispatcher,
-    replyOptions: {
-      onReplyStart: resolvedOnReplyStart,
-      onVisibleDeliveryStart: startVisibleDeliveryTyping,
-      onTypingCleanup: resolvedOnCleanup,
-      onTypingController: (typing) => {
-        typingController = typing;
-      },
-    },
-    markDispatchIdle: () => {
-      typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
-    },
-    markRunComplete: () => {
-      typingController?.markRunComplete();
-    },
-  };
+export function createReplyDispatcherWithTyping(options: ReplyDispatcherWithTypingOptions) {
+  const { dispatcherOptions, ...lifecycle } = createReplyDispatcherTypingLifecycle(options);
+  return { dispatcher: createReplyDispatcher(dispatcherOptions), ...lifecycle };
 }

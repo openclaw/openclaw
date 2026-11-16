@@ -266,10 +266,10 @@ async function deliverAdmittedInboundReply(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
-    ...(params.onVisibleDeliveryStart
+    ...(params.info.startVisibleDeliveryTyping
       ? {
           onPlatformSendDispatch: async () => {
-            await params.onVisibleDeliveryStart?.();
+            await params.info.startVisibleDeliveryTyping?.();
           },
         }
       : {}),

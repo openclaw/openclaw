@@ -459,12 +459,9 @@ async function dispatchChannelTurnWithDeliveryOwner(
   };
   async function deliverReply<T extends { payload: ReplyPayload }>(
     payload: ReplyPayload,
-    dispatchInfo: ChannelDeliveryInfo,
+    info: ChannelDeliveryInfo,
     operation: ChannelDeliveryOperation<T>,
   ): Promise<ChannelDeliveryResult | void> {
-    const info = replyOptions.onVisibleDeliveryStart
-      ? { ...dispatchInfo, startVisibleDeliveryTyping: replyOptions.onVisibleDeliveryStart }
-      : dispatchInfo;
     const preparedPayloadResult = delivery.preparePayload
       ? await delivery.preparePayload(payload, info)
       : payload;

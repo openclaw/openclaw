@@ -5,6 +5,7 @@ import { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js"
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { logVerbose } from "../../globals.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
+import { readReplyDispatchTyping } from "../../plugins/reply-dispatch-typing.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
@@ -197,7 +198,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const routedVisibleDeliveryStart =
     state.params.replyOptions?.typingStartPolicy === "visible_delivery" &&
     state.params.replyOptions?.suppressTyping !== true
-      ? state.params.replyOptions.onVisibleDeliveryStart
+      ? readReplyDispatchTyping(state.params.replyOptions)
       : undefined;
 
   const routeReplyOperationToOriginating = async (

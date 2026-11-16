@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
@@ -43,6 +44,7 @@ import type {
   WhatsAppDispatchPipeline,
   WhatsAppReplyPlan,
 } from "./inbound-dispatch.types.js";
+import { resolveWhatsAppTypingStartPolicy } from "./inbound-typing-policy.js";
 import type { updateLastRouteInBackground } from "./last-route.js";
 import {
   getAgentScopedMediaLocalRoots,
@@ -318,39 +320,6 @@ export async function prepareWhatsAppInboundContext(params: {
   };
 }
 
-function isExplicitWhatsAppCommandTurn(params: {
-  commandTurn?: FinalizedMsgContext["CommandTurn"];
-  commandSource?: "native" | "text";
-  commandAuthorized?: boolean;
-}): boolean {
-  const isNativeCommandTurn = params.commandTurn?.kind === "native";
-  const isNativeCommandSource = params.commandSource === "native";
-  const isAuthorizedTextCommandTurn =
-    params.commandTurn?.kind === "text-slash" ? params.commandTurn.authorized : false;
-  const isAuthorizedTextCommandSource =
-    params.commandSource === "text" ? Boolean(params.commandAuthorized) : false;
-
-  return (
-    isNativeCommandTurn ||
-    isNativeCommandSource ||
-    isAuthorizedTextCommandTurn ||
-    isAuthorizedTextCommandSource
-  );
-}
-
-function resolveWhatsAppTypingStartPolicy(params: {
-  chatType?: string;
-  commandTurn?: FinalizedMsgContext["CommandTurn"];
-  commandSource?: "native" | "text";
-  commandAuthorized?: boolean;
-  wasMentioned?: boolean;
-}): "visible_delivery" | undefined {
-  if (params.chatType !== "group" || params.wasMentioned === true) {
-    return undefined;
-  }
-  return isExplicitWhatsAppCommandTurn(params) ? undefined : "visible_delivery";
-}
-
 export function resolveWhatsAppDmRouteTarget(params: {
   msg: AdmittedWebInboundMessage;
   senderE164?: string;
@@ -447,6 +416,9 @@ export function createWhatsAppReplyPlan(params: {
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
   const typingStartPolicy = resolveWhatsAppTypingStartPolicy({
+    configuredTypingMode:
+      resolveAgentConfig(params.cfg, params.route.agentId)?.typingMode ??
+      params.cfg.agents?.defaults?.typingMode,
     chatType: params.context.ChatType,
     commandTurn: params.context.CommandTurn,
     commandSource: params.context.CommandSource,
@@ -688,7 +660,6 @@ export function createWhatsAppReplyPlan(params: {
           tableMode,
           chunkMode,
         },
-        onVisibleDeliveryStart: info.startVisibleDeliveryTyping,
       };
     },
     deliver: async (payload: ReplyPayload, info: ReplyDeliveryInfo) => {

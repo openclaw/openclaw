@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readReplyDispatchTyping } from "../../plugins/reply-dispatch-typing.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { runVisibleDeliveryTypingStart } from "./typing-visible-delivery.js";
@@ -8,16 +9,19 @@ import { createTypingController } from "./typing.js";
 afterEach(() => vi.useRealTimers());
 
 describe("visible delivery typing", () => {
-  it("disables stream starts even with instant typing configured", () => {
-    expect(
-      resolveTypingMode({
-        configured: "instant",
-        isGroupChat: true,
-        wasMentioned: false,
-        typingStartPolicy: "visible_delivery",
-      }),
-    ).toBe("never");
-  });
+  it.each(["instant", "thinking", "message", "never"] as const)(
+    "preserves explicit %s typing during visible delivery",
+    (configured) => {
+      expect(
+        resolveTypingMode({
+          configured,
+          isGroupChat: true,
+          wasMentioned: false,
+          typingStartPolicy: "visible_delivery",
+        }),
+      ).toBe(configured);
+    },
+  );
 
   it("starts once after the run and dispatcher have completed", async () => {
     const onReplyStart = vi.fn();
@@ -51,8 +55,8 @@ describe("visible delivery typing", () => {
       suppressTyping,
       onReplyStart,
     });
-    await lifecycle.replyOptions.onVisibleDeliveryStart?.();
-    await lifecycle.replyOptions.onVisibleDeliveryStart?.();
+    await readReplyDispatchTyping(lifecycle.replyOptions)?.();
+    await readReplyDispatchTyping(lifecycle.replyOptions)?.();
     expect(onReplyStart).toHaveBeenCalledTimes(suppressTyping ? 0 : 1);
     lifecycle.dispatcher.markComplete();
     await lifecycle.dispatcher.waitForIdle();

@@ -127,7 +127,7 @@ describe("durable inbound reply delivery", () => {
     await deliver({
       threadId: null,
       executionIdentityToken,
-      onVisibleDeliveryStart,
+      info: { kind: "final", startVisibleDeliveryTyping: onVisibleDeliveryStart },
       ctxPayload: { ...context, MessageThreadId: "context-thread" },
     });
     expect(mocks.send.mock.calls[0]?.[0]).toMatchObject({

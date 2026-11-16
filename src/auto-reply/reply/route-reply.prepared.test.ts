@@ -2,6 +2,7 @@ import path from "node:path";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { readReplyDispatchTyping } from "../../plugins/reply-dispatch-typing.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
@@ -104,7 +105,7 @@ describe("prepared reply routing", () => {
         beforeDeliver: async () => {
           prepared = true;
         },
-        onVisibleDeliveryStart: lifecycle.replyOptions.onVisibleDeliveryStart,
+        onVisibleDeliveryStart: readReplyDispatchTyping(lifecycle.replyOptions),
       };
       const result =
         operation === "prepared"

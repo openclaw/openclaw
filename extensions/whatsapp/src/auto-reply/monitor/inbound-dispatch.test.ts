@@ -248,30 +248,72 @@ describe("prepared WhatsApp inbound boundary", () => {
 });
 
 describe("WhatsApp reply delivery", () => {
-  it("passes deferred typing to the durable send without starting it early", async () => {
-    const startVisibleDeliveryTyping = vi.fn(async () => undefined);
+  it.each(["instant", "thinking", "message", "never"] as const)(
+    "preserves explicit %s typing instead of deferring it",
+    async (typingMode) => {
+      for (const agents of [
+        { defaults: { typingMode } },
+        { defaults: { typingMode: "instant" as const }, entries: { main: { typingMode } } },
+      ]) {
+        const { plan } = await fixture({
+          cfg: { agents, messages: { groupChat: { visibleReplies: "automatic" } } },
+          context: { Body: "hi", ChatType: "group", WasMentioned: false, CommandAuthorized: false },
+        });
+        expect(plan.replyOptions?.typingStartPolicy).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "ordinary group turn",
+      wasMentioned: false,
+      commandSource: undefined,
+      commandAuthorized: false,
+      deferred: true,
+    },
+    {
+      name: "mention",
+      wasMentioned: true,
+      commandSource: undefined,
+      commandAuthorized: false,
+      deferred: false,
+    },
+    {
+      name: "native command",
+      wasMentioned: false,
+      commandSource: "native" as const,
+      commandAuthorized: true,
+      deferred: false,
+    },
+    {
+      name: "authorized text command",
+      wasMentioned: false,
+      commandSource: "text" as const,
+      commandAuthorized: true,
+      deferred: false,
+    },
+    {
+      name: "unauthorized text",
+      wasMentioned: false,
+      commandSource: "text" as const,
+      commandAuthorized: false,
+      deferred: true,
+    },
+  ])("selects the default typing policy for $name", async (turn) => {
     const { plan } = await fixture({
       cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
-      context: { Body: "hi", ChatType: "group", WasMentioned: false, CommandAuthorized: false },
-    });
-    expect(plan.replyOptions).toMatchObject({ typingStartPolicy: "visible_delivery" });
-    if (typeof plan.delivery.durable !== "function") {
-      throw new Error("expected durable delivery policy");
-    }
-    const options = await plan.delivery.durable(
-      { text: "reply" },
-      {
-        kind: "final",
-        startVisibleDeliveryTyping,
+      context: {
+        Body: "hi",
+        ChatType: "group",
+        WasMentioned: turn.wasMentioned,
+        CommandSource: turn.commandSource,
+        CommandAuthorized: turn.commandAuthorized,
       },
+    });
+    expect(plan.replyOptions?.typingStartPolicy).toBe(
+      turn.deferred ? "visible_delivery" : undefined,
     );
-    expect(options).toBeTruthy();
-    if (!options) {
-      throw new Error("expected durable delivery options");
-    }
-    expect(startVisibleDeliveryTyping).not.toHaveBeenCalled();
-    await options.onVisibleDeliveryStart?.();
-    expect(startVisibleDeliveryTyping).toHaveBeenCalledOnce();
   });
 
   it("records visible delivery without logging the reply content", async () => {

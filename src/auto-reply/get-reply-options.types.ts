@@ -266,8 +266,6 @@ export type GetReplyOptions = {
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
-  /** Starts typing at the first accepted visible delivery attempt. */
-  onVisibleDeliveryStart?: () => Promise<void>;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;

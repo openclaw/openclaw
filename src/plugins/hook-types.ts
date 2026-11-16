@@ -385,7 +385,6 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
-  onVisibleDeliveryStart?: () => Promise<void> | void;
   /** @deprecated Use onPreparedAgentRunStart. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
   onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];

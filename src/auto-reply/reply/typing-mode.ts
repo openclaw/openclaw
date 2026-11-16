@@ -22,16 +22,14 @@ export function resolveTypingMode({
   typingStartPolicy?: "visible_delivery";
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): TypingMode {
-  if (
-    typingPolicy === "system_event" ||
-    typingPolicy === "internal_webchat" ||
-    suppressTyping ||
-    typingStartPolicy === "visible_delivery"
-  ) {
+  if (typingPolicy === "system_event" || typingPolicy === "internal_webchat" || suppressTyping) {
     return "never";
   }
   if (configured) {
     return configured;
+  }
+  if (typingStartPolicy === "visible_delivery") {
+    return "never";
   }
   if (sourceReplyDeliveryMode === "message_tool_only" || !isGroupChat || wasMentioned) {
     return "instant";

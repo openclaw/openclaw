@@ -175,7 +175,6 @@ export type ChannelTurnDurableDeliveryOptions = Pick<
 > & {
   /** Validate the admitted sender or restore its account view from current Gateway config. */
   prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
-  onVisibleDeliveryStart?: () => Promise<void> | void;
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
