@@ -668,17 +668,11 @@ node_release_version_is_supported() {
 # runtimes use node_release_version_is_supported, which accepts canonical
 # release labels with a leading v, build metadata, or future-major prereleases.
 node_version_is_supported() {
-  local version="${1#v}"
+  local version="$1"
   local major minor patch
 
+  [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || return 1
   IFS=. read -r major minor patch <<<"$version"
-  minor="${minor:-0}"
-  patch="${patch:-0}"
-  for part in "$major" "$minor" "$patch"; do
-    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
-      return 1
-    fi
-  done
 
   if ((major == 24)); then
     semver_at_least "$version" "$MIN_NODE_24_VERSION"
@@ -1303,6 +1297,7 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  NODE_VERSION="${NODE_VERSION#v}"
   # Node-only recovery ignores the method; normal installs validate before any writes.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
     fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"

@@ -120,6 +120,31 @@ function runNpmPolicy(spec: string) {
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
+  it.each(["v24.22.1", "24.22.1"])("requests a canonical Node archive for %s", (version) => {
+    const f = makeFixture("node-download-version");
+    const result = f.run(`
+      download_file() { printf 'download=%s\\n' "$1"; return 79; }
+      main --node-only --prefix "$ROOT/prefix" --node-version ${version}
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(79);
+    expect(result.stdout).toContain("download=https://nodejs.org/dist/v24.22.1/SHASUMS256.txt\n");
+  });
+
+  it.each(["27", "27.1", "024.22.1"])(
+    "rejects incomplete or noncanonical Node release %s",
+    (version) => {
+      const f = makeFixture("invalid-node-download-version");
+      const result = f.run(`
+      download_file() { echo unexpected-download; return 79; }
+      main --node-only --prefix "$ROOT/prefix" --node-version ${version}
+    `);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout).toContain(`Node ${version} is unsupported`);
+      expect(result.stdout).not.toContain("unexpected-download");
+      expect(existsSync(join(f.root, "prefix"))).toBe(false);
+    },
+  );
+
   it.each(["--install-method npn", "--method npn", ""])(
     "rejects invalid methods without switching the active runtime (%s)",
     (args) => {
