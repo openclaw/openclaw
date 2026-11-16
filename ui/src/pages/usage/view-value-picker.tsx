@@ -92,7 +92,14 @@ export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu
   const selectedCount = () =>
     config.options().filter((option) => config.isSelected(option.value)).length;
   const searchKeydown = nativeListener("keydown", (event) => {
-    if (event.key !== "Enter" || isComposingKeyboardEvent(event) || !query().trim()) {
+    if (event.key !== "Enter") {
+      return;
+    }
+    if (isComposingKeyboardEvent(event)) {
+      event.stopPropagation();
+      return;
+    }
+    if (!query().trim()) {
       return;
     }
     const first = rows().all[0];

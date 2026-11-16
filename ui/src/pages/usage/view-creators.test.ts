@@ -246,24 +246,34 @@ it("keeps creator choices and opaque identities through row, picker, and search 
     ),
   ).toEqual(["Jordan Lee"]);
   onSelect.mockClear();
-  for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
-    search.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...composition }),
-    );
-    expect(onSelect).not.toHaveBeenCalled();
+  const confirmComposition = (event: KeyboardEvent) => {
+    search.focus();
+    search.dispatchEvent(event);
     flush();
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
+    expect(onSelect).not.toHaveBeenCalled();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  };
+  for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+    confirmComposition(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...composition,
+      }),
+    );
   }
   const end = new CompositionEvent("compositionend", { bubbles: true });
   search.dispatchEvent(end);
-  search.dispatchEvent(
+  confirmComposition(
     Object.defineProperty(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       "timeStamp",
       { value: end.timeStamp - 1 },
     ),
   );
-  expect(onSelect).not.toHaveBeenCalled();
   search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);

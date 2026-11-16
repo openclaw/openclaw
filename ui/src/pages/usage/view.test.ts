@@ -142,9 +142,16 @@ describe("renderUsage", () => {
     expect(search.value).toBe("anthropic");
     expect(surface.querySelector('[aria-label="anthropic"]')).not.toBeNull();
     expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
-    search.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }),
-    );
+    search.focus();
+    const confirm = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: 229,
+      bubbles: true,
+      cancelable: true,
+    });
+    search.dispatchEvent(confirm);
+    expect(confirm.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
     expect(onQueryDraftChange).not.toHaveBeenCalled();
     search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
     search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
