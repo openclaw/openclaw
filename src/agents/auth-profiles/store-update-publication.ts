@@ -1,4 +1,3 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   observeSqliteWorkerCommittedFacts,
@@ -39,7 +38,6 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type { AuthStoreUpdateCommitted } from "./store-update.worker.js";
 import type { PreparedAuthProfileStoreOwner } from "./types.js";
@@ -119,10 +117,9 @@ export async function publishAuthProfileStoreUpdate(
   let currentStore = committed.store;
   let mutation = committed.publication;
   let isCommittedCurrent = committedIsCurrent;
-  const prepareReader = (databasePath: string, agentDir = path.dirname(databasePath)) =>
+  const prepareReader = (databasePath: string) =>
     prepareAgentAuthProfileRowsRead({
       databasePath,
-      agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
       env: owner.env,
     });
   // A later native save may publish only its own delta. Keep this commit's
@@ -136,7 +133,7 @@ export async function publishAuthProfileStoreUpdate(
       rows = await readSharedAuthProfileRows(context);
       context.admission.assertCurrent();
     } else {
-      const reader = prepareReader(owner.databasePath);
+      const reader = await prepareReader(owner.databasePath);
       try {
         rows = await reader.read();
       } finally {
@@ -156,7 +153,7 @@ export async function publishAuthProfileStoreUpdate(
   if (!shared) {
     // The shared owner can rotate while the local worker commits. Its current
     // rows and revision come from the same reader used by auth health publication.
-    const reader = prepareReader(owner.databasePath);
+    const reader = await prepareReader(owner.databasePath);
     try {
       return await publishInlineAuthFailure(
         owner,
@@ -216,7 +213,7 @@ export async function publishAuthProfileStoreUpdate(
     );
   for (const entry of entries) {
     const targetOwner = { ...owner, databasePath: entry.databasePath };
-    let reader: ReturnType<typeof prepareAgentAuthProfileRowsRead> | undefined;
+    let reader: Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>> | undefined;
     const localRevision =
       installed?.mutations.get(entry.databasePath) ??
       getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(entry.databasePath);
@@ -234,7 +231,7 @@ export async function publishAuthProfileStoreUpdate(
       assertAuthProfileMigrationStateAtDatabasePath(targetOwner.sharedDatabasePath);
       let local = currentStore;
       if (entry.databasePath !== owner.databasePath) {
-        reader = prepareReader(entry.databasePath, entry.agentDir);
+        reader = await prepareReader(entry.databasePath);
         local = markRuntimePersistedProfiles(
           loadPersistedAuthProfileStoreFromRows(await reader.read(), entry.databasePath) ??
             createEmptyAuthProfileStore(),
