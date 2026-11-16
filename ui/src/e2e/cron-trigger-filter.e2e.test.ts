@@ -5,7 +5,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron trigger filter E2E",
@@ -51,6 +51,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       const conditionalRow = page.locator('[data-test-id="cron-row-conditional-job"]');
       await conditionalRow.waitFor();
       await page.locator('[data-test-id="cron-row-plain-job"]').waitFor();

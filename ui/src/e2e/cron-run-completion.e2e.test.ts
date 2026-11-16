@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture, createCronRunsResult } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { collapseNav } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron whole-run completion",
@@ -84,6 +85,7 @@ suite.define(() => {
           },
         });
         const response = await page.goto(`${suite.server.baseUrl}cron`);
+        await collapseNav(page);
         expect(response?.status()).toBe(200);
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
 
