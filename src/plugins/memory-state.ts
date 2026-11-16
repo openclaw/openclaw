@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
