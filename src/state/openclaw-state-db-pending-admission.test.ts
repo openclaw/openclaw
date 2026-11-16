@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-async-lifecycle.js";
+import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-read-lifecycle.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 

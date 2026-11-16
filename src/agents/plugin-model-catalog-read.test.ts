@@ -17,6 +17,8 @@ import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-st
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import * as catalogReads from "./plugin-model-catalog-read.js";
@@ -154,8 +156,12 @@ it("reads without creating shared state and observes canonical replacements on t
 
   const sql = observeHostDataSql();
   try {
+    using filesystem = observeMainThreadFs();
     await fixture.expectContents(first);
     expect(sql.queries).toEqual([]);
+    expect(
+      filesystem.stacks().filter(({ stack }) => stack.includes("loadPersistedPluginModelCatalogs")),
+    ).toEqual([]);
   } finally {
     sql.restore();
   }
@@ -169,18 +175,49 @@ it("reads without creating shared state and observes canonical replacements on t
   expect(observation).toEqual([reader]);
 });
 
-it("refuses a catalog result after its captured root admission closes", async () => {
-  const fixture = createFixture(catalogContents("retired root"));
-  const held = createDeferredCore<Awaited<ReturnType<typeof loadPersistedPluginModelCatalogs>>>();
-  vi.spyOn(catalogReads, "readPluginModelCatalogsInWorker").mockReturnValueOnce(held.promise);
+it.skipIf(process.platform === "win32")(
+  "retires replaced state aliases while preparing catalog reads without host filesystem probes",
+  async () => {
+    const contents = catalogContents("retained physical source");
+    const fixture = createFixture(contents);
+    const statePath = resolveOpenClawStateSqlitePath(fixture.env);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, "");
+    const original = captureOpenClawStateReadContext(statePath);
+    const aliasRoot = tempDirs.make("openclaw-catalog-state-alias-");
+    const env = { ...fixture.env, OPENCLAW_STATE_DIR: aliasRoot };
+    fs.mkdirSync(path.dirname(resolveOpenClawStateSqlitePath(env)), { recursive: true });
+    fs.linkSync(statePath, resolveOpenClawStateSqlitePath(env));
+    fs.renameSync(statePath, path.join(fixture.root, "retired.sqlite"));
+    fs.writeFileSync(statePath, "replacement");
 
-  const reading = fixture.read();
-  const closing = closeOpenClawStateDatabaseAsync();
-  held.resolve([]);
-  const results = await Promise.allSettled([reading, closing]);
+    using filesystem = observeMainThreadFs();
+    await expect(
+      loadPersistedPluginModelCatalogs(fixture.agentDir, ["fixture"], env),
+    ).resolves.toEqual([{ pluginId: "fixture", contents }]);
+    expect(() => original.admission.assertCurrent()).toThrow("read admission changed");
+    expect(
+      filesystem.stacks().filter(({ stack }) => stack.includes("loadPersistedPluginModelCatalogs")),
+    ).toEqual([]);
+  },
+);
 
-  expect(results).toMatchObject([{ status: "rejected" }, { status: "fulfilled" }]);
-});
+it.each(["root", "agent"] as const)(
+  "refuses a catalog result after its captured %s admission closes",
+  async (owner) => {
+    const fixture = createFixture(catalogContents("retired root"));
+    const held = createDeferredCore<Awaited<ReturnType<typeof loadPersistedPluginModelCatalogs>>>();
+    vi.spyOn(catalogReads, "readPluginModelCatalogsInWorker").mockReturnValueOnce(held.promise);
+
+    const reading = fixture.read();
+    const closing =
+      owner === "root" ? closeOpenClawStateDatabaseAsync() : closeOpenClawAgentDatabasesAsync();
+    held.resolve([]);
+    const results = await Promise.allSettled([reading, closing]);
+
+    expect(results).toMatchObject([{ status: "rejected" }, { status: "fulfilled" }]);
+  },
+);
 
 it("rejects quarantine and tracked schema damage after warm reads, then accepts cleared quarantine", async () => {
   const contents = catalogContents("quarantine fixture");

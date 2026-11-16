@@ -1,9 +1,14 @@
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isMissingPathError } from "../../infra/errno.js";
 import { canAccess } from "../../infra/path-existence.js";
 import type { ModelRequestHeaders } from "../../llm/types.js";
+import { captureModelsJsonSource } from "../models-config-state.js";
 import { mergeProviderModels, type ProviderModelCatalog } from "../models-config.merge.js";
 import { loadPersistedPluginModelCatalogs } from "../plugin-model-catalog-execution.js";
+import { inspectLegacyPluginModelCatalogWarningInWorker } from "../plugin-model-catalog-read.js";
 import type { PersistedPluginModelCatalog } from "../plugin-model-catalog-read.types.js";
 import type { ModelsConfig, ProviderAuthMode } from "./model-registry-schema.js";
 
@@ -77,7 +82,7 @@ function mergeCompat(
   return merged;
 }
 
-export async function readModelRegistryPluginCatalogs(
+async function readModelRegistryPluginCatalogs(
   modelsJsonPath: string,
   options: { config?: OpenClawConfig; modelsJsonContents?: string | null },
 ): Promise<{ catalogs: readonly PersistedPluginModelCatalog[]; error?: string }> {
@@ -96,6 +101,63 @@ export async function readModelRegistryPluginCatalogs(
       error: `Failed to load generated plugin model catalogs: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+export type PreparedModelRegistrySources = {
+  root?: { contents: string | null; error?: string };
+  plugins?: { catalogs: readonly PersistedPluginModelCatalog[]; error?: string };
+  legacyWarning?: string | null;
+};
+
+/** Disk-backed async APIs prepare each reload; captured sources retain their caller-owned lifetime. */
+export async function readModelRegistrySources(
+  modelsJsonPath: string,
+  options: {
+    config?: OpenClawConfig;
+    modelsJsonContents?: string | null;
+    includePluginCatalogs?: boolean;
+    pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+    staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
+  },
+): Promise<PreparedModelRegistrySources> {
+  if (options.config?.models?.mode === "replace") {
+    return {};
+  }
+  const prepared: PreparedModelRegistrySources = {};
+  const agentDir = dirname(modelsJsonPath);
+  if (options.modelsJsonContents === undefined) {
+    try {
+      prepared.root = {
+        contents:
+          modelsJsonPath === join(agentDir, "models.json")
+            ? (await captureModelsJsonSource(agentDir)).contents
+            : await readFile(modelsJsonPath, "utf8"),
+      };
+    } catch (error) {
+      prepared.root = { contents: null };
+      if (!isMissingPathError(error)) {
+        prepared.root.error = `Failed to load models.json: ${error instanceof Error ? error.message : String(error)}\n\nFile: ${modelsJsonPath}`;
+      }
+    }
+  }
+  if (options.includePluginCatalogs !== false && options.pluginCatalogs === undefined) {
+    prepared.plugins = await readModelRegistryPluginCatalogs(modelsJsonPath, {
+      config: options.config,
+      modelsJsonContents: prepared.root?.error
+        ? options.modelsJsonContents
+        : prepared.root
+          ? prepared.root.contents
+          : options.modelsJsonContents,
+    });
+    if (options.modelsJsonContents === undefined && options.staticProviderConfigs === undefined) {
+      try {
+        prepared.legacyWarning = await inspectLegacyPluginModelCatalogWarningInWorker(agentDir);
+      } catch {
+        prepared.legacyWarning = `Could not inspect legacy provider catalogs: ${join(agentDir, "plugins")}\nRun openclaw doctor --fix to verify and import legacy provider catalogs.`;
+      }
+    }
+  }
+  return prepared;
 }
 
 export interface ProviderRequestConfig {

@@ -8,11 +8,12 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type {
   PersistedPluginModelCatalog,
   PluginModelCatalogReadInput,
+  PluginModelCatalogReadTask,
   PluginModelCatalogReadResult,
 } from "./plugin-model-catalog-read.types.js";
 
 type CatalogReadPool = ReturnType<
-  typeof createOwnedWorkerTaskPool<PluginModelCatalogReadInput, PluginModelCatalogReadResult>
+  typeof createOwnedWorkerTaskPool<PluginModelCatalogReadTask, PluginModelCatalogReadResult>
 >;
 
 class PluginModelCatalogInputError extends WorkerTaskError {
@@ -46,7 +47,7 @@ function catalogReadPool(): CatalogReadPool {
   const key = source.moduleUrl.href;
   let pool = pools.get(key);
   if (!pool) {
-    pool = createOwnedWorkerTaskPool<PluginModelCatalogReadInput, PluginModelCatalogReadResult>(
+    pool = createOwnedWorkerTaskPool<PluginModelCatalogReadTask, PluginModelCatalogReadResult>(
       {
         workerUrl: source.moduleUrl,
         workerOptions: { workerData: { pluginCatalogRead: true } },
@@ -94,8 +95,17 @@ export async function readPluginModelCatalogsInWorker(
       }
       throw error;
     });
-  if (result) {
+  if (result && "error" in result) {
     throw new Error(result.error);
   }
   return catalogs;
+}
+
+/** Reuse catalog read custody without opening SQLite or transferring legacy credentials. */
+export async function inspectLegacyPluginModelCatalogWarningInWorker(agentDir: string) {
+  const result = await catalogReadPool().run({ legacyAgentDir: agentDir }, {});
+  if (!result || !("legacyWarning" in result)) {
+    throw new Error(result?.error ?? "Legacy catalog inspection returned no result");
+  }
+  return result.legacyWarning;
 }

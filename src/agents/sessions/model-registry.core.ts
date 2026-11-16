@@ -20,10 +20,10 @@ import {
   normalizeProviderMapKeys,
 } from "../models-config.merge.js";
 import { materializeConfiguredProviderCatalogModels } from "../models-config.providers.catalog.js";
+import { inspectLegacyPluginModelCatalogWarning } from "../plugin-model-catalog-legacy-inspection.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
-  inspectLegacyPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
   type PersistedPluginModelCatalog,
   type PluginModelCatalogMetadataSnapshot,
@@ -57,7 +57,8 @@ import {
   storeModelHeaders,
   type ProviderRequestConfig,
   type CustomModelsResult,
-  readModelRegistryPluginCatalogs,
+  readModelRegistrySources,
+  type PreparedModelRegistrySources,
   type RegistryProviderSources,
   type ResolvedRequestAuth,
 } from "./model-registry-sources.js";
@@ -115,7 +116,7 @@ export class ModelRegistry {
     modelsJsonPath: string | undefined,
     options: ModelRegistryOptions = {},
     publishedModels?: ReadonlyMap<string, readonly Model[]>,
-    preparedCatalogs?: { catalogs: readonly PersistedPluginModelCatalog[]; error?: string },
+    prepared?: PreparedModelRegistrySources,
   ) {
     this.authStorage = authStorage;
     this.config = options.config ?? options.sourceSnapshot?.config;
@@ -150,8 +151,8 @@ export class ModelRegistry {
     }
     this.modelsJsonPath = modelsJsonPath;
     this.modelsJsonContents = options.modelsJsonContents;
-    this.pluginCatalogs = preparedCatalogs?.catalogs ?? options.pluginCatalogs;
-    this.pluginCatalogReadError = preparedCatalogs?.error;
+    this.pluginCatalogs = prepared?.plugins?.catalogs ?? options.pluginCatalogs;
+    this.pluginCatalogReadError = prepared?.plugins?.error;
     this.staticProviderConfigs = options.staticProviderConfigs;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       config: this.config,
@@ -161,7 +162,7 @@ export class ModelRegistry {
       ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       allowWorkspaceScopedCurrent: true,
     });
-    this.loadModels();
+    this.loadModels(prepared);
     this.baseCatalogSnapshot = this.captureCatalogSnapshot();
   }
 
@@ -204,10 +205,9 @@ export class ModelRegistry {
     modelsJsonPath: string,
     options: ModelRegistryOptions = {},
   ): Promise<ModelRegistry> {
-    const prepared =
-      options.pluginCatalogs === undefined && options.includePluginCatalogs !== false
-        ? await readModelRegistryPluginCatalogs(modelsJsonPath, options)
-        : undefined;
+    const prepared = options.sourceSnapshot
+      ? undefined
+      : await readModelRegistrySources(modelsJsonPath, options);
     return new ModelRegistry(authStorage, modelsJsonPath, options, undefined, prepared);
   }
 
@@ -254,18 +254,23 @@ export class ModelRegistry {
   }
 
   async refreshAsync(): Promise<void> {
-    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
-      const prepared = await readModelRegistryPluginCatalogs(this.modelsJsonPath, {
-        config: this.config,
-        modelsJsonContents: this.modelsJsonContents,
-      });
-      this.pluginCatalogs = prepared.catalogs;
-      this.pluginCatalogReadError = prepared.error;
+    const prepared = this.modelsJsonPath
+      ? await readModelRegistrySources(this.modelsJsonPath, {
+          config: this.config,
+          modelsJsonContents: this.modelsJsonContents,
+          includePluginCatalogs: this.includePluginCatalogs,
+          pluginCatalogs: this.reloadPluginCatalogs ? undefined : this.pluginCatalogs,
+          staticProviderConfigs: this.staticProviderConfigs,
+        })
+      : undefined;
+    if (prepared?.plugins) {
+      this.pluginCatalogs = prepared.plugins.catalogs;
+      this.pluginCatalogReadError = prepared.plugins.error;
     }
-    this.reload();
+    this.reload(prepared);
   }
 
-  private reload(): void {
+  private reload(prepared?: PreparedModelRegistrySources): void {
     this.providerRequestConfigs.clear();
     this.modelRequestHeaders.clear();
     this.loadError = undefined;
@@ -280,7 +285,7 @@ export class ModelRegistry {
         getAuthStorageOAuthProviderRegistry(this.authStorage).register(oauthProvider);
       }
     } else {
-      this.loadModels();
+      this.loadModels(prepared);
       // Forks start from the latest disk-backed base, then replay this registry's dynamic providers.
       this.baseCatalogSnapshot = this.captureCatalogSnapshot();
     }
@@ -300,14 +305,15 @@ export class ModelRegistry {
     return this.pluginMetadataSnapshot?.owners;
   }
 
-  private loadModels(): void {
+  private loadModels(prepared?: PreparedModelRegistrySources): void {
     // Keep authored models.json separate from rebuildable provider catalogs
     // owned by the agent SQLite cache.
     const replace = this.config?.models?.mode === "replace";
+    const contents = prepared?.root ? prepared.root.contents : this.modelsJsonContents;
     const customResult =
-      !replace && this.modelsJsonPath && this.modelsJsonContents !== null
+      !replace && this.modelsJsonPath && contents !== null
         ? this.loadCustomModels(this.modelsJsonPath, {
-            ...(this.modelsJsonContents !== undefined ? { contents: this.modelsJsonContents } : {}),
+            ...(contents !== undefined ? { contents } : {}),
             includePluginCatalogs: this.includePluginCatalogs && this.pluginCatalogs === undefined,
           })
         : emptyCustomModelsResult();
@@ -319,6 +325,7 @@ export class ModelRegistry {
       customResult.error,
       capturedPluginResult.error,
       this.pluginCatalogReadError,
+      prepared?.root?.error,
     ].filter((error): error is string => Boolean(error));
 
     if (
@@ -331,17 +338,12 @@ export class ModelRegistry {
     ) {
       // Only explicit disk discovery/refresh inspects legacy sources; hot lookups
       // and lifecycle-captured registries consume their existing catalog snapshot.
-      const inspected = inspectLegacyPluginModelCatalogs(dirname(this.modelsJsonPath));
-      const diagnostics = [
-        ...inspected.warnings,
-        ...inspected.catalogs.map(
-          ({ pathname }) => `Legacy generated provider catalog: ${pathname}`,
-        ),
-      ];
-      if (diagnostics.length > 0) {
-        errors.push(
-          `${diagnostics.join("\n")}\nRun openclaw doctor --fix to verify and import legacy provider catalogs.`,
-        );
+      const warning =
+        prepared?.legacyWarning !== undefined
+          ? prepared.legacyWarning
+          : inspectLegacyPluginModelCatalogWarning(dirname(this.modelsJsonPath));
+      if (warning) {
+        errors.push(warning);
       }
     }
 

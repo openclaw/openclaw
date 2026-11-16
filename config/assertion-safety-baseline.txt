@@ -1185,7 +1185,7 @@ src/agents/models-config.providers.policy.lookup.ts	1
 src/agents/modes/interactive/theme/theme.ts	10
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
-src/agents/plugin-model-catalog.ts	3
+src/agents/plugin-model-catalog.ts	1
 src/agents/plugin-text-transforms.ts	4
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
