@@ -14,7 +14,7 @@ vi.mock("../../../plugins/provider-failover.js", async (importOriginal) => ({
 }));
 
 const REJECTED_COPY =
-  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account.";
+  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account. Choose another model.";
 const MODEL = "fixture-listed-model";
 
 // Live OpenAI and Google AI Studio bodies; model ids are synthetic, request ids and headers removed.

@@ -16,7 +16,7 @@ export const MODEL_CHAT_UNSUPPORTED_TEXT = "This model doesn't support chat; pic
 /** A listed model failed its chat request; see `isListedModelChatRejection`. */
 export const MODEL_CHAT_REJECTED_CODE = "model_chat_rejected";
 export const MODEL_CHAT_REJECTED_TEXT =
-  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account.";
+  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account. Choose another model.";
 /** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
 export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
 /** The host refused another warm CLI process because its free memory is low. */
