@@ -1,3 +1,4 @@
+import { createAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -40,12 +41,16 @@ const assistant = makeAssistantMessageFixture({
   usage: createUsageFixture(8, 2, 10),
 });
 const messages = [{ role: "user" as const, content: "Generate a title", timestamp: 1 }];
+// Other files can install process-wide provider hooks outside this fixture's boundary.
+const transportHost = createAiTransportHost();
 const complete = () =>
-  completeWithPreparedSimpleCompletionModel({
-    model,
-    auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
-    context: { messages },
-  });
+  runWithAiTransportHost(transportHost, () =>
+    completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
+      context: { messages },
+    }),
+  );
 let stop: (() => void) | undefined;
 beforeEach(() => {
   resetDiagnosticEventsForTest();
