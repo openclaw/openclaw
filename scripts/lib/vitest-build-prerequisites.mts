@@ -164,6 +164,7 @@ const runtimeConsumers = [
     // Compiled catalog workers load the fixture's public SDK through built host artifacts.
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
