@@ -188,10 +188,10 @@ function recordUnavailableRuntime(execPath: string, cause?: unknown, stderr?: st
     return runtime.failure;
   }
   runtime.execPath = execPath;
+  const warning = formatMissingChildRuntimeWarning({ execPath, available: false });
+  const detail = stderr?.trim();
   runtime.failure = Object.assign(
-    new Error(stderr?.trim() || formatMissingChildRuntimeWarning({ execPath, available: false }), {
-      cause,
-    }),
+    new Error(detail ? `${warning}\n${detail}` : warning, { cause }),
     { code: "NODE_RUNTIME_UNAVAILABLE" },
   );
   createSubsystemLogger("gateway/runtime").error(runtime.failure.message);
