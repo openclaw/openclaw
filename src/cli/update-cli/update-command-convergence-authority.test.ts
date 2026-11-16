@@ -212,6 +212,26 @@ describe("candidate convergence Doctor dispatch authority", () => {
     );
     expect(doctor).not.toHaveBeenCalled();
   });
+  it("leaves plugins alone for an unverified Git release under --no-restart", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(await fs.realpath(tempDirs.make("git-release-")), "git-install");
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    const persist = vi
+      .spyOn(pluginConfig, "persistRequestedUpdateChannel")
+      .mockResolvedValue(snapshot);
+    const { resultWithPostUpdate } = await converge({
+      root: gitReleaseSlot(prefix),
+      result: { root: gitReleaseSlot(prefix) },
+      requestedChannel: "beta",
+      opts: { json: true, yes: true, restart: false },
+    });
+    expect(resultWithPostUpdate.status).toBe("ok");
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({ requestedChannel: "beta" }));
+    expect(mocks.convergeCandidate).not.toHaveBeenCalled();
+  });
   it("records the failed post-core child even without supplied failure facts", async () => {
     vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
       resumed: false,

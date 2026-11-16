@@ -32,6 +32,7 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
   capturePreUpdateSourceConfig,
+  persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   withUpdatePluginCohortConfigCapture,
 } from "./update-command-config.js";
@@ -90,6 +91,15 @@ export async function convergeUpdatePlugins(params: {
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
   const gitRelease = isSwitchedGitRelease(params.result);
+  if (gitRelease && params.opts.restart === false) {
+    // Unverified until it starts: replacing plugins now could strand them if its trial fails.
+    const postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot: params.configSnapshot,
+      requestedChannel: params.requestedChannel,
+      assertCurrent,
+    });
+    return { resultWithPostUpdate: params.result, postUpdateConfigSnapshot };
+  }
   // Uncommitted target finalization cannot authorize a detached helper restart.
   const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
     ...result,

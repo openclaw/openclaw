@@ -284,6 +284,8 @@ export async function updateGitRelease(params: {
   const afterBuildId = await readBuiltGatewayBuildId(releaseRoot);
   return {
     ...result("ok"),
+    // The new release's own verdict; the previous runtime's belongs to failure recovery only.
+    recovery: await verifyGitUpdateRecovery({ root: releaseRoot, sha: afterSha }),
     root: slot,
     gitRuntime: await readGitRuntimeArtifactIdentity(releaseRoot),
     after: {

@@ -11,6 +11,7 @@ const target = vi.hoisted(() => ({
   beforeRuntimeVerified: [] as boolean[],
   conversionTargets: [] as string[],
   runtimeVerified: false,
+  runningRoot: "",
 }));
 vi.mock("./update-runner-git-preflight.js", () => ({
   // The first release is built from the commit that serves now.
@@ -53,8 +54,8 @@ vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
 vi.mock("./update-git-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-git-runtime.js")>()),
   // The running release is at the requested commit but its runtime artifacts are incomplete.
-  verifyGitUpdateRecovery: async () =>
-    target.runtimeVerified
+  verifyGitUpdateRecovery: async (params: { root: string }) =>
+    target.runtimeVerified || params.root !== target.runningRoot
       ? { serviceRestartSafe: true, version: "1.0.0", buildId: "serving" }
       : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
 }));
@@ -73,6 +74,7 @@ afterEach(async () => {
   target.beforeRuntimeVerified.length = 0;
   target.conversionTargets.length = 0;
   target.runtimeVerified = false;
+  target.runningRoot = "";
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -96,6 +98,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const running = (await createGitReleaseDirs(prefix)).releaseRoot;
     await git(checkout, "worktree", "add", "--detach", running, "HEAD");
     await publishGitRelease({ prefix, releaseRoot: running, trial: false });
+    target.runningRoot = gitReleaseSlot(prefix);
     const runCommand: CommandRunner = (argv, options) =>
       argv[1]?.endsWith("openclaw.mjs")
         ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
@@ -118,6 +121,8 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
 
     expect(target.beforeRuntimeVerified).toEqual([false]);
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    // The successful result carries the new release's verdict, not the incomplete one's.
+    expect(result.recovery).toMatchObject({ serviceRestartSafe: true });
     expect(await fs.realpath(gitReleaseSlot(prefix))).not.toBe(await fs.realpath(running));
   });
 
