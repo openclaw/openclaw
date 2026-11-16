@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { callGateway, callGatewayCli, type CallGatewayCliOptions } from "./call.js";
 import type { GatewayClientOptions } from "./client.js";
@@ -200,9 +201,15 @@ it.each<{
   },
 );
 
-it("keeps unrelated local shared-token CLI methods at least privilege", async () => {
-  await callGatewayCli({ ...localConnection, method: "health" });
-
+it("cancels an interrupted CLI read at least privilege instead of returning a late reply", async () => {
+  const work = new AsyncWorkScope();
+  fixture.request.mockImplementationOnce(async () => {
+    work.beginClose();
+    return { ok: true };
+  });
+  await expect(
+    work.run(() => callGatewayCli({ ...localConnection, method: "health" })),
+  ).rejects.toMatchObject({ name: "AbortError" });
   expect(fixture.clientOptions?.scopes).toEqual(["operator.read"]);
   expect(fixture.clientOptions?.deviceIdentity).toBeNull();
   expect(fixture.request).toHaveBeenCalledExactlyOnceWith("health", undefined, expect.any(Object));

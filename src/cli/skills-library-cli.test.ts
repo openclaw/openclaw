@@ -189,19 +189,16 @@ describe("skills library CLI", () => {
   it("lists a session projection and reads only its exact pin", async () => {
     const sessionKey = "agent:main:alice-session";
     await parse(["list", "--session", sessionKey, "--json"]);
-    expect(mocks.call).toHaveBeenLastCalledWith(
-      "skills.library.list",
-      expect.anything(),
-      { scope: "all", sessionKey },
-      { signal: undefined },
-    );
+    expect(mocks.call).toHaveBeenLastCalledWith("skills.library.list", expect.anything(), {
+      scope: "all",
+      sessionKey,
+    });
     await parse(["read", skillId, "--session", sessionKey, "--revision", revision, "--json"]);
-    expect(mocks.call).toHaveBeenLastCalledWith(
-      "skills.library.read",
-      expect.anything(),
-      { skillId, sessionKey, revision },
-      { signal: undefined },
-    );
+    expect(mocks.call).toHaveBeenLastCalledWith("skills.library.read", expect.anything(), {
+      skillId,
+      sessionKey,
+      revision,
+    });
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
     const work = new AsyncWorkScope();
     mocks.call.mockImplementationOnce(async () => {
