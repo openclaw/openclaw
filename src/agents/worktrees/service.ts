@@ -161,7 +161,7 @@ async function claimManagedRemoval(
 }
 
 export class ManagedWorktreeService {
-  private readonly env: NodeJS.ProcessEnv;
+  private readonly envOverride: NodeJS.ProcessEnv | undefined;
   private readonly getConfig: ServiceOptions["getConfig"];
   private readonly capacity: ReturnType<typeof createWorktreeCapacityOwner>;
   private readonly cleanupDeferrals: WorktreeCleanupDeferrals = new Map();
@@ -169,13 +169,18 @@ export class ManagedWorktreeService {
   readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
-    this.env = options.env ?? process.env;
+    this.envOverride = options.env;
     this.getConfig = options.getConfig;
-    this.maintainGit = createWorktreeGitMaintenance(this.env);
+    this.maintainGit = createWorktreeGitMaintenance(this.envOverride);
     this.capacity = createWorktreeCapacityOwner({
-      env: this.env,
+      env: this.envOverride,
       getConfig: this.getConfig,
     });
+  }
+
+  private get env(): NodeJS.ProcessEnv {
+    // Workers can replace process.env; only explicit overrides retain their identity.
+    return this.envOverride ?? process.env;
   }
 
   onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void): () => void {
@@ -690,11 +695,10 @@ export class ManagedWorktreeService {
         }
         params = { ...params, exactState: exactStateRetirementSchema.parse(params.exactState) };
       }
-      let removalPath: string | undefined;
+      let removalError: unknown;
       let deferral: WorktreeRemovalDeferral | undefined;
       const timing = startGitOperationTiming("worktree-removal", log, () => ({
         id: params.id,
-        path: removalPath,
         deferred: deferral ?? false,
       }));
       let outcome: "returned" | "threw" = "threw";
@@ -703,7 +707,6 @@ export class ManagedWorktreeService {
           params.id,
           await readRegistryWorktreeForMutation({ ...params, env: this.env }),
         );
-        removalPath = record.path;
         // A session mutation must not wait on a remover that needs its final publication fence.
         assertWorktreeRemovalAvailable(this.env, record.id, params.claimToken);
         if (params.withOwnerMutation && !params.claimToken) {
@@ -728,12 +731,13 @@ export class ManagedWorktreeService {
         outcome = "returned";
         return result;
       } catch (error) {
+        removalError = error;
         if (params.withOwnerMutation && params.claimToken && !hasWorktreeUnknownOutcome(error)) {
           await abortWorktreeRemoval(this.env, params.id, params.claimToken);
         }
         throw error;
       } finally {
-        timing?.finish(outcome);
+        timing?.finish(outcome, removalError);
       }
     });
   }

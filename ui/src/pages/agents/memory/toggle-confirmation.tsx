@@ -86,8 +86,12 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
               disabled={props.disabled || saving()}
+              aria-busy={saving() ? "true" : undefined}
               onClick={confirm}
             >
+              <Show when={saving()}>
+                <span class="btn__spinner" aria-hidden="true" />
+              </Show>
               {saving() ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}
             </button>
           </openclaw-modal-actions>

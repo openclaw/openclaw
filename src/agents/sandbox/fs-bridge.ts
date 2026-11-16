@@ -43,6 +43,16 @@ export function createSandboxFsBridge(params: {
   return new SandboxFsBridgeImpl(params.sandbox, params.containerOnlyMounts);
 }
 
+/** Reference preparation uses the mounted bridge owner without expanding the SDK contract. */
+export async function resolveSandboxReferencePath(
+  bridge: SandboxFsBridge,
+  params: Parameters<SandboxFsBridge["resolvePath"]>[0],
+): Promise<SandboxResolvedPath> {
+  return bridge instanceof SandboxFsBridgeImpl
+    ? bridge.resolvePathInWorker(params)
+    : bridge.resolvePath(params);
+}
+
 class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly sandbox: MountedSandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
@@ -51,7 +61,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   constructor(sandbox: MountedSandboxFsBridgeContext, containerOnlyMounts?: readonly string[]) {
     this.sandbox = sandbox;
-    this.mounts = buildSandboxFsMounts(sandbox);
+    this.mounts = sandbox.fsPreparation?.mounts ?? buildSandboxFsMounts(sandbox);
     this.containerOnlyMounts =
       containerOnlyMounts ??
       resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map((mount) => mount.containerPath);
@@ -74,6 +84,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       relativePath: target.relativePath,
       containerPath: target.containerPath,
     };
+  }
+
+  async resolvePathInWorker(
+    params: Parameters<SandboxFsBridge["resolvePath"]>[0],
+  ): Promise<SandboxResolvedPath> {
+    const input = this.pathInput(params);
+    const { prepareSandboxFsPath } = await import("../../skills/runtime/refresh.js");
+    return prepareSandboxFsPath(input);
   }
 
   get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
@@ -393,14 +411,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private resolveResolvedPath(params: { filePath: string; cwd?: string }): SandboxResolvedFsPath {
-    return resolveSandboxFsPathWithMounts({
+    return resolveSandboxFsPathWithMounts(this.pathInput(params));
+  }
+
+  private pathInput(params: { filePath: string; cwd?: string }) {
+    return {
       filePath: params.filePath,
       cwd: params.cwd ?? this.sandbox.workspaceDir,
       defaultWorkspaceRoot: this.sandbox.workspaceDir,
       defaultContainerRoot: this.sandbox.containerWorkdir,
       mounts: this.mounts,
       containerOnlyMounts: this.containerOnlyMounts,
-    });
+    };
   }
 
   /**

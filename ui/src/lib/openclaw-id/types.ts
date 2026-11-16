@@ -86,6 +86,20 @@ export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   ownerDevices?: OpenClawIdOwnerDevice[];
   /** The last publication to Discovery, while one was attempted. */
   publication?: OpenClawIdPublication;
+  /** Member invites; a redeemed one waits for the owner as `pending`. */
+  invites?: OpenClawIdPendingInvite<{
+    reported: { email: string | null; displayName: string | null };
+  }>[];
+  /** Node invites; a redeemed one waits for the owner as `pending`. */
+  nodeInvites?: OpenClawIdPendingInvite[];
+};
+
+/** The parts of a listed invite the Inbox needs; times are unix seconds. */
+type OpenClawIdPendingInvite<Pending = unknown> = {
+  inviteId: string;
+  label: string;
+  status: "open" | "pending" | "approved" | "denied" | "expired";
+  pending?: Pending & { requestedAt: number; decideBy: number };
 };
 
 /** An active owner device as `openclawId.people` lists it. */
@@ -97,6 +111,8 @@ export type OpenClawIdOwnerDevice = {
   peerKeys: string[];
   /** Who approved it: "root" (the recovery kit) or the approving device's fingerprint. */
   approvedBy: string;
+  /** The node key bound to this device's approval, if it also runs tools for the claw. */
+  nodePeerKey?: string;
   /** When the claw last admitted it (or added it), unix seconds. */
   lastSeen: number;
   /** Its OwnerDeviceCert: public and signed. */

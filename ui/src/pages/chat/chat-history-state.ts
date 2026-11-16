@@ -59,6 +59,7 @@ type ChatHistoryLoadState =
         promise: Promise<ObservedChatHistoryResult | undefined>;
         startup: boolean;
         deferBranches: boolean;
+        version: number;
       };
     } & ChatHistoryLoadRequest)
   | {

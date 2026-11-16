@@ -240,7 +240,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       if (notice) {
         expect(mocks.commitCronConversationResult).toHaveBeenCalledWith(
           expect.objectContaining({
-            conversation: { sessionKey: "agent:main:owner", sessionId: "owner-session" },
+            conversation: { sessionKey: "agent:main:owner", lifecycleRevision: undefined },
             payloads: [{ text: expect.stringContaining("did not start") }],
           }),
         );

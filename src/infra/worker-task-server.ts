@@ -42,7 +42,10 @@ export function serveWorkerTasks<Output, Input = unknown>(
   serveOwnedWorkerTasks(handler, options);
 }
 
-/** Every served worker closes its agent database readers by path between tasks; owners may add more. */
+/**
+ * Every served worker closes its agent database readers by path, between tasks except for
+ * deleted-agent closes and revives; owners may add more.
+ */
 export function serveOwnedWorkerTasks<Output, Input = unknown>(
   handler: WorkerTaskHandler<Output, Input> | SynchronousWorkerTaskHandler<Output, Input>,
   options: {
@@ -71,12 +74,21 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
       }
       let active = true;
       try {
-        return await withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
-          if (!active) {
-            throw new Error("SQLite admission facts outlived their worker task");
-          }
-          return exchangeSqliteDatabaseAdmissions(port, admissions, location, create);
-        }, operation);
+        return await withSqliteDatabaseAdmissionExchange(
+          (admissions, location, create, observedLocation) => {
+            if (!active) {
+              throw new Error("SQLite admission facts outlived their worker task");
+            }
+            return exchangeSqliteDatabaseAdmissions(
+              port,
+              admissions,
+              location,
+              create,
+              observedLocation,
+            );
+          },
+          operation,
+        );
       } finally {
         active = false;
       }
@@ -111,6 +123,14 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
       ...options,
       get retireOnError() {
         return options.retireOnError || postgresPoolWorkerFailure() !== undefined;
+      },
+      // The deletion fence is set before these closers run and matches only the deleted agent's
+      // paths. A running read of that agent (an auth-profile or catalog read, for example) then
+      // fails visibly instead of holding agents.delete behind it; the usual running task is
+      // another agent's catalog build, which can take up to 180 s.
+      closesBesideExecution: (key) => {
+        const request = decodeAgentDatabaseReaderRequest(key);
+        return request?.kind === "revive" || (request?.kind === "close" && request.deleted);
       },
       closeResource: (key) =>
         runWithTaskContext(async () => {

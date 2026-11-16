@@ -31,36 +31,46 @@ import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type TelegramOriginTarget = { to: string; threadId?: number };
 
+// Live turns and stored sessions both carry targets such as `telegram:<chat>:topic:<id>`;
+// normalize them the same way so the origin consistency check compares like with like.
+function toTelegramOriginTarget(
+  rawTo: string | null | undefined,
+  rawThreadId: string | number | null | undefined,
+): TelegramOriginTarget | null {
+  const trimmedTo = normalizeOptionalString(rawTo);
+  if (!trimmedTo) {
+    return null;
+  }
+  const parsed = parseTelegramTarget(trimmedTo);
+  const chatId = normalizeTelegramChatId(parsed.chatId);
+  if (!chatId) {
+    return null;
+  }
+  if (parsed.directMessagesTopicId != null) {
+    return { to: `${chatId}:direct-topic:${parsed.directMessagesTopicId}` };
+  }
+  return { to: chatId, threadId: parseTelegramThreadId(rawThreadId ?? parsed.messageThreadId) };
+}
+
 function resolveTurnSourceTelegramOriginTarget(
   request: ApprovalRequest,
 ): TelegramOriginTarget | null {
-  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  const rawTurnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
-  const parsedTurnSourceTarget = rawTurnSourceTo ? parseTelegramTarget(rawTurnSourceTo) : null;
-  const turnSourceTo = normalizeTelegramChatId(parsedTurnSourceTarget?.chatId ?? rawTurnSourceTo);
-  if (turnSourceChannel !== "telegram" || !turnSourceTo) {
+  if (normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel) !== "telegram") {
     return null;
   }
-  const rawThreadId =
-    request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
-  const directMessagesTopicId = parsedTurnSourceTarget?.directMessagesTopicId;
-  return {
-    to:
-      directMessagesTopicId == null
-        ? turnSourceTo
-        : `${turnSourceTo}:direct-topic:${directMessagesTopicId}`,
-    threadId: directMessagesTopicId == null ? parseTelegramThreadId(rawThreadId) : undefined,
-  };
+  return toTelegramOriginTarget(request.request.turnSourceTo, request.request.turnSourceThreadId);
 }
 
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
-  resolveSessionTarget: (sessionTarget) => ({
-    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: parseTelegramThreadId(sessionTarget.threadId),
-  }),
+  // An unparseable stored target still has to disagree with the live turn, not vanish.
+  resolveSessionTarget: (sessionTarget) =>
+    toTelegramOriginTarget(sessionTarget.to, sessionTarget.threadId) ?? {
+      to: sessionTarget.to,
+      threadId: parseTelegramThreadId(sessionTarget.threadId),
+    },
 });
 
 const resolveConfiguredTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({

@@ -127,7 +127,9 @@ export function createRequesterSettleCases() {
           requesterContinuationSettled: settled,
           acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
         },
-        localOnly,
+        aborted
+          ? { ...localOnly, expected: { ...missingRequesterFinal, reason: "requester_aborted" } }
+          : localOnly,
       ),
     ),
     ...["accepted", "in_flight"].map((status) =>
@@ -139,7 +141,8 @@ export function createRequesterSettleCases() {
     settleCase(
       "does not record a canceled partial answer as a visible final",
       { payloads: [{ text: "partial answer" }] },
-      { ...localOnly, status: "timeout", expected: deliveredRequesterFinal },
+      // The settle turn is bound to the requester chat, so a canceled turn leaves the wake owed.
+      { ...localOnly, status: "timeout", expected: missingRequesterFinal },
     ),
     settleCase(
       "records a non-yielded visible final without requiring a reply",

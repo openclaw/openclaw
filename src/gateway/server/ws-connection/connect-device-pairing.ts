@@ -317,6 +317,7 @@ export async function authorizeGatewayConnectDevice(
             publicKey: devicePublicKey,
             commands: connectParams.commands ?? [],
             caps: connectParams.caps ?? [],
+            permissions: connectParams.permissions,
             accessMetadata: clientAccessMetadata,
             isCurrent: isConnectAuthorizationCurrent,
           });
@@ -573,7 +574,7 @@ export async function authorizeGatewayConnectDevice(
     if (paired && !isPaired && state.remoteIngressPrincipal) {
       failPairingHandshake({
         message:
-          "Remote Control UI device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
+          "Remote web app device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
       });
       return undefined;
     }

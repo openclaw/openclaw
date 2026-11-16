@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { matchesGlob } from "node:path";
 import {
   agentVitestProjectOwners,
@@ -46,6 +47,30 @@ import { getCommandFilesByOwner } from "./ci-command-test-plan.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
+
+export type NodeTestVolume = {
+  version: 1;
+  revision: string;
+  policy: "node" | "bun-all" | "dual-all";
+  entries: {
+    config: string;
+    runtime: "node" | "bun";
+    engine: "vitest" | "bun-test";
+    profile: string;
+    environment: string;
+    argsDigest: string;
+    full: { id: string; count: number; digest: string } | null;
+    selected: { count: number; digest: string } | null;
+  }[];
+};
+
+export function summarizeNodeTestFiles(files: readonly string[]) {
+  const unique = [...new Set(files)].toSorted();
+  return {
+    count: unique.length,
+    digest: createHash("sha256").update(JSON.stringify(unique)).digest("hex"),
+  };
+}
 
 export function listScopedOwnerTestFiles(owner: {
   root: string;
@@ -325,7 +350,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
           include: ["src/gateway/server-methods/**/*.test.ts"],
           exclude: [...databaseWorkerCoreTestFiles, ...gatewayDatabaseWorkerTestFiles],
         }),
-        ...gatewayPluginTestFiles.filter((file) => !gatewayDatabaseWorkerTestFiles.includes(file)),
+        ...gatewayPluginTestFiles.filter((file) => !gatewayMethodsTestExclude.includes(file)),
       ],
     },
   ],

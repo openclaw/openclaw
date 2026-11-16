@@ -200,11 +200,12 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
-  /** Process-lifetime pool totals; completed workers remain represented after native exit. */
+  /** Process-lifetime worker totals; retired workers remain represented after native exit. */
   workerTaskMetrics?: {
     workerClass: WorkerPoolClass | "other";
     script: string;
-    tasksCompleted: number;
+    /** Absent for broker workers, which do not use the pool task-reply protocol. */
+    tasksCompleted?: number;
     heapUsedHighWaterBytes: number;
     gc: { kind: GcSample["kind"]; count: number; durationMs: number; reclaimedBytes: number }[];
   }[];

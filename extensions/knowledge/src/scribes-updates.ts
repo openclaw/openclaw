@@ -264,14 +264,18 @@ export function updateNotice(
   const replace = button(
     "Replace with new…",
     () => {
-      // One request per dialog: confirming again after a failed send repeats the same request.
-      const attempt = crypto.randomUUID();
       openConfirmDialog(
         "Replace with the new run instructions?",
         `Later runs of ${scribe.title} follow the new run message. These lines change; the saved message is not kept.`,
         "Replace with new",
         async () => {
-          await updateScribe(ui.s.context.host, snapshot, job, agentId, next, attempt);
+          // Per Gateway, like an update, so the page a reconnect brings repeats a lost request.
+          // Once sent, the job shows as updating until a new revision, which asks under a new key.
+          const map = attemptsOf(ui);
+          const asked = `replace:${job.id}:${job.configRevision ?? ""}`;
+          const attempt = map.get(asked) ?? { id: crypto.randomUUID(), sent: false };
+          map.set(asked, attempt);
+          await updateScribe(ui.s.context.host, snapshot, job, agentId, next, attempt.id);
           // Keep a late retry's identity until its send succeeds.
           let retryAttempt = crypto.randomUUID();
           markUpdating(

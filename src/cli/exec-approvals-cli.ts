@@ -43,6 +43,7 @@ import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js"
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
@@ -214,7 +215,8 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
       native: params.native,
       baseHash: params.baseHash,
     });
-    next = await loadSnapshot(params.opts, params.nodeId);
+    // The accepted mutation owns this readback until its saved policy can be reported.
+    next = await runOutsideAsyncWorkScope(() => loadSnapshot(params.opts, params.nodeId));
   } else if (params.source === "local") {
     // Announced at the write, not at target resolution: no-op allowlist edits and
     // rejected `set` input never reach here and must not claim a write happened.

@@ -72,6 +72,9 @@ function createRequesterWakeReceiptHolds(
     phase: keyof typeof holds;
   }>();
   vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation((params) => {
+    if (params.operation.kind === "requesterDelivery") {
+      return mutate(params);
+    }
     if (params.operation.kind === "settle") {
       return mutationScope.run(
         { entries: params.entries, phase: params.committed ? "reconcile" : "outcome" },
@@ -255,6 +258,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     "reply replacement",
     "delivery replacement",
     "rejected wake",
+    "rejected retired",
     "rejected persistence",
     "rejected newer yield",
     "rejected stopped",
@@ -342,7 +346,10 @@ export function registerRequesterWakeReceiptBoundaryTests({
       scenario === "rejected stable newer yield"
         ? holdRequesterWakeReceipts({ holdOutcome: true })
         : undefined;
-    setWakeRefusal(rejectRequesterWake, rejectPersistence);
+    setWakeRefusal(rejectRequesterWake && scenario !== "rejected retired", rejectPersistence);
+    if (scenario === "rejected retired") {
+      subagentRuns.retireCompletionAuthority(registry.getSubagentRunByRunId(beta.runId)!);
+    }
     if (stableBatch) {
       const batchRunIds = [alpha.runId, beta.runId];
       await mutateSubagentRuns(batchRunIds, (rows) => ({
@@ -516,7 +523,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
               ? { lifecycleRunId: requesterTurnRunId, activeWriterRunId: requesterTurnRunId }
               : { status: "failed", lastRunId: requesterTurnRunId },
       );
-      if (scenario === "rejected wake" || stableBatch || rejectPersistence) {
+      if (
+        scenario === "rejected wake" ||
+        scenario === "rejected retired" ||
+        stableBatch ||
+        rejectPersistence
+      ) {
         const events = readTranscriptEventRows(
           openOpenClawAgentDatabase({ agentId: "main" }),
           entry!.sessionId,

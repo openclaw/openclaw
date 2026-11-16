@@ -11,6 +11,7 @@ import {
 import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { SESSION_DELIVERY_QUEUE_NAME } from "../session-delivery-queue.records.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -25,6 +26,8 @@ import {
 
 type MediaStageEntry = DeliveryQueueEntryState & { artifacts: string[] };
 type OutboundMediaEntry = DeliveryQueueEntryState & {
+  kind?: string;
+  expectedMediaUrls?: string[];
   payloads?: ReplyPayload[];
   preparedBatch?: {
     entries?: Array<{ status?: string; payload?: ReplyPayload }>;
@@ -32,6 +35,9 @@ type OutboundMediaEntry = DeliveryQueueEntryState & {
 };
 
 function entryPayloads(entry: OutboundMediaEntry): ReplyPayload[] {
+  if (entry.kind === "mediaCandidate" || entry.kind === "agentTurn") {
+    return [{ mediaUrls: entry.expectedMediaUrls ?? [] }];
+  }
   if (Array.isArray(entry.payloads)) {
     return entry.payloads;
   }
@@ -83,6 +89,7 @@ export function loadDeliveryQueueMediaRetentionSnapshotInDatabase(
 ): { payloads: ReplyPayload[][]; stagedArtifacts: string[] } {
   const snapshot = expireStagingAndLoadDeliveryQueueEntriesInDatabase(database, {
     queueNames: [
+      SESSION_DELIVERY_QUEUE_NAME,
       ...OUTBOUND_EXECUTABLE_QUEUE_NAMES,
       LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,

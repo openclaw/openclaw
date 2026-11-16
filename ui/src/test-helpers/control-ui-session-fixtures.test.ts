@@ -110,3 +110,35 @@ it("keeps explicit metadata overrides and archive normalization when serialized"
     ),
   ).toEqual(row);
 });
+
+it("persists runtime selection and restores the model runtime when cleared", () => {
+  const row = createControlUiSessionRow("agent:main:runtime", "Runtime", 1, {
+    model: "fixture-model",
+    modelProvider: "fixture",
+  });
+  const modelRuntime = { id: "openclaw", source: "model" as const };
+  const sessions = createControlUiSessionFixtures(
+    {
+      rows: [row],
+      mainKey: row.key,
+      models: [
+        { id: row.model, provider: row.modelProvider, name: "Fixture", agentRuntime: modelRuntime },
+      ],
+    },
+    isRecord,
+  );
+  const selected = { id: "codex", source: "session" };
+  expect(
+    sessions.patch(row.key, { model: "fixture/fixture-model", agentRuntime: "codex" }),
+  ).toMatchObject({
+    entry: { agentRuntimeOverride: "codex", agentRuntime: selected },
+    resolved: { agentRuntime: selected },
+  });
+  expect(sessions.list([row])[0]).toMatchObject({ agentRuntime: selected });
+  expect(sessions.sessionInfo(row.key)).toMatchObject({ agentRuntime: selected });
+  expect(sessions.patch(row.key, { agentRuntime: null })).toMatchObject({
+    entry: { agentRuntimeOverride: undefined, agentRuntime: modelRuntime },
+    resolved: { agentRuntime: modelRuntime },
+  });
+  expect(sessions.list([row])[0]).toMatchObject({ agentRuntime: modelRuntime });
+});

@@ -8,6 +8,10 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mockStoppedWorkspaceContainer } from "../agents/sandbox/mount-plan.test-helpers.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +32,10 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -186,6 +194,8 @@ afterEach(async () => {
     await closeStateDatabaseForTest();
     await fs.rm(temp, { recursive: true, force: true });
   } finally {
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     restoreEnv();
   }
@@ -537,6 +547,122 @@ it.each(["role assignment", "role definition"] as const)(
     await expectWithheld(source, { ticket, bytes: true });
   },
 );
+
+it.each(
+  (["session ceiling", "scope ceiling", "access policy", "device listing"] as const).flatMap(
+    (change) =>
+      (change === "device listing"
+        ? (["before request", "during file preparation"] as const)
+        : (["before request"] as const)
+      ).map((when) => ({ change, when })),
+  ),
+)("rechecks an ID media ticket's $change $when", async ({ change, when }) => {
+  const profile = await namedReader("id-media-reader@example.test", {
+    viewer: viewerRole,
+    localAdmin: { ...viewerRole, scopes: ["operator.admin"] },
+  });
+  setUserProfileRole(profile.id, "localAdmin");
+  invalidateOperatorRolePolicy(profile.id);
+  const localAuth = {
+    authMethod: "trusted-proxy",
+    operatorScopes: ["operator.admin"],
+    ...resolveHttpProfile(profile.id, cfg),
+  };
+  let principal: OpenClawIdTunnelPrincipal | undefined = {
+    kind: "member",
+    peerKey: `iroh:${"a".repeat(64)}`,
+    accountId: "media-member",
+    role: "viewer",
+    authority: { clawId: "media-claw", rootPub: "media-root", listedSeq: 1 },
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  setRuntimeConfigSnapshot(cfg);
+  state.auth.mockResolvedValue({
+    ...localAuth,
+    operatorScopes: readScopes,
+    operatorRolePolicy: viewerRole,
+    openclawIdPrincipal: principal,
+  });
+  const source = await image("id-shared.png");
+  const ticket = await mediaTicket(source);
+  await expectBytes(source, { ticket });
+  state.auth.mockResolvedValue(localAuth);
+  const localTicket = await mediaTicket(source);
+  let withdrawn = false;
+  const withdraw = () => {
+    withdrawn = true;
+    if (change === "device listing") {
+      principal = undefined;
+    } else {
+      cfg.gateway!.roles!.definitions.viewer =
+        change === "session ceiling"
+          ? { ...viewerRole, sessions: { others: "none" } }
+          : change === "scope ceiling"
+            ? { ...viewerRole, scopes: [] }
+            : { ...viewerRole, accessPolicyPlugin: "unavailable-member-access" };
+      setRuntimeConfigSnapshot(cfg);
+    }
+  };
+  if (when === "before request") {
+    withdraw();
+  }
+  using opened = onOpen(source, () => {
+    if (when === "during file preparation") {
+      withdraw();
+    }
+  });
+  await expectWithheld(source, { ticket, bytes: true });
+  expect(withdrawn).toBe(true);
+  opened.mockRestore();
+  await expectBytes(source, { ticket: localTicket });
+});
+
+it("keeps an owner device's media tickets independent of its linked local role", async () => {
+  const localRole: GatewayOperatorRolesConfig["definitions"][string] = {
+    ...viewerRole,
+    scopes: [],
+    sessions: { others: "none" },
+  };
+  const profile = await namedReader("owner-media-reader@example.test", {
+    viewer: localRole,
+  });
+  localRole.accessPolicyPlugin = "unavailable-local-access";
+  const principal: OpenClawIdTunnelPrincipal = {
+    kind: "owner",
+    peerKey: `iroh:${"b".repeat(64)}`,
+    authority: { clawId: "media-claw", rootPub: "media-root", listedSeq: 1 },
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  setRuntimeConfigSnapshot(cfg);
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: ["operator.admin"],
+    ...resolveHttpProfile(profile.id),
+    openclawIdPrincipal: principal,
+  });
+  const source = await image("owner.png");
+  await expectBytes(source, { ticket: await mediaTicket(source) });
+});
+
+it("withholds member media when attribution did not resolve a durable profile", async () => {
+  cfg.gateway = { roles: { definitions: { viewer: viewerRole } } };
+  const principal: OpenClawIdTunnelPrincipal = {
+    kind: "member",
+    peerKey: `iroh:${"c".repeat(64)}`,
+    accountId: "unattributed-member",
+    role: "viewer",
+    authority: { clawId: "media-claw", rootPub: "media-root", listedSeq: 1 },
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  setRuntimeConfigSnapshot(cfg);
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: readScopes,
+    operatorRolePolicy: viewerRole,
+    openclawIdPrincipal: principal,
+  });
+  await expectWithheld(await image("unattributed.png"));
+});
 
 it.each(
   (["metadata", "bytes"] as const).flatMap((operation) =>

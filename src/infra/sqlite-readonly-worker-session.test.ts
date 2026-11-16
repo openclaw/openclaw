@@ -8,11 +8,13 @@ import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
-import { captureSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
+import {
+  captureSqliteReadOnlyWorkerScope,
+  resolveSqliteInspectionSignal,
+} from "./sqlite-readonly-worker-context.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
 import {
   createSqliteReadOnlyWorkerScope,
-  resolveSqliteInspectionSignal,
   createScopedSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
@@ -32,10 +34,11 @@ class MockChild extends EventEmitter {
   kill = vi.fn<(_signal?: NodeJS.Signals) => boolean>(() => true);
 }
 const mock = vi.hoisted(() => ({ spawn: vi.fn<(executable: string) => MockChild>() }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mock.spawn,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const mocked = { ...actual, spawn: mock.spawn };
+  return { ...mocked, default: mocked };
+});
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
@@ -257,6 +260,8 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
 it("captures only read scope and refuses callbacks after owner retirement", async () => {
   const caller = new AsyncLocalStorage<string>();
   const withoutOwner = captureSqliteReadOnlyWorkerScope();
+  const explicit = new AbortController().signal;
+  expect(resolveSqliteInspectionSignal(explicit)).toBe(explicit);
   const controller = new AbortController();
   const owner = createSqliteReadOnlyWorkerScope({
     signal: controller.signal,
@@ -265,9 +270,12 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
   const other = createSqliteReadOnlyWorkerScope();
   const run = owner.run(() => caller.run("startup", captureSqliteReadOnlyWorkerScope));
   const signal = owner.run(() => resolveSqliteInspectionSignal());
+  const otherSignal = other.run(() => resolveSqliteInspectionSignal());
+  expect(signal).toBeDefined();
   try {
-    await other.run(() =>
-      caller.run("request", () =>
+    await other.run(async () => {
+      expect(resolveSqliteInspectionSignal()).toBe(otherSignal);
+      await caller.run("request", () =>
         run(async () => {
           await Promise.resolve();
           expect(resolveSqliteInspectionSignal()).toBe(signal);
@@ -275,13 +283,15 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
           expect(withoutOwner(() => resolveSqliteInspectionSignal())).toBeUndefined();
           expect(resolveSqliteInspectionSignal()).toBe(signal);
         }),
-      ),
-    );
+      );
+      expect(resolveSqliteInspectionSignal()).toBe(otherSignal);
+    });
     const late = vi.fn();
     const aborted = new Error("captured owner cancelled");
     controller.abort(aborted);
     expect(() => run(late)).toThrow(aborted);
     await owner.close();
+    expect(owner.run(() => resolveSqliteInspectionSignal())).toBe(signal);
     expect(() => other.run(() => run(late))).toThrow(
       expect.objectContaining({
         message: "SQLite read-only worker scope closed",
@@ -293,6 +303,36 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
     await Promise.all([owner.close(), other.close()]);
   }
 });
+
+it.each(["caller", "scope", "both already aborted"] as const)(
+  "preserves %s cancellation in the read scope",
+  async (source) => {
+    const caller = new AbortController();
+    const scope = new AbortController();
+    const callerReason = new Error("caller cancelled");
+    const scopeReason = new Error("scope cancelled");
+    const owner = createSqliteReadOnlyWorkerScope({
+      signal: scope.signal,
+      deadlineOwnedByCaller: false,
+    });
+    try {
+      if (source === "both already aborted") {
+        scope.abort(scopeReason);
+        caller.abort(callerReason);
+      }
+      const signal = owner.run(() => resolveSqliteInspectionSignal(caller.signal));
+      if (source === "caller") {
+        caller.abort(callerReason);
+      } else if (source === "scope") {
+        scope.abort(scopeReason);
+      }
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toBe(source === "scope" ? scopeReason : callerReason);
+    } finally {
+      await owner.close();
+    }
+  },
+);
 
 it("releases callers of close while retired read scopes remain reachable", async () => {
   class RetiredCaller {

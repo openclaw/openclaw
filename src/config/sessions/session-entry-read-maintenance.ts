@@ -3,7 +3,7 @@ import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admissio
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 /** Keep the physical reader owner through a registry maintenance consumer and its commit guard. */
 export function withSessionRegistryEntriesInWorker(
@@ -33,7 +33,7 @@ export function withSessionRegistryEntriesInWorker(
         afterSessionKey = nextCronRunSessionKey ?? undefined;
       } while (afterSessionKey !== undefined);
     },
-    { lane: maintenanceLane },
+    { lane: sessionStoreLane },
   );
 }
 
@@ -57,6 +57,6 @@ export async function readExpiredCronRunEntriesInWorker(
       });
       return { entries, nextCronRunUpdatedAt };
     },
-    { lane: maintenanceLane, dataOnly: true },
+    { lane: sessionStoreLane, dataOnly: true },
   );
 }

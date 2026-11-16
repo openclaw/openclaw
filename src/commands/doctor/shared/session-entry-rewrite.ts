@@ -42,7 +42,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
-import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-context.js";
 import { withArtifactPreservingStateReads } from "../../../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
@@ -61,6 +61,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
+import { doctorMigrationBackupPath } from "../../doctor-migration-backup-names.js";
 import {
   inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
@@ -254,7 +255,7 @@ export async function repairLegacySessionRunOutcomes(
     const { createVerifiedSqliteSnapshot } = await import("../../../infra/sqlite-snapshot.js");
     await createVerifiedSqliteSnapshot({
       sourcePath: scope.storePath,
-      targetPath: `${scope.storePath}.pre-startup-migration-restart-recovery-${randomUUID()}.bak`,
+      targetPath: doctorMigrationBackupPath(scope.storePath, randomUUID(), "restart-recovery"),
       preserveRowIds: true,
       beforePublish: assertRepairCurrent,
     });

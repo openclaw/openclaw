@@ -7,16 +7,16 @@ import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-function formatMessageFileReadFailure(messageFile: string, err: unknown): string {
+function formatTextFileReadFailure(label: string, inputFile: string, err: unknown): string {
   const code = asOptionalRecord(err)?.code;
   if (code === "ENOENT") {
-    return `Message file not found: ${messageFile}`;
+    return `${label} file not found: ${inputFile}`;
   }
   if (code === "EISDIR") {
-    return `Message file is a directory: ${messageFile}`;
+    return `${label} file is a directory: ${inputFile}`;
   }
   const message = err instanceof Error ? err.message : String(err);
-  return `Unable to read message file ${messageFile}: ${message}`;
+  return `Unable to read ${label.toLowerCase()} file ${inputFile}: ${message}`;
 }
 
 // Agent messages are prompt text; a 4 MiB cap gives generous headroom for
@@ -24,50 +24,59 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
 // the CLI before dispatch.
 const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
-export async function readAgentMessageFile(messageFile: string): Promise<string> {
+export async function readBoundedCliTextInput(
+  inputFile: string,
+  options?: { maxBytes?: number; label?: string },
+): Promise<string> {
+  const maxBytes = options?.maxBytes ?? AGENT_MESSAGE_FILE_MAX_BYTES;
+  const label = options?.label ?? "Message";
   let buffer: Buffer;
-  if (messageFile === "-") {
+  if (inputFile === "-") {
     buffer = await readByteStreamWithLimit(process.stdin, {
-      maxBytes: AGENT_MESSAGE_FILE_MAX_BYTES,
-      onOverflow: () => new Error(`Message stdin exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes`),
+      maxBytes,
+      onOverflow: () => new Error(`${label} stdin exceeds ${maxBytes} bytes`),
     });
   } else {
     // Open the original path so the kernel preserves symlink and procfs magic-link
     // behavior (notably piped /dev/stdin), then inspect that exact descriptor.
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
-      handle = await fs.open(messageFile, "r");
+      handle = await fs.open(inputFile, "r");
       const stat = await handle.stat();
       if (stat.isDirectory()) {
         // Keep the legacy fs.readFile directory UX.
-        throw Object.assign(new Error("Message file is a directory"), { code: "EISDIR" });
+        throw Object.assign(new Error(`${label} file is a directory`), { code: "EISDIR" });
       }
       // Regular files fail fast. Streams report size 0, so the descriptor reader
       // enforces the same limit byte-by-byte while preserving FIFO behavior.
-      if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
-        throw new Error(`File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${messageFile}`);
+      if (stat.isFile() && stat.size > maxBytes) {
+        throw new Error(`File exceeds ${maxBytes} bytes: ${inputFile}`);
       }
-      buffer = await readFileDescriptorBounded(handle.fd, AGENT_MESSAGE_FILE_MAX_BYTES);
+      buffer = await readFileDescriptorBounded(handle.fd, maxBytes);
     } catch (err) {
-      throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+      throw new Error(formatTextFileReadFailure(label, inputFile, err), { cause: err });
     } finally {
       await handle?.close().catch(() => undefined);
     }
   }
-  let message: string;
+  let text: string;
   try {
-    message = MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
+    text = MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
   } catch {
     throw new Error(
-      messageFile === "-"
-        ? "Message stdin must be valid UTF-8"
-        : `Message file must be valid UTF-8: ${messageFile}`,
+      inputFile === "-"
+        ? `${label} stdin must be valid UTF-8`
+        : `${label} file must be valid UTF-8: ${inputFile}`,
     );
   }
-  if (!message.trim()) {
+  if (!text.trim()) {
     throw new Error(
-      messageFile === "-" ? "Message stdin is empty" : `Message file is empty: ${messageFile}`,
+      inputFile === "-" ? `${label} stdin is empty` : `${label} file is empty: ${inputFile}`,
     );
   }
-  return message;
+  return text;
+}
+
+export async function readAgentMessageFile(messageFile: string): Promise<string> {
+  return readBoundedCliTextInput(messageFile);
 }
