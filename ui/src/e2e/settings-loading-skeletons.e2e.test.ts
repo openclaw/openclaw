@@ -1,6 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -14,7 +18,10 @@ import {
   pageRunner,
   settingsPageOptions,
 } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI settings loading skeletons mocked Gateway E2E",
@@ -39,6 +46,117 @@ const withPage = (run: (page: import("playwright").Page) => Promise<void>) =>
   runPage(({ page }) => run(page));
 
 suite.define(() => {
+  it("does not diagnose desktop sharing before the environment catalog answers", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const environment = { id: "node:studio", type: "node", status: "available", desktop: true };
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "environments.list",
+            "desktop.observe",
+          ],
+          heldMethods: ["environments.list"],
+          methodResponses: {
+            "node.list": {
+              nodes: [
+                {
+                  nodeId: "studio",
+                  displayName: "Studio",
+                  paired: true,
+                  connected: true,
+                  platform: "darwin",
+                  commands: ["desktop.stream"],
+                },
+              ],
+            },
+            "device.pair.list": { pending: [], paired: [] },
+            "system-presence": [],
+            "environments.list": { environments: [environment] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/devices");
+        await gateway.waitForRequest("environments.list");
+        const row = page.locator(".device-entry", { hasText: "Studio" });
+        await row.locator(":scope > summary").click();
+        const hint = row.getByText(/Desktop sharing starts enabled/);
+        const prematureHints = await hint.count();
+        const artifacts =
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? createControlUiE2eArtifactDir("defensive-desktop")
+            : undefined;
+        const capture = async (name: string) => {
+          if (!artifacts) {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            row,
+            [row.locator(":scope > summary")],
+            {
+              animations: "disabled",
+              scrollTo: row,
+              elements: [row],
+            },
+          );
+          await writeFile(path.join(artifacts, name + ".png"), frame.png);
+        };
+        await capture("pending");
+        await gateway.resolveDeferred("environments.list", { environments: [environment] });
+        await row.getByRole("button", { name: "Open desktop", exact: true }).waitFor();
+        expect(await hint.count()).toBe(0);
+        await capture("available");
+        const reads = await gateway.deferNext("environments.list");
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+        await gateway.waitForRequest("environments.list", { after: reads });
+        await gateway.resolveDeferred("environments.list", {
+          environments: [{ ...environment, desktop: false }],
+        });
+        await hint.waitFor();
+        await capture("disabled");
+        expect(await row.getByRole("button", { name: "Open desktop", exact: true }).count()).toBe(
+          0,
+        );
+        expect(
+          prematureHints,
+          "A pending catalog is not evidence that desktop sharing needs repair",
+        ).toBe(0);
+      },
+    );
+  });
+  it.each([
+    ["approvals", "Recent exec, plugin, and system-agent approvals."],
+    [
+      "labs",
+      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
+    ],
+  ])("renders the %s subtitle before the lazy sidebar", async (id, subtitle) => {
+    await suite.withPage(
+      { viewport: { width: 820, height: 1000 }, locale: "en-US" },
+      async ({ page }) => {
+        const sidebar = await holdModuleResponse(
+          page,
+          new RegExp("/src/components/settings-sidebar-shell[.]tsx"),
+        );
+        await installMockGateway(page);
+        try {
+          await page.goto(`${suite.server.baseUrl}settings/${id}`);
+          await sidebar.request;
+          const header = page.locator(`openclaw-${id}-page .content-header`);
+          await header.locator(".page-title").waitFor();
+          await header.locator(".page-subtitle").waitFor();
+          expect(await header.locator(".page-subtitle").textContent()).toBe(
+            `${subtitle} Learn more`,
+          );
+          expect(sidebar.requests()).toBe(1);
+        } finally {
+          sidebar.release();
+        }
+      },
+    );
+  });
+
   it("renders the Models initial load as a skeleton", async () => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
@@ -63,7 +181,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -72,17 +190,26 @@ suite.define(() => {
     });
   });
 
-  it("renders the MCP server load as a skeleton", async () => {
-    await withPage(async (page) => {
-      await installMockGateway(page, { heldMethods: ["config.get"] });
-      await page.goto(`${suite.server.baseUrl}settings/mcp`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/mcp",
-        routeId: "mcp",
+  it.each(["config.get", "config.schema"])(
+    "keeps MCP loading inside its sections while %s is pending",
+    async (method) => {
+      await withPage(async (page) => {
+        const gateway = await installMockGateway(page, { heldMethods: [method] });
+        await page.goto(suite.server.baseUrl + "settings/mcp");
+        await waitForControlUiRoute(page, { pathname: "/settings/mcp", routeId: "mcp" });
+        await gateway.waitForRequest(method);
+        if (method === "config.get") {
+          await expectLoadingState(page.locator(".mcp-server-list"));
+        }
+        await expectLoadingState(page.locator("#config-section-panel"));
+        await gateway.resolveDeferred(method);
+        await expect
+          .poll(() => page.locator("#config-section-panel .settings-loading-skeleton").count())
+          .toBe(0);
+        expect(await page.locator(".mcp-server-list").isVisible()).toBe(true);
       });
-      await expectLoadingState(page.locator(".mcp-server-list"));
-    });
-  });
+    },
+  );
 
   it("renders the Plugins catalog load as a skeleton", async () => {
     await withPage(async (page) => {
@@ -146,8 +273,15 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "tools.catalog",
+          "tools.effective",
+        ],
         heldMethods: ["tools.catalog", "tools.effective"],
+        operatorScopes: ["operator.read"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "config.get": {
@@ -194,7 +328,6 @@ suite.define(() => {
       await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list");
       await page.locator(".custodian__change-card").waitFor();
-
       const requestCount = (await gateway.getRequests("openclaw.changes.list")).length;
       await gateway.deferNext("openclaw.changes.list");
       await historyToggle.click();
@@ -265,6 +398,58 @@ suite.define(() => {
       expect(await spinner.isVisible()).toBe(true);
       expect(await panel.locator(".settings-loading-skeleton").count()).toBe(0);
     });
+  });
+
+  it("keeps a failed first Secrets read out of the empty state and recovers with Retry", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "secrets.store.list",
+            "secrets.store.set",
+          ],
+          heldMethods: ["secrets.store.list"],
+          methodResponses: { "secrets.store.list": { entries: [] } },
+        });
+        await page.goto(new URL("settings/secrets", suite.server.baseUrl).href);
+        await gateway.waitForRequest("secrets.store.list");
+        const surface = page.locator("openclaw-secrets-page");
+        await surface.locator(".settings-loading-skeleton").waitFor();
+        const empty = surface.getByText("No secrets yet.", { exact: false });
+        expect(await empty.count()).toBe(0);
+        await gateway.rejectDeferred("secrets.store.list", {
+          message: "Could not read the Secrets inventory",
+        });
+        const error = surface.getByRole("alert");
+        await error.waitFor();
+        expect(await error.textContent()).toContain("Could not read the Secrets inventory");
+        const falseEmpty = await empty.count();
+        const artifacts =
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? createControlUiE2eArtifactDir("secrets-first-read")
+            : undefined;
+        if (artifacts) {
+          const frame = await takeControlUiScreenshotFrame(page, surface, [error], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifacts, "failed.png"), frame.png);
+        }
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        await error.waitFor({ state: "hidden" });
+        await empty.waitFor();
+        expect(await error.count()).toBe(0);
+        expect(await gateway.getRequests("secrets.store.list")).toHaveLength(2);
+        if (artifacts) {
+          const frame = await takeControlUiScreenshotFrame(page, surface, [empty], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifacts, "empty.png"), frame.png);
+        }
+        expect(falseEmpty, "A failed inventory read is not proof that no secrets exist").toBe(0);
+      },
+    );
   });
 
   it("wraps row-shaped loading controls at the compact breakpoint", async () => {

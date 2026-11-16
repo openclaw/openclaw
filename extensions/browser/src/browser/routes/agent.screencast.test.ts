@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-support/browser-security.mock.js";
+import type { RunningChrome } from "../chrome.js";
 import * as navigationGuard from "../navigation-guard.js";
+import { withBrowserRequestScope } from "../request-scope.js";
 import {
   clearBrowserScreencastTokens,
   consumeBrowserScreencastToken,
@@ -172,6 +175,43 @@ describe("browser screencast mint route", () => {
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).rejects.toThrow();
     getProfileLifecycle(runtime).controller.abort();
     expect(() => token.assertCurrent()).toThrow("superseded");
+  });
+
+  it("checks screencast navigation as its minting request, not the page event's call", async () => {
+    const { request, state, runtime } = setup();
+    // An unconfigured policy plus an OpenClaw-owned process lets a call's loopback grant apply.
+    state.resolved.ssrfPolicyConfigured = false;
+    const running = {
+      cdpPort: 18800,
+      proc: { exitCode: null, signalCode: null },
+    } as unknown as RunningChrome;
+    getProfileLifecycle(runtime).handles.add(running);
+    runtime.running = running;
+    const loopback = "http://127.0.0.1:49187/";
+    const grant = {
+      allowLocalLoopback: true,
+      assertInvocationCurrent: () => {},
+      assertLocalLoopbackCurrent: () => {},
+    };
+    const mint = async () => {
+      const response = await request();
+      return consumeBrowserScreencastToken((response.body as { token: string }).token)!;
+    };
+    // Page events are delivered in whatever call's context created the shared connection.
+    const outsideAnyCall = AsyncLocalStorage.snapshot();
+
+    // A viewer without the grant cannot borrow one from a still-running granted call.
+    const viewerToken = await mint();
+    await withBrowserRequestScope(grant, async () => {
+      await expect(viewerToken.checkNavigationAllowed(loopback)).rejects.toThrow();
+    });
+    // A granted minting call keeps its grant for events delivered outside any call.
+    await withBrowserRequestScope(grant, async () => {
+      const grantedToken = await mint();
+      await expect(
+        outsideAnyCall(() => grantedToken.checkNavigationAllowed(loopback)),
+      ).resolves.toBeUndefined();
+    });
   });
 
   it("blocks minting for a disallowed current tab through the shared route guard", async () => {

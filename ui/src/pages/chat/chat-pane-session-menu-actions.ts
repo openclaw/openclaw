@@ -1,13 +1,23 @@
+import type {
+  SessionsFilesRevealResult,
+  WorktreesBranchesResult,
+  WorktreesListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type {
   SidebarSessionMutationScope,
   SidebarSessionMutationResult,
 } from "../../components/app-sidebar-session-types.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import {
   areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
   isPinnableUiSessionRow,
   isNativeCatalogAdoptionSessionKey,
 } from "../../lib/sessions/session-key.ts";
@@ -15,10 +25,156 @@ import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navi
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import type {
   ChatHeaderSessionActionSource,
+  ChatHeaderWorkspaceDataOwner,
   HeaderMenuAction,
   HeaderSessionOperation,
 } from "./chat-pane-session-menu-contract.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+
+export async function openHeaderSessionGroup(
+  owner: Pick<ReturnType<ChatHeaderSessionActionSource["readOwner"]>, "context" | "state">,
+  moveToGroup: (name: string) => Promise<SidebarSessionMutationResult | void>,
+  signal: AbortSignal,
+): Promise<void> {
+  const gateway = owner.context.gateway;
+  await showInputDialog({
+    signal,
+    gateway,
+    title: t("sessionsView.newGroupTitle"),
+    label: t("sessionsView.newGroupPrompt"),
+    submitLabel: t("sessionsView.newGroupCreate"),
+    requireValue: true,
+    submit: async (name) => {
+      const result = await moveToGroup(name);
+      return result === "completed"
+        ? null
+        : result === "stale"
+          ? t("sessionsView.newGroupStale")
+          : (owner.state?.chatError ?? t("sessionsView.newGroupFailed"));
+    },
+  });
+}
+
+export async function revealHeaderWorkspace(
+  owner: Pick<
+    ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
+    "context" | "ownsHeaderOutcome" | "publishHeaderError"
+  >,
+  row: GatewaySessionRow,
+  outcomeOwner: string,
+): Promise<void> {
+  const client = owner.context.gateway.snapshot.client;
+  if (!client || !owner.ownsHeaderOutcome(outcomeOwner)) {
+    return;
+  }
+  const agentId = parseAgentSessionKey(row.key)?.agentId;
+  const result = await client.request<SessionsFilesRevealResult>("sessions.files.reveal", {
+    key: row.key,
+    ...(agentId ? { agentId } : {}),
+  });
+  if (!result.ok) {
+    owner.publishHeaderError(
+      result.error ??
+        "Couldn’t show the session workspace. Open the folder manually on the Gateway device.",
+      outcomeOwner,
+    );
+  }
+}
+
+export async function loadHeaderWorkspaceData(
+  owner: ChatHeaderWorkspaceDataOwner,
+  row: GatewaySessionRow,
+  agentWorkspace: string | undefined,
+  workspaceGit: boolean,
+  outcomeOwner: string,
+): Promise<void> {
+  const client = owner.context.gateway.snapshot.client;
+  if (!client || !owner.ownsHeaderOutcome(outcomeOwner)) {
+    return;
+  }
+  const header = owner.headerPresentation;
+  const loads: Promise<void>[] = [];
+  // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
+  const immediateRoot =
+    row.deviceFolder?.path ||
+    (row.execNode ? row.execCwd?.trim() : undefined) ||
+    row.spawnedWorkspaceDir?.trim() ||
+    row.spawnedCwd?.trim() ||
+    null;
+  const worktreeId = row.worktree?.id;
+  if (worktreeId && !immediateRoot) {
+    const entry = header.worktreePaths.get(worktreeId) ?? {};
+    header.worktreePaths.set(worktreeId, entry);
+    if (entry.path === undefined && !entry.loading) {
+      entry.loading = true;
+      loads.push(
+        client
+          .request<WorktreesListResult>("worktrees.list", {})
+          .then((result) => {
+            entry.path =
+              result.worktrees.find(
+                (candidate) => candidate.id === worktreeId && candidate.removedAt === undefined,
+              )?.path ?? null;
+          })
+          .catch(() => {
+            entry.path = undefined;
+          })
+          .finally(() => {
+            entry.loading = false;
+            if (header.worktreePaths.get(worktreeId) === entry) {
+              header.worktreePaths = new Map(header.worktreePaths);
+            }
+          }),
+      );
+    }
+  }
+  const agentRoot = !row.worktree ? agentWorkspace?.trim() : undefined;
+  const knownRoot =
+    immediateRoot ||
+    (worktreeId ? header.worktreePaths.get(worktreeId)?.path : undefined) ||
+    agentRoot;
+  const remote = Boolean(row.execNode) || isCloudWorkerPlacementState(row.placement?.state);
+  // workspaceGit describes the agent workspace only; a session-specific
+  // root (spawned dir) may be a Git checkout regardless.
+  const rootMayHaveBranch = knownRoot === agentRoot ? workspaceGit : Boolean(knownRoot);
+  // HEAD can move mid-session, so refetch on every open while keeping the
+  // last-known branch visible during the refresh to avoid menu flicker.
+  if (
+    !row.worktree &&
+    !remote &&
+    knownRoot &&
+    rootMayHaveBranch &&
+    hasOperatorWriteAccess(owner.context.gateway.snapshot.hello?.auth ?? null)
+  ) {
+    const entry = header.branches.get(knownRoot) ?? {};
+    header.branches.set(knownRoot, entry);
+    if (!entry.loading) {
+      entry.loading = true;
+      loads.push(
+        (async () => {
+          try {
+            const result = await requestCheckoutSnapshot<WorktreesBranchesResult>(
+              owner.context.gateway,
+              "worktrees.branches",
+              { repoRoot: knownRoot },
+            );
+            if (owner.ownsHeaderOutcome(outcomeOwner)) {
+              entry.value = result.headBranch ?? null;
+            }
+          } catch {
+            entry.value = null;
+          } finally {
+            entry.loading = false;
+            if (header.branches.get(knownRoot) === entry) {
+              header.branches = new Map(header.branches);
+            }
+          }
+        })(),
+      );
+    }
+  }
+  await Promise.all(loads);
+}
 
 /** Loaded by the menu before its actions exist; gesture-bound work stays synchronous. */
 export async function runChatHeaderSessionAction(
@@ -115,6 +271,7 @@ type HeaderSessionMutationAdmission = {
   scope: SidebarSessionMutationScope & { signal: AbortSignal };
   owner: string;
   draftSignal: AbortSignal;
+  isCurrent?: () => boolean;
 };
 export async function runHeaderSessionMutation(
   owner: ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
@@ -140,10 +297,13 @@ export async function runHeaderSessionMutation(
   const outcomeOwner = admission?.owner ?? owner.headerOutcomeOwner;
   const draftSignal = admission?.draftSignal ?? owner.headerSessionDraftAbortController.signal;
   const capturedRow = admission ? row : { ...row };
+  const isCurrent = (candidate: SidebarSessionMutationScope) =>
+    owner.isHeaderSessionActionCurrent(candidate, outcomeOwner) &&
+    (admission?.isCurrent?.() ?? true);
   try {
     const { runHeaderSessionOperation } = await import("./chat-pane-session-operations.ts");
     return await runHeaderSessionOperation(action, capturedRow, scope, {
-      isCurrent: (candidate) => owner.isHeaderSessionActionCurrent(candidate, outcomeOwner),
+      isCurrent,
       publishError: (error) => owner.publishHeaderError(error, outcomeOwner),
       selectSession: (key) => owner.onPaneSessionChange?.(owner.paneId, key),
       label: (candidate) => owner.resolveHeaderSessionTitle(candidate),
@@ -168,7 +328,7 @@ export async function runHeaderSessionMutation(
       },
     });
   } catch (error) {
-    if (owner.isHeaderSessionActionCurrent(scope, outcomeOwner)) {
+    if (isCurrent(scope)) {
       owner.publishHeaderError(error, outcomeOwner);
     }
   }

@@ -1,4 +1,5 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show, useContext, type Accessor } from "solid-js";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -196,13 +197,16 @@ export function ProgressRuntime(props: {
   const detail = () =>
     unavailable()
       ? ""
-      : formatUiExternalText(
-          props.terminalOutcome === "failed"
-            ? props.runtime?.lastRunError
-            : props.runtime?.children?.failed
-              ? props.runtime.childError
-              : undefined,
-        ).slice(0, 240);
+      : truncateUtf16Safe(
+          formatUiExternalText(
+            props.terminalOutcome === "failed"
+              ? props.runtime?.lastRunError
+              : props.runtime?.children?.failed
+                ? props.runtime.childError
+                : undefined,
+          ),
+          240,
+        );
   return (
     <Show when={props.runtime}>
       <span

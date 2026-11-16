@@ -2,15 +2,22 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { serializeConversationWithinBudget } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   historyLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
+import * as sqliteAdmission from "../../infra/sqlite-database-admission.js";
+import { snapshotSqliteReaderMetrics } from "../../infra/sqlite-reader-metrics.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
@@ -24,11 +31,430 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import {
+  prepareCompactionSafeguardHistory,
+  prepareCompactionSafeguardMessages,
+  prepareCompactionSafeguardSummary,
+} from "../agent-hooks/compaction-safeguard-preparation.js";
+import { sanitizeCompactionMessages } from "../compaction-planning.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { prepareAgentCompactionWork } from "./compaction/preparation.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
+it("prepares and rerenders captured rows without hydrating summarized history on the host", () =>
+  withOpenClawTestState({ label: "prepared-compaction-worker" }, async (state) => {
+    const target = makeTarget(state, "prepared-compaction");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const model = makeProviderModelFixture({
+      id: "fixture",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+    });
+    for (let index = 0; index < 20; index += 1) {
+      await source.appendMessageAsync(
+        makeUserMessage(index === 1 ? "漢字 source ".repeat(15_000) : "Request " + index, index),
+      );
+    }
+    await source.appendCustomEntryAsync("model-snapshot", {
+      timestamp: 1,
+      provider: model.provider,
+      modelApi: model.api,
+      modelId: model.id,
+    });
+    const before = source.getPersistedEntries();
+    const branch = source.getBranch();
+    const work = {
+      itemId: "prepared-fixture",
+      settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+      mode: "manual" as const,
+      summaryOutputPolicy: "none" as const,
+    };
+    const expected = prepareAgentCompactionWork(branch, work);
+    if (expected.status !== "prepared") {
+      throw new Error("Expected compactable native fixture");
+    }
+    const history = prepareCompactionSafeguardHistory({
+      messages: prepareCompactionSafeguardMessages(expected.preparation),
+      firstKeptEntryId: expected.preparation.firstKeptEntryId,
+      readBranch: () => branch,
+    });
+    const summary = prepareCompactionSafeguardSummary({
+      history,
+      preparation: expected.preparation,
+      qualityGuardEnabled: true,
+      splitTurnContextChars: 8000,
+    });
+    const operations: string[] = [];
+    let retainedBytes = 0;
+    let abortRetainedStream: AbortController | undefined;
+    const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
+      const run = pool.run.bind(pool);
+      return vi.spyOn(pool, "run").mockImplementation((input, options) => {
+        let planRequest = false;
+        const receive = options.onRequest;
+        return run(
+          async () => {
+            const request = typeof input === "function" ? await input() : input;
+            if (request.kind === "compaction-preparation") {
+              operations.push(request.operation.kind);
+              planRequest = request.operation.kind === "plan";
+            }
+            return request;
+          },
+          {
+            ...options,
+            ...(receive
+              ? {
+                  onRequest: async (value, context) => {
+                    if (planRequest) {
+                      // The paired native producer owns this hydration envelope.
+                      const chunk =
+                        value as import("../../config/sessions/session-transcript-hydration.types.js").SessionTranscriptHydrationChunk;
+                      retainedBytes += chunk.frames.reduce(
+                        (total, frame) => total + frame.data.byteLength,
+                        0,
+                      );
+                      abortRetainedStream?.abort(new Error("fixture retained stream cancelled"));
+                    }
+                    return await receive(value, context);
+                  },
+                }
+              : {}),
+          },
+        );
+      });
+    });
+    try {
+      const prepared = await readPreparedSessionCompactionInWorker(target, {
+        kind: "plan",
+        options: { work, qualityGuardEnabled: true },
+        replay: {
+          model,
+          policy: resolveTranscriptPolicy({
+            model,
+            modelApi: model.api,
+            provider: model.provider,
+            modelId: model.id,
+          }),
+          imageLimits: resolveImageSanitizationLimits(),
+          allowedToolNames: [],
+          signedThinkingProvider: false,
+          allowProviderOwnedThinkingReplay: false,
+          isOpenAIResponsesApi: true,
+          sessionId: target.sessionId,
+          replayEnabled: true,
+        },
+      });
+      if (prepared.status !== "prepared") {
+        throw new Error(
+          "Native preparation did not produce its bounded plan: " + JSON.stringify(prepared),
+        );
+      }
+      expect(prepared.plan.preparation.firstKeptEntryId).toBe(
+        expected.preparation.firstKeptEntryId,
+      );
+      expect(prepared.plan.retained.map((entry) => entry.id)).not.toContain(branch[0]!.id);
+      expect(prepared.beforeHookMetrics.messageCountOriginal).toBe(20);
+      expect(retainedBytes).toBeGreaterThan(0);
+      expect(retainedBytes).toBeLessThan(16 * 1024);
+      const expectedMessages = convertToLlm(
+        sanitizeCompactionMessages(summary.reconciliationMessages),
+      );
+      for (const maxChars of [4000, 8000, 16_000]) {
+        const rendered = await readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences: prepared.plan.selections.history,
+          version: prepared.version,
+          maxChars,
+        });
+        expect(rendered).toEqual({
+          kind: "compaction-preparation",
+          status: "rendered",
+          conversation: serializeConversationWithinBudget(expectedMessages, maxChars),
+        });
+      }
+      expect(operations).toEqual(["plan", "render", "render", "render"]);
+      abortRetainedStream = new AbortController();
+      await expect(
+        readPreparedSessionCompactionInWorker(
+          target,
+          {
+            kind: "plan",
+            options: { work, qualityGuardEnabled: true },
+            replay: {
+              model,
+              policy: resolveTranscriptPolicy({
+                model,
+                modelApi: model.api,
+                provider: model.provider,
+                modelId: model.id,
+              }),
+              imageLimits: resolveImageSanitizationLimits(),
+              allowedToolNames: [],
+              signedThinkingProvider: false,
+              allowProviderOwnedThinkingReplay: false,
+              isOpenAIResponsesApi: true,
+              sessionId: target.sessionId,
+              replayEnabled: true,
+            },
+          },
+          abortRetainedStream.signal,
+        ),
+      ).rejects.toThrow();
+      abortRetainedStream = undefined;
+      expect(source.getPersistedEntries()).toEqual(before);
+      expect(replaceTranscriptEventsSync(target, before)).toBe(true);
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences: prepared.plan.selections.history,
+          version: prepared.version,
+          maxChars: 4000,
+        }),
+      ).rejects.toThrow();
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
+  }));
+
+it("streams oversized compaction history without first materializing it in the reader", () =>
+  withOpenClawTestState({ label: "prepared-compaction-working-set" }, async (state) => {
+    const target = makeTarget(state, "oversized-preparation");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const text = "x".repeat(1024 * 1024);
+    const messages = Array.from({ length: 18 }, (_, index) => ({
+      type: "message",
+      id: "large-" + index,
+      parentId: index ? "large-" + (index - 1) : null,
+      timestamp: new Date(index).toISOString(),
+      message: makeUserMessage(text, index),
+    }));
+    expect(
+      replaceTranscriptEventsSync(target, [source.getPersistedEntries()[0]!, ...messages]),
+    ).toBe(true);
+    await waitForSessionTranscriptProjection(target);
+    const before = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
+    if (before.kind !== "bounded" || !before.residentRows) {
+      throw new Error("Expected indexed compaction fixture");
+    }
+    const sequences = before.residentRows.slice(1).map((row) => row.rawSeq);
+    const last = sequences.at(-1)!;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
+    const writePayload = database.db.prepare(
+      "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
+    );
+    // Keep admitted byte/navigation facts, but make payload acquisition observably fail.
+    // A budget refusal must precede decoding, not arrive after allocating the full graph.
+    writePayload.run("{malformed", target.sessionId, last);
+    const model = makeProviderModelFixture({
+      id: "fixture",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+    });
+    try {
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "plan",
+          options: {
+            work: {
+              itemId: "oversized-plan",
+              mode: "manual",
+              summaryOutputPolicy: "none",
+              settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+            },
+            qualityGuardEnabled: true,
+          },
+          replay: {
+            model,
+            policy: resolveTranscriptPolicy({
+              model,
+              modelApi: model.api,
+              provider: model.provider,
+              modelId: model.id,
+            }),
+            imageLimits: resolveImageSanitizationLimits(),
+            allowedToolNames: [],
+            signedThinkingProvider: false,
+            allowProviderOwnedThinkingReplay: false,
+            isOpenAIResponsesApi: true,
+            sessionId: target.sessionId,
+            replayEnabled: true,
+          },
+        }),
+      ).rejects.toThrow("materialized preparation byte limit");
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences,
+          version: before.snapshot.version,
+          maxChars: 4000,
+        }),
+      ).rejects.toThrow("materialized preparation byte limit");
+    } finally {
+      writePayload.run(JSON.stringify(messages.at(-1)), target.sessionId, last);
+    }
+    // Declining optimization must leave the complete existing streamed host path usable.
+    const hydrated = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
+    const events = hydrated.snapshot.events.slice(1);
+    expect(events).toHaveLength(messages.length);
+    expect(
+      events.every(
+        (event, index) =>
+          isRecord(event) &&
+          event.id === "large-" + index &&
+          isRecord(event.message) &&
+          event.message.content === text,
+      ),
+    ).toBe(true);
+  }));
+
 function makeTarget(state: OpenClawTestState, sessionId: string) {
   return sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId);
+}
+
+it("preserves deferred and interleaved hydration callers through real worker reads", () =>
+  withOpenClawTestState({ label: "hydration-callers" }, async (state) => {
+    const target = makeTarget(state, "attribution");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    await source.appendMessageAsync(makeUserMessage("synthetic attribution", 1));
+    const counts = () =>
+      new Map(snapshotSqliteReaderMetrics().map(({ operation, count }) => [operation, count]));
+    const before = counts();
+    const callers: Array<string | undefined> = [];
+    const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
+      const run = pool.run.bind(pool);
+      return vi.spyOn(pool, "run").mockImplementation((input, options) =>
+        run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind === "transcript-hydration") {
+            callers.push(request.caller);
+          }
+          return request;
+        }, options),
+      );
+    });
+    try {
+      const preview = withSessionTranscriptHydrationCaller("preview", () =>
+        prepareSessionTranscriptHydration(target),
+      );
+      const exported = withSessionTranscriptHydrationCaller("export", () =>
+        prepareSessionTranscriptHydration(target),
+      );
+      const reads = await withSessionTranscriptHydrationCaller("correction", () =>
+        Promise.all([preview.read(), exported.read()]),
+      );
+      for (const read of reads) {
+        expect(read.snapshot.events).toEqual(source.getPersistedEntries());
+      }
+      await source.reloadPersistedTranscriptAsync();
+      await SessionManager.openAsync(target);
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
+    expect(callers.toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual([
+      "export",
+      "model-reload",
+      "preview",
+      "session-manager",
+    ]);
+    // Physical reader counters are available only through Linux procfs.
+    if (process.platform === "linux") {
+      await expect
+        .poll(() => {
+          const after = counts();
+          return ["preview", "export", "model-reload", "session-manager", "correction"].map(
+            (caller) => {
+              const operation = `sessions.transcript-hydration.${caller}`;
+              return (after.get(operation) ?? 0) - (before.get(operation) ?? 0);
+            },
+          );
+        })
+        .toEqual([1, 1, 1, 1, 0]);
+    }
+  }));
+
+for (const cancelled of ["leader", "follower"] as const) {
+  it(`cancels a joined bounded hydration ${cancelled} without cancelling its peer`, ({ signal }) =>
+    withOpenClawTestState({ label: `hydration-cancel-${cancelled}` }, async (state) => {
+      const target = makeTarget(state, "joined-hydration");
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      await source.appendMessageAsync(makeUserMessage("shared bounded context", 1));
+      const entered = createDeferredCore();
+      const joined = createDeferredCore();
+      const release = createDeferredCore();
+      const controllers = [new AbortController(), new AbortController()];
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      let dispatches = 0;
+      const transport = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) =>
+        run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind === "transcript-hydration" && ++dispatches === 1) {
+            entered.resolve();
+            await release.promise;
+          }
+          return request;
+        }, options),
+      );
+      const read = (index: number) =>
+        prepareSessionTranscriptHydration(
+          target,
+          { maxBytes: 8192, maxEvents: 20 },
+          controllers[index]!.signal,
+        ).read();
+      const leader = read(0);
+      const pending = [leader];
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, leader, "Hydration missed transport gate"),
+          signal,
+        );
+        const revision = sqliteAdmission.readSqliteDatabaseScopedWriteTokenForPath;
+        const observer = vi
+          .spyOn(sqliteAdmission, "readSqliteDatabaseScopedWriteTokenForPath")
+          .mockImplementation((location, scopes) => {
+            const token = revision(location, scopes);
+            const last = Array.isArray(scopes) ? scopes.at(-1) : undefined;
+            if (isRecord(last) && last.sessionId === target.sessionId) {
+              joined.resolve();
+            }
+            return token;
+          });
+        try {
+          const follower = read(1);
+          pending.push(follower);
+          await withinTest(
+            awaitGateBeforeSettlement(joined.promise, follower, "Follower missed revision join"),
+            signal,
+          );
+          const index = cancelled === "leader" ? 0 : 1;
+          const reason = new Error(`cancelled ${cancelled}`);
+          expect(dispatches).toBe(1);
+          const refused = expect(pending[index]).rejects.toBe(reason);
+          controllers[index]!.abort(reason);
+          // Cancellation must settle while the shared transport remains held.
+          await withinTest(refused, signal);
+          release.resolve();
+          const survivor = await withinTest(pending[1 - index]!, signal);
+          expect(survivor.snapshot.events).toEqual(source.getPersistedEntries());
+          expect(dispatches).toBe(cancelled === "leader" ? 2 : 1);
+        } finally {
+          observer.mockRestore();
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled(pending);
+        transport.mockRestore();
+      }
+    }));
 }
 
 function retainedManager(timestamp: number) {
@@ -127,7 +553,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
     });
     const { manager, before } = retainedManager(2);
     // The closed database makes this a cold read, which runs on the target-discovery lane.
-    const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const dispatch = vi.spyOn(sessionStoreLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
@@ -141,7 +567,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
         error: { kind: "read-error" },
       });
       expect(managerView(manager)).toEqual(before);
-      expect(targetDiscoveryLane.pool.getSnapshot()).toMatchObject({
+      expect(sessionStoreLane.pool.getSnapshot()).toMatchObject({
         activeTasks: 0,
         pendingTasks: 0,
       });

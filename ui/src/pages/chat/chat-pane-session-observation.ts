@@ -28,6 +28,7 @@ import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -36,11 +37,7 @@ import {
   reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
-import {
-  cacheChatSessionSnapshot,
-  clearChatMessagesFromCache,
-  readChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 function createSessionObservationRefresh(
   sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
@@ -217,7 +214,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       : null;
   }
 
-  private cacheParentSession() {
+  protected cacheSessionState(patch: Partial<ChatSessionStateSnapshot> = {}) {
     const state = this.state;
     if (!state || !this.ownsChatSnapshot({ sessionKey: state.sessionKey })) {
       return;
@@ -228,10 +225,11 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       return;
     }
     const parentSession = this.displayedParentSession(selectedChatSessionRow(state));
-    if (JSON.stringify(snapshot.sessionState.parentSession) !== JSON.stringify(parentSession)) {
+    const sessionState = { ...snapshot.sessionState, ...patch, parentSession };
+    if (JSON.stringify(snapshot.sessionState) !== JSON.stringify(sessionState)) {
       cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
         ...snapshot,
-        sessionState: { ...snapshot.sessionState, parentSession },
+        sessionState,
       });
     }
   }
@@ -280,9 +278,6 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       state.sessionKey,
       resolveChatAgentId(state),
     );
-    for (const { key, agentId } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
-    }
     // Live rows retire on disconnect; the session owner retains same-identity
     // presentation (including deferred metadata) until the next canonical list.
     const presentation = this.context.sessions.presentation;
@@ -309,7 +304,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       this.ownsChatSnapshot({ sessionKey: state.sessionKey })
     ) {
       commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
-      this.cacheParentSession();
+      this.cacheSessionState();
     }
     const outboxState = selectedSession
       ? JSON.stringify([
@@ -475,7 +470,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
-        this.cacheParentSession();
+        this.cacheSessionState();
         this.publishParentRow?.();
         if (
           !notification?.eventPending &&
@@ -497,7 +492,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
-      this.cacheParentSession();
+      this.cacheSessionState();
       this.publishParentRow?.();
       refresh.refresh();
     }

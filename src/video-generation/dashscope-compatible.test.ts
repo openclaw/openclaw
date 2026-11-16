@@ -6,7 +6,7 @@ import {
   pollDashscopeVideoTaskUntilComplete as pollTask,
   runDashscopeVideoGenerationTask as generateTask,
 } from "./dashscope-compatible.js";
-import type { VideoGenerationRequest as VideoRequest } from "./types.js";
+import type { VideoGenerationRequest as VideoRequest } from "./provider-types.js";
 
 function videoRequest(overrides: Partial<VideoRequest> = {}): VideoRequest {
   return { provider: "qwen", model: "wan2.6-t2v", prompt: "video", cfg: {}, ...overrides };

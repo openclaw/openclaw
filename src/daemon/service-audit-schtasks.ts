@@ -225,6 +225,11 @@ export async function auditScheduledTaskDefinition(
       continue;
     }
     if (
+      // The scheduler can inject this value; replacement must still protect it.
+      (!expectedCommand &&
+        !expectedXml &&
+        key === "Settings.UseUnifiedSchedulingEngine" &&
+        current === "true") ||
       (!canonical && nativeDefaults[key] === current) ||
       (canonical &&
         (node.children.length || canonical.children.length || current === canonical.textContent))

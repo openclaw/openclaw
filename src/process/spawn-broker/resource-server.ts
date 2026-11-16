@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { dirname } from "node:path";
 import { serialize } from "node:v8";
-import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwCollectedErrors, throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type {
   NativeWorkerResourceModule,
@@ -77,9 +80,11 @@ export async function createBrokerNativeResourceServer(options: {
   canAdmit: () => boolean;
 }) {
   const resources = new Map<number, Resource>();
+  const directory = process.platform === "win32" ? undefined : dirname(options.endpoint);
   const connections = new Set<ResourceSocket>();
   let available = true;
   let sourceSealed = false;
+  let sourceLoaderRegistered = false;
   let closePromise: Promise<void> | undefined;
   let ownerBufferedBytes = 0;
   let ownerBufferedMessages = 0;
@@ -365,6 +370,8 @@ export async function createBrokerNativeResourceServer(options: {
           !Number.isSafeInteger(attachment.id) ||
           attachment.id <= 0 ||
           typeof attachment.moduleUrl !== "string" ||
+          (attachment.sourceLoaderUrl !== undefined &&
+            typeof attachment.sourceLoaderUrl !== "string") ||
           typeof attachment.ownerPort !== "boolean"
         ) {
           transport.close();
@@ -430,6 +437,17 @@ export async function createBrokerNativeResourceServer(options: {
           if (!live() || sourceSealed) {
             return;
           }
+          if (!sourceLoaderRegistered && attachment.sourceLoaderUrl) {
+            const loader: unknown = await import(attachment.sourceLoaderUrl);
+            if (!live() || sourceSealed) {
+              return;
+            }
+            if (!isRecord(loader) || typeof loader.register !== "function") {
+              throw new Error("Native resource source loader is unavailable");
+            }
+            loader.register();
+            sourceLoaderRegistered = true;
+          }
           const module: NativeWorkerResourceModule = await import(attachment.moduleUrl);
           if (!live() || sourceSealed) {
             return;
@@ -493,20 +511,44 @@ export async function createBrokerNativeResourceServer(options: {
         }),
       );
       await serverClosed;
+      if (directory) {
+        outcomes.push(
+          ...(await Promise.allSettled([rm(directory, { recursive: true, force: true })])),
+        );
+      }
       throwSettledAggregate(outcomes, "Spawn broker native resource cleanup failed");
       resources.clear();
     });
     disconnect();
     return closePromise;
   }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.endpoint, () => {
-      server.off("error", reject);
-      server.on("error", disconnect);
-      resolve();
+  if (directory) {
+    await mkdir(directory, { mode: 0o700 });
+  }
+  try {
+    if (directory) {
+      await chmod(directory, 0o700);
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(options.endpoint, () => {
+        server.off("error", reject);
+        server.on("error", disconnect);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    const errors = [error];
+    if (directory) {
+      try {
+        await rm(directory, { recursive: true, force: true });
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+    }
+    throwCollectedErrors(errors, "Native resource server startup and cleanup failed");
+    throw error;
+  }
   return {
     receive,
     disconnect,

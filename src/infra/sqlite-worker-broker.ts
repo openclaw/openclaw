@@ -1,11 +1,8 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   SQLITE_WORKER_ADMISSION_TIMEOUT_MS as ADMISSION_TIMEOUT_MS,
   assertSqliteWorkerActorReusable,
@@ -24,6 +21,7 @@ import {
   retainSqliteWorkerAdmissionPathReferences,
   suspendSqliteWorkerScheduledMaintenance,
   validateSqliteWorkerDatabaseLocator,
+  waitForSqliteOpen,
 } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
 import {
@@ -42,6 +40,7 @@ import type {
   Slot,
   SqliteWorkerStoreOptions,
   StoreClient,
+  SqliteWorkerClientBinding,
   SqliteWorkerOpenCustody,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
@@ -60,8 +59,10 @@ import { readSqliteDatabaseAdmissionDeadline } from "./sqlite-worker-database-ad
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
-import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
-import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
+import {
+  sqliteWorkerRequestBytes,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 import { trackWorkerRequest, type WorkerRequestObservation } from "./worker-request-diagnostics.js";
 
@@ -70,8 +71,11 @@ const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
 
-function waitForSqliteOpen<T>(pending: Promise<T>, signal?: AbortSignal) {
-  return racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+// These live readers outlast opening; their scope must contain only the retained actor.
+function captureSqliteWorkerRetirementReaders(
+  actor: Actor,
+): [() => Actor["closeReceipt"], () => boolean] {
+  return [() => actor.closeReceipt, () => actor.openDispatch.openRefused === true];
 }
 
 export class SqliteWorkerBroker {
@@ -149,9 +153,11 @@ export class SqliteWorkerBroker {
     const reusable = reserved
       ? findReusableSqliteWorkerClient(this.stores.values(), snapshot.databasePath)
       : undefined;
+    let preparation: Awaited<ReturnType<typeof prepareSqliteWorkerDatabaseAdmission>> | undefined;
     return this.inputAdmission
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
+        snapshot.databasePath,
         async () => {
           if (!reserved) {
             await reclaimSqliteWorkerClient(
@@ -162,13 +168,15 @@ export class SqliteWorkerBroker {
               () => this.draining !== undefined,
             );
           }
-          return runWithSqliteDatabaseAdmissionTurn([snapshot.databasePath], () =>
-            this.openAdmitted<Operations>(snapshot, client),
-          );
+          return this.openAdmitted<Operations>(snapshot, client, undefined, preparation);
         },
         snapshot.signal,
         reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
         snapshot.carrierClass,
+        async () => {
+          preparation = await prepareSqliteWorkerDatabaseAdmission(snapshot);
+          return { readIdentities: new Map([[snapshot.databasePath, preparation.identity]]) };
+        },
       )
       .catch((error: unknown) => {
         this.clients.delete(client);
@@ -180,8 +188,9 @@ export class SqliteWorkerBroker {
     options: PreparedSqliteWorkerOpen,
     client: object,
     reusable?: StoreClient,
+    preparation?: Awaited<ReturnType<typeof prepareSqliteWorkerDatabaseAdmission>>,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
-    // Cached client callbacks share this scope; never capture the opening options in it.
+    // Opening custody stays in this frame; persistent clients are bound separately.
     const { maintenanceScope, cleanupAccess } = options;
     const databaseIdentity = options.expectedIdentity
       ? {
@@ -192,8 +201,9 @@ export class SqliteWorkerBroker {
       : undefined;
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
-    const { databasePath, inputHash, identity, key } =
-      await prepareSqliteWorkerDatabaseAdmission(options);
+    const { databasePath, inputHash, identity, key } = preparation?.identity.key.startsWith("file:")
+      ? preparation
+      : await prepareSqliteWorkerDatabaseAdmission(options);
     options.assertCurrent?.();
     if (reusable && this.actors.get(key) !== reusable.actor) {
       return undefined;
@@ -348,11 +358,10 @@ export class SqliteWorkerBroker {
         options.retainCleanup,
         this.lifecycle.closeActor.bind(this.lifecycle, owned, maintenanceScope),
       );
-      options.onNativeStopped?.(
-        owned.nativeStopped,
-        () => owned.closeReceipt,
-        () => owned.openDispatch.openRefused === true,
-      );
+      if (options.onNativeStopped) {
+        const [readCloseReceipt, readOpenRefused] = captureSqliteWorkerRetirementReaders(owned);
+        options.onNativeStopped(owned.nativeStopped, readCloseReceipt, readOpenRefused);
+      }
       await actor.opened;
       options.assertCurrent?.();
       if (actor.retirementRequested) {
@@ -365,58 +374,40 @@ export class SqliteWorkerBroker {
       resumeScheduledMaintenance?.();
       return this.lifecycle.rejectActorAdmission(actor, error, options.maintenanceScope);
     }
-    const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
-    let referenceReleased = false;
+    return this.bindClient<Operations>(owned, client, {
+      releasePaths: retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths),
+      databaseIdentity,
+      maintenanceScope,
+      cleanupAccess,
+      resumeScheduledMaintenance,
+      retireIdle: options.retireIdle,
+    });
+  }
+
+  // A live client retains its actor and cleanup custody, never the completed opening request.
+  private bindClient<Operations extends SqliteWorkerOperations>(
+    owned: Actor,
+    client: object,
+    binding: SqliteWorkerClientBinding,
+  ): SqliteWorkerStore<Operations> {
+    const releaseClient = this.lifecycle.bindClientRelease({
+      actor: owned,
+      client,
+      clientReservations: this.clients,
+      releasePaths: binding.releasePaths,
+      maintenanceScope: binding.maintenanceScope,
+      resumeScheduledMaintenance: binding.resumeScheduledMaintenance,
+      readDraining: () => this.draining,
+    });
     const { store, client: storeClient } = createSqliteWorkerClient<Operations>({
       actor: owned,
       isDraining: () => this.draining !== undefined,
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
-      retireIdle: options.retireIdle,
-      dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
-        this.enqueue(
-          owned.slot,
-          {
-            type: "execute",
-            actor: owned.id,
-            databaseIdentity,
-            input: payload,
-            ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
-          },
-          sqliteWorkerRequestBytes(payload, scope?.stateContext),
-          {
-            signal,
-            requestClass,
-            scope,
-            assertCurrent,
-            createAdmission,
-            cleanupAccess,
-            maintenanceScope: cleanupAccess
-              ? undefined
-              : scope
-                ? scope.maintenanceScope
-                : getOpenClawDatabaseMaintenanceScope(),
-          },
-        ),
-      release: async (reclaiming) => {
-        if (!referenceReleased) {
-          referenceReleased = true;
-          resumeScheduledMaintenance?.();
-          this.lifecycle.releaseActorReference(owned);
-          this.stores.delete(store);
-          this.clients.delete(client);
-          releasePaths();
-        }
-        if (this.draining && !reclaiming && !owned.stateContext) {
-          // Canonical shared-state close must release its clients before host drainage joins it.
-          await this.draining;
-        } else if (owned.slot.failed) {
-          // A nonlast client must still join the failed worker's native cleanup.
-          await owned.slot.exit;
-        }
-        if (!owned.references) {
-          await this.lifecycle.closeActor(owned, maintenanceScope);
-        }
-      },
+      retireIdle: binding.retireIdle,
+      databaseIdentity: binding.databaseIdentity,
+      cleanupAccess: binding.cleanupAccess,
+      dispatch: (request, bytes, options) => this.enqueue(owned.slot, request, bytes, options),
+      release: (reclaiming): Promise<void> => releaseClient(store, reclaiming),
     });
     this.stores.set(store, storeClient);
     return store;
@@ -553,7 +544,11 @@ export class SqliteWorkerBroker {
       const index = slot.queue.indexOf(job);
       if (index >= 0) {
         slot.queue.splice(index, 1);
-        this.finish(slot, job, signal?.reason ?? new Error("SQLite worker operation canceled"));
+        void this.finish(
+          slot,
+          job,
+          signal?.reason ?? new Error("SQLite worker operation canceled"),
+        );
       }
       // Once dispatched, retain the Promise until the database outcome is known.
     };
@@ -562,7 +557,7 @@ export class SqliteWorkerBroker {
     if (activeInput) {
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) {
-        this.finish(slot, job, signal.reason ?? new Error("SQLite worker operation canceled"));
+        void this.finish(slot, job, signal.reason ?? new Error("SQLite worker operation canceled"));
       } else {
         this.dispatchJob(slot, job);
       }
@@ -643,7 +638,7 @@ export class SqliteWorkerBroker {
     job.custody.activate();
     slot.current = job;
     slot.worker.ref();
-    job.observation.started();
+    job.observation.started(slot.worker.threadId, slot.worker.performance);
     void dispatchSqliteWorkerJob(slot, job, (error, retire) => {
       // Slot failure owns settlement after joining preparation and native retirement.
       if (slot.current !== job) {
@@ -653,10 +648,18 @@ export class SqliteWorkerBroker {
         // Retire uncertain transfers or failed prepared-custody cleanup before settlement.
         this.fail(slot, error, toErrorObject(error, "SQLite worker transfer failed"));
       } else {
-        job.custody.retire();
-        slot.current = undefined;
-        this.finish(slot, job, error);
-        this.dispatch(slot);
+        const pending = this.finish(slot, job, error);
+        const release = () => {
+          if (slot.current === job) {
+            slot.current = undefined;
+          }
+          this.dispatch(slot);
+        };
+        if (pending) {
+          void pending.then(release, (failure: unknown) => this.fail(slot, failure));
+        } else {
+          release();
+        }
       }
     });
   }
@@ -667,22 +670,29 @@ export class SqliteWorkerBroker {
     error?: unknown,
     value?: unknown,
     settlement?: SqliteWorkerOperationSettlement,
-  ): void {
-    job.observation.completed();
-    this.requests.set(slot, (this.requests.get(slot) ?? 0) - 1);
-    this.bytes -= job.bytes;
-    settleSqliteWorkerJob(job, error, value, settlement);
-    if (!this.resuming.has(slot)) {
-      this.resuming.add(slot);
-      while ((this.requests.get(slot) ?? 0) < SQLITE_WORKER_MAX_REQUESTS_PER_WORKER) {
-        const resume = this.waiters.get(slot)?.values().next().value;
-        if (!resume) {
-          break;
-        }
-        resume();
-      }
-      this.resuming.delete(slot);
+  ): void | Promise<void> {
+    // Reply and native exit may converge while an accepted host create is settling.
+    if (job.finishing) {
+      const settled = () => {};
+      return job.result.then(settled, settled);
     }
+    job.finishing = true;
+    return settleSqliteWorkerJob(job, error, value, settlement, () => {
+      job.observation.completed();
+      this.requests.set(slot, (this.requests.get(slot) ?? 0) - 1);
+      this.bytes -= job.bytes;
+      if (!this.resuming.has(slot)) {
+        this.resuming.add(slot);
+        while ((this.requests.get(slot) ?? 0) < SQLITE_WORKER_MAX_REQUESTS_PER_WORKER) {
+          const resume = this.waiters.get(slot)?.values().next().value;
+          if (!resume) {
+            break;
+          }
+          resume();
+        }
+        this.resuming.delete(slot);
+      }
+    });
   }
 
   private fail(

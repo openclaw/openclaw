@@ -172,6 +172,7 @@ export async function buildWorkspaceStageInput(
     inputPath: params.inputPath,
     ref: stagedResultRef,
     entries: compared.entries,
+    existingObjects: "publication" in params ? undefined : new Map(params.existingObjects),
     message: stagedResultMessage({ ...source, gitHistory: params.gitHistory }),
     parentCommit:
       params.parentCommit ??
@@ -190,6 +191,7 @@ export async function buildWorkspaceTreeInput(
   const source = params.source;
   await writeWorkspaceGitInput({
     ...params,
+    result: "tree",
     assertBeforeMutation,
     readVerifiedContent: async (entry) =>
       source.tree === undefined

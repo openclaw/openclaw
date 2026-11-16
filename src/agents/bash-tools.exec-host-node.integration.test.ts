@@ -624,6 +624,32 @@ it("collects live conversation context only when the node exec tool reaches revi
   expect(invokeCount).toBe(0);
 });
 
+it("keeps ordinary node timeouts when background is requested", async () => {
+  // host=node ignores background and runs synchronously, so it is not a service.
+  const tool = createExecTool({
+    host: "node",
+    node: "node-1",
+    security: "full",
+    ask: "off",
+    notifyOnExit: false,
+    nodeCwd: request.workdir,
+    agentId: request.agentId,
+    sessionKey: request.sessionKey,
+  });
+
+  const result = await tool.execute("node-background", {
+    command: request.command,
+    background: true,
+  });
+
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  const run = rpc.mock.calls.find(
+    ([method, , invoke]) => method === "node.invoke" && invoke.command === "system.run",
+  );
+  expect(run?.[2].params.timeoutMs).toBe(1_800_000);
+  expect(run?.[2].timeoutMs).toBe(1_805_000);
+});
+
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
   await expect(execute({ security: "allowlist" })).rejects.toThrow("allowlist");
   expect(invokeCount).toBe(0);

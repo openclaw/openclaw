@@ -1,7 +1,7 @@
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { assertSqliteIntegrityInWorker } from "./sqlite-integrity-worker.js";
 import type { SqliteIntegrityCheck, SqliteIntegrityOperation } from "./sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 
 /** Keep the caller's connection and authority until every native reader closes. */
 export async function runSqliteIntegrityOperationInWorker<T>(
@@ -10,7 +10,10 @@ export async function runSqliteIntegrityOperationInWorker<T>(
     busyTimeoutMs: number;
     signal: AbortSignal;
     beforeResume: () => void;
-    repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean;
+    repairIntegrityError?: (
+      check: SqliteIntegrityCheck,
+      error: unknown,
+    ) => boolean | Promise<boolean>;
   },
 ): Promise<T | undefined> {
   const signal = resolveSqliteInspectionSignal(options.signal) ?? options.signal;
@@ -48,7 +51,7 @@ export async function runSqliteIntegrityOperationInWorker<T>(
       if (failure && options.repairIntegrityError) {
         const original = failure.error;
         try {
-          if (options.repairIntegrityError(step.value, original)) {
+          if (await options.repairIntegrityError(step.value, original)) {
             failure = undefined;
           }
         } catch (repairError) {
@@ -57,6 +60,7 @@ export async function runSqliteIntegrityOperationInWorker<T>(
             original.message += ` Startup FTS repair failed: ${String(repairError)}`;
           }
         }
+        beforeResume();
       }
       step = failure ? operation.throw(failure.error) : operation.next();
     }

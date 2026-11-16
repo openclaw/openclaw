@@ -40,7 +40,6 @@ import {
 } from "../plugins/install-overrides.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../plugins/install-source-plan.js";
-import { isUnavailableNpmTarget } from "../plugins/install-types.js";
 import {
   installPluginFromNpmSpec,
   installPluginFromNpmPackArchive,
@@ -811,27 +810,28 @@ export async function ensureOnboardingPluginInstalled(
       install: async (
         source,
       ): Promise<InstallOutcome<InstallPluginResult | InstallPluginFromClawHubResult>> => {
-        const specs = source.source === "npm" ? npmSpecs : clawhubSpecs;
         const attemptEntry = {
           ...entry,
           install: { ...entry.install, expectedIntegrity: source.expectedIntegrity },
         };
+        const install = (spec: string) =>
+          installPluginWithProgress({
+            ...params,
+            entry: attemptEntry,
+            source: { kind: source.source, spec },
+            onCapabilityConsent,
+          });
+        if (source.source === "npm") {
+          return await install(npmSpecs?.installSpec ?? source.spec);
+        }
         return await installWithChannelFallback({
-          installSpec: specs?.installSpec ?? source.spec,
-          ...(source.expectedIntegrity ? {} : { fallbackSpec: specs?.fallbackSpec }),
-          install: (spec) =>
-            installPluginWithProgress({
-              ...params,
-              entry: attemptEntry,
-              source: { kind: source.source, spec },
-              onCapabilityConsent,
-            }),
+          installSpec: clawhubSpecs?.installSpec ?? source.spec,
+          ...(source.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+          install,
           isRetryable: (attempt) =>
             attempt.status === "completed" &&
             !attempt.result.ok &&
-            (source.source === "npm"
-              ? isUnavailableNpmTarget(attempt.result)
-              : isUnavailableClawHubTarget(attempt.result)),
+            isUnavailableClawHubTarget(attempt.result),
           onFallback,
         });
       },

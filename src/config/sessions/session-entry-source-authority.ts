@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { retainSqliteDatabaseAdmissionForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  canShareSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -175,6 +178,7 @@ export function captureSessionEntrySourceAssertion(params: {
             fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
         });
       const revision = predicate.captureRevision();
+      const sharedAdmission = canShareSqliteDatabaseAdmissions();
       let admission: ReturnType<typeof retainSqliteDatabaseAdmissionForPath>;
       let active = true;
       let conversations:
@@ -184,12 +188,25 @@ export function captureSessionEntrySourceAssertion(params: {
         params.assertHostCurrent?.();
         retained.owner.assertCurrent();
         conversations?.assertCurrent();
-        if (!active || !admission?.isCurrent() || !predicate.isCurrent()) {
+        if (!active || (sharedAdmission && !admission?.isCurrent()) || !predicate.isCurrent()) {
           params.refuse();
+        }
+        // Unhosted workers retain the same physical-source checks as native reads.
+        if (!sharedAdmission) {
+          if (![locator, ...candidates].every(isSessionStoreReadCandidateCurrent)) {
+            params.refuse();
+          }
+          assertExistingDatabaseIdentity(
+            source.path,
+            `file:${source.databaseIdentity}`,
+            source.databaseBirthtime,
+          );
         }
       };
       try {
-        admission = retainSqliteDatabaseAdmissionForPath(source.path);
+        if (sharedAdmission) {
+          admission = retainSqliteDatabaseAdmissionForPath(source.path);
+        }
         if (!params.preparedEntry) {
           const result = await retained.owner.readExactEntries({
             sessionKeys: [scope.sessionKey],

@@ -19,11 +19,13 @@ Fresh local guided onboarding shows a one-line pointer to the
 [security guide](/gateway/security) and one choice: **Quick start** or
 **Custom setup**. Quick start records the security acknowledgment; Custom setup
 shows the full security note and asks for confirmation. Quick start reuses
-detected AI access, verifies it, saves config, and opens the web
-dashboard with a foreground Gateway. It uses agent name `main` and full access,
-leaves telemetry consent unset, and skips route confirmation, memory import,
-and app recommendations. **Ctrl+C** stops the Gateway without removing config;
-`openclaw gateway install` enables background operation later.
+detected AI access, verifies it, offers to keep OpenClaw running in the
+background (default yes), saves config, and opens the web dashboard. It uses agent name
+`main` and full access, leaves telemetry consent unset, and skips route
+confirmation, memory import, and app recommendations. If you decline the
+background service, the Gateway runs in the foreground: **Ctrl+C** stops it
+without removing config, and `openclaw gateway install` enables background
+operation later.
 
 Custom setup keeps the full guided prompts. If Quick start finds no usable
 route, it continues with manual provider setup and the remaining guided steps,

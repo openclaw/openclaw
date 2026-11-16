@@ -1,7 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { expectNoCalls } from "./program.test-helpers.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 
@@ -124,12 +124,12 @@ it.each([
   expectOptions(owner, options);
 });
 it("rejects an invalid probe timeout without dispatch", async () => {
-  await run("status --timeout nope");
-  expect(mocks.runtime.error).toHaveBeenCalledWith(
-    "--timeout must be a positive integer (milliseconds)",
-  );
-  expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-  expect(mocks.status).not.toHaveBeenCalled();
+  const execution = run("status --timeout nope");
+  await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(execution).rejects.toMatchObject({
+    message: "--timeout must be a positive integer (milliseconds)",
+  });
+  expectNoCalls(mocks.status, mocks.runtime.error, mocks.runtime.exit);
 });
 
 it.each([

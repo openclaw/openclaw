@@ -14,7 +14,7 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { ConfiguredProviderLocalServiceTarget } from "../agents/provider-local-service-target.js";
-import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
+import type { EmbeddingProviderCreateOptions } from "./embedding-provider-types.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 async function createProvider(options: Partial<EmbeddingProviderCreateOptions> = {}) {
@@ -286,6 +286,16 @@ it("does not lease a configured local service for a remote endpoint override", a
   });
   await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
   expect(acquireLocalService).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["http://127.0.0.1:8090/v1", 1],
+  ["http://localhost:8090/v1", 1],
+  ["http://[::1]:8090/v1", 1],
+  ["http://192.168.1.20:8090/v1", undefined],
+])("limits index concurrency only for loopback endpoints (%s)", async (baseUrl, expected) => {
+  const { runtime } = await providerAt(baseUrl);
+  expect(runtime?.inlineIndexConcurrency).toBe(expected);
 });
 
 it("adds non-secret routing headers to runtime cache identity", async () => {

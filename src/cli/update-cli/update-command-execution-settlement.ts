@@ -4,18 +4,21 @@ import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
-import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { recordMutableUpdateInterruption } from "./update-command-mutable-signals.js";
+import { checkActivatedRelease } from "./update-command-activated-check.js";
 import {
-  recordServiceReconciliationWarning,
-  type MutableUpdateExecutionResult,
-} from "./update-command-result.js";
+  adoptUpdateBootDatabaseWrites,
+  restoreFailedUpdateDatabases,
+} from "./update-command-database-backup.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
+import {
+  recordMutableUpdateInterruption,
+  runMutableUpdateRecovery,
+} from "./update-command-mutable-signals.js";
+import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 
 export async function settleMutableUpdateResult(
   params: MutableUpdateExecutionParams,
   settlement: {
-    originalManagedServiceRuntime?: MutableUpdateExecutionResult["originalManagedServiceRuntime"];
     result: UpdateRunResult;
     failure: MutableUpdateExecutionResult["failure"];
     candidateFailureReason?: string;
@@ -33,15 +36,15 @@ export async function settleMutableUpdateResult(
   const { opts } = params;
   const { databaseBackup, databaseCaptureStep, activationSteps, packageTransaction } = settlement;
   const originalRun = settlement.originalRun;
-  const { originalManagedServiceRuntime } = settlement;
-  if (originalManagedServiceRuntime && !originalManagedServiceRuntime.definition.runtimePin) {
-    recordServiceReconciliationWarning(
-      settlement.result,
-      originalManagedServiceRuntime.service.serviceEnv ?? {},
-      "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
-    );
-  }
   let result = recordMutableUpdateInterruption(opts, settlement.result);
+  // Without a service restart nothing boots the activated release; a failed boot
+  // reaches the same post-activation rollback as a failed Doctor.
+  const boot = () =>
+    checkActivatedRelease(params, result, settlement.env, settlement.assertCurrent);
+  result =
+    databaseBackup && originalRun && result.status === "ok" && !params.shouldRestart
+      ? await adoptUpdateBootDatabaseWrites(databaseBackup, settlement.env ?? originalRun.env, boot)
+      : await boot();
   if (
     result.status === "ok" &&
     opts.restart === false &&
@@ -68,15 +71,17 @@ export async function settleMutableUpdateResult(
     // databases in place; the rollback owner checks schemas before restoring.
     // Execution has not entered finalization or admitted any candidate Gateway.
     // Restore before schema inspection can hand an incompatible ledger to the candidate.
-    await restoreFailedUpdateDatabases({
-      backup: databaseBackup,
-      result,
-      runId: originalRun.runId,
-      env: settlement.env ?? originalRun.env,
-      assertCurrent: settlement.assertCurrent,
-      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
-      progress: params.progress,
-    });
+    await runMutableUpdateRecovery(() =>
+      restoreFailedUpdateDatabases({
+        backup: databaseBackup,
+        result,
+        runId: originalRun.runId,
+        env: settlement.env ?? originalRun.env,
+        assertCurrent: settlement.assertCurrent,
+        assertRollbackSafe: packageTransaction?.assertRollbackSafe,
+        progress: params.progress,
+      }),
+    );
   }
   return result;
 }

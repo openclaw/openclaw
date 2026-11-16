@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   loadNodeHostConfig: vi.fn<LoadNodeHostConfig>(async () => null),
   runNodeHost: vi.fn(),
+  runNodeJoin: vi.fn(),
   runNodeHostWorker: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   runNodeDaemonLifecycle: vi.fn(),
@@ -22,6 +23,8 @@ vi.mock("./daemon.js", () => mocks);
 vi.mock("../../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
 // mock-isolation: Assert dispatch without starting a real node host.
 vi.mock("../../node-host/runner.js", () => ({ runNodeHost: mocks.runNodeHost }));
+// mock-isolation: Exercise CLI dispatch without redeeming a real invitation.
+vi.mock("../../node-host/openclaw-id-join.js", () => ({ runNodeJoin: mocks.runNodeJoin }));
 // mock-isolation: Assert worker options without starting a real worker.
 vi.mock("../../node-host/worker.js", () => ({ runNodeHostWorker: mocks.runNodeHostWorker }));
 // mock-isolation: Capture command output and exits without affecting the test process.
@@ -59,6 +62,50 @@ it.each([
 });
 
 it.each([
+  ["--commands fixture.read join", ["fixture.read"], undefined],
+  [
+    "join --commands fixture.read --commands fixture.list",
+    ["fixture.list", "fixture.read"],
+    undefined,
+  ],
+  ["--all-commands join", undefined, true],
+  ["join --all-commands", undefined, true],
+] as const)("forwards node enrollment options: %s", async (args, commands, allCommands) => {
+  const link = "openclaw-node://join#synthetic-invitation";
+  await run(
+    args,
+    link,
+    "--service",
+    "--discovery-url",
+    "https://discovery.example",
+    "--display-name",
+    "Build Node",
+  );
+  expect(mocks.runNodeJoin).toHaveBeenCalledWith(link, {
+    service: true,
+    discoveryUrl: "https://discovery.example",
+    displayName: "Build Node",
+    commands,
+    allCommands,
+  });
+  expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+  expect(mocks.runNodeHost).not.toHaveBeenCalled();
+  expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+});
+
+it("reports enrollment failures through the CLI runtime", async () => {
+  mocks.runNodeJoin.mockRejectedValueOnce(new Error("Node invitation expired."));
+  await run("join", "openclaw-node://join#synthetic-invitation");
+  expect(runtime.error).toHaveBeenCalledWith("Node invitation expired.");
+  expect(runtime.exit).toHaveBeenCalledWith(1);
+});
+
+it("passes exact-device resume to the node owner", async () => {
+  await run("run --ephemeral --resume-device device-1");
+  expectHost({ ephemeral: true, resumeDeviceId: "device-1" });
+});
+
+it.each([
   "--commands fixture.read,fixture.list install",
   "install --commands fixture.read --commands fixture.list,fixture.read",
 ])("accepts exact command allowlists: %s", async (args) => {
@@ -78,8 +125,12 @@ it.each([
   "--all-commands run --commands fixture.read",
   "--commands fixture.read run --all-commands",
   "--commands fixture.read --all-commands run",
+  "join openclaw-node://join --all-commands --commands fixture.read",
+  "--all-commands join openclaw-node://join --commands fixture.read",
+  "--commands fixture.read join openclaw-node://join --all-commands",
 ])("rejects conflicting command selections: %s", async (args) => {
   await expect(run(args)).rejects.toThrow(/--all-commands.*--commands/);
+  expect(mocks.runNodeJoin).not.toHaveBeenCalled();
   expect(mocks.runNodeHost).not.toHaveBeenCalled();
   expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();

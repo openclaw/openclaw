@@ -1,7 +1,7 @@
 // Synthetic authenticated Inbox reads and broadcasts through the real Gateway.
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -26,7 +26,7 @@ import { requestSessionListParams } from "../../ui/src/lib/sessions/session-requ
 import type { SessionRequestClient } from "../../ui/src/lib/sessions/session-types.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
@@ -124,10 +124,7 @@ registerHooks({
 });
 function markGc(phase: string, profilePath?: string) {
   if (process.execArgv.includes("--trace-gc-nvp")) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, profilePath);
   }
 }
 if (process.execArgv.includes("--trace-gc-nvp")) {

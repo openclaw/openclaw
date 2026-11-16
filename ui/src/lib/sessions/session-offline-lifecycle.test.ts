@@ -282,7 +282,9 @@ it.each(["archive", "delete"])("rolls back a rejected offline %s", async (kind) 
   }
   h.reject();
   h.reconnect();
-  await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith({ message: "Lifecycle denied" }));
+  await vi.waitFor(() =>
+    expect(showToast).toHaveBeenCalledWith({ severity: "error", message: "Lifecycle denied" }),
+  );
   expect(h.row()).toMatchObject({ label: "Original", archived: false, pinned: true });
   expect(h.sessions.presentation.result?.sessions).toHaveLength(1);
 });
@@ -433,7 +435,11 @@ it.each(["archive", "delete"])(
     h.gateway.connect({ token: "new-synthetic-owner" });
     expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
     expect(h.sessions.deletionState("agent:main:offline", "main", "incarnation")).toBeUndefined();
-    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "Offline changes discarded: 1" });
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      severity: undefined,
+      placement: "top-right",
+      message: "Offline changes discarded: 1",
+    });
     expect(h.writes()).toHaveLength(0);
   },
 );
@@ -453,7 +459,7 @@ it("reports targets without an identity while queuing the rest of an offline del
   const message =
     'Cannot queue deletion of "agent:main:missing" without its session identity. Refresh after reconnecting and try again.';
   expect(result.errors).toEqual([{ target: missing, error: new Error(message) }]);
-  expect(showToast).toHaveBeenCalledWith({ message });
+  expect(showToast).toHaveBeenCalledWith({ severity: "error", message });
   expect(h.sessions.state.error).toBe(message);
   expect(result.queued).toEqual(["agent:main:offline", "agent:main:second"]);
   expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
@@ -469,7 +475,9 @@ it("moves an offline unarchive to active and restores the archive on rejection",
   expect(h.sessions.archiveVisibility("agent:main:offline")).toBeUndefined();
   h.reject();
   h.reconnect();
-  await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith({ message: "Lifecycle denied" }));
+  await vi.waitFor(() =>
+    expect(showToast).toHaveBeenCalledWith({ severity: "error", message: "Lifecycle denied" }),
+  );
   expect(h.row()?.archived).toBe(true);
 });
 
@@ -563,7 +571,8 @@ it("reports a preserved worktree after deferred deletion without removing it", a
   h.reconnect();
   await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
   expect(showToast).toHaveBeenCalledExactlyOnceWith({
-    message: "Managed Worktrees:\nfeature/offline — live run or cleanup active",
+    severity: undefined,
+    message: "Managed worktrees:\nfeature/offline — live run or cleanup active",
   });
   expect(h.row()).toBeUndefined();
   expect(h.current().request.mock.calls.some(([method]) => method === "worktrees.remove")).toBe(
@@ -702,7 +711,10 @@ it.each(["rejection", "discard"])("rolls back queued metadata on %s", async (out
       expect(h.errors.some((error) => error?.includes("label already in use"))).toBe(true),
     );
     await vi.waitFor(() => expect(h.row()?.label).toBe("Original"));
-    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "label already in use: Taken" });
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      severity: "error",
+      message: "label already in use: Taken",
+    });
   } else {
     h.gateway.stop();
   }

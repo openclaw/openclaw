@@ -98,7 +98,6 @@ describe("subagent announce Gateway instance dispatch", () => {
               requesterSessionKey: "agent:main:subagent:gone-requester",
               requesterAgentId: "main",
               targetRequesterSessionKey: sessionKey,
-              completionRequesterSessionId: "gone-requester-session",
               sourceSessionKey: "agent:main:subagent:completed-child",
               sourceTool: "subagent_announce",
               triggerMessage: "Review the completed child.",

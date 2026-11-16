@@ -8,6 +8,8 @@ export function saveIndicatorProps(overrides: Partial<Props> = {}): Props {
     status: "idle",
     lastError: null,
     needsApply: false,
+    pending: false,
+    savedNotice: false,
     saving: false,
     applying: false,
     applyDisabled: false,

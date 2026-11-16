@@ -99,12 +99,16 @@ export function chronicle(
   assertSourceGrouping(input);
   const predicate = onDay ? dayPredicate(onDay) : undefined;
   const field = input.timeField ?? "occurred_at";
-  let { snapshot, ids } = runSqliteImmediateTransactionSync(db, () => ({
-    snapshot: reconcileChronicle(db, records, binding),
-    ids: input.group
-      ? entityRecordIds(db, binding, input.entity!)
-      : chronologicalIds(db, binding, input),
-  }));
+  let { snapshot, ids } = runSqliteImmediateTransactionSync(
+    db,
+    () => ({
+      snapshot: reconcileChronicle(db, records, binding),
+      ids: input.group
+        ? entityRecordIds(db, binding, input.entity!)
+        : chronologicalIds(db, binding, input),
+    }),
+    { operationLabel: "knowledge.chronicle" },
+  );
   // A cursor belongs to both a source snapshot and a particular query.
   snapshot = digest(
     JSON.stringify([

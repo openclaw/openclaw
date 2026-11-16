@@ -42,5 +42,9 @@
     "tools": [
       "mcp_events"
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether MCP Events is ready for my chosen account.",
+    "Draft an automation for an event advertised by a connected MCP account."
+  ]
 }

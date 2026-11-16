@@ -22,26 +22,26 @@ function matches(query: string, schema: Schema, options: Partial<Search> = {}) {
 }
 
 it.each([
-  ["tag:security", true],
-  ["mode tag:security", false],
+  ["tag:überwachung tag:cafe\u0301", true],
+  ["mode tag:überwachung tag:cafe\u0301", false],
 ] as const)("matches text and tag criteria: %s", (query, expected) => {
   expect(
     matches(query, object({ auth: object({ token: string() }) }), {
       path: ["gateway"],
-      hints: { "gateway.auth.token": { label: "Access Token", tags: ["security", "secret"] } },
+      hints: { "gateway.auth.token": { label: "Token", tags: ["u\u0308berwachung", "café"] } },
     }),
   ).toBe(expected);
 });
 
 const overflow: Schema = {
   items: [{}, string("secondary")],
-  additionalItems: string("Overflow"),
+  additionalItems: string("Café"),
 };
 const closed: Schema = { items: [string("reachable")], additionalItems: false };
 const forbidden: Schema = { items: [{}, string("Forbidden")] };
 it.each([
-  ["credential", array(object({ source: string("Credential") })), true],
-  ["overflow", array([string("outer")], overflow), true],
+  ["münchen", array(object({ source: string("Mu\u0308nchen") })), true],
+  ["cafe\u0301", array([string("outer")], overflow), true],
   ["forbidden", array(undefined, closed, forbidden), false],
 ] satisfies [string, Schema, boolean][])(
   "searches only reachable empty-array schemas: %s",

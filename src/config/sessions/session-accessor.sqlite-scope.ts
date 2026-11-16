@@ -9,7 +9,6 @@ import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
-import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
@@ -18,6 +17,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseWriteTiming } from "../../state/openclaw-agent-write-admission-state.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
@@ -167,7 +167,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   assertAgentSessionWriteAdmission(databaseOptions, scope.agentId);
-  const timing: StoreWriterTiming = {};
+  const timing: AgentDatabaseWriteTiming = { operationLabel: operation };
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
   const timingFields = (completedAt: number) => ({
@@ -175,6 +175,9 @@ export async function runExclusiveSqliteSessionWrite<T>(
     threadId,
     isMainThread,
     operation,
+    ...(!timing.reentrant && timing.holderAtEnqueue
+      ? { holderAtEnqueue: timing.holderAtEnqueue }
+      : {}),
     ...(diagnostics?.kind ? { reclamationKind: diagnostics.kind } : {}),
     ...(diagnostics?.workerThreadId !== undefined
       ? { workerThreadId: diagnostics.workerThreadId }

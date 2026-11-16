@@ -53,7 +53,7 @@ describe("resolveSessionGitCoauthorPrompt", () => {
     }
     vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue(undefined);
     expect(await resolveRequestGitCoauthorPrompt(source)).toContain(
-      "no host-verified requester trailer",
+      "no host-supplied requester trailer",
     );
   });
 

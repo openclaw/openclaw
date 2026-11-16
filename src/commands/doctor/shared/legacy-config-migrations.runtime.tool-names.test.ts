@@ -60,4 +60,67 @@ describe("legacy tool name migrations", () => {
     expect(migrate("tools.view-image-name", raw)).toHaveLength(changed);
     expect(raw.tools.allow).toEqual(expected);
   });
+
+  it("adds skill_library beside skill_workshop and keeps the Workshop entry", () => {
+    const raw = {
+      tools: {
+        allow: ["skill_workshop", "read"],
+        deny: ["SKILL_WORKSHOP"],
+        sandbox: { tools: { alsoAllow: ["skill_*"] } },
+      },
+      agents: { entries: { main: { tools: { allow: ["skill_workshop", "skill_library"] } } } },
+    };
+    expect(migrate("tools.skill-library-split", raw)).toHaveLength(1);
+    expect(raw.tools.allow).toEqual(["skill_workshop", "read", "skill_library"]);
+    // A deny of skill_workshop also hid personal-library authoring before the split.
+    expect(raw.tools.deny).toEqual(["SKILL_WORKSHOP", "skill_library"]);
+    // Globs and lists that already cover skill_library stay unchanged.
+    expect(raw.tools.sandbox.tools.alsoAllow).toEqual(["skill_*"]);
+    expect(raw.agents.entries.main.tools.allow).toEqual(["skill_workshop", "skill_library"]);
+    expect(raw).toHaveProperty("meta.migrations.skillLibraryToolSplit", true);
+    expect(migrate("tools.skill-library-split", raw)).toEqual([]);
+  });
+
+  it("leaves post-split policy alone once the split marker is recorded", () => {
+    const raw = {
+      meta: { migrations: { skillLibraryToolSplit: true } },
+      tools: {
+        allow: ["skill_library"],
+        deny: ["skill_workshop"],
+        gatewayPolicy: { allow: ["skill_workshop"], actions: { skill_workshop: ["list"] } },
+      },
+    };
+    const authored = structuredClone(raw);
+    for (let run = 0; run < 3; run += 1) {
+      expect(migrate("tools.skill-library-split", raw)).toEqual([]);
+    }
+    expect(raw).toEqual(authored);
+  });
+
+  it.each([
+    {
+      name: "grants the personal actions skill_workshop permitted",
+      actions: { skill_workshop: ["list", "view", "create", "patch"] },
+      granted: ["list", "create"],
+    },
+    {
+      name: "intersects alias spellings like the policy does",
+      actions: { skill_workshop: ["list", "read"], " Skill_Workshop ": ["read", "update"] },
+      granted: ["read"],
+    },
+    { name: "never widens Workshop-only actions", actions: { skill_workshop: ["view"] } },
+    { name: "never widens a missing action list", actions: {} },
+  ])("gatewayPolicy: $name", ({ actions, granted }) => {
+    const raw = { tools: { gatewayPolicy: { allow: ["read", "skill_workshop"], actions } } };
+    const authored = structuredClone(raw);
+    migrate("tools.skill-library-split", raw);
+    expect(raw.tools.gatewayPolicy).toEqual(
+      granted
+        ? {
+            allow: ["read", "skill_workshop", "skill_library"],
+            actions: { ...actions, skill_library: granted },
+          }
+        : authored.tools.gatewayPolicy,
+    );
+  });
 });

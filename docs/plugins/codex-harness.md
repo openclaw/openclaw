@@ -28,6 +28,11 @@ current owned proxy. Context-only projection refreshes use that same logical
 inference identity when background work retains its predecessor, rather than
 comparing the private relay URL with the logical route fingerprint.
 
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration
@@ -97,6 +102,12 @@ MCP progress, streamed patch updates, reasoning section markers, and model metad
 keep native work from appearing stalled. Terminal interaction also informs process
 cleanup. These notifications remain enabled. Older app-servers that do not recognize
 the optional capability ignore it; the normal minimum-version check still applies.
+
+Local app-server process creation and stdio forwarding run in a dedicated worker
+thread. A slow executable launch therefore leaves the Gateway event loop available
+for other requests. The worker preserves the Gateway's parent-process identity,
+so existing orphan registration and descendant cleanup still apply. Each retained
+app-server has one transport worker; shared-client idle retirement closes both.
 
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page

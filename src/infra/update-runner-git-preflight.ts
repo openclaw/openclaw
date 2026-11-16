@@ -29,15 +29,20 @@ import {
   prepareCandidateCommandEnv,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
+  resolveGitNoLazyFetchArgs,
   resetPreflightCandidateWorktree,
   type StepFactory,
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
+import {
+  hasSameReplayConflictObjects,
+  LOCAL_REPLAY_CONFLICT_REASON,
+  replayLocalCommits,
+} from "./update-runner-git-replay.js";
 import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
 import {
-  abortGitPreflightRebase,
   isInterruptedGitStep,
   resolveExplicitGitPreflightTarget,
   runClassifiedGitStep,
@@ -55,6 +60,7 @@ type GitCandidatePreflightResult =
       status: "ok";
       candidateSha: string;
       selectedDevUpstream: string | null;
+      selectedDevSource: GitFetchTarget | null;
       localDevBranchExists: boolean | null;
     }
   | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> };
@@ -69,6 +75,8 @@ type PreflightCandidateResult =
         | "node-runtime-incompatible"
         | "stopped"
         | "replay-timeout";
+      /** Paths Git left unmerged when replaying local commits onto this candidate. */
+      replayConflictPaths?: string[];
     };
 
 async function testPreflightCandidate(
@@ -122,49 +130,10 @@ async function testPreflightCandidate(
     return { status: classifyPreflightFailure(checkout) };
   }
   if (params.rebaseFrom) {
-    const source = await runCandidateCheck("local-checkout", [
-      "git",
-      "-C",
-      params.worktreeDir,
-      "checkout",
-      "--detach",
-      params.rebaseFrom,
-    ]);
-    const rebase =
-      source ??
-      (await runCandidateCheck("rebase", [
-        "git",
-        "-C",
-        params.worktreeDir,
-        "rebase",
-        ...(params.referenceSource ? ["--rebase-merges"] : []),
-        params.sha,
-      ]));
-    if (rebase) {
-      if (
-        isInterruptedGitStep(rebase) ||
-        (!source &&
-          (await abortGitPreflightRebase(
-            params.step(
-              "preflight-rebase-abort",
-              ["git", "-C", params.worktreeDir, "rebase", "--abort"],
-              params.worktreeDir,
-            ),
-          )))
-      ) {
-        return { status: "stopped" };
-      }
-      const failure = classifyPreflightFailure(rebase);
-      if (failure === "insufficient-space") {
-        return { status: failure };
-      }
-      if (
-        !params.referenceSource &&
-        (rebase.termination === "timeout" || rebase.termination === "no-output-timeout")
-      ) {
-        return { status: "replay-timeout" };
-      }
-      return { status: failure };
+    const rebaseFrom = params.rebaseFrom;
+    const replay = await replayLocalCommits({ ...params, rebaseFrom, runCandidateCheck });
+    if (replay) {
+      return replay;
     }
   }
   const candidateHead = await params.runCommand(
@@ -420,6 +389,7 @@ export async function runGitCandidatePreflight(params: {
     : null;
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
+  let selectedDevSource: GitFetchTarget | null = null;
   let localDevBranchExists: boolean | null = null;
   let localDevBranchSha: string | undefined;
   if (params.targetRevision) {
@@ -473,16 +443,22 @@ export async function runGitCandidatePreflight(params: {
     if (!source || (source.remote !== "." && !params.refreshedRemotes.includes(source.remote))) {
       return { status: "skipped", reason: "no-upstream" };
     }
-    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
-    if (!upstreamRef) {
+    selectedDevSource = { remote: source.remote, mergeRef: source.mergeRef };
+    // Keep the cache ref identity separate from the fetched source revision.
+    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, {
+      remote: source.remote,
+      mergeRef: source.mergeRef,
+    });
+    const revision = source.revision ?? upstreamRef;
+    if (!revision) {
       return { status: "skipped", reason: "no-upstream" };
     }
-    const upstreamSha = await readGit("rev-parse", "--verify", `${upstreamRef}^{commit}`);
+    const upstreamSha = await readGit("rev-parse", "--verify", `${revision}^{commit}`);
     if (!upstreamSha) {
       return { status: "error", reason: "no-upstream-sha" };
     }
     // Local branches are operator state, not remote cache refs to publish after admission.
-    selectedDevUpstream = upstreamRef.startsWith("refs/heads/") ? null : upstreamRef;
+    selectedDevUpstream = upstreamRef?.startsWith("refs/heads/") ? null : upstreamRef;
     const revListStep = await runStep(
       step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
     );
@@ -510,8 +486,12 @@ export async function runGitCandidatePreflight(params: {
       : undefined;
 
   if (rebaseFrom && !params.referenceSource) {
+    const noLazyFetchArgs = await resolveGitNoLazyFetchArgs(params.runCommand, {
+      cwd: params.gitRoot,
+      timeoutMs: params.timeoutMs,
+    });
     const relation = await runClassifiedGitStep(
-      step("preflight-local-history", "--no-lazy-fetch", "merge-base", rebaseFrom, candidates[0]!),
+      step("preflight-local-history", ...noLazyFetchArgs, "merge-base", rebaseFrom, candidates[0]!),
       (result) => {
         if (
           result.exitCode === 1 &&
@@ -605,6 +585,9 @@ export async function runGitCandidatePreflight(params: {
   }
   const worktreeDir = path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
   let tested: PreflightCandidateResult | undefined;
+  let replayConflict: { sha: string; paths: string[] } | undefined;
+  // Stays true only while every candidate was rejected by a local replay conflict.
+  let onlyReplayConflicts = true;
   let cleanupUncertain = false;
   try {
     const worktreeStep = await runStep(
@@ -623,8 +606,17 @@ export async function runGitCandidatePreflight(params: {
       if (canSkipActivation && sha === params.beforeSha) {
         return { status: "skipped", reason: "already-current" };
       }
+      if (
+        rebaseFrom &&
+        replayConflict &&
+        (await hasSameReplayConflictObjects({ ...params, worktreeDir }, replayConflict, sha))
+      ) {
+        // Replaying here would stop on the same conflict; keep walking back.
+        continue;
+      }
       if (sha !== preflightBaseSha) {
         if (!(await checkNodeRuntime(sha))) {
+          onlyReplayConflicts = false;
           continue;
         }
         await params.beforeCandidate(sha);
@@ -640,6 +632,7 @@ export async function runGitCandidatePreflight(params: {
         });
       let candidate = await testCandidate();
       if (candidate.status === "stopped") {
+        onlyReplayConflicts = false;
         tested = { status: "failed" };
         break;
       }
@@ -647,6 +640,11 @@ export async function runGitCandidatePreflight(params: {
         // Retry only this candidate clean, then keep the original walk-back order.
         rebaseFrom = undefined;
         candidate = await testCandidate();
+      }
+      if (candidate.status === "failed" && candidate.replayConflictPaths) {
+        replayConflict = { sha, paths: candidate.replayConflictPaths };
+      } else {
+        onlyReplayConflicts = false;
       }
       // Node requirements and package managers can differ across older revisions.
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
@@ -686,7 +684,8 @@ export async function runGitCandidatePreflight(params: {
           });
           return false;
         });
-      if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
+      // Failed candidates still need their private Git repository until cleanup settles.
+      if (!params.retainCleanup?.(cleanup)) {
         await cleanup();
       }
     }
@@ -701,13 +700,16 @@ export async function runGitCandidatePreflight(params: {
             ? tested.reason
             : tested?.status === "node-runtime-incompatible"
               ? "preflight-node-runtime-incompatible"
-              : "preflight-no-good-commit",
+              : replayConflict && onlyReplayConflicts
+                ? LOCAL_REPLAY_CONFLICT_REASON
+                : "preflight-no-good-commit",
     };
   }
   return {
     status: "ok",
     candidateSha: tested.candidateSha,
     selectedDevUpstream,
+    selectedDevSource,
     localDevBranchExists,
   };
 }

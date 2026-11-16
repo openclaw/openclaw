@@ -69,6 +69,37 @@ describe("worker turn launcher claim admission", () => {
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each(["worker-turn", "remote-exec"] as const)(
+    "keeps fresh %s input unclaimed when provider observation is unavailable",
+    async (mode) => {
+      await seedActivePlacement(mode);
+      const environments = environmentForTunnel({
+        startTunnel: vi.fn(async () => {
+          throw new Error("unexpected worker launch");
+        }),
+        inspectTurnLease: vi.fn(async () => {
+          throw new Error("provider observation unavailable");
+        }),
+      });
+      const provider = createLauncher({ environments });
+      const runLocal = vi.fn(localResult);
+      const onAdmitted = vi.fn();
+      const runId = "provider-observation-unavailable";
+      await expect(
+        provider.executeTurn(runIdentity(runId), turn(runId), runLocal, onAdmitted),
+      ).rejects.toThrow("provider observation unavailable");
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expectUncalled(
+        runLocal,
+        onAdmitted,
+        environments.startTunnel,
+        environments.acquireTurnCredential,
+        environments.destroy,
+      );
+    },
+  );
+
+  it.each(["worker-turn", "remote-exec"] as const)(
     "rejects compaction successors throughout the %s placement lifecycle without changing ownership",
     async (executionMode) => {
       const provider = createLauncher();

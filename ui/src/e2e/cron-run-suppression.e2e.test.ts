@@ -97,7 +97,8 @@ suite.define(() => {
           const suppressed = runs.nth(0);
           const failedDelivery = runs.nth(1);
           for (const run of [suppressed, failedDelivery]) {
-            expect(await run.locator(".cron-run-entry__title").textContent()).toContain("OK");
+            const title = await run.locator(".cron-run-entry__title").textContent();
+            expect(title).toContain("Completed");
             expect(await run.locator(".cron-run-entry__facts").textContent()).toContain(
               "Not delivered",
             );

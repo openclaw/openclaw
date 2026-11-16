@@ -1,13 +1,13 @@
 import type {
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
-export function listSupportedVideoGenerationModes(
-  provider: Pick<VideoGenerationProvider, "capabilities">,
-): VideoGenerationMode[] {
+export function listSupportedVideoGenerationModes(provider: {
+  capabilities: VideoGenerationProviderCapabilities;
+}): VideoGenerationMode[] {
   const modes: VideoGenerationMode[] = ["generate"];
   const imageToVideo = provider.capabilities.imageToVideo;
   if (imageToVideo?.enabled) {
@@ -21,7 +21,7 @@ export function listSupportedVideoGenerationModes(
 }
 
 export function resolveVideoGenerationModeCapabilities(params: {
-  provider?: Pick<VideoGenerationProvider, "capabilities">;
+  provider?: { capabilities: VideoGenerationProviderCapabilities };
   model?: string;
   inputImageCount?: number;
   inputVideoCount?: number;

@@ -12,6 +12,7 @@ export const {
   ApplicationCommandType,
   ApplicationFlags,
   ButtonStyle,
+  ChannelFlags,
   ChannelType,
   ComponentType,
   GatewayCloseCodes,

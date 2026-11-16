@@ -35,7 +35,7 @@ export const payload = new CatalogWorkspacePayload();
 `,
     "index.cjs": `
 const { payload } = require("./payload.mjs");
-const v8 = require("node:v8");
+const { forceFullGc } = require(${JSON.stringify(path.resolve(import.meta.dirname, "../test-utils/retention.ts"))});
 const fs = require("node:fs");
 const state = globalThis[Symbol.for("catalog.workspace.memory.proof")] ??= { payloads: [], callbacks: [], calls: 0 };
 state.payloads.push(new WeakRef(payload));
@@ -43,7 +43,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   const run = (ctx) => {
     if (payload.rows[99_999].index !== 99_999) throw Error("native module unavailable");
     state.calls++;
-    if (state.calls === 1 || state.calls === 5 || state.calls === 20) v8.queryObjects(WeakRef);
+    if (state.calls === 1 || state.calls === 5 || state.calls === 20) forceFullGc();
     fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
       memory: process.memoryUsage(),
       payloads: state.payloads.filter(ref => ref.deref()).length,

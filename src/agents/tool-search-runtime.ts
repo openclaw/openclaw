@@ -1,4 +1,5 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
@@ -13,6 +14,8 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { resolveAgentHarnessToolResultPresentation } from "./harness/tool-result-facts.js";
+import { createAgentToolResultMiddlewareApplier } from "./harness/tool-result-middleware.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -25,12 +28,12 @@ import {
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
 import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
-import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
-  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { isToolResultError, resolveToolResultFailureKind } from "./tool-result-error.js";
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
@@ -45,6 +48,11 @@ import {
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import type {
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
@@ -56,14 +64,11 @@ import { readToolSearchLimit } from "./tool-search-request.js";
 import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
   ToolSearchCatalogSession,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
-  UnknownToolErrorOptions,
 } from "./tool-search-types.js";
 import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
@@ -208,6 +213,7 @@ function sanitizeToolCallIdPart(value: string): string {
 export class ToolSearchRuntime {
   readonly sourceReplyCell = new ToolSourceReplyCell();
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
+  private readonly applyToolResultMiddleware;
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
@@ -220,7 +226,16 @@ export class ToolSearchRuntime {
       validateInput?: boolean;
       callIdScope?: string;
     } = {},
-  ) {}
+  ) {
+    const { agentId, sessionId, sessionKey, runId } = ctx;
+    this.applyToolResultMiddleware = createAgentToolResultMiddlewareApplier({
+      runtime: "openclaw",
+      agentId,
+      sessionId,
+      sessionKey,
+      runId,
+    });
+  }
 
   search = async (
     query: string,
@@ -281,15 +296,6 @@ export class ToolSearchRuntime {
   all = (options?: CatalogVisibilityOptions) =>
     visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
       compactToolSearchCatalogEntry(entry),
-    );
-
-  namespaceEntries = () =>
-    // Snapshot host metadata without rendering hints or retaining the executable tool.
-    resolveCatalog(this.ctx).entries.map(
-      ({ tool: _tool, outputSchema: _outputSchema, ...entry }) => {
-        entry.parameters ??= {};
-        return entry;
-      },
     );
 
   describe = async (
@@ -412,6 +418,7 @@ export class ToolSearchRuntime {
       ? captureToolOutputSelection(outputVariants.inputProperty, normalizedInput)
       : undefined;
     let executedOutputSelection: ToolOutputSelection | undefined;
+    let executedInput: Record<string, unknown> | undefined;
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
@@ -427,7 +434,8 @@ export class ToolSearchRuntime {
     let preExecutionRefused = false;
     // Reuse only this call's accepted snapshot; outer schema validation must still run.
     let acceptedSnapshot: AgentToolResult<unknown> | undefined;
-    const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+    const acceptResultBeforeProjection = async (rawResult: AgentToolResult<unknown>) => {
+      let candidate = rawResult;
       // Projection failure cannot revoke delivery already committed by the producer.
       this.sourceReplyCell.observe(candidate);
       const refusal = readToolExecutionRefusal(candidate);
@@ -444,6 +452,26 @@ export class ToolSearchRuntime {
           }
         }
         await assertCatalogOutputMatchesSchema(entry, candidate);
+      }
+      // Native catalog calls bypass the session tool_result hook. Apply once
+      // before guest serialization; MCP/client transports keep their owned projections.
+      if (entry.source === "openclaw" && candidate !== acceptedSnapshot) {
+        const failureKind = resolveToolResultFailureKind(candidate);
+        const update = await this.applyToolResultMiddleware({
+          toolCallId,
+          toolName: entry.name,
+          args: executedInput ?? asOptionalRecord(structuredClone(normalizedInput)) ?? {},
+          cwd: readStringValue(asOptionalRecord(candidate.details)?.cwd),
+          isError: failureKind !== undefined,
+          result: candidate,
+        });
+        if (update) {
+          candidate = resolveAgentHarnessToolResultPresentation({
+            result: update,
+            executionIsError: failureKind !== undefined,
+            executionFailureKind: failureKind,
+          }).result;
+        }
       }
       const snapshot =
         candidate === acceptedSnapshot
@@ -478,6 +506,7 @@ export class ToolSearchRuntime {
       try {
         const result = await executeTool({
           tool: executionTool,
+          toolId: entry.id,
           toolName: entry.name,
           source: entry.source,
           sourceName: entry.sourceName,
@@ -520,6 +549,7 @@ export class ToolSearchRuntime {
               if (validateInput) {
                 await assertCatalogInputMatchesSchema(entry, finalInput);
               }
+              executedInput = asOptionalRecord(structuredClone(finalInput));
               if (outputVariants) {
                 // Retain the prepared primitive, not an input object the tool can mutate.
                 executedOutputSelection = captureToolOutputSelection(
@@ -563,11 +593,14 @@ export function formatToolSearchControlResult<T>(
   options: {
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
-    compact?: boolean;
+    /** Model-facing projection of payload; details keep the full payload. */
+    modelPayload?: unknown;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
-  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const serialized = serializeToolSearchControlResult(
+    "modelPayload" in options ? options.modelPayload : payload,
+  );
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
   const { text } = renderToolSearchControlText(serialized, networkContent);
   const result = textResult(text, payload);

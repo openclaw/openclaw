@@ -128,7 +128,9 @@ type ToolCatalogMetadata = {
 
 type ToolCatalogHandle = ((input?: unknown) => Promise<unknown>) &
   ToolCatalogMetadata & {
-    describe(): Promise<ToolCatalogDescription | McpCatalogDescription>;
+    describe(options?: {
+      includeRarelyNeededOutputSchema?: boolean;
+    }): Promise<ToolCatalogDescription | McpCatalogDescription>;
     toJSON(): ToolCatalogMetadata;
   };
 ```
@@ -165,7 +167,12 @@ declaration. Search also accepts the fully qualified `callableName`.
 `catalog.all()` continues to list only native and client handles; searching does
 not add remote tools to that list or to the trusted quick index.
 
-Full schema is loaded only on demand:
+Full schema is loaded only on demand. Native and client `describe()` omits
+`outputSchema` by default: `API.read("tools/<callableName>.d.ts")` already
+renders the trusted output as a TypeScript declaration, and the raw schema can
+cost tens of thousands of characters when returned. Pass
+`{ includeRarelyNeededOutputSchema: true }` only when the original JSON Schema
+is required, for example when declaration bounds leave the output `unknown`.
 
 ```typescript
 type ToolCatalogDescription = Omit<ToolCatalogMetadata, "toolName"> & {

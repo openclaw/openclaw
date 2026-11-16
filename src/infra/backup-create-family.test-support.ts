@@ -8,12 +8,14 @@ import {
   createColdPluginConfig,
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import {
   type OpenClawTestState as State,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { BackupCreateOptions, BackupCreateResult } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 type FixtureOptions = Parameters<typeof withOpenClawTestState>[0];
 
@@ -42,6 +44,17 @@ export async function isolateBackupScratch(state: State) {
   await fs.mkdir(scratchRoot);
   Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
   state.applyEnv();
+  const cleanup = state.cleanup;
+  let cleanupPromise: Promise<void> | undefined;
+  // Scratch can contain the retained broker socket; join native custody before removal.
+  state.cleanup = () =>
+    (cleanupPromise ??= Promise.resolve().then(async () => {
+      await state.restoreEnv();
+      const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+      expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+      expect(await source.retireIdleBroker()).toBe(true);
+      await cleanup();
+    }));
 }
 
 export const createVerifiedBackup = (

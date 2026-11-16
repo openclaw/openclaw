@@ -31,7 +31,7 @@ import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { historyBudget, makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { requestChatSend } from "./chat-send-request.ts";
@@ -64,8 +64,6 @@ import {
 } from "./queued-message-edit.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
-
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 
 function textMessage(text: string, role = "assistant") {
   return { role, content: [{ type: "text", text }] };
@@ -1009,67 +1007,6 @@ describe("chat state render lifecycle", () => {
     expect(state.pendingAbort?.runId).toBe("offline-run");
   });
 
-  it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
-    const { frames } = captureAnimationFrames();
-    const awaitDomCommit = vi.fn(async () => true);
-    const controller = createChatState<ChatPageHost>({
-      awaitDomCommit,
-    });
-    let state: ChatPageHost;
-    const rendered: (string | null)[] = [];
-    const queueLengths: number[] = [];
-    const dispose = createRoot((stop) => {
-      state = createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
-        dispatchEvent: () => true,
-      });
-      state.client = createTestGatewayClient(vi.fn());
-      controller.attach(state);
-      createEffect(
-        () => state.chatStream,
-        (stream) => {
-          rendered.push(stream);
-        },
-      );
-      createEffect(
-        () => state.chatQueue.length,
-        (length) => {
-          queueLengths.push(length);
-        },
-      );
-      return stop;
-    });
-    onTestFinished(() => {
-      controller.dispose();
-      dispose();
-    });
-    flush();
-    awaitDomCommit.mockClear();
-    chatRunPresentation(state!).batch(
-      () => (state!.chatStream = "queued stream"),
-      "animation-frame",
-    );
-    expect(frames.size).toBe(1);
-    controller.publishPendingRunState();
-    controller.captureRenderChanges();
-    flush();
-    expect(frames.size).toBe(0);
-    expect(rendered).toEqual([null, "queued stream"]);
-    keepVolatileQueuedMessage(state!, state!.sessionKey, {
-      id: "run-and-outbox-publication",
-      text: "Keep this queued input",
-      createdAt: 1,
-      sendState: "held",
-    });
-    expect(state!.chatQueue).toHaveLength(1);
-    flush();
-    expect(queueLengths).toEqual([0, 1]);
-    removeQueuedMessage(state!, "run-and-outbox-publication");
-    flush();
-    expect(queueLengths).toEqual([0, 1, 0]);
-    expect(rendered).toEqual([null, "queued stream"]);
-    expect(awaitDomCommit).not.toHaveBeenCalled();
-  });
-
   it("publishes run fields once per frame while preserving synchronous state and terminal ordering", () => {
     const { frames } = captureAnimationFrames();
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
@@ -1821,8 +1758,7 @@ describe("session pull request refresh", () => {
   });
 
   function createFinalReplyState(refreshSessionPullRequests: ReturnType<typeof vi.fn>) {
-    return {
-      ...makeChatHost(),
+    return Object.assign(makeChatHost(), {
       chatMessagesBySession: new Map(),
       chatStreamRenderFrame: null,
       pendingSessionMessageReloadSessionKey: null,
@@ -1830,7 +1766,7 @@ describe("session pull request refresh", () => {
       sessionKey: "main",
       sessions: { reconcileRunTerminal: vi.fn() },
       settings: {},
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
   }
 
   it.each([
@@ -1949,15 +1885,14 @@ describe("refreshChatMetadata", () => {
       hello?: { features: { methods: string[] } };
     } = {},
   ): ChatPageHost {
-    return {
-      ...makeChatHost(),
+    return Object.assign(makeChatHost(), {
       agentsList: null,
       assistantAgentId: "main",
       client: { request },
       hello: { features: { methods: ["chat.metadata"] } },
       sessionKey: "agent:work:main",
       ...overrides,
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
   }
 
   it("ends a retired automatic catalog's loading before unrelated commands settle", async () => {

@@ -115,6 +115,7 @@ export type TestChatPane = HTMLElement &
     catalogLoadGeneration: number;
     continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
     forkFromMessage: (entryId: string) => Promise<void>;
+    retireHeaderSessionMutations: () => void;
     createSession: () => Promise<boolean>;
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
     resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];

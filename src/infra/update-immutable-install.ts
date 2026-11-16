@@ -24,7 +24,7 @@ import {
 } from "./update-immutable-layout.js";
 import { withImmutableUpdateOwner } from "./update-immutable-owner.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
-import type { StepFactory } from "./update-runner-git-commands.js";
+import { resolveGitNoLazyFetchArgs, type StepFactory } from "./update-runner-git-commands.js";
 import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -466,28 +466,37 @@ export async function prepareImmutableUpdate(params: {
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_NO_REPLACE_OBJECTS: "1",
     });
-    const runCommand: CommandRunner = (argv, options) =>
-      runner.runCommand(
-        argv[0] === "git"
-          ? [
-              "git",
-              "--no-lazy-fetch",
-              "-c",
-              "core.fsmonitor=false",
-              "-c",
-              "core.hooksPath=/dev/null",
-              "-c",
-              "submodule.recurse=false",
-              ...argv.slice(1),
-            ]
-          : argv,
-        {
-          ...options,
-          baseEnv: {},
-          env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
-        },
-      );
     const timeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
+    const runIsolatedCommand: CommandRunner = (argv, options) =>
+      runner.runCommand(argv, {
+        ...options,
+        baseEnv: {},
+        env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
+      });
+    let noLazyFetchArgs: Promise<string[]> | undefined;
+    const runCommand: CommandRunner = async (argv, options) => {
+      if (argv[0] !== "git") {
+        return runIsolatedCommand(argv, options);
+      }
+      noLazyFetchArgs ??= resolveGitNoLazyFetchArgs(runIsolatedCommand, {
+        cwd: installation.root,
+        timeoutMs,
+      });
+      return runIsolatedCommand(
+        [
+          "git",
+          ...(await noLazyFetchArgs),
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "submodule.recurse=false",
+          ...argv.slice(1),
+        ],
+        options,
+      );
+    };
     const step: StepFactory = (name, argv, cwd, env) => ({
       name,
       argv,

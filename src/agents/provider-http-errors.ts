@@ -17,7 +17,7 @@ import type { ModelProviderRequestTransportOverrides } from "./provider-request-
 import {
   collectRequestHeaderSecretValues,
   createExactSecretValueMatcher,
-  redactExactSecretValues,
+  createExactSecretValueRedactor,
   redactProviderResponseErrorText,
 } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
@@ -51,7 +51,7 @@ function collectProviderRequestCredentialValues(
   params: ProviderRequestCredentialContext,
 ): string[] {
   const auth = params.request?.auth;
-  const headers = new Headers();
+  const headers: [string, string][] = [];
   const names = new Set(
     [
       params.defaultAuthHeader,
@@ -65,7 +65,7 @@ function collectProviderRequestCredentialValues(
   for (const name of names) {
     const value = params.headers.get(name);
     if (value) {
-      headers.set(name, value);
+      headers.push([name, value]);
     }
   }
   return [
@@ -74,9 +74,7 @@ function collectProviderRequestCredentialValues(
     auth?.mode === "header"
       ? extractHeaderCredential(params.headers, auth.headerName, auth.prefix ?? "")
       : "",
-  ]
-    .filter(Boolean)
-    .toSorted((left, right) => right.length - left.length);
+  ];
 }
 
 /** Successful provider results must match actual credentials, not diagnostic redaction patterns. */
@@ -91,12 +89,11 @@ export function createProviderErrorTextRedactor(
   params: ProviderRequestCredentialContext,
 ): (text: string, context?: ProviderErrorTextRedactionContext) => string {
   const credentials = collectProviderRequestCredentialValues(params);
+  // Unused redactors must not prepare patterns on successful request paths.
+  let redactCredentials: ReturnType<typeof createExactSecretValueRedactor> | undefined;
   return (text, context) => {
-    const withoutActiveCredential = redactExactSecretValues(
-      text,
-      credentials,
-      context?.truncated === true,
-    );
+    const withoutActiveCredential = (redactCredentials ??=
+      createExactSecretValueRedactor(credentials))(text, context?.truncated === true);
     return redactToolPayloadText(withoutActiveCredential).replace(
       SHORT_BEARER_TOKEN_PATTERN,
       "$1 ***",

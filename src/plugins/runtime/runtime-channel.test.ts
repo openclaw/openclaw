@@ -4,6 +4,7 @@ import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.j
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { LegacyPluginSdkResourceHost } from "../legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugin-instance.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -49,6 +50,43 @@ it("warns about synchronous runtime timestamps while preserving the shipped resu
 });
 
 describe("inbound dispatch", () => {
+  it("keeps buffered SDK dispatch on its host and projects only public reply options", async () => {
+    const result = { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+    const dispatch = vi.fn(async () => result);
+    const host = new LegacyPluginSdkResourceHost({
+      tryDispatchAcpReplyHook: async () => undefined,
+      dispatchReplyWithBufferedBlockDispatcher: dispatch,
+      dispatchReplyWithDispatcher: dispatch,
+    });
+    const channel = createRuntimeChannel();
+    const ordinary = vi.fn();
+    const forbidden = vi.fn();
+    const replyOptions = { onModelSelected: ordinary, onReplyOperationOwned: forbidden };
+    const params = {
+      ctx: { Body: "hello", CommandAuthorized: false },
+      cfg: {},
+      dispatcherOptions: { deliver: async () => {} },
+      replyOptions,
+    };
+    try {
+      await expect(
+        host.run(() => channel.reply.dispatchReplyWithBufferedBlockDispatcher(params)),
+      ).resolves.toBe(result);
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({
+        ...params,
+        replyOptions: { onModelSelected: ordinary },
+      });
+      expect(replyOptions.onReplyOperationOwned).toBe(forbidden);
+      await host.close();
+      await expect(
+        host.run(() => channel.reply.dispatchReplyWithBufferedBlockDispatcher(params)),
+      ).rejects.toThrow("closed");
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      await host.close();
+    }
+  });
+
   function createOwnedInboundFixture(observerOnly = false) {
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: "owned-channel" });
@@ -56,23 +94,34 @@ describe("inbound dispatch", () => {
     const owner = new PluginInstance("owned-channel", { record, registry });
     const channel = createRuntimeChannel();
     const delivered = vi.fn();
+    const resolveTurn = (replyOptions?: GetReplyOptions) => ({
+      cfg: {},
+      channel: "owned-channel",
+      route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
+      ctxPayload: { Body: "test", CommandAuthorized: false },
+      delivery: { deliver: delivered },
+      replyOptions:
+        replyOptions ??
+        (observerOnly ? { onModelSelected: delivered } : { onQueuedFollowupReplyBatch: delivered }),
+    });
     return {
       owner,
+      channel,
       delivered,
+      resolveTurn,
       dispatch: (replyOptions?: GetReplyOptions) =>
         owner.run(() =>
-          channel.inbound.dispatch({
-            cfg: {},
-            channel: "owned-channel",
-            route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
-            ctxPayload: { Body: "test", CommandAuthorized: false },
-            delivery: { deliver: delivered },
-            replyOptions:
-              replyOptions ??
-              (observerOnly
-                ? { onModelSelected: delivered, turnAdoptionLifecycle: { onAdopted() {} } }
-                : { onQueuedFollowupReplyBatch: delivered }),
-          }),
+          observerOnly
+            ? channel.inbound.run({
+                channel: "owned-channel",
+                raw: "test",
+                turnAdoptionLifecycle: { onAdopted() {} },
+                adapter: {
+                  ingest: (raw) => ({ id: "fixture", rawText: raw }),
+                  resolveTurn: () => resolveTurn(replyOptions),
+                },
+              })
+            : channel.inbound.dispatch(resolveTurn(replyOptions)),
         ),
     };
   }
@@ -139,7 +188,8 @@ describe("inbound dispatch", () => {
     const { owner, delivered, dispatch } = createOwnedInboundFixture(observerOnly);
     let settle: (() => void | Promise<void>) | undefined;
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
-      turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+      const lifecycle = turn.turnAdoptionLifecycle ?? turn.replyOptions?.turnAdoptionLifecycle;
+      lifecycle?.onDeferred?.();
       return { status: "handled" };
     });
     try {
@@ -148,8 +198,8 @@ describe("inbound dispatch", () => {
       if (!queued) {
         throw new Error("Dispatch did not retain the queued source");
       }
-      settle = queued.replyOptions?.turnAdoptionLifecycle?.onSettled;
-      expect(owner.hasRetainedConsumers).toBe(true);
+      settle = (queued.turnAdoptionLifecycle ?? queued.replyOptions?.turnAdoptionLifecycle)
+        ?.onSettled;
       const batch = {
         kind: "queued-followup" as const,
         runId: "queued-run",
@@ -162,6 +212,7 @@ describe("inbound dispatch", () => {
         ? () => queued.replyOptions?.onModelSelected?.(model)
         : () => queued.replyOptions?.onQueuedFollowupReplyBatch?.(batch);
       await callback();
+      expect(owner.hasRetainedConsumers).toBe(true);
       expect(delivered).toHaveBeenCalledExactlyOnceWith(observerOnly ? model : batch);
       await settle?.();
       expect(owner.hasRetainedConsumers).toBe(false);
@@ -172,6 +223,55 @@ describe("inbound dispatch", () => {
       await owner.dispose();
     }
   });
+
+  it.each([false, true])(
+    "preserves prepared lifecycle identity (mismatch=%s)",
+    async (mismatch) => {
+      const { owner, channel, resolveTurn } = createOwnedInboundFixture();
+      const lifecycle = { onAdopted: vi.fn() };
+      const runDispatch = vi.fn(async () => {
+        lifecycle.onAdopted();
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      const onDispatchSkipped = vi.fn();
+      const turn = resolveTurn();
+      const run = () =>
+        owner.run(() =>
+          channel.inbound.run({
+            channel: turn.channel,
+            raw: "prepared",
+            turnAdoptionLifecycle: lifecycle,
+            adapter: {
+              ingest: (raw) => ({ id: "prepared", rawText: raw }),
+              resolveTurn: () => ({
+                cfg: turn.cfg,
+                channel: turn.channel,
+                route: turn.route,
+                ctxPayload: turn.ctxPayload,
+                runDispatch,
+                runDispatchLifecycle: {
+                  turnAdoptionLifecycle: mismatch ? { onAdopted() {} } : lifecycle,
+                  onDispatchSkipped,
+                },
+              }),
+            },
+          }),
+        );
+      try {
+        if (mismatch) {
+          await expect(run()).rejects.toThrow(
+            "runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+          );
+          expect(runDispatch).not.toHaveBeenCalled();
+        } else {
+          await expect(run()).resolves.toBeDefined();
+          expect(runDispatch).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await owner.dispose();
+      }
+    },
+  );
 
   it.each([true, false])("inbound preserves dispatch precedence (bound=%s)", async (bound) => {
     const boundReplyDispatch = bound ? vi.fn() : undefined;

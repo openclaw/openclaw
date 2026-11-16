@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
 import { MIN_AUDIO_FILE_BYTES } from "../../../../src/media-understanding/defaults.constants.js";
-import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/provider-types.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { audioConfig } from "./media-understanding.test-support.js";
 

@@ -149,7 +149,6 @@ function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: rea
 export {
   resolveProviderAuthProfileId,
   resolveProviderFollowupFallbackRoute,
-  resolveProviderRuntimePlugin,
   wrapProviderSimpleCompletionStreamFn,
 };
 
@@ -264,20 +263,23 @@ function completeProviderRuntimeContext<
 export function normalizeProviderResolvedModelWithPlugin(
   params: ProviderRuntimeLookup & {
     pluginMetadataSnapshot?: PluginMetadataRegistryView;
+    runtimeHandle?: ProviderRuntimePluginHandle;
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
   const context = completeProviderRuntimeContext(params);
   return (
-    resolveProviderRuntimePlugin({
+    ensureProviderRuntimePluginHandle({
       ...params,
       modelId: params.context.modelId,
-    })?.normalizeResolvedModel?.(context) ?? undefined
+    }).plugin?.normalizeResolvedModel?.(context) ?? undefined
   );
 }
 
 export function applyProviderResolvedTransportWithPlugin(
   params: ProviderRuntimeLookup & {
+    runtimeHandle?: ProviderRuntimePluginHandle;
+    resolveFallbackPlugins?: () => readonly ProviderPlugin[];
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
@@ -288,6 +290,8 @@ export function applyProviderResolvedTransportWithPlugin(
     config,
     workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
+    resolveFallbackPlugins: params.resolveFallbackPlugins,
     modelId: params.context.modelId,
     context: {
       ...(config !== undefined ? { config } : {}),
@@ -319,6 +323,8 @@ export function applyProviderResolvedTransportWithPlugin(
 export function normalizeProviderTransportWithPlugin(
   params: ProviderRuntimeLookup & {
     modelId?: string | null;
+    runtimeHandle?: ProviderRuntimePluginHandle;
+    resolveFallbackPlugins?: () => readonly ProviderPlugin[];
     context: ProviderNormalizeTransportContext;
   },
 ): { api?: string | null; baseUrl?: string } | undefined {
@@ -335,12 +341,18 @@ export function normalizeProviderTransportWithPlugin(
     return undefined;
   }
 
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
-      continue;
-    }
-    const normalized = candidate.normalizeTransport(context);
-    if (normalized && hasTransportChange(normalized)) {
+  // Other plugins may only tidy a transport within its origin; another origin would receive
+  // this provider's credential.
+  const origin = (url?: string) => (url ? URL.parse(url)?.origin : undefined);
+  const requestOrigin = origin(params.context.baseUrl);
+  for (const candidate of params.resolveFallbackPlugins?.() ??
+    resolveProviderPluginsForHooks(params)) {
+    const normalized =
+      candidate === matchedPlugin ? undefined : candidate.normalizeTransport?.(context);
+    const keepsOrigin =
+      !normalized?.baseUrl ||
+      (requestOrigin !== undefined && origin(normalized.baseUrl) === requestOrigin);
+    if (normalized && hasTransportChange(normalized) && keepsOrigin) {
       return normalized;
     }
   }
@@ -433,13 +445,7 @@ export function resolveProviderTransportTurnStateWithPlugin(
   };
 }
 
-export {
-  loginProviderOAuthWithPlugin,
-  prepareProviderRuntimeAuth,
-  refreshProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin,
-} from "./provider-runtime-auth.js";
+export { prepareProviderRuntimeAuth } from "./provider-runtime-auth.js";
 
 const resolveUsageAuth = asyncRuntimeHook("resolveUsageAuth");
 export const resolveProviderUsageAuthWithPlugin = async (
@@ -525,13 +531,7 @@ export function listProviderUsagePluginDescriptors(params: {
   return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
-
-export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
-
 export const resolveProviderCacheTtlEligibility = runtimeHook("isCacheTtlEligible");
-
-export const resolveProviderModernModelRef = runtimeHook("isModernModelRef");
 
 /** Returns provider-owned profile ids retired from generic credential resolution. */
 export function resolveProviderDeprecatedAuthProfileIds(
@@ -746,8 +746,6 @@ export async function captureProviderSyntheticAuthFacts(params: {
   return Object.freeze(facts);
 }
 
-export { resolveExternalAuthProfilesWithPlugins } from "./provider-external-auth.js";
-
 export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   params: ProviderRuntimeLookup & {
     context: ProviderDeferSyntheticProfileAuthContext;
@@ -770,5 +768,3 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   }
   return undefined;
 }
-
-export { augmentModelCatalogWithProviderPlugins } from "./provider-catalog-augment.js";

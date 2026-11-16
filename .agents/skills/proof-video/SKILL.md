@@ -109,7 +109,7 @@ try {
   await page.waitForTimeout(8000);
   recording.speed(1);
   recording.caption("Return to the full session list.");
-  await page.getByRole("menuitemradio", { name: "All", exact: true }).click();
+  await page.getByRole("radio", { name: "All", exact: true }).click();
   await page.waitForFunction(() =>
     document
       .querySelector(".sidebar-session-sort")

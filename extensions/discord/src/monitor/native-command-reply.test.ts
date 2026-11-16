@@ -7,6 +7,7 @@ import {
 } from "discord-api-types/v10";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { discordComponentRegistryState } from "../components-registry-state.js";
 import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
@@ -203,10 +204,11 @@ it.each([false, true])(
   },
 );
 
-it("preserves native attachments and embeds with shared presentation", async () => {
+it("preserves native attachments and embeds, keeping text when one attachment fails", async () => {
   const interaction = createInteraction();
   const onDelivered = vi.fn(async () => {});
   const embeds = [{ title: "Status" }];
+  loadWebMediaMock.mockRejectedValueOnce(new MediaFetchError("http_error", "HTTP 404"));
   loadWebMediaMock.mockResolvedValue({
     buffer: Buffer.from("image"),
     fileName: "status.png",
@@ -219,20 +221,21 @@ it("preserves native attachments and embeds with shared presentation", async () 
       text: "x".repeat(2_100),
       presentationTextMode: "fallback",
       presentation: presentation([["Continue", "/status"]], "Status details"),
-      mediaUrls: ["file:///tmp/status.png"],
+      mediaUrls: ["https://example.com/files/missing.png", "file:///tmp/status.png"],
       channelData: { discord: { embeds } },
     },
     onDelivered,
   });
 
+  const receipt = `${"x".repeat(100)}\n⚠️ missing.png: Delivery failed. Try sending this file again.`;
   expect(interaction.followUp).toHaveBeenNthCalledWith(1, {
     content: "x".repeat(2_000),
     embeds,
     files: [{ name: "status.png", data: Buffer.from("image"), contentType: "image/png" }],
   });
-  expect(interaction.followUp).toHaveBeenNthCalledWith(2, { content: "x".repeat(100) });
+  expect(interaction.followUp).toHaveBeenNthCalledWith(2, { content: receipt });
   expect(onDelivered).toHaveBeenCalledExactlyOnceWith(
-    ["x".repeat(2_000), "Status", "x".repeat(100)].join("\n"),
+    ["x".repeat(2_000), "Status", receipt].join("\n"),
   );
 });
 
@@ -288,16 +291,13 @@ it("sends singular WebP media after blank plural URLs across a real multipart re
 
     await deliver({ interaction: interaction as never, payload });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock.mock.calls).toEqual([["file:///tmp/sticker.webp", expect.anything()]]);
     const upload = loopback.requests.find((request) => request.method === "POST");
     expect(upload).toMatchObject({
       path: expect.stringContaining("/webhooks/123/token"),
       contentType: expect.stringMatching(/^multipart\/form-data; boundary=/),
     });
-    expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
-    expect(upload?.body).toContain("Content-Type: image/webp");
+    expect(upload?.body).toContain('filename="sticker.webp"\r\nContent-Type: image/webp');
   } finally {
     await loopback.close();
   }

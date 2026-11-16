@@ -17,6 +17,7 @@ import {
 } from "../config/io.js";
 import { recoverConfigFromLastKnownGoodCore } from "../config/io.observe-recovery.js";
 import { prepareConfigRecoveryFromContext } from "../config/io.snapshot.js";
+import { findLegacyConfigRuleIssues } from "../config/legacy.shared.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
@@ -26,6 +27,7 @@ import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js
 import type { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
 import { classifyOtelGrpcMigrationOwnership } from "./doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
+import { LEGACY_PLUGIN_PROMPT_PERMISSION } from "./doctor/shared/legacy-config-migrations.plugin-prompts.js";
 import { findRetiredConfigUpgradeRequirement } from "./doctor/shared/retired-config-formats.js";
 
 const transformDoctorRecoveryCandidate: ConfigRecoveryCandidateTransform = (params) => {
@@ -124,6 +126,15 @@ export async function prepareDoctorConfigRecovery(params: {
       typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
         ? await params.planRepair(snapshot)
         : null;
+    if (
+      !activeConfigRepair &&
+      findLegacyConfigRuleIssues(sourceConfig, LEGACY_PLUGIN_PROMPT_PERMISSION.legacyRules ?? [])
+        .length > 0
+    ) {
+      // Includes can prevent an automatic write plan. Keep the current permission
+      // for Doctor rather than restoring a historical grant or denial from backup.
+      return { snapshotRead, activeConfigRepair };
+    }
     let configRepaired = false;
     const recoverPrefix =
       params.databaseAccess === "none"

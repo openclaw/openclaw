@@ -39,6 +39,12 @@ describe("sanitizeGoogleThinkingPayload", () => {
       { thinkingBudget: 2048, ...thoughts },
       { ...thoughts, thinkingLevel: "HIGH" },
     ],
+    [
+      "gemini-3.1-pro-preview",
+      "medium",
+      { ...thoughts, thinkingLevel: "MEDIUM" },
+      { ...thoughts, thinkingLevel: "MEDIUM" },
+    ],
     ["gemini-flash-latest", "off", budget, { thinkingLevel: "MINIMAL" }, "generationConfig"],
     [
       "gemini-3-flash-preview",

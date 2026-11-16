@@ -15,7 +15,10 @@ import {
   type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
+import {
+  pluginCommandResultContinuesAgent,
+  type PluginCommandNativeCandidate,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
@@ -553,34 +556,37 @@ async function dispatchDiscordCommandInteraction(
       messageThreadId,
       threadParentId: pluginThreadParentId,
     });
-    if (pluginReply.suppressReply === true) {
-      await settleDiscordInteractionWithoutVisibleReply(interaction);
+    // A continuing command hands this turn to the agent through the normal reply path below.
+    if (!pluginCommandResultContinuesAgent(pluginReply)) {
+      if (pluginReply.suppressReply === true) {
+        await settleDiscordInteractionWithoutVisibleReply(interaction);
+        return { accepted: true, effectiveRoute };
+      }
+      const recordReply = async (replyText: string) => {
+        await recordDeliveredCommandExchange({
+          config: cfg,
+          agentId: pluginCommandAgentId,
+          sessionKey: effectiveRoute.sessionKey,
+          expectedSessionId: targetSessionEntry?.sessionId,
+          commandText: prompt,
+          commandId: `discord:${accountId}:${channelId}:${interaction.id}`,
+          replyId: "plugin-reply",
+          replyText,
+        });
+      };
+      if (hasRenderableReplyPayload(pluginReply)) {
+        await deliverDiscordInteractionReply({
+          interaction,
+          payload: pluginReply,
+          ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
+          responseEphemeral,
+          onDelivered: recordReply,
+        });
+      } else if (await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING)) {
+        await recordReply(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
+      }
       return { accepted: true, effectiveRoute };
     }
-    const recordReply = async (replyText: string) => {
-      await recordDeliveredCommandExchange({
-        config: cfg,
-        agentId: pluginCommandAgentId,
-        sessionKey: effectiveRoute.sessionKey,
-        expectedSessionId: targetSessionEntry?.sessionId,
-        commandText: prompt,
-        commandId: `discord:${accountId}:${channelId}:${interaction.id}`,
-        replyId: "plugin-reply",
-        replyText,
-      });
-    };
-    if (hasRenderableReplyPayload(pluginReply)) {
-      await deliverDiscordInteractionReply({
-        interaction,
-        payload: pluginReply,
-        ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
-        responseEphemeral,
-        onDelivered: recordReply,
-      });
-    } else if (await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING)) {
-      await recordReply(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
-    }
-    return { accepted: true, effectiveRoute };
   }
 
   const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({

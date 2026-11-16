@@ -685,6 +685,7 @@ export function createStreamRendering({
     state.partialBlockState = createAssistantStreamBlockState();
     state.assistantStream = undefined;
     state.nextCommentaryAt = undefined;
+    state.commentaryTextProjection = undefined;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;

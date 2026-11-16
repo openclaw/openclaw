@@ -10,6 +10,7 @@ import type { Command } from "commander";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import {
   callSessionTargetGateway,
   resolveSessionTarget,
@@ -77,7 +78,9 @@ export async function registerAttachCli(program: Command) {
         const signal = getAsyncWorkSignal();
         signal?.throwIfAborted();
         if (target && opts.session) {
-          throw new Error("pass one session target: use either the positional target or --session");
+          throwExpectedCliError(
+            "pass one session target: use either the positional target or --session",
+          );
         }
         let ttlMs: number | undefined;
         if (opts.ttl !== undefined) {

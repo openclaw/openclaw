@@ -142,15 +142,22 @@ it("moves observation to the rendered replacement and ignores the old pending la
   expect(observers.every((observer) => !observer.targets.has(first))).toBe(true);
 });
 
-it("defers bounded reveal and cancels replaced, cleared, and disposed requests", () => {
+it.each([1, 0.9])("defers bounded reveal at scale %s and cancels stale requests", (scale) => {
   const ancestor = div();
   const region = div(ancestor);
   const first = region.appendChild(document.createElement("button"));
   const second = region.appendChild(document.createElement("button"));
   const outside = ancestor.appendChild(document.createElement("button"));
-  vi.spyOn(region, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 200, 100));
-  vi.spyOn(first, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 240, 200, 20));
-  vi.spyOn(second, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 80, 200, 20));
+  Object.defineProperty(region, "offsetHeight", { value: 100 });
+  vi.spyOn(region, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 100 * scale, 200, 100 * scale),
+  );
+  vi.spyOn(first, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 240 * scale, 200, 20 * scale),
+  );
+  vi.spyOn(second, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 80 * scale, 200, 20 * scale),
+  );
   const nativeScroll = vi.spyOn(Element.prototype, "scrollIntoView");
   const [active, setActive] = createSignal<HTMLElement | null>(first);
   const select = (target: HTMLElement | null) => {

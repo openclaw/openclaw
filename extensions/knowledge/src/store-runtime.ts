@@ -1,4 +1,3 @@
-import { LiveState } from "./live-state.js";
 import type { StoreConfig } from "./real-vault.js";
 import { KnowledgeRestartError } from "./restart-error.js";
 import { StorageClient } from "./storage-client.js";
@@ -15,15 +14,13 @@ const retired = () =>
  * coordinator (spec §5.3). */
 export class StoreRuntime {
   readonly client: StorageClient;
-  readonly live: LiveState;
   private pending: Promise<void> = Promise.resolve();
   private retiredAt?: Promise<void>;
   constructor(
     readonly config: StoreConfig,
-    changed: () => void,
+    changed?: () => void,
   ) {
-    this.client = new StorageClient(config);
-    this.live = new LiveState(config.root, changed);
+    this.client = new StorageClient(config, changed);
   }
   get vaultId() {
     return this.config.vaultId;
@@ -62,10 +59,7 @@ export class StoreRuntime {
   /** Stop accepting work, let queued work settle, then release the worker.
    * Resolves once the worker has exited. */
   retire(): Promise<void> {
-    this.retiredAt ??= this.pending.then(() => {
-      this.live.stop();
-      return this.client.close();
-    });
+    this.retiredAt ??= this.pending.then(() => this.client.close());
     return this.retiredAt;
   }
 }

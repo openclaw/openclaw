@@ -19,6 +19,7 @@ import {
   flushDeferredRowPrune,
   type TestContentRow,
 } from "../components/chat-transcript.test-support.ts";
+import { settleChatMount } from "./chat-mount-frames.ts";
 
 class NativeFixture {
   constructor(
@@ -72,7 +73,8 @@ export function render(value: NativeContent, container: HTMLElement): void {
   if (existing) {
     existing.update({ value });
   } else {
-    mounts.set(container, mountSolid(Content, { value }, container));
+    const mount = () => mountSolid(Content, { value }, container);
+    mounts.set(container, transcript ? settleChatMount(mount) : mount());
   }
   transcript?.update();
 }

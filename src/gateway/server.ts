@@ -11,6 +11,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { settlesWithin } from "../shared/settle-within.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -69,9 +70,16 @@ async function closeWithRuntimeCleanup(
 }
 
 /** Starts the gateway server after lazily loading the full server implementation. */
-export async function startGatewayServer(
+export function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
+): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  return withLiveStateReads(() => startGatewayServerLive(port, opts));
+}
+
+async function startGatewayServerLive(
+  port: number,
+  opts: GatewayServerOptions,
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   installDatabaseProcessRole("gateway");
   const { installGatewayDatabaseEngine } = await import("./server-database-engine.js");

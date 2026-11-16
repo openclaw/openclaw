@@ -6,18 +6,29 @@ import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/clien
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import * as coldStorageRead from "../../config/sessions/session-cold-storage-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureActivePluginRegistrySnapshot } from "../../plugins/runtime.js";
+import { changeCanonicalUserChannelIdentity } from "../../state/user-channel-identity-operations.js";
 import * as modelAccounts from "../../state/user-model-accounts.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setCanonicalUserProfileDisplayName } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  activateTestChannelRegistry,
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { withMentionInbox } from "../mention-inbox.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import {
   seedHistorySession as seedSession,
@@ -698,4 +709,170 @@ it("returns a typed selection error for an ownerless explicit fleet", async () =
     }),
   );
   expect(readChatMetadata).not.toHaveBeenCalled();
+});
+
+it("projects manually linked Slack mentions for the captured account without rewriting stored text", async () => {
+  await withMentionInbox(async (fixture) => {
+    const { alice, bob: profile, aliceClient, bobClient, inbox } = fixture;
+    const registry = expectDefined(
+      captureActivePluginRegistrySnapshot().activeRegistry,
+      "test plugin registry",
+    );
+    registry.channels = registry.channels.filter((entry) => entry.plugin.id !== "slack");
+    registry.channelSetups = registry.channelSetups.filter((entry) => entry.plugin.id !== "slack");
+    // Keep the Gateway contract test independent of extension runtime graphs;
+    // the browser test exercises the real Slack parser and registration.
+    const tokens = [
+      {
+        token: "<@U1111111111> (Slack Alice)",
+        senderId: "u1111111111",
+        fallbackLabel: "Slack Alice",
+      },
+      { token: "<@U2222222222> (Roboclaw)", senderId: "u2222222222", fallbackLabel: "Roboclaw" },
+      { token: "<@U3333333333>", senderId: "u3333333333", fallbackLabel: undefined },
+    ];
+    const channelPlugin = {
+      ...createChannelTestPluginBase({ id: "slack" }),
+      mentions: {
+        readDisplayMentions(text: string) {
+          const references = tokens.flatMap(({ token, senderId, fallbackLabel }) => {
+            const ranges: Array<{
+              start: number;
+              end: number;
+              senderId: string;
+              fallbackLabel?: string;
+            }> = [];
+            for (
+              let start = text.indexOf(token);
+              start >= 0;
+              start = text.indexOf(token, start + token.length)
+            ) {
+              ranges.push({
+                start,
+                end: start + token.length,
+                senderId,
+                ...(fallbackLabel ? { fallbackLabel } : {}),
+              });
+            }
+            return ranges;
+          });
+          return references.toSorted((left, right) => left.start - right.start);
+        },
+      },
+    };
+    await activateTestChannelRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: channelPlugin, source: "slack-display-fixture" },
+      ]),
+    );
+    await setCanonicalUserProfileDisplayName(profile.id, "Gateway Alice");
+    await changeCanonicalUserChannelIdentity("link", profile.id, {
+      channelId: "slack",
+      accountId: "work",
+      senderId: "u1111111111",
+    });
+    await prepareUserProfileCatalog();
+    const scope = await seedSession("slack-inline-identity", {
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: alice.id },
+    });
+    const source =
+      "<@U1111111111> (Slack Alice), ask <@U2222222222> (Roboclaw). Unknown: <@U3333333333>. Code: `<@U1111111111> (Slack Alice)`.";
+    await sessions.appendTranscriptMessage(scope, {
+      eventId: "slack-inline-proof",
+      message: {
+        role: "user",
+        content: source,
+        timestamp: 1,
+        __openclaw: {
+          requesterOrigin: {
+            sessionKey: scope.sessionKey,
+            messageProvider: "slack",
+            accountId: "work",
+            senderId: "u9999999999",
+          },
+          transport: { channel: "slack", messageId: "1793736900.000001" },
+        },
+      },
+    });
+    for (const [id, accountId] of [
+      ["slack-other-account", "home"],
+      ["slack-missing-account", undefined],
+    ] as const) {
+      await sessions.appendTranscriptMessage(scope, {
+        eventId: id,
+        message: {
+          role: "user",
+          content: source,
+          timestamp: 2,
+          __openclaw: {
+            requesterOrigin: {
+              sessionKey: scope.sessionKey,
+              messageProvider: "slack",
+              ...(accountId ? { accountId } : {}),
+              senderId: "u9999999999",
+            },
+            transport: { channel: "slack", messageId: id },
+          },
+        },
+      });
+    }
+    const context = await createHistoryReadContext({ mentionInbox: inbox });
+    expect(getChannelPlugin("slack")).toBe(channelPlugin);
+    const response = expectSuccess(
+      await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, aliceClient),
+    );
+    expect(JSON.stringify(response.messages)).toContain("@Gateway Alice, ask @Roboclaw");
+    await setCanonicalUserProfileDisplayName(profile.id, `Gateway ${"A".repeat(100)}`);
+    await prepareUserProfileCatalog();
+    const capped = expectSuccess(
+      await requestHistory(
+        "chat.history",
+        { sessionKey: scope.sessionKey, maxChars: 32 },
+        context,
+        aliceClient,
+      ),
+    );
+    expect(JSON.stringify(capped.messages)).toContain("@Gateway");
+    expect(JSON.stringify(capped.messages)).not.toContain("A".repeat(40));
+    await setCanonicalUserProfileDisplayName(profile.id, "Gateway Alice");
+    await prepareUserProfileCatalog();
+    expect(JSON.stringify(response.messages)).toContain("<@U3333333333>");
+    expect(JSON.stringify(response.messages)).toContain("`<@U1111111111> (Slack Alice)`");
+    expect(JSON.stringify(response.messages)).toContain("@Slack Alice, ask @Roboclaw");
+    expect(JSON.stringify(response.messages)).toContain(source);
+    expect(JSON.stringify(response.messages)).not.toContain("requesterOrigin");
+    const internal = expectSuccess(
+      await requestHistory(
+        "chat.history",
+        { sessionKey: scope.sessionKey },
+        context,
+        adminClient("unlinked-display-reader"),
+      ),
+    );
+    expect(JSON.stringify(internal.messages)).not.toContain("@Gateway Alice");
+    const self = expectSuccess(
+      await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, bobClient),
+    );
+    expect(JSON.stringify(self.messages)).toContain("@Gateway Alice, ask @Roboclaw");
+    const full = expectSuccess(
+      await requestHistory(
+        "chat.message.get",
+        { sessionKey: scope.sessionKey, messageId: "slack-inline-proof" },
+        context,
+        aliceClient,
+      ),
+    );
+    expect(JSON.stringify(full.message)).toContain("@Gateway Alice, ask @Roboclaw");
+    const stored = await readSessionMessageByIdAsync(scope, "slack-inline-proof");
+    expect(asOptionalRecord(stored.message)?.content).toBe(source);
+    await setCanonicalUserProfileDisplayName(profile.id, 'Gateway [Alice] <b>& "co"');
+    await prepareUserProfileCatalog();
+    const escaped = expectSuccess(
+      await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, aliceClient),
+    );
+    expect(JSON.stringify(escaped.messages)).toContain("&lt;b&gt;&amp; &quot;co&quot;");
+    expect(JSON.stringify(escaped.messages)).not.toContain("<b>");
+    expect(await fixture.items()).toHaveLength(0);
+  });
 });

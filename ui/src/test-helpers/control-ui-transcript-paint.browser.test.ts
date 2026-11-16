@@ -84,6 +84,30 @@ it.for([
   }
 });
 
+it("waits for the active hydrated composer after an editable static fallback", async () => {
+  const proof = await runProbe(`
+      const pane = document.createElement('div');
+      pane.className = 'chat-pane-cache__pane--active';
+      pane.innerHTML = '<div class="loading-skeleton__composer"><textarea id="openclaw-boot-composer">Draft</textarea></div><textarea aria-label="Other editor"></textarea>';
+      const inactivePane = document.createElement('div');
+      inactivePane.innerHTML = '<div class="agent-chat__composer-combobox"><textarea></textarea></div>';
+      document.body.append(pane, inactivePane);
+      const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      window.probeResult = (async () => {
+        await frames();
+        const hydratedAt = performance.now();
+        const composer = document.createElement('div');
+        composer.className = 'agent-chat__composer-combobox';
+        composer.innerHTML = '<textarea></textarea>';
+        pane.append(composer);
+        await frames();
+        return { hydratedAt, ...window.__warmReload.read() };
+      })();
+  `);
+  expect(proof.milestones.inputReady).toBeTypeOf("number");
+  expect(proof.milestones.inputReady).toBeGreaterThanOrEqual(proof.hydratedAt);
+});
+
 it("records live transcript visibility after caught-up rows are revealed", async () => {
   const proof = await runProbe(`
       const pane = document.createElement('div');
@@ -112,21 +136,35 @@ it("records live transcript visibility after caught-up rows are revealed", async
   expect(proof.milestones.firstLiveTranscript).toBeGreaterThanOrEqual(proof.shownAt);
 });
 
-it("records transcript presentation after opacity reveals nested text, not its earlier DOM mount", async () => {
+it("records separate transcript and Details paints after their text is revealed", async () => {
   const proof = await runProbe(`
-      document.body.innerHTML += '<div class="chat-pane-cache__pane--active" style="opacity:0"><div class="chat-thread"><div class="chat-thread-inner"><div class="chat-virtual-row" data-virtual-row-key="fixture-row"><div class="chat-text"><p>Cached transcript text.</p></div></div></div></div></div>';
-      window.probeResult = new Promise(resolve => {
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const shownAt = performance.now();
-          const painted = new PerformanceObserver(list => {
-            if (!list.getEntries().some(entry => entry.identifier === 'openclaw-transcript')) return;
-            painted.disconnect();
-            resolve({ shownAt, ...window.__warmReload.read() });
-          });
-          painted.observe({ type:'element', buffered:true });
-          document.querySelector('.chat-pane-cache__pane--active').style.opacity = '1';
-        }));
+      document.body.innerHTML += '<div class="chat-pane-cache__pane--active" style="opacity:0"><div class="chat-thread"><div class="chat-thread-inner"><div class="chat-virtual-row" data-virtual-row-key="fixture-row"><div class="chat-text"><p>Cached transcript text.</p></div></div></div></div><section class="chat-details-session" style="opacity:0"><p>Cached Details text.</p></section></div>';
+      const paints = new Map();
+      const waiting = new Map();
+      const painted = new PerformanceObserver(list => {
+        for (const entry of list.getEntries()) {
+          if (entry.renderTime <= 0) continue;
+          paints.set(entry.identifier, entry.renderTime);
+          waiting.get(entry.identifier)?.(entry.renderTime);
+        }
       });
+      painted.observe({ type:'element', buffered:true });
+      const paint = identifier => paints.has(identifier)
+        ? Promise.resolve(paints.get(identifier))
+        : new Promise(resolve => waiting.set(identifier, resolve));
+      window.probeResult = (async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        const shownAt = performance.now();
+        document.querySelector('.chat-pane-cache__pane--active').style.opacity = '1';
+        await paint('openclaw-transcript');
+        const detailsBeforeReveal = paints.has('openclaw-details');
+        const detailsShownAt = performance.now();
+        document.querySelector('.chat-details-session').style.opacity = '1';
+        const detailsPaint = await paint('openclaw-details');
+        painted.disconnect();
+        return { shownAt, detailsBeforeReveal, detailsShownAt, detailsPaint, ...window.__warmReload.read() };
+      })();
   `);
   expect(proof.transcriptPaints).toContainEqual({
     element: "p",
@@ -135,6 +173,10 @@ it("records transcript presentation after opacity reveals nested text, not its e
   });
   expect(proof.milestones.firstTranscriptPaint).toBeGreaterThanOrEqual(proof.shownAt);
   expect(proof.milestones.firstTranscript).toBeLessThanOrEqual(proof.shownAt);
+  expect(proof.detailsBeforeReveal).toBe(false);
+  expect(proof.milestones.firstDetailsPaint).toBe(proof.detailsPaint);
+  expect(proof.milestones.firstDetailsPaint).toBeGreaterThanOrEqual(proof.detailsShownAt);
+  expect(proof.milestones.firstDetailsPaint).toBeGreaterThan(proof.milestones.firstTranscriptPaint);
 });
 
 it.for(["hidden", "clipped", "animated"] as const)(

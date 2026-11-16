@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as backoff from "../../infra/backoff.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import {
@@ -241,6 +243,123 @@ it.each([false, true])("retries failed clones (existing: %s)", async (existing) 
     step: { exitCode: 0 },
   });
   await expectFile(checkoutDir);
+});
+
+it.each([
+  { stderr: "fatal: early EOF", failures: 2, attempts: 3, code: 0 },
+  {
+    stderr: `fatal: Authentication failed\n${"x".repeat(9_000)}\nfatal: early EOF`,
+    failures: 1,
+    attempts: 1,
+    code: 128,
+  },
+  { stderr: "error: RPC failed; curl 56 ECONNRESET", failures: 5, attempts: 4, code: 128 },
+  { stderr: "fatal: Authentication failed\nfatal: early EOF", failures: 1, attempts: 1, code: 128 },
+  {
+    stderr: "fatal: pack checksum mismatch\nfatal: early EOF",
+    failures: 1,
+    attempts: 1,
+    code: 128,
+  },
+])("settles clone failures without reusing partial artifacts (case %#)", async (test) => {
+  const wait = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+  const stages: string[] = [];
+  runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
+    const stagingDir = cloneTarget(argv);
+    for (const previous of stages) {
+      await expect(fs.stat(path.dirname(previous))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    stages.push(stagingDir);
+    await writeClone(stagingDir, true);
+    return stages.length <= test.failures
+      ? { ...successfulCommandResult, code: 128, stderr: test.stderr }
+      : successfulCommandResult;
+  });
+  const result = await ensureGitCheckout({ dir: checkoutDir, timeoutMs: 60_000, env: process.env });
+  expect(result.step?.exitCode).toBe(test.code);
+  expect(stages).toHaveLength(test.attempts);
+  expect(wait.mock.calls.map(([delay]) => delay)).toEqual(
+    [1_000, 5_000, 15_000].slice(0, test.attempts - 1),
+  );
+  if (test.code === 0) {
+    await expectFile(checkoutDir);
+    await expect(fs.readdir(base)).resolves.toEqual(["openclaw"]);
+  } else {
+    await expect(fs.readdir(base)).resolves.toEqual([]);
+  }
+});
+
+it("cancels clone backoff without publishing or starting another command", async () => {
+  const controller = new AbortController();
+  vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+    controller.abort();
+  });
+  runCommandWithTimeout.mockResolvedValue({
+    ...successfulCommandResult,
+    code: 128,
+    stderr: "fatal: early EOF",
+  });
+  const result = await withCommandProcessScope(
+    () => ensureGitCheckout({ dir: checkoutDir, timeoutMs: 60_000, env: process.env }),
+    controller.signal,
+  );
+  expect(result.step).toMatchObject({ exitCode: null, termination: "signal" });
+  expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+  await expect(fs.readdir(base)).resolves.toEqual([]);
+});
+
+it("rechecks clone authority after backoff and asynchronous progress", async () => {
+  let current = true;
+  vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+    current = false;
+  });
+  runCommandWithTimeout.mockResolvedValue({
+    ...successfulCommandResult,
+    code: 128,
+    stderr: "fatal: early EOF",
+  });
+  const pending = ensureGitCheckout({
+    dir: checkoutDir,
+    timeoutMs: 60_000,
+    env: process.env,
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("update authority revoked");
+      }
+    },
+    progress: {
+      onStepStart: async () => {
+        await Promise.resolve();
+      },
+    },
+  });
+  await expect(pending).rejects.toThrow("update authority revoked");
+  expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+  await expect(fs.readdir(base)).resolves.toEqual([]);
+});
+
+it("stops clone retries when staging cleanup cannot settle", async () => {
+  const wait = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+  runCommandWithTimeout.mockResolvedValue({
+    ...successfulCommandResult,
+    code: 128,
+    stderr: "fatal: early EOF",
+  });
+  const remove = fs.rm.bind(fs);
+  using _ = vi
+    .spyOn(fs, "rm")
+    .mockImplementation((directory, options) =>
+      String(directory).includes(".openclaw-clone-")
+        ? Promise.reject(Object.assign(new Error("cleanup denied"), { code: "EPERM" }))
+        : remove(directory, options),
+    );
+  const result = await ensureGitCheckout({ dir: checkoutDir, timeoutMs: 60_000, env: process.env });
+  expect(result.step).toMatchObject({
+    exitCode: 128,
+    warnings: [expect.stringContaining("cleanup denied")],
+  });
+  expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+  expect(wait).not.toHaveBeenCalled();
 });
 
 it.each([

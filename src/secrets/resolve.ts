@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   loadPluginManifestRegistryCore,
@@ -272,6 +273,15 @@ async function resolveProviderRefs({
       });
     }
     if (providerConfig.source === "exec") {
+      // Arbitrary resolvers cannot be made read-only against serving credentials.
+      // The disposable Gateway records this provider as unavailable instead.
+      if (resolveUpdateRehearsalRoot(options.env ?? process.env)) {
+        throw providerResolutionError({
+          source: "exec",
+          provider: providerName,
+          message: "Exec secret providers are deferred during update rehearsal.",
+        });
+      }
       if (isPluginIntegrationSecretProviderConfig(providerConfig)) {
         throw providerResolutionError({
           source,

@@ -1,10 +1,19 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { MessageChannel } from "node:worker_threads";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withEnv } from "../../test-utils/env.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { createSpawnBrokerHost } from "./host.js";
+import * as resourceAuthority from "./resource-authority.js";
 import { attachBrokerNativeResource } from "./resource-client.js";
 import type { BrokerResourceResponse } from "./resource-protocol.js";
+
+const temp = useAutoCleanupTempDirTracker(afterEach);
 
 function resourceFixture() {
   const host = createSpawnBrokerHost({ nativeResources: true });
@@ -23,13 +32,19 @@ function resourceFixture() {
     clientFailures,
     responses,
     async attach(
-      source: string,
+      source: string | URL,
       ownerPort = false,
       observe: (response: BrokerResourceResponse) => void = () => {},
     ) {
       await host.ready();
       lease = host.captureNativeResource(
-        { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort },
+        {
+          moduleUrl:
+            source instanceof URL
+              ? source.href
+              : `data:text/javascript,${encodeURIComponent(source)}`,
+          ownerPort,
+        },
         { message() {}, failed: (error) => ownerFailures.push(error) },
       );
       client = attachBrokerNativeResource(
@@ -63,6 +78,40 @@ function resourceFixture() {
     },
   };
 }
+
+it.skipIf(process.platform === "win32")(
+  "loads a source SQLite resource in the compiled broker and joins its cleanup",
+  async () => {
+    await using fixture = resourceFixture();
+    const created = createDeferred();
+    const { client, lease } = await fixture.attach(
+      new URL("../../infra/sqlite-readonly-native-resource.ts", import.meta.url),
+      true,
+      (response) => {
+        if (response.type === "resource-created") {
+          created.resolve();
+        }
+      },
+    );
+    expect(fixture.host.entryPath).not.toMatch(/\.[cm]?ts$/u);
+    await Promise.race([
+      created.promise,
+      fixture.failure.then((error) => {
+        throw error;
+      }),
+    ]);
+    await client.close();
+    await lease.close();
+    lease.release();
+    expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
+    expect(fixture.responses).toContainEqual({
+      type: "resource-closed",
+      id: lease.attachment.id,
+      requestId: 1,
+    });
+  },
+  20_000,
+);
 
 it.skipIf(process.platform === "win32").each([
   ["import", 'throw new Error("synthetic resource import failure");'],
@@ -152,4 +201,66 @@ it.skipIf(process.platform === "win32")(
     expect(diagnostic).toContain("resource cleanup failed | resource operation failed");
   },
   20_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "creates and retires a cold native resource without main-thread synchronous metadata",
+  async () => {
+    const preload = path.join(temp.make("broker-private-mode-"), "umask.mjs");
+    fs.writeFileSync(preload, "process.umask(0o400);");
+    using observed = observeMainThreadFs();
+    {
+      await using fixture = withEnv(
+        {
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
+        },
+        resourceFixture,
+      );
+      const { client, lease } = await fixture.attach(`
+        export function createNativeWorkerResource() { return { close() {} }; }
+      `);
+      const directory = path.dirname(lease.attachment.endpoint);
+      expect((await fs.promises.stat(directory)).mode & 0o777).toBe(0o700);
+      await client.close();
+      await lease.close();
+      lease.release();
+      await fixture.host.close();
+      await expect(fs.promises.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
+    }
+    expect(
+      observed
+        .stacks()
+        .filter(
+          ({ api, opensForWrite }) =>
+            opensForWrite ||
+            /^(?:mkdtemp|mkdir|rmdir|rm|rename|unlink|symlink|link|writeFile|appendFile|copyFile|cp|chmod|fchmod|lchmod|chown|fchown|lchown|truncate|ftruncate|utimes|futimes|lutimes)Sync$/u.test(
+              api,
+            ),
+        ),
+    ).toEqual([]);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "refuses an existing resource directory without removing its contents",
+  async () => {
+    const authority = resourceAuthority.createNativeResourceAuthority();
+    const directory = path.dirname(authority.endpoint);
+    await fs.promises.mkdir(directory, { mode: 0o700 });
+    const marker = path.join(directory, "existing-owner");
+    await fs.promises.writeFile(marker, "synthetic existing owner");
+    const create = vi
+      .spyOn(resourceAuthority, "createNativeResourceAuthority")
+      .mockReturnValue(authority);
+    const host = createSpawnBrokerHost({ nativeResources: true });
+    try {
+      await expect(host.ready()).rejects.toThrow();
+      await host.close();
+      expect(await fs.promises.readFile(marker, "utf8")).toBe("synthetic existing owner");
+    } finally {
+      create.mockRestore();
+      await host.close();
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
+  },
 );

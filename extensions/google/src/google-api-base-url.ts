@@ -104,3 +104,19 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
 
   return normalized;
 }
+
+/** Keep configured API version paths intact instead of appending the SDK default. */
+export function resolveGoogleGenerativeAiSdkHttpOptions(baseUrl?: string): {
+  baseUrl?: string;
+  apiVersion: string;
+} {
+  const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl);
+  if (!normalized) {
+    return { apiVersion: "v1beta" };
+  }
+  const path = URL.parse(normalized)?.pathname ?? normalized;
+  return {
+    baseUrl: normalized,
+    apiVersion: /(?:^|\/)v\d+(?:(?:alpha|beta)\d*)?(?:\/|$)/i.test(path) ? "" : "v1beta",
+  };
+}

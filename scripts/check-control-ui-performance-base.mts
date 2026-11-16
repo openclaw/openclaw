@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Compare source revisions with one installed UI toolchain, outside artifact builds.
-import { spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -22,6 +22,8 @@ const COMPARISON_BUILD_ENV = {
   OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
 } satisfies NodeJS.ProcessEnv;
 
+class CommandExitError extends Error {}
+
 function run(
   command: string,
   args: string[],
@@ -29,10 +31,10 @@ function run(
   env = process.env,
   acceptFailure = false,
 ): boolean {
-  const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
+  const result = childProcess.spawnSync(command, args, { cwd, env, stdio: "inherit" });
   // A historical source mismatch may exit nonzero; a signal means no trustworthy
   // build outcome exists and must never enter the absolute-only fallback.
-  if (result.error || result.signal !== null || (!acceptFailure && result.status !== 0)) {
+  if (result.error || result.signal !== null || result.status === null) {
     throw new Error(
       `${path.basename(command)} failed (${result.signal ?? result.status ?? "launch"})`,
       {
@@ -40,11 +42,14 @@ function run(
       },
     );
   }
+  if (!acceptFailure && result.status !== 0) {
+    throw new CommandExitError(`${path.basename(command)} failed (${result.status})`);
+  }
   return result.status === 0;
 }
 
 function resolveCommit(ref: string): string {
-  const result = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+  const result = childProcess.spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
     cwd: repoRoot,
     encoding: "utf8",
   });
@@ -248,13 +253,44 @@ async function main(): Promise<void> {
     if (!identicalInputs) {
       console.log("Base CSS sidecars normalized with the candidate's canonical compressor.");
     }
-    run(process.execPath, [
-      "--import",
-      loader,
-      "scripts/check-control-ui-performance.mts",
-      "--base-dist",
-      baseDist,
-    ]);
+    try {
+      run(process.execPath, [
+        "--import",
+        loader,
+        "scripts/check-control-ui-performance.mts",
+        "--base-dist",
+        baseDist,
+      ]);
+    } catch (comparisonError) {
+      // Attribute a completed failure before its paired archive is retired. An
+      // interrupted or unlaunchable child must not dispatch more diagnostic work.
+      if (comparisonError instanceof CommandExitError) {
+        for (const [label, dist] of [
+          ["candidate", candidateDist],
+          ["baseline", baseDist],
+        ] as const) {
+          try {
+            console.log(`Control UI ${label} failure attribution:`);
+            run(process.execPath, [
+              "--import",
+              loader,
+              "scripts/check-control-ui-performance.mts",
+              "--report-only",
+              "--module-attribution",
+              "--json",
+              "--dist",
+              dist,
+            ]);
+          } catch (diagnosticError) {
+            console.warn(`${label} attribution failed:`, diagnosticError);
+            if (!(diagnosticError instanceof CommandExitError)) {
+              break;
+            }
+          }
+        }
+      }
+      throw comparisonError;
+    }
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }

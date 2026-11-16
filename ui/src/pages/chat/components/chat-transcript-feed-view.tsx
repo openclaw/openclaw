@@ -2,13 +2,16 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For } from "solid-js";
-import "../../../styles/chat/transcript-feed.css";
+import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../../src/chat/tool-content.js";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
+import "../../../styles/chat/transcript-feed.css";
+import { messageSubagentCompletions } from "../../../../../src/shared/subagent-completion.js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { NormalizedMessage, ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -16,7 +19,7 @@ import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
-import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import { describeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { resolveToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   extractToolCardsCached,
@@ -25,12 +28,19 @@ import {
   resolveToolCardDisplay,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
+import { formatTimeMs } from "../../../lib/reactive/format.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
-import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
+import {
+  ownSessionLaunchCalls,
+  readSubagentCancellation,
+  subagentCompletionText,
+} from "../chat-spawned-subagent.ts";
+import { projectSubagentCompletions } from "../chat-subagent-completions.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
+import { isExecutedCommandCard } from "./chat-activity-operations.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
@@ -40,10 +50,9 @@ type Entry = { key: string; timestamp: number | null } & (
   | {
       kind: "tools";
       calls: Array<{ key: string; card: ToolCard }>;
-      activity: ReturnType<typeof readPreparedActivity>;
     }
   | {
-      kind: "user" | "assistant" | "block";
+      kind: "user" | "assistant" | "block" | "completion";
       text: string;
       cappedMessageId?: string;
       senderSession?: NormalizedMessage["senderSession"];
@@ -69,8 +78,20 @@ function entries(messages: unknown[]): Entry[] {
     }
     history.push(content ? { ...raw, content } : message);
   }
-  for (const item of coalesceToolActivityMessages(buildMessageItems(history))) {
+  for (const item of coalesceToolActivityMessages(
+    projectSubagentCompletions(buildMessageItems(history), true),
+  )) {
     if (item.kind !== "message" || isStandaloneToolMessageForDisplay(item.message)) {
+      continue;
+    }
+    const completions = messageSubagentCompletions(item.message);
+    if (completions.length) {
+      result.push({
+        kind: "completion",
+        key: item.key,
+        timestamp: rawMessageTimestamp(item.message),
+        text: subagentCompletionText(completions),
+      });
       continue;
     }
     const normalized = normalizeMessage(item.message);
@@ -89,22 +110,23 @@ function entries(messages: unknown[]): Entry[] {
       const key = `${item.key}:${index}`;
       if (isToolCallContentBlock(block)) {
         const call = cards[callIndex++];
-        if (!call) {
+        if (
+          !call ||
+          call.activity?.hideFromChannelProgress ||
+          call.activity?.suppressChannelProgress ||
+          (Array.isArray(asNullableRecord(item.message)?.activity) && !call.activity)
+        ) {
           continue;
         }
         const previous = result.at(-1);
         if (previous?.kind === "tools") {
           previous.calls.push({ key, card: call });
-          if (call.activity) {
-            previous.activity.push(call.activity);
-          }
         } else {
           result.push({
             kind: "tools",
             key,
             timestamp,
             calls: [{ key, card: call }],
-            activity: call.activity ? [call.activity] : [],
           });
         }
       } else if (
@@ -192,7 +214,7 @@ function ToolLine(props: { call: ToolCard }) {
   const outcome = createMemo(() => resolveToolCardOutcome(call(), false));
   const outcomeLabel = () =>
     t(
-      `chat.toolCards.${outcome() === "succeeded" ? "completed" : outcome() === "unknown" ? "outcomeUnknown" : outcome()}`,
+      `chat.toolCards.${outcome() === "succeeded" ? "completed" : outcome() === "unknown" ? "outcomeUnknown" : outcome() === "unrecorded" ? "noResult" : outcome()}`,
     );
   return (
     <details
@@ -224,23 +246,53 @@ function ToolLine(props: { call: ToolCard }) {
 }
 
 function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
-  const overview = createMemo(() =>
-    describeToolGroup(props.entry.activity, {
-      ownSessionLaunches: ownSessionLaunchCalls(props.entry.calls.map(({ card }) => card)),
-    }),
-  );
+  const overview = createMemo(() => {
+    const launches = ownSessionLaunchCalls(props.entry.calls.map(({ card }) => card));
+    const ownSessionLaunches = new Set<string>();
+    const executedCommands = new Set<string>();
+    const subagentCancellations = new Map<string, boolean>();
+    const activity = props.entry.calls.map(({ key, card }): AgentActivityItem => {
+      const call = unwrapToolCallForDisplay(card);
+      const outcome = resolveToolCardOutcome(card, false);
+      const cancellation = readSubagentCancellation(card);
+      if (cancellation) {
+        subagentCancellations.set(key, cancellation.stopped);
+      }
+      if (card.callId && launches.has(card.callId)) {
+        ownSessionLaunches.add(key);
+      }
+      if (isExecutedCommandCard(card)) {
+        executedCommands.add(key);
+      }
+      return {
+        ...card.activity,
+        itemId: key,
+        toolCallId: key,
+        name: call.name,
+        title: card.activity?.title ?? call.name,
+        kind: "tool",
+        phase: card.completed ? "end" : "start",
+        status:
+          outcome === "succeeded"
+            ? "completed"
+            : outcome === "unrecorded" || outcome === "unknown"
+              ? undefined
+              : outcome,
+        unpairedCall: outcome === "unrecorded",
+      };
+    });
+    return describeToolGroup(activity, {
+      ownSessionLaunches,
+      executedCommands,
+      subagentCancellations,
+    });
+  });
   return (
     <details class="chat-task-feed__tool-group">
       <summary>
         <span class="chat-task-feed__overview">
           <span class="chat-task-feed__overview-heading">
-            <strong>
-              {overview().total
-                ? t(`chat.toolCards.activity.title${overview().total === 1 ? "One" : "Many"}`, {
-                    count: String(overview().total),
-                  })
-                : t("chat.toolCards.rawDetails")}
-            </strong>
+            <strong>{overview().label}</strong>
             <For each={overview().outcomes} keyed={(outcome) => outcome.kind}>
               {(outcome) => (
                 <span
@@ -251,7 +303,6 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
               )}
             </For>
           </span>
-          {overview().label && <span class="chat-task-feed__summary">{overview().label}</span>}
         </span>
         <span class="chat-task-feed__chevron" aria-hidden="true">
           <Icon name="chevronRight" />
@@ -276,9 +327,11 @@ function FeedEntry(props: { entry: Entry }) {
               ? toolIcon(props.entry.calls[0]!.card)
               : props.entry.kind === "user"
                 ? "users"
-                : props.entry.kind === "block"
-                  ? "paperclip"
-                  : "messageSquare"
+                : props.entry.kind === "completion"
+                  ? "bot"
+                  : props.entry.kind === "block"
+                    ? "paperclip"
+                    : "messageSquare"
           }
         />
       </span>
@@ -300,12 +353,18 @@ function FeedEntry(props: { entry: Entry }) {
             markdownOptions={{}}
           />
         ) : (
-          <div class={[`chat-task-feed__${props.entry.kind}`]}>{props.entry.text}</div>
+          <div
+            class={[
+              `chat-task-feed__${props.entry.kind === "completion" ? "block" : props.entry.kind}`,
+            ]}
+          >
+            {props.entry.text}
+          </div>
         )}
       </div>
       {props.entry.timestamp !== null && (
         <time class="chat-task-feed__time" datetime={new Date(props.entry.timestamp).toISOString()}>
-          {new Date(props.entry.timestamp).toLocaleTimeString([], {
+          {formatTimeMs(props.entry.timestamp, {
             hour: "2-digit",
             minute: "2-digit",
             hour12: false,

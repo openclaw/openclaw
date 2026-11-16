@@ -26,6 +26,7 @@ suite.define(() => {
   async function openPage(options: {
     hasTouch?: boolean;
     height?: number;
+    historyMessages?: unknown[];
     phone?: boolean;
     route?: string;
     webChrome?: boolean;
@@ -51,6 +52,7 @@ suite.define(() => {
     }
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      ...(options.historyMessages ? { historyMessages: options.historyMessages } : {}),
     });
     const response = await page.goto(`${suite.server.baseUrl}${options.route ?? ""}`);
     expect(response?.status()).toBe(200);
@@ -236,4 +238,123 @@ suite.define(() => {
       expect(errors).toEqual([]);
     },
   );
+  it("opens from the reachable content edge after a landscape safe-area inset", async () => {
+    const page = await openPage({ hasTouch: true, width: 852, height: 393 });
+    await shellHas(page, "shell--mobile-nav");
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--safe-area-left", "48px");
+    });
+    await expect.poll(async () => (await page.locator(".content").boundingBox())?.x).toBe(48);
+    const cdp = await context!.newCDPSession(page);
+    const swipeFrom = async (x: number) => {
+      // CDP hit-tests the actual point, unlike dispatching a touch to .content.
+      expect(
+        await page
+          .locator(".content")
+          .evaluate(
+            (content, startX) => content.contains(document.elementFromPoint(startX, 180)),
+            x,
+          ),
+      ).toBe(true);
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y: 180 }],
+      });
+      for (let step = 1; step <= 12; step++) {
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: x + step * 12, y: 180 }],
+        });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    // The inset moves the opening strip; it must not broaden content interception.
+    await swipeFrom(112);
+    await shellHas(page, "shell--nav-drawer-open", false);
+    await swipeFrom(72);
+    await shellHas(page, "shell--nav-drawer-open");
+  });
+
+  it("leaves swipes away from the left edge to chat content", async () => {
+    const text = [
+      "See https://docs.openclaw.ai/a/long/synthetic/path/for/the/swipe/regression/test now.",
+      "",
+      "| Column A | Column B | Column C | Column D | Column E | Column F |",
+      "| --- | --- | --- | --- | --- | --- |",
+      "| alpha-value | beta-value | gamma-value | delta-value | epsilon-value | zeta-value |",
+      "",
+      "```ts",
+      "const overwideLine = synthetic(argumentNumberOne, argumentNumberTwo, argumentNumberThree);",
+      "```",
+    ].join("\n");
+    const page = await openPage({
+      hasTouch: true,
+      height: 852,
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text }] }],
+      phone: true,
+      width: 393,
+    });
+    await shellHas(page, "shell--mobile-nav");
+    const table = page.locator(".markdown-table__viewport").first();
+    await table.waitFor();
+    const url = page.url();
+    const cdp = await context!.newCDPSession(page);
+    // Real input lets Chromium arbitrate native scrolling and taps against the gesture.
+    const swipeFrom = async (selector: string) => {
+      const box = await page.locator(selector).first().boundingBox();
+      const start = { x: Math.max(box!.x + 12, 64), y: box!.y + Math.min(box!.height / 2, 12) };
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [start] });
+      for (let step = 1; step <= 12; step++) {
+        const touchPoints = [{ x: start.x + step * 12, y: start.y - step }];
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    for (const selector of [
+      ".chat-thread a[href]",
+      ".chat-thread pre",
+      ".markdown-table__viewport",
+    ]) {
+      await swipeFrom(selector);
+      await shellHas(page, "shell--nav-drawer-open", false);
+    }
+    // Swiping across the link must not follow it.
+    expect(page.url()).toBe(url);
+    expect(context!.pages()).toHaveLength(1);
+
+    // A table scrolled away from its left edge keeps the rightward swipe.
+    await table.evaluate((viewport) => (viewport.scrollLeft = 60));
+    await swipeFrom(".markdown-table__viewport");
+    await expect.poll(() => table.evaluate((viewport) => viewport.scrollLeft)).toBeLessThan(60);
+    await shellHas(page, "shell--nav-drawer-open", false);
+
+    // Canvas controls commonly use pointer events and disable native touch scrolling.
+    await page
+      .locator(".chat-thread pre")
+      .first()
+      .evaluate((pre) => {
+        const canvas = document.createElement("canvas");
+        pre.replaceChildren(canvas);
+        canvas.className = "gesture-canvas";
+        canvas.style.cssText = "display:block;width:240px;height:160px;touch-action:none";
+        let startX = 0;
+        canvas.addEventListener("pointerdown", (event) => {
+          startX = event.clientX;
+          canvas.setPointerCapture(event.pointerId);
+        });
+        canvas.addEventListener("pointermove", (event) => {
+          canvas.dataset.distance = String(event.clientX - startX);
+        });
+        canvas.addEventListener("pointerup", () => (canvas.dataset.completed = "true"));
+        canvas.addEventListener("pointercancel", () => (canvas.dataset.canceled = "true"));
+      });
+    await page.locator(".gesture-canvas").scrollIntoViewIfNeeded();
+    await swipeFrom(".gesture-canvas");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-distance")).toBe("144");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-completed")).toBe("true");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-canceled")).toBeNull();
+    await shellHas(page, "shell--nav-drawer-open", false);
+  });
 });

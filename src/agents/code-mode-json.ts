@@ -268,7 +268,7 @@ export class CodeModeOutputState {
       };
       const fits = (candidate: ReturnType<typeof project>) => {
         const rendered = renderToolSearchControlText(
-          serializeToolSearchControlResult({ ...metadata, ...candidate.channels }, true),
+          serializeToolSearchControlResult({ ...metadata, ...candidate.channels }),
           networkContent,
         );
         return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);
@@ -444,7 +444,7 @@ export class CodeModeOutputState {
             ...(params.error === undefined ? {} : { error: null }),
           };
           const measured = jsonBudget(
-            serializeToolSearchControlResult({ ...metadata, ...placeholders }, true),
+            serializeToolSearchControlResult({ ...metadata, ...placeholders }),
           );
           const nullChars = Object.keys(placeholders).length * 4;
           envelopeBudget = {

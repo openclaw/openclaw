@@ -10,7 +10,11 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { runAfterReplyOperationClear } from "../../sessions/session-controller.state.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
-import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
+import {
+  isFollowupOperatorAuthorityCurrent,
+  resolveFollowupAbortSignal,
+  type FollowupRun,
+} from "./queue/types.js";
 
 type GoalReturnParams = {
   base: FollowupRun;
@@ -111,20 +115,20 @@ export function bindGoalContinuationExecution(runId: string, sessionKey: string 
   }
 }
 
-/** A Goal created by this execution can use its admitted chat return, never another command's. */
-export function bindCreatedGoalContinuation(params: {
+type GoalToolContinuation = {
   runId?: string;
   sessionKey: string;
   agentId: string;
   storePath: string;
   goalId: string;
-}): void {
+};
+
+function activeGoalReturnForTool(params: GoalToolContinuation): GoalReturn | undefined {
   const owner = goalReturns.getStore();
   if (
     !owner ||
     owner.closed ||
     owner.signal.aborted ||
-    owner.continuation ||
     owner.params.base.run.scheduledAutomation ||
     owner.params.operation.result !== null ||
     owner.generation !== getAgentRunLifecycleGeneration() ||
@@ -134,9 +138,42 @@ export function bindCreatedGoalContinuation(params: {
     owner.params.base.run.agentId !== params.agentId ||
     owner.params.storePath !== params.storePath
   ) {
-    return;
+    return undefined;
   }
-  owner.continuation = { ...owner.params.expectedSession, goalId: params.goalId };
+  return owner;
+}
+
+/** A Goal created by this execution can use its admitted chat return, never another command's. */
+export function bindCreatedGoalContinuation(params: GoalToolContinuation): void {
+  const owner = activeGoalReturnForTool(params);
+  if (owner && !owner.continuation) {
+    owner.continuation = { ...owner.params.expectedSession, goalId: params.goalId };
+  }
+}
+
+/** Only the committed completion of this return's goal permits its next explicit creation. */
+export function releaseCompletedGoalContinuation(params: GoalToolContinuation): void {
+  const owner = activeGoalReturnForTool(params);
+  if (owner?.continuation?.goalId === params.goalId) {
+    owner.continuation = undefined;
+  }
+}
+
+/** A created successor overrides the old goal fence only within its own execution. */
+export function readCreatedGoalContinuationId(
+  runId: string,
+  operation: ReplyOperation,
+): string | undefined {
+  const owner = goalReturns.getStore();
+  return owner &&
+    !owner.closed &&
+    !owner.signal.aborted &&
+    owner.generation === getAgentRunLifecycleGeneration() &&
+    owner.sourceRunId === runId &&
+    owner.params.operation === operation &&
+    owner.continuation?.goalId !== owner.params.initialGoalId
+    ? owner.continuation?.goalId
+    : undefined;
 }
 
 /** The committed yield publisher binds the return before the completion wake becomes eligible. */
@@ -172,9 +209,6 @@ export function promoteGoalContinuationYield(params: {
       (entry) =>
         entry.requesterSessionKey !== sessionKey ||
         entry.requesterAgentId !== base.run.agentId ||
-        (entry.completionRequesterSessionId !== undefined &&
-          (entry.completionRequesterSessionId !== continuation.sessionId ||
-            entry.completionRequesterLifecycleRevision !== continuation.lifecycleRevision)) ||
         entry.requesterSettleWake?.rearmGeneration !== params.rearmGeneration ||
         entry.requesterSettleWake?.requesterYieldBatch !== true,
     )
@@ -334,12 +368,7 @@ export async function finishGoalContinuationSettlement(
       });
     }
   } catch (error) {
-    if (owner.closed) {
-      return;
-    }
-    try {
-      owner.params.base.operatorAuthority?.assertCurrent();
-    } catch {
+    if (owner.closed || !isFollowupOperatorAuthorityCurrent(owner.params.base)) {
       return;
     }
     throw error;

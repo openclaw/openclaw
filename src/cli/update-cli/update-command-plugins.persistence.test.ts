@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { recoverInstalledPluginConfigIds } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
 import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin-id-recovery.test-support.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -123,21 +123,36 @@ it.each([
   );
 });
 
-it("still requires the live executor for a shipped post-core parent", async () => {
+it.each([
+  { parent: "run-bearing shipped post-core parent", runId: "run-without-executor" },
+  { parent: "run-less legacy post-core parent", runId: undefined },
+])("binds post-core convergence to the $parent contract", async ({ runId }) => {
   await withOpenClawTestState(
-    { label: "updater-post-core-native-authority", env: { OPENCLAW_UPDATE_POST_CORE: "1" } },
+    {
+      label: "updater-post-core-native-authority",
+      env: { OPENCLAW_UPDATE_POST_CORE: "1", OPENCLAW_UPDATE_RUN_ID: runId },
+    },
     async (state) => {
-      await state.writeConfig({ plugins: { enabled: false } });
+      await prepareUpdate(state, { plugins: { enabled: false } });
       const original = await fs.readFile(state.configPath, "utf8");
-      await expect(
-        convergePostCoreUpdatePlugins({
-          root: state.root,
-          channel: "stable",
-          requestedChannel: null,
-          opts: { json: true },
-          timeoutMs: 1_000,
-        }),
-      ).rejects.toThrow("Plugin cohort convergence requires its live outer update executor");
+      if (!runId) {
+        mocks.convergence.mockImplementationOnce(async ({ cfg }) => convergenceResult(cfg));
+      }
+      const convergence = convergePostCoreUpdatePlugins({
+        root: state.root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { json: true },
+        timeoutMs: 1_000,
+      });
+      if (!runId) {
+        // Parents before the run ledger (2026.6.x) never pass an executor and keep plain convergence.
+        await expect(convergence).resolves.toBeDefined();
+        return;
+      }
+      await expect(convergence).rejects.toThrow(
+        "Plugin cohort convergence requires its live outer update executor",
+      );
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
     },
   );
@@ -222,6 +237,162 @@ async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
     json: true,
   };
 }
+
+it.each(["unrelated", "same-value", "conflict", "include"])(
+  "settles plugin finalization after a %s config write",
+  async (change) => {
+    await withOpenClawTestState({ label: `updater-config-${change}` }, async (state) => {
+      const config: OpenClawConfig = {
+        plugins: { enabled: false, entries: { fixture: { enabled: true } } },
+        gateway: { port: 18789 },
+      };
+      const prepared = await prepareUpdate(state, config);
+      if (change === "include") {
+        await fs.writeFile(state.statePath("plugins.json"), JSON.stringify(config.plugins));
+        await state.writeConfig({ ...config, plugins: { $include: "./plugins.json" } });
+        prepared.configSnapshot = await readConfigFileSnapshot();
+      }
+      expect(prepared.configSnapshot.valid).toBe(true);
+      const preparedWrite = await readConfigFileSnapshotForWrite();
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => {
+        // A real config writer runs after the updater captured its planning baseline.
+        const concurrent = {
+          ...config,
+          gateway: { port: 19001 },
+          plugins: {
+            ...config.plugins,
+            entries: { fixture: { enabled: change === "unrelated" || change === "include" } },
+          },
+        };
+        if (change === "include") {
+          await fs.writeFile(
+            state.statePath("plugins.json"),
+            JSON.stringify({ ...concurrent.plugins, allow: ["fixture"] }),
+          );
+        } else {
+          await state.writeConfig(concurrent);
+        }
+        return {
+          ...convergenceResult(cfg),
+          config: {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              entries: change === "conflict" ? {} : { fixture: { enabled: false } },
+            },
+          },
+          configChanges: ["Reconciled fixture policy."],
+          installRecords: { fixture: { source: "archive" } },
+        };
+      });
+      const result = await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configWriteOptions: preparedWrite.writeOptions,
+      });
+      const saved = (await readConfigFileSnapshot()).sourceConfig;
+      expect(saved.gateway?.port).toBe(change === "include" ? 18789 : 19001);
+      expect(saved.plugins?.entries?.fixture?.enabled).toBe(false);
+      if (change === "include") {
+        expect(saved.plugins?.allow).toEqual(["fixture"]);
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8")).plugins).toEqual({
+          $include: "./plugins.json",
+        });
+      }
+      expect(result.status).toBe(change === "conflict" ? "warning" : "ok");
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(change === "conflict" ? {} : { fixture: { source: "archive" } });
+      if (change === "conflict") {
+        expect(result.warnings).toContainEqual(
+          expect.objectContaining({
+            reason: "plugin-config-conflict",
+            guidance: ["openclaw plugins doctor", "openclaw doctor --fix"],
+          }),
+        );
+      }
+    });
+  },
+);
+
+it.each([1, 5])("bounds publication retries after %s late writes", async (writes) => {
+  await withOpenClawTestState(
+    {
+      label: `updater-late-writes-${writes}`,
+      env: { UPDATER_RETRY_TOKEN: "synthetic-before-retry" },
+    },
+    async (state) => {
+      const config = {
+        plugins: {
+          enabled: false,
+          entries: { fixture: { enabled: true, config: { apiKey: "${UPDATER_RETRY_TOKEN}" } } },
+        },
+        gateway: { port: 18789, auth: { token: "${UPDATER_RETRY_TOKEN}" } },
+      };
+      const prepared = await prepareUpdate(state, config);
+      const originalInclude = JSON.stringify(config.plugins);
+      await fs.writeFile(state.statePath("plugins.json"), originalInclude);
+      await state.writeConfig({ ...config, plugins: { $include: "./plugins.json" } });
+      prepared.configSnapshot = await readConfigFileSnapshot();
+      const preparedWrite = await readConfigFileSnapshotForWrite();
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+        ...convergenceResult(cfg),
+        config: {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            entries: { fixture: { ...cfg.plugins.entries.fixture, enabled: false } },
+          },
+        },
+        installRecords: { fixture: { source: "archive" } },
+      }));
+      let attempts = 0;
+      const result = await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configWriteOptions: {
+          ...preparedWrite.writeOptions,
+          beforeCommit: async () => {
+            attempts += 1;
+            if (attempts <= writes) {
+              // A manual editor does not participate in the OpenClaw write lock.
+              if (attempts === 1) {
+                process.env.UPDATER_RETRY_TOKEN = "synthetic-after-retry";
+                await fs.writeFile(
+                  state.statePath("plugins-next.json"),
+                  JSON.stringify({ ...config.plugins, allow: ["fixture"] }),
+                );
+              }
+              await state.writeConfig({
+                ...config,
+                plugins: { $include: "./plugins-next.json" },
+                gateway: { ...config.gateway, port: 19000 + attempts },
+              });
+            }
+          },
+        },
+      });
+      expect(attempts).toBe(writes === 1 ? 2 : 5);
+      expect(result.status).toBe(writes === 1 ? "ok" : "warning");
+      expect((await readConfigFileSnapshot()).sourceConfig.gateway?.port).toBe(19000 + writes);
+      const root = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      expect(root.plugins).toEqual({ $include: "./plugins-next.json" });
+      expect(root.gateway.auth.token).toBe("${UPDATER_RETRY_TOKEN}");
+      expect(await fs.readFile(state.statePath("plugins.json"), "utf8")).toBe(originalInclude);
+      expect(JSON.parse(await fs.readFile(state.statePath("plugins-next.json"), "utf8"))).toEqual({
+        ...config.plugins,
+        allow: ["fixture"],
+        entries: {
+          fixture: {
+            enabled: writes !== 1,
+            config: { apiKey: "${UPDATER_RETRY_TOKEN}" },
+          },
+        },
+      });
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(writes === 1 ? { fixture: { source: "archive" } } : {});
+    },
+  );
+});
 
 it("prints each skipped plugin and its reason after the update counts", async () => {
   await withOpenClawTestState({ label: "updater-plugin-skip-reasons" }, async (state) => {

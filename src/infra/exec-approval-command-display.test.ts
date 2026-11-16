@@ -1,16 +1,10 @@
 import { expect, it } from "vitest";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
+  boundExecApprovalVisibleText,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-text-sanitize.js";
-
-function hasLoneSurrogate(value: string): boolean {
-  return Array.from(value).some((char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint >= 0xd800 && codePoint <= 0xdfff;
-  });
-}
 
 function runPlan(commandText: string, commandPreview: string, argv = ["echo", "hi"]) {
   return {
@@ -37,17 +31,21 @@ it.each([
   expect(() => encodeURIComponent(result)).not.toThrow();
 });
 
-it.each(["x".repeat(20 * 1024), "a".repeat(16 * 1024 - 1) + "😀tail".repeat(3)])(
-  "bounds display output without splitting surrogate pairs (%#)",
-  (command) => {
-    const result = sanitizeExecApprovalDisplayText(command);
+it.each([undefined, 128, 256, 512])("bounds display output without splitting pairs (%s)", (cap) => {
+  for (const command of [
+    "x".repeat(20 * 1024),
+    "a".repeat((cap ?? 16 * 1024) - 1) + "😀tail".repeat(3),
+  ]) {
+    const result =
+      cap === undefined
+        ? sanitizeExecApprovalDisplayText(command)
+        : boundExecApprovalVisibleText(command, cap);
     expect(result.length).toBeLessThan(command.length);
-    expect(result).toContain("[truncated]");
-    expect(hasLoneSurrogate(result)).toBe(false);
-    expect(result).not.toContain("\uD83D");
+    expect(cap === undefined ? result.includes("[truncated]") : result.length <= cap).toBe(true);
+    expect(result.isWellFormed()).toBe(true);
     expect(() => encodeURIComponent(result)).not.toThrow();
-  },
-);
+  }
+});
 
 it("refuses to display commands above the hard input cap", () => {
   const huge = "x".repeat(300 * 1024);

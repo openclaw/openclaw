@@ -6,8 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { closeSwarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -71,8 +74,8 @@ export type Fixture = {
   registry: PluginRegistry;
   params: (body?: string) => HandleCommandsParams;
   handler: ReturnType<typeof vi.fn<Handler>>;
-  userInputs: () => Promise<unknown[]>;
-  assistantOutputs: () => Promise<unknown[]>;
+  userInputs: (sessionId?: string) => Promise<unknown[]>;
+  assistantOutputs: (sessionId?: string) => Promise<unknown[]>;
   restrictParentTools: () => Promise<unknown>;
   revokeOwner: () => void;
   demoteOwner: () => void;
@@ -201,6 +204,7 @@ export async function withCommandPlugin(
     let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
     const scheduledResults: Fixture["scheduledResults"] = [];
     const sessionEventPrompts: string[] = [];
+    const previousSubagentRuns = new Set(subagentRuns.keys());
     let fixtureRef: Fixture | undefined;
     const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
@@ -272,12 +276,12 @@ export async function withCommandPlugin(
     );
     await state.writeConfig(cfg);
     const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
-    const transcriptContents = async (role: "user" | "assistant") => {
+    const transcriptContents = async (role: "user" | "assistant", sessionId = "command-parent") => {
       const events = await loadTranscriptEvents({
         agentId: "main",
         sessionKey,
         storePath,
-        sessionId: "command-parent",
+        sessionId,
       });
       return events.flatMap((event) => {
         const record = asOptionalRecord(event);
@@ -331,8 +335,8 @@ export async function withCommandPlugin(
         reloadPlugin,
         params,
         handler,
-        userInputs: () => transcriptContents("user"),
-        assistantOutputs: () => transcriptContents("assistant"),
+        userInputs: (sessionId) => transcriptContents("user", sessionId),
+        assistantOutputs: (sessionId) => transcriptContents("assistant", sessionId),
         restrictParentTools: () =>
           upsertSessionEntryCore(
             { agentId: "main", sessionKey, storePath },
@@ -375,7 +379,30 @@ export async function withCommandPlugin(
     } finally {
       cron.stop();
       await cron.waitForIdle();
+      const queuedChildCleanups = [...subagentRuns.values()].filter(
+        (entry) =>
+          !previousSubagentRuns.has(entry.runId) &&
+          entry.requesterSessionKey === sessionKey &&
+          entry.collectorLaunchCleanupPending &&
+          entry.execution.outcome?.error ===
+            "Queued channel operator authority changed; submit a new request.",
+      );
+      // Queued source revocation still needs this lifecycle to delete the child session.
+      await closeSwarmScheduler(resolveGatewayContext);
       agentTurnRuntime?.close();
+      for (const child of queuedChildCleanups) {
+        expect
+          .soft(
+            loadSessionEntry({
+              agentId: child.childAgentId ?? "main",
+              sessionKey: child.childSessionKey,
+              storePath,
+            }),
+            "revoked queued child session is physically deleted before fixture retirement",
+          )
+          .toBeUndefined();
+        expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
+      }
       Reflect.deleteProperty(globalThis, bridge);
       resetGlobalHookRunner();
       resetPluginRuntimeStateForTest();

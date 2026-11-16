@@ -109,9 +109,13 @@ export type PluginCommandContext = {
 };
 
 export type PluginCommandResult = ReplyPayload & {
-  /** Allows the agent session to continue processing after the command. */
-  continueAgent?: boolean;
-  /** Suppresses channel fallback replies when the handler already delivered a response. */
+  /**
+   * Continues the agent turn after the command. `true` keeps the original message text;
+   * `{ prompt }` replaces the turn text, so the agent and transcript see `prompt` as this
+   * turn's user message, the same way core command rewrites appear. Earlier history is untouched.
+   */
+  continueAgent?: boolean | { prompt: string };
+  /** The handler already delivered its response: send neither the result text nor a missing-reply notice. */
   suppressReply?: boolean;
 };
 

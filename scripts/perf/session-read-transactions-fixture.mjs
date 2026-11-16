@@ -1,4 +1,7 @@
-/** Synthetic schema-39 fixture; run with node --import ./scripts/tsx.mjs. */
+/**
+ * Synthetic current-schema fixture; run with node --import ./scripts/tsx.mjs.
+ * --database-only omits the unrelated 62,000-file workspace for SQL owner measurements.
+ */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -16,9 +19,12 @@ const { values } = parseArgs({
     "target-body-bytes": { type: "string", default: "1024" },
     "snapshot-bytes": { type: "string", default: "65536" },
     "workspace-only": { type: "boolean" },
+    "database-only": { type: "boolean" },
+    "idempotency-keys": { type: "boolean", default: false },
   },
 });
 assert(values.root, "--root is required and must not already exist");
+assert(!(values["workspace-only"] && values["database-only"]));
 const positive = (input) => {
   const number = Number(input);
   assert(Number.isSafeInteger(number) && number > 0);
@@ -75,7 +81,10 @@ const started = performance.now();
 let inserted = 0;
 let payloadBytes = 0;
 try {
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 39);
+  assert.equal(
+    db.prepare("PRAGMA user_version").get().user_version,
+    owner.OPENCLAW_AGENT_SCHEMA_VERSION,
+  );
   // Raw insertion is limited to this newly created offline synthetic fixture.
   const node = db.prepare(`INSERT INTO session_nodes
     (session_key,current_session_id,entry_json,updated_at,entry_valid,display_name)
@@ -92,7 +101,8 @@ try {
      message_role,navigation_last_type,navigation_valid)
     VALUES(?,?,?,?,?,?,?,?,1)`);
   const identity = db.prepare(`INSERT INTO transcript_event_identities
-    (session_id,event_id,seq,event_type,parent_id,created_at) VALUES(?,?,?,?,?,?)`);
+    (session_id,event_id,seq,event_type,parent_id,created_at,message_idempotency_key)
+    VALUES(?,?,?,?,?,?,?)`);
   const active = db.prepare(`INSERT INTO session_transcript_active_events
     (session_id,active_position,event_seq,message_position,context_eligible)
     VALUES(?,?,?,?,1)`);
@@ -139,6 +149,7 @@ try {
         for (let seq = start; seq < Math.min(count, start + 2000); seq++) {
           const role = seq % 2 === 0 ? "assistant" : "user";
           const parentId = seq > 1 ? id(seq - 1) : null;
+          const idempotencyKey = values["idempotency-keys"] ? `result-${index}-${seq}` : null;
           const record =
             seq === 0
               ? { type: "session", version: 3, id: sessionId(index), timestamp }
@@ -151,6 +162,7 @@ try {
                     role,
                     content: `${index}:${seq}:${index === 0 ? shortBody : longBody}`,
                     timestamp: now,
+                    ...(idempotencyKey ? { idempotencyKey } : {}),
                   },
                 };
           const json = JSON.stringify(record);
@@ -166,7 +178,7 @@ try {
             record.type,
           );
           if (seq > 0) {
-            identity.run(sessionId(index), id(seq), seq, "message", parentId, now);
+            identity.run(sessionId(index), id(seq), seq, "message", parentId, now, idempotencyKey);
             active.run(sessionId(index), seq - 1, seq, seq - 1);
           }
           payloadBytes += bytes;
@@ -200,12 +212,14 @@ try {
   );
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   assert.equal(inserted, eventCount);
-  const workspace = createSyntheticWorkspace(path.join(root, "workspace"));
+  const workspace = values["database-only"]
+    ? undefined
+    : createSyntheticWorkspace(path.join(root, "workspace"));
   const summary = {
     format: "openclaw-session-read-transactions-v1",
     root,
     databasePath: database.path,
-    schemaVersion: 39,
+    schemaVersion: owner.OPENCLAW_AGENT_SCHEMA_VERSION,
     sessionCount,
     eventCount,
     populatedSessions: sessionCount,
@@ -213,6 +227,7 @@ try {
     bodyBytes,
     targetBodyBytes,
     snapshotBytes,
+    idempotencyKeys: values["idempotency-keys"],
     payloadBytes,
     databaseBytes: statSync(database.path).size,
     elapsedMs: performance.now() - started,

@@ -16,7 +16,6 @@ import "../../../llm/stream.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { runEmbeddedSessionFork } from "../session-fork.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
@@ -110,7 +109,7 @@ function startWatchdog(label: string) {
   const allowed = new Set(["exec", "read"]);
   const promoted = wrapStreamFnPromoteStandaloneTextToolCalls(base, allowed);
   const trimmed = wrapStreamFnTrimToolCallNames(promoted, allowed, {
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
   const timeoutOptions = {
     cfg: { agents: { defaults: { timeoutSeconds: 3600 } } },
@@ -300,7 +299,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("omits native fork affinity without replacing the parent's continuation", async () => {
+  it("keeps native fork cache affinity without replacing the parent's continuation", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const requests: Frame[] = [];
@@ -340,7 +339,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       ],
     });
     expect(requests[0]?.prompt_cache_key).toBe(identity.sessionId);
-    expect(requests[1]).not.toHaveProperty("prompt_cache_key");
+    expect(requests[1]?.prompt_cache_key).toBe("parent-key");
     expect(requests[2]).toMatchObject({
       previous_response_id: "resp_native_1",
       input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],

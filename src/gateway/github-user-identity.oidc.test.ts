@@ -289,7 +289,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     );
   });
 
-  it("reuses an existing email profile and role for HTTP and WebSocket connections", async () => {
+  it.each(["oidc", "onetimepin"])("reuses the %s profile for HTTP and WS", async (type) => {
     const profile = ensureProfileForEmail("ada@example.test");
     setUserProfileRole(profile.id, "maintainer");
     const before = getUserProfileListItem(profile.id);
@@ -298,7 +298,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         id: "oidc-subject-101",
         email: "ADA@Example.Test",
         name: "OIDC display name",
-        idp: { type: "oidc" },
+        idp: { type },
       }),
     );
     using request = disposableAccessRequest();
@@ -319,7 +319,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     }
   });
 
-  it("gives a new OIDC email its own default-role profile without interpreting its subject as GitHub", async () => {
+  it.each(["oidc", "onetimepin"])("keeps new %s users separate from GitHub", async (type) => {
     const existing = syncGitHubIdentity({
       identity: { accountId: 101, login: "ada" },
       authenticationAlias: { kind: "email", email: "ada@example.test" },
@@ -329,7 +329,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
       identityResponse({
         id: 101,
         email: "grace@example.test",
-        idp: { type: "oidc" },
+        idp: { type },
       }),
     );
     using request = disposableAccessRequest("grace@example.test");
@@ -348,6 +348,11 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     { name: "missing principal", idp: { type: "oidc" } },
     { name: "missing provider", email: "ada@example.test" },
     { name: "unknown provider", email: "ada@example.test", idp: { type: "unknown" } },
+    {
+      name: "mismatched OTP principal",
+      email: "mallory@example.test",
+      idp: { type: "onetimepin" },
+    },
   ])("rejects $name without changing an existing profile", async ({ name: _name, ...identity }) => {
     const profile = ensureProfileForEmail("ada@example.test");
     setUserProfileRole(profile.id, "maintainer");
@@ -366,6 +371,18 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     } finally {
       stop();
     }
+  });
+
+  it("rejects an Access-rejected assertion despite a matching email header", async () => {
+    const profile = ensureProfileForEmail("ada@example.test");
+    setUserProfileRole(profile.id, "maintainer");
+    const before = getUserProfileListItem(profile.id);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(identityResponse({}, 401));
+    using request = disposableAccessRequest();
+    await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow(
+      "Cloudflare Access identity lookup failed",
+    );
+    expect(getUserProfileListItem(profile.id)).toEqual(before);
   });
 });
 

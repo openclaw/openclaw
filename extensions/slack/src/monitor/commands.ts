@@ -6,10 +6,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
  * normalized text. Use in both prepare and debounce gate for consistency.
  */
 export function stripSlackMentionsForCommandDetection(text: string): string {
-  return text
-    .replace(/<@[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const body = text.replace(/<@[^>]+>/g, " ").trim();
+  // Multiline command arguments must survive mention removal before core dispatch.
+  return body.startsWith("/") && /[\r\n]/.test(body) ? body : body.replace(/\s+/g, " ");
 }
 
 function normalizeSlackSlashCommandName(raw: string) {

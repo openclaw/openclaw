@@ -3,6 +3,7 @@ import path from "node:path";
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
 import { realpathOrResolve } from "../../infra/path-existence.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -258,7 +259,7 @@ function ensureExitCleanupRegistered(): void {
   }
   exitCleanupRegistered = true;
   // Only settled admissions can be deleted synchronously; unknown writers may still insert.
-  process.on("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const cleanup of pendingLeaseCleanups) {
       if (cleanup.admissionSettled && !cleanup.rowDeleted) {
         try {

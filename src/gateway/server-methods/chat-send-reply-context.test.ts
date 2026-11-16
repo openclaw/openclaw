@@ -54,6 +54,23 @@ it("hydrates display-visible assistant content without tool payloads", async () 
   expect(fields.ReplyToBody).not.toContain("tool_call");
 });
 
+it("keeps the visible quote after hidden reasoning within the display window", async () => {
+  expect(
+    await resolveMessage({
+      role: "assistant",
+      content: "<think>" + "x".repeat(4_000) + "</think>visible answer",
+    }),
+  ).toEqual({ ReplyToId: "msg-1", ReplyToBody: "visible answer", ReplyToSender: "Molty" });
+});
+
+it("retains exactly the first 2,000 characters of an oversized reply body", async () => {
+  const fields = await resolveMessage({
+    role: "user",
+    content: "a".repeat(2_000) + "b".repeat(3_000),
+  });
+  expect(fields.ReplyToBody).toBe("a".repeat(2_000));
+});
+
 it.each([
   [
     "user",

@@ -7,6 +7,7 @@ import type { executeJobCore } from "./timer-execution.js";
 
 export type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
+  executionSettlement?: Promise<unknown>;
 };
 export type CronRunProgress = {
   completedCoreResult?: CronCoreRunOutcome;

@@ -1,12 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-control-ui-controllers.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templates = useAutoCleanupTempDirTracker(afterAll);
+let template: string | undefined;
 const errors = vi.fn();
 beforeEach(() => {
   errors.mockClear();
@@ -22,15 +24,19 @@ function write(root: string, file: string, source: string) {
 }
 
 function git(cwd: string, args: string[]) {
+  const env = createNestedGitEnv();
+  // Automatic maintenance must not mutate the completed seed during copies.
+  env.GIT_CONFIG_PARAMETERS =
+    `${env.GIT_CONFIG_PARAMETERS ?? ""} 'maintenance.auto=false' 'gc.auto=0'`.trim();
   execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
     cwd,
-    env: createNestedGitEnv(),
+    env,
     stdio: "ignore",
   });
 }
 
-function fixture(source = "export {};\n") {
-  const root = tempDirs.make("openclaw-controller-guard-");
+function createFixture(source = "export {};\n", dirs = tempDirs) {
+  const root = dirs.make("openclaw-controller-guard-");
   write(root, "ui/src/view.ts", source);
   for (const pattern of [
     "createEffect",
@@ -50,6 +56,17 @@ function fixture(source = "export {};\n") {
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
     git(root, args);
   }
+  return root;
+}
+
+function fixture(source = "export {};\n") {
+  if (source !== "export {};\n") {
+    return createFixture(source);
+  }
+  template ??= createFixture(undefined, templates);
+  const root = tempDirs.make("openclaw-controller-guard-");
+  // Keep refs, index and objects private to each case before it stages or prunes.
+  fs.cpSync(template, root, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
   return root;
 }
 

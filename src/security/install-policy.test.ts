@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForReapTick } from "node:timers/promises";
@@ -104,6 +104,8 @@ function configWithPolicy(scriptPath: string, env: Record<string, string>): Open
 
 describe("runInstallPolicy", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  // Policy commands need trusted ancestors, independent of the host's TMPDIR.
+  const tempRoot = process.platform === "win32" ? undefined : realpathSync("/tmp");
   let sourceDir: string;
   let scriptPath: string;
   let receipts: FixtureReceiptChannel;
@@ -116,13 +118,12 @@ describe("runInstallPolicy", () => {
   });
 
   beforeEach(async () => {
-    sourceDir = tempDirs.make("openclaw-install-policy-");
+    sourceDir = tempDirs.make("openclaw-install-policy-", tempRoot);
     scriptPath = await writePolicyScript(sourceDir);
   });
 
   async function writeWritableParentPolicy() {
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const writableDir = path.join(dir, "writable-parent");
+    const writableDir = path.join(sourceDir, "writable-parent");
     await fs.mkdir(writableDir, { recursive: true });
     await fs.chmod(writableDir, 0o777);
     return { writableDir, writableScriptPath: await writePolicyScript(writableDir) };
@@ -473,10 +474,8 @@ describe("runInstallPolicy", () => {
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinked interpreter script args", async () => {
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const realScriptPath = await writePolicyScript(dir);
-    const symlinkScriptPath = path.join(dir, "policy-link.cjs");
-    await fs.symlink(realScriptPath, symlinkScriptPath);
+    const symlinkScriptPath = path.join(sourceDir, "policy-link.cjs");
+    await fs.symlink(scriptPath, symlinkScriptPath);
 
     await expectInvalidExec(
       { command: process.execPath, args: [symlinkScriptPath] },

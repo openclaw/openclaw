@@ -52,8 +52,9 @@ describePosix("native merge completion", () => {
     expect(f.record().phase).toBe("commenting");
     expect(f.state().posts).toBe(1);
     f.recover();
-    expectExit(f.run());
+    const resumed = expectExit(f.run());
     expect(f.record().phase).toBe(comment === "lost" ? "commented" : "commenting");
+    expect(resumed.output.includes("scripts/pr gc --pr 123")).toBe(comment === "lost");
     expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
     expect(existsSync(f.worktree)).toBe(true);
   });

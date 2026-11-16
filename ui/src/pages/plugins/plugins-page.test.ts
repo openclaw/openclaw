@@ -28,6 +28,7 @@ import {
   createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
+  methodCalls,
   mountPage,
   resetPluginsPageTestState,
   settlePlugins,
@@ -103,10 +104,6 @@ function waitForText(page: HTMLElement, text: string, selector?: string) {
   );
 }
 
-function methodCalls(request: ReturnType<typeof createClient>["request"], name: string) {
-  return request.mock.calls.filter(([method]) => method === name);
-}
-
 function scriptedClient(handlers: Record<string, (params: unknown) => unknown>) {
   return createClient(async (method, params) => {
     if (method === "plugins.inspect" && !handlers[method]) {
@@ -136,56 +133,71 @@ async function mountInventory(
   };
 }
 
-it("flushes a pending config draft before enabling and refreshes afterward", async () => {
-  vi.useFakeTimers();
-  let config: Record<string, unknown> = { pending: false };
-  let hash = "hash-1";
-  const enabled = createPlugin({ enabled: true, state: "enabled" });
-  const fixture = runtimeFixture({
-    "config.get": () => {
-      return sourceConfigSnapshot(config, hash);
-    },
-    "config.set": (params) => {
-      config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
-      hash = "hash-2";
-      return { config, hash };
-    },
-    "plugins.setEnabled": () => {
-      config = { ...config, pluginMutation: "enable" };
-      hash = "hash-3";
-      return { ok: true, plugin: enabled, restartRequired: true };
-    },
-    "plugins.inspect": () => {
-      return createInspectResult();
-    },
-    "config.schema": () => {
-      return { schema: { type: "object", properties: {} }, uiHints: {} };
-    },
-    "plugins.list": () => {
-      return createResult(enabled);
-    },
-  });
-  const { runtimeConfig } = fixture;
-  await runtimeConfig.ensureLoaded();
-  const { page } = await fixture.mount();
-  await settlePlugins();
-  fixture.request.mockClear();
-  const order = () => fixture.request.mock.calls.map(([method]) => method);
-  runtimeConfig.patchForm(["pending"], true);
-  await clickPluginAction(page, "Enable Workboard");
-  await waitForSolid(() => expect(order()).toContain("plugins.list"));
-  expect(order().slice(0, 4)).toEqual([
-    "config.set",
-    "plugins.setEnabled",
-    "config.get",
-    "plugins.list",
-  ]);
-  expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
-  expect(runtimeConfig.state.configForm).toMatchObject({
-    pending: true,
-    pluginMutation: "enable",
-  });
-});
+it.each([
+  { suffix: "", refreshBeforeEnable: false },
+  { suffix: " after catalog refresh", refreshBeforeEnable: true },
+])(
+  "flushes a pending config draft before enabling and refreshes afterward$suffix",
+  async ({ refreshBeforeEnable }) => {
+    await import("./settings-view.tsx");
+    vi.useFakeTimers();
+    let config: Record<string, unknown> = { pending: false };
+    let hash = "hash-1";
+    const enabled = createPlugin({ enabled: true, state: "enabled" });
+    let inventory = createResult();
+    const fixture = runtimeFixture({
+      "config.get": () => {
+        return sourceConfigSnapshot(config, hash);
+      },
+      "config.set": (params) => {
+        config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hash = "hash-2";
+        return { config, hash };
+      },
+      "plugins.setEnabled": () => {
+        config = { ...config, pluginMutation: "enable" };
+        hash = "hash-3";
+        inventory = createResult(enabled);
+        return { ok: true, plugin: enabled, restartRequired: true };
+      },
+      "plugins.inspect": () => {
+        return createInspectResult();
+      },
+      "config.schema": () => {
+        return { schema: { type: "object", properties: {} }, uiHints: {} };
+      },
+      "plugins.list": () => {
+        return inventory;
+      },
+    });
+    const { runtimeConfig } = fixture;
+    await runtimeConfig.ensureLoaded();
+    const { page } = await fixture.mount();
+    await settlePlugins();
+    if (refreshBeforeEnable) {
+      fixture.request.mockClear();
+      fixture.publishGeneration(1);
+      await fixture.waitForCall("plugins.list");
+      await settlePlugins();
+    }
+    fixture.request.mockClear();
+    const order = () => fixture.request.mock.calls.map(([method]) => method);
+    runtimeConfig.patchForm(["pending"], true);
+    await clickPluginAction(page, "Enable Workboard");
+    await waitForSolid(() => expect(order()).toContain("plugins.list"));
+    expect(order().slice(0, 4)).toEqual([
+      "config.set",
+      "plugins.setEnabled",
+      "config.get",
+      "plugins.list",
+    ]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toMatchObject({
+      pending: true,
+      pluginMutation: "enable",
+    });
+  },
+);
 
 it("waits for uninstall confirmation and sends nothing when cancelled", async () => {
   const { client, request } = scriptedClient({
@@ -650,8 +662,9 @@ it.each(["removed", "available", "navigated", "failed"] as const)(
       name: "Calendar",
       origin: outcome === "available" ? "official" : "global",
       removable: true,
+      catalogId: "local_Y2FsZW5kYXI",
     });
-    const other = createPlugin({ id: "other", name: "Other" });
+    const other = createPlugin({ id: "other", name: "Other", catalogId: "local_b3RoZXI" });
     const catalog = catalogFor(plugin, "local_Y2FsZW5kYXI", true);
     const otherCatalog = catalogFor(other, "local_b3RoZXI", true);
     const available = availablePlugin(plugin);
@@ -838,7 +851,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   harness.emit(client, false);
   harness.emit(client, true);
   await clickPluginAction(page, "Continue installation");
-  await waitForText(page, "request a fresh review");
+  await waitForText(page, "request a new review");
   expect(installCalls).toBe(1);
   await clickPluginAction(page, "Install");
   await waitForSolid(() => expect(installCalls).toBe(2));
@@ -853,7 +866,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   expect(showConfirmDialog).not.toHaveBeenCalled();
 });
 
-it.each(["settled", "navigated"] as const)(
+it.each(["settled", "navigated", "hub-adopted"] as const)(
   "restores removed-plugin focus for a %s catalog read",
   async (outcome) => {
     const plugin = createPlugin({
@@ -865,6 +878,7 @@ it.each(["settled", "navigated"] as const)(
     });
     const available = availablePlugin(plugin);
     const catalog = catalogFor(plugin, "catalog-calendar");
+    catalog.detail.readme = "# Calendar metadata";
     const refreshed = catalogFor(available, catalog.plugin.id);
     const other = createPlugin({ id: "other", name: "Other", installed: false });
     const otherCatalog = catalogFor(other, "catalog-other");
@@ -884,14 +898,26 @@ it.each(["settled", "navigated"] as const)(
         return removalResult(plugin.id);
       },
       "plugins.list": () => createResult(removed ? available : plugin),
+      "plugins.catalog.browse": () => ({ items: [], categories: [] }),
+      "plugins.catalog.categories": () => ({ categories: [] }),
     });
     const harness = createGateway(client);
+    const detailPath = pathForPluginCatalogEntry(catalog.plugin.id);
     const { page } = await mountPage(
       createContext(harness.gateway),
-      routeFor(harness.gateway, createResult(plugin), pathForPluginCatalogEntry(catalog.plugin.id)),
+      routeFor(
+        harness.gateway,
+        createResult(plugin),
+        outcome === "hub-adopted" ? "/plugins" : detailPath,
+      ),
     );
+    if (outcome === "hub-adopted") {
+      page.routeData = routeFor(harness.gateway, createResult(plugin), detailPath);
+    }
     const find = queryWithin(page);
     await waitForSolid(() => expect(find('[aria-label="Uninstall Calendar"]')).not.toBeNull());
+    await waitForText(page, "Calendar metadata");
+    await page.updateComplete;
     // SAFETY: waitForSolid above established the control exists before focus is exercised.
     const trigger = find<HTMLButtonElement>('[aria-label="Uninstall Calendar"]')!;
     const readsBefore = methodCalls(request, "plugins.catalog.get").length;

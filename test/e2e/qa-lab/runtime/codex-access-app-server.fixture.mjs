@@ -97,44 +97,11 @@ export function runSpawnAccessFixture({ requestLog, outcome, version }) {
       },
       "thread/backgroundTerminals/list": ({ sendResult }) =>
         sendResult({ data: [], nextCursor: null }),
-      "turn/start": ({ params, sendResult, notify }) => {
+      "turn/start": ({ completeTextTurn }) => {
         if (account !== "account-a") {
           throw new Error("Inference reached a forbidden account");
         }
-        const turnId = "synthetic-turn";
-        sendResult({
-          turn: {
-            id: turnId,
-            items: [],
-            itemsView: "notLoaded",
-            status: "inProgress",
-            error: null,
-            startedAt: null,
-            completedAt: null,
-            durationMs: null,
-          },
-        });
-        setImmediate(() => {
-          const item = {
-            type: "agentMessage",
-            id: "synthetic-message",
-            text: `Completed as ${account}`,
-          };
-          notify("item/completed", { item, threadId: params.threadId, turnId });
-          notify("turn/completed", {
-            threadId: params.threadId,
-            turn: {
-              id: turnId,
-              items: [item],
-              itemsView: "full",
-              status: "completed",
-              error: null,
-              startedAt: 1,
-              completedAt: 2,
-              durationMs: 1,
-            },
-          });
-        });
+        completeTextTurn(() => `Completed as ${account}`);
       },
     },
   });

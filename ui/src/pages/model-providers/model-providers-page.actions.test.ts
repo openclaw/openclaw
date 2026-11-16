@@ -18,7 +18,7 @@ import {
 const keyInput = (page: ModelProvidersPageTestElement) =>
   page.querySelector<HTMLInputElement>(".model-providers__inline-form input");
 const keyButton = (page: ModelProvidersPageTestElement) =>
-  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!;
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form .btn.primary")!;
 const primaryButton = (page: ModelProvidersPageTestElement) =>
   modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger");
 

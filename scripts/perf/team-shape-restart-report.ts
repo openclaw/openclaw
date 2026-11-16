@@ -1,3 +1,5 @@
+import { asNonArrayRecord as record } from "../../packages/normalization-core/src/record-coerce.ts";
+
 // Analyze captured public RPC evidence without treating consumed input as an answer.
 export type StressInput = {
   id: string;
@@ -34,10 +36,6 @@ export type SharedRateLimitProbe = {
 };
 type Status = "pass" | "fail" | "unknown";
 type Invariant = { id: number; name: string; status: Status; details: string; evidence: unknown[] };
-const record = (value: unknown): Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 const array = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 function text(value: unknown): string {
   if (typeof value === "string") {

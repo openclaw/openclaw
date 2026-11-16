@@ -352,6 +352,7 @@ function classifyToolCall(toolName: string, args: unknown): ToolMutationState {
       replaySafe = action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
       break;
     case "skill_workshop":
+    case "skill_library":
       replaySafe = action === "list" || action === "inspect" || action === "read";
       break;
     case "transcripts":
