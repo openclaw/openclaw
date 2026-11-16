@@ -931,6 +931,22 @@ export function subtractShippedPullRequests(source, baselines) {
       pullRequests: sortedPullRequests,
     });
   }
+  // References belonging only to already-shipped PRs are outside this release.
+  // Keep shared references and references from direct commits in the inventory.
+  const shippedReferences = new Set();
+  const retainedReferences = new Set();
+  for (const commit of source.activeCommits) {
+    const references =
+      commit.pullRequests.length > 0 && commit.pullRequests.every((number) => excluded.has(number))
+        ? shippedReferences
+        : retainedReferences;
+    for (const number of commit.references) {
+      references.add(number);
+    }
+  }
+  source.references = source.references.filter(
+    (number) => !shippedReferences.has(number) || retainedReferences.has(number),
+  );
   return { baselines: metadata, pullRequests: excluded };
 }
 
@@ -1938,12 +1954,13 @@ export function loadHistoricalIssueSnapshot({
   if (
     snapshot.schemaVersion !== githubSnapshotSchemaVersion ||
     snapshot.repository !== repo ||
-    snapshot.base !== base ||
+    !/^[0-9a-f]{40}$/.test(snapshot.base ?? "") ||
+    !isAncestor(base, snapshot.base) ||
     !/^[0-9a-f]{40}$/.test(snapshot.target ?? "") ||
     !snapshot.responses ||
     typeof snapshot.responses !== "object" ||
     Array.isArray(snapshot.responses) ||
-    !isAncestor(base, snapshot.target) ||
+    !isAncestor(snapshot.base, snapshot.target) ||
     !isAncestor(snapshot.target, target)
   ) {
     fail("historical issue snapshot repository/range mismatch");
@@ -1975,7 +1992,10 @@ export function loadHistoricalIssueSnapshot({
       nodes.set(number, node);
     }
   }
-  return { nodes, snapshot: { repository: repo, base, target: snapshot.target, sha256 } };
+  return {
+    nodes,
+    snapshot: { repository: repo, base: snapshot.base, target: snapshot.target, sha256 },
+  };
 }
 
 function completeRelationship(node, name) {
@@ -2039,13 +2059,21 @@ export function recoverUnavailableIssues({
         return true;
       }
       const origins = [...commit.body.matchAll(/^Source commit: ([0-9a-f]{40})$/gm)];
+      const cherryPicks = [
+        ...commit.body.matchAll(/^\(cherry picked from commit ([0-9a-f]{40})\)$/gm),
+      ];
       const pullRequests = [...commit.body.matchAll(/^Source PR: (\S+)$/gm)];
       return (
         pullRequestTitleFromCommitSubject(commit.subject, prNumber) === priorPr?.title &&
-        origins.length === 1 &&
-        origins[0][1] === merge &&
-        pullRequests.length === 1 &&
-        pullRequests[0][1] === "https://github.com/" + repo + "/pull/" + prNumber
+        ((origins.length === 1 &&
+          origins[0][1] === merge &&
+          pullRequests.length === 1 &&
+          pullRequests[0][1] === "https://github.com/" + repo + "/pull/" + prNumber &&
+          cherryPicks.every((entry) => entry[1] === merge)) ||
+          (origins.length === 0 &&
+            pullRequests.length === 0 &&
+            cherryPicks.length === 1 &&
+            cherryPicks[0][1] === merge))
       );
     });
     const coveredCommit = coveredCommits.length === 1 ? coveredCommits[0].hash : undefined;
@@ -3269,6 +3297,37 @@ function main() {
     ? parseContributionRecordProvenance(committedSection.source)?.base
     : undefined;
   const recordBase = committedRecordBase ? gitCommit(committedRecordBase) : undefined;
+  // Cumulative stable accounting can include a prior beta's audited range.
+  // Read its committed record without retargeting the original snapshot.
+  let historicalRecord = committedRecord;
+  let historicalRecordTarget = committedRecordTarget;
+  let historicalRecordBase = recordBase;
+  if (historicalEvidence) {
+    const matches = extractChangelogReleaseSections(
+      loadChangelogCollection({ rootDir, ref: source.target, recordsOnly: true }),
+    ).filter((entry) => {
+      // Only the matching audited range is evidence for this recovery. Unrelated
+      // historical records can predate the current ledger format or invariants.
+      const auditLine = entry.source.match(/^This audited record covers the complete .+$/mu)?.[0];
+      if (!auditLine?.includes(`..${historicalEvidence.snapshot.target} history:`)) {
+        return false;
+      }
+      const provenance = parseContributionRecordProvenance(entry.source);
+      return (
+        provenance &&
+        provenance.target === historicalEvidence.snapshot.target &&
+        gitCommit(provenance.base) === historicalEvidence.snapshot.base
+      );
+    });
+    if (matches.length > 1) {
+      fail("ambiguous committed historical contribution record");
+    }
+    if (matches.length === 1) {
+      historicalRecord = contributionRecordFor(matches[0]);
+      historicalRecordTarget = contributionRecordTarget(matches[0]);
+      historicalRecordBase = historicalEvidence.snapshot.base;
+    }
+  }
   const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
   source.shippedBaselines = shippedExclusions.baselines;
@@ -3339,7 +3398,7 @@ function main() {
   if (historicalEvidence) {
     appendReferences(
       references,
-      [...committedRecord.pullRequests].flatMap(([number, row]) =>
+      [...historicalRecord.pullRequests].flatMap(([number, row]) =>
         source.pullRequests.has(number)
           ? row.references.filter(
               (reference) => historicalEvidence.nodes.get(reference)?.__typename === "Issue",
@@ -3361,9 +3420,9 @@ function main() {
       numbers,
       ...resolution,
       evidence: historicalEvidence,
-      record: committedRecord,
-      recordTarget: committedRecordTarget,
-      recordBase,
+      record: historicalRecord,
+      recordTarget: historicalRecordTarget,
+      recordBase: historicalRecordBase,
       source,
     });
     return resolution;

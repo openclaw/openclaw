@@ -704,6 +704,9 @@ process.exitCode = errors.length ? 1 : 0;
     "adaptation-missing",
     "adaptation-conflicting",
     "adaptation-ambiguous",
+    "cumulative",
+    "cumulative-wrong-record",
+    "cumulative-conflicting-origin",
     "proxy",
     "mixed-transport",
     "unrelated",
@@ -717,33 +720,56 @@ process.exitCode = errors.length ? 1 : 0;
     "symlink-collision",
   ])("recovers historical issues through collector passes without masking failures: %s", (mode) => {
     const { cwd, base, changelog } = seedRepository("release-historical-issue-", "main");
+    const cumulative = mode.startsWith("cumulative");
+    writeFileSync(join(cwd, "prior.txt"), "prior release");
+    const historicalBase = cumulative ? commitAll(cwd, "chore: beta base") : base;
     writeFileSync(join(cwd, "product.txt"), "original");
     const merge = commitAll(
       cwd,
       "fix: preserve delivery (#123)" + (mode === "late" ? "" : "\n\nCloses #122."),
     );
     let covered = merge;
-    if (mode.startsWith("adaptation")) {
-      git(cwd, ["checkout", "-qb", "release", base]);
+    if (mode.startsWith("adaptation") || cumulative) {
+      git(cwd, ["checkout", "-qb", "release", historicalBase]);
       writeFileSync(join(cwd, "product.txt"), "adapted");
       covered = commitAll(
         cwd,
-        "fix: preserve delivery (#123)\n\nSource commit: " +
-          merge +
-          (mode === "adaptation-missing"
-            ? ""
-            : "\nSource PR: https://github.com/openclaw/openclaw/pull/123") +
-          (mode === "adaptation-conflicting" ? "\nSource commit: " + base : ""),
+        cumulative
+          ? "fix: preserve delivery (#123)\n\n(cherry picked from commit " +
+              merge +
+              ")" +
+              (mode === "cumulative-conflicting-origin" ? "\nSource commit: " + base : "")
+          : "fix: preserve delivery (#123)\n\nSource commit: " +
+              merge +
+              (mode === "adaptation-missing"
+                ? ""
+                : "\nSource PR: https://github.com/openclaw/openclaw/pull/123") +
+              (mode === "adaptation-conflicting" ? "\nSource commit: " + base : ""),
       );
     }
     writeFileSync(
       join(cwd, "CHANGELOG.md"),
       changelog +
         "\n" +
-        contributionRecord(base, covered, [
+        contributionRecord(historicalBase, mode === "cumulative-wrong-record" ? base : covered, [
           "- **PR #123** Related #122. Thanks @writer and @reporter.",
         ]),
     );
+    if (cumulative) {
+      const prior = readFileSync(join(cwd, "CHANGELOG.md"), "utf8").replace(
+        "## 2026.7.1",
+        "## 2026.7.1-beta.1",
+      );
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        changelog +
+          "\n" +
+          prior.replace("# Changelog\n", "") +
+          "\n## 2026.6.1\n\n### Complete contribution record\n\n" +
+          `This audited record covers the complete ${base}..${base} history: 1 merged PR.\n` +
+          "\n#### Pull requests\n",
+      );
+    }
     if (mode === "adaptation-ambiguous") {
       writeFileSync(join(cwd, "product.txt"), "second adaptation");
       commitAll(
@@ -779,7 +805,7 @@ process.exitCode = errors.length ? 1 : 0;
     const evidenceBytes = JSON.stringify({
       schemaVersion: 1,
       repository: "openclaw/openclaw",
-      base,
+      base: historicalBase,
       target: covered,
       responses: {
         [JSON.stringify([
@@ -851,7 +877,7 @@ process.exitCode = errors.length ? 1 : 0;
       env: { RECOVERY_CASE: mode, PATH: cwd + ":" + process.env.PATH },
     });
     expect(readFileSync(evidencePath, "utf8")).toBe(evidenceBytes);
-    if (!["source", "late", "adaptation", "proxy", "unrelated"].includes(mode)) {
+    if (!["source", "late", "adaptation", "cumulative", "proxy", "unrelated"].includes(mode)) {
       expect(result.status, result.stderr).not.toBe(0);
       return;
     }
@@ -873,7 +899,7 @@ process.exitCode = errors.length ? 1 : 0;
       {
         number: 122,
         historicalIdentity: issue.author,
-        snapshot: { base, target: covered },
+        snapshot: { base: historicalBase, target: covered },
         pullRequest: 123,
         mergeCommit: merge,
         coveredCommit: covered,
@@ -1075,7 +1101,8 @@ process.exitCode = errors.length ? 1 : 0;
             mode === "digest" ? "0".repeat(64) : createHash("sha256").update(bytes).digest("hex"),
           base,
           target,
-          isAncestor: () => mode !== "ancestry",
+          isAncestor: (left: string, right: string) =>
+            mode !== "ancestry" && !(mode === "base" && left === base && right === target),
         });
       if (mode === "valid") {
         expect(load().nodes.get(122)).toEqual(node);
@@ -1642,7 +1669,12 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
   it("subtracts cumulative shipped PRs deterministically from the source inventory", () => {
     const source = {
       pullRequests: new Set([1, 2, 3]),
-      references: [1, 2, 4],
+      references: [1, 2, 4, 8, 9, 10],
+      activeCommits: [
+        { pullRequests: [1, 2], references: [1, 2, 8, 9] },
+        { pullRequests: [3], references: [3, 9] },
+        { pullRequests: [], references: [10] },
+      ],
     };
 
     const result = subtractShippedPullRequests(source, [
@@ -1651,7 +1683,7 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
     ]);
 
     expect([...source.pullRequests]).toEqual([3]);
-    expect(source.references).toEqual([]);
+    expect(source.references).toEqual([9, 10]);
     expect(result.baselines).toEqual([
       { ref: "v2026.6.10", count: 2, pullRequests: [2, 4] },
       { ref: "v2026.6.11", count: 1, pullRequests: [1] },

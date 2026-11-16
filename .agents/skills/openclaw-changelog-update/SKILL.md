@@ -137,14 +137,18 @@ of this skill; initial generation must never overwrite them.
    `--historical-issue-snapshot-sha256 <sha256>` inputs. Supply the original,
    immutable canonical snapshot and its independently retained digest, never a
    retargeted snapshot. This evidence reader is separate from exact-range live
-   caching; output paths must not alias its input. The repository and base must
-   match, and the historical endpoint must be an ancestor of the current target.
+   caching; output paths must not alias its input. The repository must match,
+   and the original historical range must be contained in the current range.
+   Cumulative releases may use the uniquely matching committed historical
+   contribution record; its original audited base and target remain unchanged.
    Recovery requires exact issue-specific GitHub `NOT_FOUND`, a historical human
    reporter with complete, unique reciprocal closing-PR evidence, and a committed
    contribution row preserving that issue and reporter. The row's exact audited
    range must cover the included PR's merge or one unambiguous release adaptation
-   with the exact merge-title suffix, `Source commit: <full-sha>` and same-repository
-   `Source PR: https://github.com/openclaw/openclaw/pull/<number>` markers.
+   with the exact merge-title suffix and either `Source commit: <full-sha>` plus
+   same-repository `Source PR: https://github.com/openclaw/openclaw/pull/<number>`
+   markers, or one standard `(cherry picked from commit <full-sha>)` trailer.
+   Conflicting origin markers are rejected.
    The PR must still resolve with the same author, merge SHA, and merge time;
    its live closing-issue edge may have disappeared with issue visibility.
    Partial historical connections, conflicting identities/relationships,
