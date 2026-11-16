@@ -1626,13 +1626,31 @@ identity still match the record. A release that another updater rewrote in
 place is refused as a rollback target.
 
 The first update with this layout support converts a plain package directory:
-the existing directory moves into `releases/` as the previous release and a
-link takes its place, then the update switches the link to the new release.
-Between those two renames the package path is briefly missing. If the updater
-dies there, `openclaw` cannot start, the old package is intact under
-`releases/`, and a leftover `lib/node_modules/.openclaw.release-link-*` link
-names it. Rename that link onto `lib/node_modules/openclaw` to restore the
-installation, then run the update again.
+the existing directory becomes the previous release in `releases/` and a link
+takes its place, then the update switches the link to the new release. The
+conversion is one atomic exchange of the directory and a prepared link
+(`renameat2` with `RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP`
+on macOS), so the package path names a complete package at every instant, also
+when the updater is killed. Node has no API for that call. The update makes it
+through Node's built-in FFI when the running Node has it (Node 26), and
+otherwise through `/usr/bin/osascript` on macOS or `/usr/bin/perl` on Linux
+x64 and arm64. The `package-swap` step of the update result says which one ran.
+
+An updater killed before the exchange leaves an unused directory in
+`releases/` that holds only a link naming nothing. It is not a release:
+`openclaw update status` does not list it, the next update converts the
+package directory again, and a successful update removes it once it is a day
+old.
+
+When no exchange is available (another platform or architecture without Node
+FFI, a system without that perl such as Alpine, or a filesystem that refuses
+the call), the update still converts the directory, with two renames: the
+directory moves into `releases/`, then a link takes its place. Between those
+two renames the package path is briefly missing. If the updater dies there,
+`openclaw` cannot start, the old package is intact under `releases/`, and a
+leftover `lib/node_modules/.openclaw.release-link-*` link names it. Rename that
+link onto `lib/node_modules/openclaw` to restore the installation, then run
+the update again.
 
 The release layout is an optimisation, and an update never fails because it
 cannot be used. When the new release's `openclaw` launcher is not the link the
