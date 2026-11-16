@@ -18,7 +18,7 @@ import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
 const model = fixtures.createReplayModel();
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const inputMessage = (text: string) => ({

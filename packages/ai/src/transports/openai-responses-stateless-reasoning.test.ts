@@ -7,7 +7,7 @@ import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
 const model = fixtures.createReplayModel();
-const identity = { sessionId: "session-current", authProfileId: "profile-current" };
+const identity = { sessionId: "session-current" };
 const item = {
   type: "reasoning",
   id: "rs_synthetic",

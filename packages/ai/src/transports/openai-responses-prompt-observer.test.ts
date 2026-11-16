@@ -53,7 +53,7 @@ const nativeModel = () =>
   });
 const invalidEncryptedContent = () =>
   Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
-const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
+const identity = { sessionId: "observer-session" };
 const sdkOptions = { apiKey: "test-key", ...identity };
 function compactionCase() {
   const model = fixtures.createModel();

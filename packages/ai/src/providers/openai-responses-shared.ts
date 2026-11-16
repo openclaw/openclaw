@@ -277,7 +277,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,
-        authProfileId: options?.authProfileId,
       }),
     });
 

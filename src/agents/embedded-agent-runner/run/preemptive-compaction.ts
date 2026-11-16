@@ -43,7 +43,6 @@ export type PreemptiveCompactionDecision = CompactionPressureDecision & {
 export type CompactionReplayPressureContext = {
   model: Model;
   sessionId?: string;
-  authProfileId?: string;
   enabled?: boolean;
 };
 

@@ -35,7 +35,6 @@ export function buildRequestBody(
     includeSystemPrompt: false,
     replayResponsesItemIds: false,
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     mutableInput: Boolean(options?.onPayload),
     replayMode,
     retainUserProvenance,

@@ -108,7 +108,6 @@ export function captureOpenAIResponsesCompaction(
     model: metadata.model,
     baseUrlHash: metadata.baseUrlHash,
     ...(metadata.sessionHash ? { sessionHash: metadata.sessionHash } : {}),
-    ...(metadata.authProfileHash ? { authProfileHash: metadata.authProfileHash } : {}),
     ...(compactedOutput
       ? {
           compactedWindow: {
@@ -128,7 +127,7 @@ export function captureOpenAIResponsesCompaction(
 export function suppressOpenAIResponsesCompaction(
   output: Pick<AssistantMessage, "providerReplay">,
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected" | "sessionId">,
+  options?: Pick<BaseOpenAIStreamOptions, "onCompactionRejected" | "sessionId">,
   rejectedCheckpoint?: CompactionReplayRejection,
 ): void {
   const context = buildProviderReplayContext(model, options);
@@ -198,7 +197,7 @@ export function isSafeResponsesReplayItemId(id: unknown): id is string {
 export function resolveNewestOpenAIResponsesCompactionReplay(
   messages: Context["messages"],
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
 ):
   | {
       owner: AssistantMessage;
@@ -305,7 +304,7 @@ export class CompactionReplayRefreshRequiredError extends Error {
 export function buildOpenAIResponsesCompactionReplayPlan(
   messages: Context["messages"],
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId"> & {
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId"> & {
     mode?: OpenAIResponsesReplayMode;
   },
 ): OpenAIResponsesCompactionReplayPlan {
@@ -339,7 +338,7 @@ export function buildOpenAIResponsesCompactionReplayPlan(
 
 export function buildOpenAIResponsesReasoningReplayMetadata(
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
 ): OpenAIResponsesReasoningReplayMetadata {
   return {
     v: 1,
