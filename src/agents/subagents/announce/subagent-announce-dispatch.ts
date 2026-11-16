@@ -20,6 +20,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "operator_authority_unavailable"
   | "requester_abandoned"
+  | "requester_aborted"
   | "requester_state_conflict"
   | "requester_transcript_conflict"
   | "requester_turn_pending"
