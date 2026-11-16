@@ -144,7 +144,7 @@ func bestShift(_ key: [Float], _ grid: [Float], strips: [Int]) -> (shift: Int, u
             best = shift
         }
     }
-    if bestCount * 3 >= changed.count {
+    if best != 0, bestCount * 3 >= changed.count {
         return (best, false)
     }
     return (0, changed.count * 2 > strips.count)

@@ -545,21 +545,27 @@ function readScreens(windows: ScreenSample[][]): ScreenRead[][] {
 }
 
 function screenGates(windows: ScreenRead[][], when: string): Result {
-  const judged = windows.flat().filter((entry) => entry.lines >= 0);
+  const reads = windows.flat();
+  const judged = reads.filter((entry) => entry.lines >= 0);
   const blank = judged.filter((entry) => entry.lines === 0);
   for (const entry of blank) {
     console.log(`ios:behavior: blank transcript on screen: ${entry.png}`);
+  }
+  for (const entry of reads.filter((read) => read.lines < 0)) {
+    console.log(`ios:behavior: no transcript to judge: ${entry.png}`);
   }
   return {
     metrics: {
       screenSamples: judged.length,
       blankSamples: blank.length,
+      unjudgedSamples: reads.length - judged.length,
       minTextLines: judged.length > 0 ? Math.min(...judged.map((entry) => entry.lines)) : undefined,
     },
     gates: {
-      // Every window: a switch that never shows a transcript must not hide behind the others.
+      // Every sample: a transcript that vanished from the screen, then came back, must not pass
+      // because the samples around it could be judged.
       [`transcript on screen to judge ${when} (setup)`]:
-        judged.length >= 3 && windows.every((reads) => reads.some((entry) => entry.lines >= 0)),
+        reads.length >= 3 && judged.length === reads.length,
       [`transcript text on screen ${when}`]: blank.length === 0,
     },
   };
