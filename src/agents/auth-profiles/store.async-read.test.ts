@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -13,7 +14,7 @@ import {
 import { revokeAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
-import { refreshAuthProfileFileState } from "./file-state.js";
+import * as fileState from "./file-state.js";
 import * as migration from "./legacy-source-diagnostic.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
@@ -30,6 +31,7 @@ import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
+  agentId: "main",
   identity: undefined,
   source: { kind: "shared-state" as const, databasePath: "/fixture/shared.sqlite" },
   signal: new AbortController().signal,
@@ -43,7 +45,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   reader.assertCurrent.mockReset();
   reader.read.mockReset();
-  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockReturnValue(reader);
+  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockResolvedValue(reader);
 });
 
 function useAgentWorkerRows() {
@@ -55,6 +57,7 @@ afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   migration.clearAuthProfileMigrationDiagnostics();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
 });
 
@@ -261,8 +264,9 @@ function createCacheDatabase(agentDir: string): void {
 it.each([false, true])(
   "rechecks retired files after an inherited read with populated local SQLite: %s",
   async (populated) => {
-    const { root, agentDir: localDir, load } = setup("migration");
+    const { root, agentDir: localDir, load } = setupWorker("migration");
     const inheritedDir = path.join(root, "agents/main/agent");
+    createCacheDatabase(inheritedDir);
     fs.mkdirSync(localDir, { recursive: true });
     const local = populated
       ? customStore("custom:local", "fixture-local")
@@ -275,6 +279,8 @@ it.each([false, true])(
       return inheritedRows.promise;
     });
     const inherited = readableRows(customStore("custom:inherited", "fixture-inherited"));
+    const legacyPath = path.join(localDir, "auth-profiles.json");
+    const read = vi.spyOn(fs, "readFileSync");
     const loading = load({ inheritedAuthDir: inheritedDir });
     try {
       await Promise.race([
@@ -283,11 +289,8 @@ it.each([false, true])(
           throw new Error("Auth read completed before the inherited read barrier");
         }),
       ]);
-      fs.writeFileSync(
-        path.join(localDir, "auth-profiles.json"),
-        JSON.stringify(customStore("custom:legacy", "fixture-legacy")),
-      );
-      await refreshAuthProfileFileState();
+      fs.writeFileSync(legacyPath, JSON.stringify(customStore("custom:legacy", "fixture-legacy")));
+      await fileState.refreshAuthProfileFileState();
       inheritedRows.resolve(inherited);
       if (populated) {
         await expect(loading).resolves.toMatchObject({ profiles: local.profiles });
@@ -295,6 +298,7 @@ it.each([false, true])(
         await expect(loading).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
       }
       expect(reader.read).toHaveBeenCalledTimes(2);
+      expect(read.mock.calls.filter(([file]) => file === legacyPath)).toEqual([]);
     } finally {
       inheritedRows.resolve(inherited);
       await Promise.allSettled([inheritedRows.promise, loading]);
@@ -384,3 +388,141 @@ it.each(["matching inherited", "unrelated inherited", "selected"] as const)(
     }
   },
 );
+
+it("loads cold runtime credentials without synchronous legacy-source probes", async () => {
+  const { root, agentDir, load } = setup("cold-source-probes");
+  createCacheDatabase(agentDir);
+  vi.mocked(sqliteRead.prepareAgentAuthProfileRowsRead).mockRestore();
+  const exists = vi.spyOn(fs, "existsSync");
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  syncBuiltinESMExports();
+  try {
+    expect((await load()).profiles).toEqual({});
+    for (const spy of [exists, stat, realpath]) {
+      expect(spy.mock.calls.filter(([file]) => String(file).startsWith(agentDir))).toEqual([]);
+    }
+  } finally {
+    await Promise.all(revokeAgentDatabaseResources({ rootPath: root }));
+  }
+});
+
+it("admits cold legacy provider diagnostics without synchronous file reads", async () => {
+  const { agentDir, load } = setup("legacy-provider-admission");
+  fs.mkdirSync(agentDir, { recursive: true });
+  const legacyPath = path.join(agentDir, "auth-profiles.json");
+  reader.read.mockResolvedValue(readableRows());
+  const read = vi.spyOn(fs, "readFileSync");
+  for (const provider of ["custom", "second"]) {
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify(customStore(`${provider}:legacy`, "synthetic", provider)),
+    );
+    await expect(load({ migrationProvider: "unrelated" })).resolves.toMatchObject({ profiles: {} });
+  }
+  fs.unlinkSync(legacyPath);
+  for (const provider of ["custom", "second"]) {
+    await expect(load({ migrationProvider: provider })).rejects.toMatchObject({
+      code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+      affectedProviders: ["custom", "second"],
+    });
+  }
+  expect(read.mock.calls.filter(([file]) => file === legacyPath)).toEqual([]);
+});
+
+it("does not discover restored legacy files from a completed reader's former OAuth scope", async () => {
+  const { root, load } = setup("legacy-scope-retirement");
+  const agentDir = path.join(root, "agents/main/agent");
+  createCacheDatabase(agentDir);
+  useAgentWorkerRows();
+  reader.read.mockResolvedValue(readableRows());
+  const previousOAuth = path.join(root, "previous-oauth");
+  const currentOAuth = path.join(root, "current-oauth");
+  for (const directory of [previousOAuth, currentOAuth]) {
+    fs.mkdirSync(directory);
+    vi.stubEnv("OPENCLAW_OAUTH_DIR", directory);
+    await load({ inheritedAuthDir: agentDir }, agentDir);
+  }
+  fs.writeFileSync(path.join(previousOAuth, "oauth.json"), "{}");
+  await fileState.refreshAuthProfileFileState();
+  await expect(load({ inheritedAuthDir: agentDir }, agentDir)).resolves.toMatchObject({
+    profiles: {},
+  });
+});
+
+it("does not publish a migration refusal after its reader retires during metadata IO", async () => {
+  const { root, agentDir, load } = setupWorker("legacy-metadata-retirement");
+  const legacyPath = path.join(agentDir, "auth-profiles.json");
+  fs.writeFileSync(legacyPath, JSON.stringify(customStore("custom:legacy")));
+  reader.read.mockResolvedValue(readableRows());
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const read = fs.promises.readFile;
+  vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
+    if (args[0] === legacyPath) {
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  });
+  const pending = load({ migrationProvider: "unrelated" });
+  try {
+    await Promise.race([
+      entered.promise,
+      pending.then(() => {
+        throw new Error("Metadata admission was skipped");
+      }),
+    ]);
+    const retirement = Promise.all(revokeAgentDatabaseResources({ rootPath: root }));
+    release.resolve();
+    await expect(pending).rejects.toThrow();
+    await retirement;
+    expect(() =>
+      migration.assertAuthProfileMigrationStateAtDatabasePath(
+        path.join(agentDir, "openclaw-agent.sqlite"),
+        "custom",
+      ),
+    ).not.toThrow();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pending]);
+  }
+});
+
+it("refuses a cold runtime read retired during registry discovery", async () => {
+  const { root, agentDir, load } = setupWorker("registry-retirement");
+  reader.read.mockResolvedValue(readableRows(customStore("custom:account")));
+  const admission = vi.spyOn(fileState, "captureAuthProfileFileIdentityAsync");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const realpath = fs.promises.realpath;
+  vi.spyOn(fs.promises, "realpath").mockImplementation(async (...args) => {
+    if (String(args[0]) === agentDir) {
+      entered.resolve();
+      await release.promise;
+    }
+    return Reflect.apply(realpath, fs.promises, args);
+  });
+  const loading = load();
+  void loading.catch(() => {});
+  try {
+    await Promise.race([
+      entered.promise,
+      loading.then(() => {
+        throw new Error("Runtime read did not enter cold registry discovery");
+      }),
+    ]);
+    const closing = Promise.all(
+      revokeAgentDatabaseResources({ path: path.join(agentDir, "openclaw-agent.sqlite") }),
+    );
+    release.resolve();
+    await closing;
+    await expect(loading).rejects.toThrow(/closed|revoked/);
+    expect(reader.read).not.toHaveBeenCalled();
+    expect(admission).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([loading]);
+    await Promise.all(revokeAgentDatabaseResources({ rootPath: root }));
+  }
+});

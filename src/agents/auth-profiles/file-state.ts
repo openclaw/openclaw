@@ -37,7 +37,12 @@ type DirectoryState = {
   publishChange: (change: FileChange) => Promise<void>;
   refresh?: Promise<void>;
   dirty: boolean;
+  sourcePreparations: Set<LegacySourcePreparation>;
 };
+type LegacySourcePreparation = (
+  sources: ReadonlyMap<string, boolean>,
+  isCurrent: () => boolean,
+) => Promise<void>;
 
 const directories = new Map<string, DirectoryState>();
 // Directories discovered after startup share the current Gateway's host binding.
@@ -90,7 +95,7 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
         state.dirty = false;
         let identityChanged = false;
         const createdPaths: string[] = [];
-        let sourcesChanged = false;
+        const sourceChanges = new Map<string, boolean>();
         for (const [databasePath, previous] of state.identities) {
           const file = await stat(databasePath, { bigint: true }).catch(missingFile);
           const current =
@@ -126,7 +131,20 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
             return;
           }
           if (current !== previous) {
-            sourcesChanged = true;
+            sourceChanges.set(sourcePath, current);
+          }
+        }
+        const sourcesChanged = sourceChanges.size > 0;
+        if (sourcesChanged) {
+          await Promise.all(
+            [...state.sourcePreparations].map((prepare) =>
+              prepare(sourceChanges, () => directories.get(directory) === state),
+            ),
+          );
+          if (directories.get(directory) !== state) {
+            return;
+          }
+          for (const [sourcePath, current] of sourceChanges) {
             state.presence.set(sourcePath, current);
           }
         }
@@ -181,6 +199,7 @@ function directoryState(directory: string): DirectoryState {
     identities,
     presence: new Map(),
     dirty: false,
+    sourcePreparations: new Set(),
     publishChange: gatewayFileChangePublisher ?? captureFileChangePublisher(),
     observation: observeOwnedDirectory(directory, (filename, event) => {
       if (event === "change" && filename !== undefined) {
@@ -214,9 +233,26 @@ export function readAuthProfileDatabaseIdentity(
   return state.identities.get(databasePath);
 }
 
-export function captureAuthProfileFileIdentity(databasePath: string) {
-  const identity = readAuthProfileDatabaseIdentity(databasePath);
+/** Cold runtime preparation joins the existing file-fact owner without blocking the host. */
+export async function readAuthProfileDatabaseIdentityAsync(databasePath: string) {
+  const directory = path.dirname(databasePath);
+  const state = directoryState(directory);
+  if (!state.identities.has(databasePath)) {
+    const identity = await readDatabasePathIdentity(databasePath);
+    if (directories.get(directory) !== state) {
+      throw new Error("Auth profile file owner retired during admission");
+    }
+    if (!state.identities.has(databasePath)) {
+      state.identities.set(databasePath, identity);
+    }
+  }
+  return state.identities.get(databasePath);
+}
+
+export async function captureAuthProfileFileIdentityAsync(databasePath: string) {
   const state = directoryState(path.dirname(databasePath));
+  await readAuthProfileDatabaseIdentityAsync(databasePath);
+  const identity = state.identities.get(databasePath);
   return {
     identity,
     assertCurrent() {
@@ -261,6 +297,48 @@ export function authProfileSourceExists(sourcePath: string): boolean {
     state.presence.set(sourcePath, fs.existsSync(sourcePath));
   }
   return state.presence.get(sourcePath)!;
+}
+
+/** Seed cold runtime source facts through the existing observation owner. */
+export async function prepareAuthProfileLegacySources(
+  sourcePaths: Iterable<string>,
+): Promise<void> {
+  for (const sourcePath of sourcePaths) {
+    const directory = path.dirname(sourcePath);
+    const state = directoryState(directory);
+    if (!state.presence.has(sourcePath)) {
+      const present = await stat(sourcePath).then(
+        () => true,
+        () => false,
+      );
+      if (directories.get(directory) !== state) {
+        throw new Error("Auth profile file owner retired during admission");
+      }
+      if (!state.presence.has(sourcePath)) {
+        state.presence.set(sourcePath, present);
+      }
+    }
+  }
+}
+
+/** Only a live read/effect scope may discover migration metadata for its captured candidates. */
+export function observeAuthProfileLegacySources(
+  sourcePaths: Iterable<string>,
+  prepare: LegacySourcePreparation,
+): () => void {
+  const states = new Set([...sourcePaths].map((source) => directoryState(path.dirname(source))));
+  let active = true;
+  const observed: LegacySourcePreparation = (sources, isCurrent) =>
+    prepare(sources, () => active && isCurrent());
+  for (const state of states) {
+    state.sourcePreparations.add(observed);
+  }
+  return () => {
+    active = false;
+    for (const state of states) {
+      state.sourcePreparations.delete(observed);
+    }
+  };
 }
 
 /** Cold credential admission revalidates migration inputs before publishing a new owner. */

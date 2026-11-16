@@ -9,6 +9,7 @@ import {
   normalizeAgentDirRegistryPath as normalizePath,
   registerResolvedAgentDir as registerDir,
   resolveRegisteredAgentIdForDir as ownerOf,
+  resolveRegisteredAgentIdForDirAsync as ownerOfAsync,
   unregisterResolvedAgentDir as unregisterDir,
 } from "./agent-dir-registry.js";
 
@@ -95,27 +96,33 @@ describe("agent directory registry", () => {
     unregisterDir({ agentId: "current", agentDir });
   });
 
-  it("keeps ownership stable through a symlinked parent after the agent dir is removed", () => {
-    const root = tempDirs.make("openclaw-agent-dir-registry-");
-    const realRoot = path.join(root, "real");
-    const linkedRoot = path.join(root, "linked");
-    const realAgentDir = path.join(realRoot, "agent");
-    const linkedAgentDir = path.join(linkedRoot, "agent");
-    fs.mkdirSync(realAgentDir, { recursive: true });
-    fs.symlinkSync(realRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+  it.each([
+    ["sync", ownerOf],
+    ["async", ownerOfAsync],
+  ] as const)(
+    "keeps %s ownership stable through a removed symlinked parent",
+    async (_mode, lookup) => {
+      const root = tempDirs.make("openclaw-agent-dir-registry-");
+      const realRoot = path.join(root, "real");
+      const linkedRoot = path.join(root, "linked");
+      const realAgentDir = path.join(realRoot, "agent");
+      const linkedAgentDir = path.join(linkedRoot, "agent");
+      fs.mkdirSync(realAgentDir, { recursive: true });
+      fs.symlinkSync(realRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
 
-    using _ = registered({ agentId: "current", agentDir: realAgentDir });
-    expect(ownerOf(linkedAgentDir)).toBe("current");
-    registerDir({ agentId: "deleted", agentDir: linkedAgentDir });
-    expect(ownerOf(realAgentDir)).toBeUndefined();
-    expect(ownedByOther({ agentId: "deleted", pathname: linkedAgentDir })).toBe(true);
-    expect(unregisterDir({ agentId: "deleted", agentDir: linkedAgentDir })).toBe(true);
-    expect(ownerOf(realAgentDir)).toBe("current");
+      using _ = registered({ agentId: "current", agentDir: realAgentDir });
+      expect(await lookup(linkedAgentDir)).toBe("current");
+      registerDir({ agentId: "deleted", agentDir: linkedAgentDir });
+      expect(await lookup(realAgentDir)).toBeUndefined();
+      expect(ownedByOther({ agentId: "deleted", pathname: linkedAgentDir })).toBe(true);
+      expect(unregisterDir({ agentId: "deleted", agentDir: linkedAgentDir })).toBe(true);
+      expect(await lookup(realAgentDir)).toBe("current");
 
-    fs.rmSync(realAgentDir, { recursive: true });
-    expect(unregisterDir({ agentId: "current", agentDir: linkedAgentDir })).toBe(true);
-    expect(ownerOf(realAgentDir)).toBeUndefined();
-  });
+      fs.rmSync(realAgentDir, { recursive: true });
+      expect(unregisterDir({ agentId: "current", agentDir: linkedAgentDir })).toBe(true);
+      expect(await lookup(realAgentDir)).toBeUndefined();
+    },
+  );
 
   it("matches tilde paths against the effective custom home", () => {
     const root = tempDirs.make("openclaw-agent-dir-home-");

@@ -373,7 +373,7 @@ describe("shared auth relocation lifecycle", () => {
   it("revokes the source credential authority before relocation and cold-loads the shared credential", async () => {
     sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
     const { sourcePath } = state;
-    const reader = prepareAgentAuthProfileRowsRead({
+    const reader = await prepareAgentAuthProfileRowsRead({
       databasePath: sourcePath,
       agentId: "main",
       env: state.env,

@@ -161,6 +161,16 @@ export function findChangedDatabasePaths(
 export async function readDatabasePathIdentity(
   databasePath: string,
 ): Promise<DatabasePathIdentity> {
+  const identity = await inspectDatabasePathIdentity(databasePath);
+  if (!identity) {
+    throw new Error("SQLite worker database path must identify a regular file");
+  }
+  return identity;
+}
+
+export async function inspectDatabasePathIdentity(
+  databasePath: string,
+): Promise<DatabasePathIdentity | undefined> {
   const file = await stat(databasePath, { bigint: true }).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -168,6 +178,9 @@ export async function readDatabasePathIdentity(
     throw error;
   });
   if (file) {
+    if (!file.isFile()) {
+      return undefined;
+    }
     try {
       const canonicalPath = await realpath(databasePath);
       const canonicalFile = await stat(canonicalPath, { bigint: true });
@@ -204,6 +217,18 @@ export function assertDatabasePathIdentity(
   if (expected.key.startsWith("file:")) {
     assertExistingDatabaseIdentity(databasePath, expected.key, expected.birthtime);
   } else if (readDatabasePathIdentitySync(databasePath).key !== expected.key) {
+    throw new Error(`SQLite database path identity changed: ${databasePath}`);
+  }
+}
+
+/** Async admission preserves the same existing-file and observed-absence checks. */
+export async function assertDatabasePathIdentityAsync(
+  databasePath: string,
+  expected: DatabasePathIdentity,
+): Promise<void> {
+  if (expected.key.startsWith("file:")) {
+    assertDatabaseFileIdentity(await stat(databasePath, { bigint: true }), expected);
+  } else if ((await readDatabasePathIdentity(databasePath)).key !== expected.key) {
     throw new Error(`SQLite database path identity changed: ${databasePath}`);
   }
 }

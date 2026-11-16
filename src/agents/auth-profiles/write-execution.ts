@@ -1,13 +1,16 @@
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 
 /** Pin an existing inode before preparation yields; the executor owns first creation. */
 export function captureAuthProfileWriteExecution(
-  target: OpenClawAgentDatabaseOptions & { path: string },
+  target: OpenClawAgentDatabaseOptions & { path: string; identity?: DatabasePathIdentity },
 ) {
-  const identity = readDatabasePathIdentitySync(target.path);
+  const identity = target.identity ?? readDatabasePathIdentitySync(target.path);
   return captureOpenClawAgentDatabaseExecution(
     target,
     identity.key.startsWith("file:") ? toAgentExecutionConstraints(identity) : {},

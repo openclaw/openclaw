@@ -23,7 +23,7 @@ import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constant
 import type { InlineAuthFailureOperations } from "./inline-usage-kernel.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
@@ -83,9 +83,13 @@ export async function withAuthProfileUsage<T>(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const selectedDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const context = captureOpenClawStateWorkerContext({ env });
+  const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
+    (value) => ({ ok: true, value }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
   const localPath = selectedDir ? resolveAuthProfileDatabasePath(selectedDir) : undefined;
   const legacyPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-  const readers = new Map<string, ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const readers = new Map<string, Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   const executions = new Map<
     string,
     Result<ReturnType<typeof captureOpenClawAgentDatabaseExecution>, unknown>
@@ -93,6 +97,15 @@ export async function withAuthProfileUsage<T>(
   let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
   let committed: AuthProfileUsageReceipt | undefined;
   const executeUsage = async (): Promise<T> => {
+    preparation = reserveAuthProfileUsagePreparation(
+      [
+        context.admission.identity,
+        ...[...new Set([...(mode ? [] : [legacyPath]), ...(localPath ? [localPath] : [])])].map(
+          (pathname) => readDatabasePathIdentitySync(pathname),
+        ),
+      ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
+    );
+
     for (const databasePath of new Set([
       ...(mode ? [] : [legacyPath]),
       ...(localPath ? [localPath] : []),
@@ -104,7 +117,7 @@ export async function withAuthProfileUsage<T>(
       };
       readers.set(
         databasePath,
-        prepareAgentAuthProfileRowsRead({
+        await prepareAgentAuthProfileRowsRead({
           databasePath,
           agentId: target.agentId,
           env,
@@ -119,16 +132,6 @@ export async function withAuthProfileUsage<T>(
         executions.set(databasePath, { ok: false, error });
       }
     }
-    preparation = reserveAuthProfileUsagePreparation(
-      [
-        context.admission.identity,
-        ...[...readers.keys()].map((pathname) => readDatabasePathIdentitySync(pathname)),
-      ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
-    );
-    const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
-      (value) => ({ ok: true, value }) as const,
-      (error: unknown) => ({ ok: false, error }) as const,
-    );
     await preparation.ready;
     const ownershipResult = await capturedOwnership;
     if (!ownershipResult.ok) {
@@ -199,12 +202,13 @@ export async function withAuthProfileUsage<T>(
         throw new Error("Auth profile shared owner changed before write admission");
       }
       assertAuthProfileMigrationStateAtDatabasePath(databasePath);
-      assertAuthProfileMigrationCandidates({
-        databasePath,
-        candidates,
-        hasCredentials: () => Object.keys(selected.profiles).length > 0,
-      });
     };
+    await prepareAuthProfileMigrationCandidates({
+      databasePath,
+      candidates,
+      hasCredentials: Object.keys(selected.profiles).length > 0,
+      assertCurrent,
+    });
     assertCurrent();
     const providerAliases = resolveProviderAuthAliasMap({ env });
     let recordingStarted = false;

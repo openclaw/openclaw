@@ -1,5 +1,4 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -13,11 +12,7 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { isSharedAuthProfileWrite } from "./shared-store-bootstrap.js";
 import { prepareAgentAuthProfileRowsRead, readSharedAuthProfileRows } from "./sqlite-read.js";
-import {
-  prepareAuthProfileWriteEnvironment,
-  resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "./sqlite.js";
+import { prepareAuthProfileWriteEnvironment, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   findPersistedAuthProfileCredentialAsync,
   updateAuthProfileStoreWithLock,
@@ -93,9 +88,8 @@ async function loadAuthProfileWriteAuthorities(
       const reader =
         !dir && databasePath === resolveOpenClawStateSqlitePath(env)
           ? undefined
-          : prepareAgentAuthProfileRowsRead({
+          : await prepareAgentAuthProfileRowsRead({
               databasePath,
-              agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
               env,
             });
       try {

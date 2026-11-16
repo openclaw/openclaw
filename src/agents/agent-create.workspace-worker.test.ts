@@ -4,6 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, registerConfigWriteListener } from "../config/config.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import * as snapshots from "../infra/sqlite-readonly-worker.js";
+import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
@@ -229,9 +230,13 @@ it.each(["default", "custom"] as const)(
     let reader: ReturnType<typeof prepareAgentAuthProfileRowsRead> | undefined;
     const unsubscribe = registerConfigWriteListener((event) => {
       if (event.sourceConfig.agents?.entries?.worker) {
+        const databasePath = resolveAuthProfileDatabasePath(agentDir);
+        const databaseIdentity = inspectDatabasePathIdentitySync(databasePath);
+        expect(databaseIdentity?.key).toMatch(/^file:/);
         reader = prepareAgentAuthProfileRowsRead({
           agentId: "worker",
-          databasePath: resolveAuthProfileDatabasePath(agentDir),
+          databasePath,
+          databaseIdentity,
           env: state.env,
         });
       }
@@ -246,14 +251,14 @@ it.each(["default", "custom"] as const)(
       ).toMatchObject({ status: "created" });
       expect(reader).toBeDefined();
       // Capture physical identity at publication, before any later open.
-      await expect(reader!.read()).resolves.toMatchObject({
+      await expect((await reader)!.read()).resolves.toMatchObject({
         store: { status: "missing", reason: "row" },
         state: { status: "missing", reason: "row" },
         cacheable: true,
       });
     } finally {
       unsubscribe();
-      await reader?.dispose();
+      await (await reader)?.dispose();
     }
   },
 );

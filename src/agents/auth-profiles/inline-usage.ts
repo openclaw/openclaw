@@ -23,7 +23,7 @@ import type {
 } from "./inline-usage-kernel.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
@@ -117,7 +117,6 @@ async function persistPreparedInlineAuthFailure(
   const identity = readDatabasePathIdentitySync(databaseTarget.path);
   let durableReceipt: InlineAuthFailureReceipt | undefined;
   let failure: { error: unknown } | undefined;
-  let hasCredentials: boolean | undefined;
   const assertCurrent = () => {
     execution.assertCurrent();
     if (identity.key.startsWith("file:")) {
@@ -134,13 +133,6 @@ async function persistPreparedInlineAuthFailure(
       throw new Error("Auth profile shared owner changed before write admission");
     }
     assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
-    if (hasCredentials !== undefined) {
-      assertAuthProfileMigrationCandidates({
-        databasePath: owner.databasePath,
-        candidates,
-        hasCredentials: () => hasCredentials === true,
-      });
-    }
   };
   const runWithAdmission = async (): Promise<InlineAuthFailureReceipt | null> => {
     try {
@@ -167,7 +159,12 @@ async function persistPreparedInlineAuthFailure(
                       scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined });
                     const rows = await readTarget();
                     const store = loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath);
-                    hasCredentials = Object.keys(store?.profiles ?? {}).length > 0;
+                    await prepareAuthProfileMigrationCandidates({
+                      databasePath: owner.databasePath,
+                      candidates,
+                      hasCredentials: Object.keys(store?.profiles ?? {}).length > 0,
+                      assertCurrent,
+                    });
                     assertCurrent();
                     const result = await scope.execute({
                       type: "authProfiles.inlineFailure",

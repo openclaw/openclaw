@@ -100,23 +100,25 @@ it.each(["current", "relocated", "closed"] as const)(
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
         let reading = false;
         let joined = false;
-        vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((target) => {
-          const reader = prepare(target);
-          if (target.databasePath !== pathname) {
-            return reader;
-          }
-          return {
-            ...reader,
-            read: async () => {
-              reading = true;
-              const rows = await reader.read();
-              joined = true;
-              entered.resolve();
-              await release.promise;
-              return rows;
-            },
-          };
-        });
+        vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(
+          async (target) => {
+            const reader = await prepare(target);
+            if (target.databasePath !== pathname) {
+              return reader;
+            }
+            return {
+              ...reader,
+              read: async () => {
+                reading = true;
+                const rows = await reader.read();
+                joined = true;
+                entered.resolve();
+                await release.promise;
+                return rows;
+              },
+            };
+          },
+        );
         let settled = false;
         const update = markAuthProfileFailure({
           store,
@@ -381,8 +383,8 @@ it.each(["before-read", "after-read"] as const)(
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
         const read = vi
           .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
-          .mockImplementation((target) => {
-            const reader = prepare(target);
+          .mockImplementation(async (target) => {
+            const reader = await prepare(target);
             if (target.databasePath !== database.path) {
               return reader;
             }

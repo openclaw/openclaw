@@ -21,15 +21,11 @@ import {
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "../agents/auth-profiles/ownership.js";
-import {
-  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
-  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.native.js";
+import { resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
-import {
-  inspectPersistedSharedAuthProfileStoreRaw,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
+import { withAuthProfileReaderCleanup } from "../agents/auth-profiles/reader-cleanup.js";
+import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -104,13 +100,27 @@ export function collectCopilotAmbientTokenFindings(
 }
 
 /** Surface the one-time relocation while the legacy shared owner is still active. */
-export function collectSharedAuthStoreFindings(
+export async function collectSharedAuthStoreFindings(
   env: NodeJS.ProcessEnv = process.env,
-): readonly HealthFinding[] {
-  if (
-    resolveSharedAuthStoreOwnership(env).location !== "legacy-main" ||
-    inspectPersistedSharedAuthProfileStoreRaw(env).status !== "readable"
-  ) {
+): Promise<readonly HealthFinding[]> {
+  if ((await prepareSharedAuthStoreOwnership(env)).location !== "legacy-main") {
+    return [];
+  }
+  const databasePath = resolveSharedAuthStorePath(env);
+  const source = await prepareAgentAuthProfileRowsRead({
+    databasePath,
+    env,
+  });
+  const readable = await withAuthProfileReaderCleanup(
+    async () => {
+      const rows = await source.read();
+      source.assertCurrent();
+      return rows.store.status === "readable";
+    },
+    [source],
+    { read: "Shared auth source read failed", cleanup: "Shared auth source cleanup failed" },
+  );
+  if (!readable) {
     return [];
   }
   return [

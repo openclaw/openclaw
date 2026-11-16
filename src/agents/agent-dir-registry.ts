@@ -1,7 +1,10 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../infra/boundary-path.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -32,7 +35,12 @@ function forgetPreparedPaths(key: string) {
   }
 }
 
-function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = false): string {
+function registryPath(
+  agentDir: string,
+  env?: NodeJS.ProcessEnv,
+  registering = false,
+  preparedKey?: string,
+): string {
   const pathname = path.resolve(resolveUserPath(agentDir, env));
   // Repair can change paths itself; resolve them directly without retaining native watches.
   const maintenance = getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true;
@@ -40,7 +48,7 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
   if (cached) {
     return cached.key;
   }
-  const key = normalizeAgentDirRegistryPath(pathname, env);
+  const key = preparedKey ?? normalizeAgentDirRegistryPath(pathname, env);
   if (maintenance || !isMainThread || (!registering && !agentIdsByDir.has(key))) {
     return key;
   }
@@ -131,6 +139,20 @@ export function resolveRegisteredAgentIdForDir(
   env?: NodeJS.ProcessEnv,
 ): string | undefined {
   const agentIds = agentIdsByDir.get(registryPath(agentDir, env));
+  return agentIds?.size === 1 ? agentIds.values().next().value : undefined;
+}
+
+export async function resolveRegisteredAgentIdForDirAsync(
+  agentDir: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const pathname = path.resolve(resolveUserPath(agentDir, env));
+  const cached =
+    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true
+      ? undefined
+      : preparedPaths.get(pathname);
+  const key = cached?.key ?? (await resolveIdentityPathViaExistingAncestor(pathname));
+  const agentIds = agentIdsByDir.get(registryPath(pathname, env, false, key));
   return agentIds?.size === 1 ? agentIds.values().next().value : undefined;
 }
 

@@ -29,6 +29,7 @@ export type LockResult<T> = {
 
 export interface AuthStorageBackend {
   read?(): string | undefined;
+  prepareProviderReady?(): Promise<void>;
   assertProviderReady?(provider?: string, baseUrl?: string): void;
   getCredentialSource?(provider: string): AuthProfileCredentialSource | undefined;
   assertCredentialReady?(source: AuthProfileCredentialSource, baseUrl?: string): void;
