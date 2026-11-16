@@ -183,10 +183,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         };
       });
     onTestFinished(() => watchSpy.mockRestore());
+    // Manual reloads must join post-ready maintenance before taking the lifecycle lease.
+    const maintenance = await observePostReadyStartupMaintenance();
     const started = await startPluginGateway({ hotReloadRecovery });
     server = started.server;
     await server.startupSettled;
     await waitForGatewayStartup(started.port);
+    await maintenance.settled;
     socket = await connectWebchatClient({ port: started.port, scopes: ["operator.admin"] });
     const connected = socket;
     type Probe = {
@@ -293,8 +296,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       });
     onTestFinished(() => metadataSpy.mockRestore());
     const explicit = await reloadPlugin(connected, "cold-chat-owner");
-    expect(echoed).toBe(true);
     expect(explicit.ok, explicit.error?.message).toBe(true);
+    expect(echoed).toBe(true);
     expect(await settledProbe("sibling-chat")).toEqual(sibling);
     expect(connected.readyState).toBe(connected.OPEN);
     expect(hotReloadRecovery).not.toHaveBeenCalled();
