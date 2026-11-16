@@ -32,6 +32,7 @@ import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-supp
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { isOpenClawIdTunnelPrincipalAdmitted } from "./openclaw-id/tunnel-principal.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { expectNonAdminMemberProfileActions } from "./server.openclaw-id-role-reload.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 
@@ -285,16 +286,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     await administrator.client.stopAndWait();
     const operator = await connectMember();
     expect(operator.hello?.auth.scopes).not.toContain("operator.admin");
-    for (const [method, params] of profileActions) {
-      if (method === "users.personalFile.get") {
-        await expect(operator.client.request(method, params)).resolves.toMatchObject({
-          agentId: "main",
-          profileId: self.profile.id,
-        });
-      } else {
-        await expect(operator.client.request(method, params), method).rejects.toThrow();
-      }
-    }
+    await expectNonAdminMemberProfileActions(operator.client, profileActions, self.profile.id);
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   } finally {
     for (const client of clients) {
