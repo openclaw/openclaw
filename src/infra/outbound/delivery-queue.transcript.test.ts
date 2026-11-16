@@ -232,9 +232,12 @@ describe("delivery-queue confirmed transcript recovery", () => {
         const result = await recover();
         const confirmed = state !== "unresolved" && state !== "rejected";
         const projected =
-          state === "sent" || state === "reconciled" || state === "other-generation";
+          state === "sent" ||
+          state === "reconciled" ||
+          state === "other-generation" ||
+          state === "stale-generation";
         expect(result).toMatchObject(confirmed ? { recovered: 1 } : { failed: 1 });
-        if (confirmed && !projected && state !== "stale-generation") {
+        if (confirmed && !projected) {
           expect(log.warn).toHaveBeenCalledOnce();
         }
         expect(deliver).not.toHaveBeenCalled();

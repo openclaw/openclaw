@@ -260,8 +260,8 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
   const target = binding?.request?.targetSha;
   const qualificationSha = binding?.request?.toolingSha;
   requireValue(
-    target === qualificationSha && /^[a-f0-9]{40}$/u.test(target),
-    "original candidate must retain C=Q",
+    /^[a-f0-9]{40}$/u.test(target) && /^[a-f0-9]{40}$/u.test(qualificationSha),
+    "original candidate and qualification must identify commits",
   );
   const parent = await client.getRunAttempt(
     request.originalParent.runId,
@@ -312,7 +312,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     "original admission must cover every beta role",
   );
   requireValue(
-    parent.head_sha === target &&
+    parent.head_sha === qualificationSha &&
       parent.head_branch === admission.request.transportRef &&
       parent.event === "workflow_dispatch" &&
       String(parent.path).split("@")[0] === ".github/workflows/full-release-validation.yml" &&
@@ -408,7 +408,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       role,
       runId: selection.runId,
       runAttempt: selection.runAttempt,
-      workflowSha: qualificationSha,
+      workflowSha: verified.selection.workflowSha,
       sourceParentRunId: selection.sourceParentRunId,
       conclusion: verified.run.conclusion,
       waivers: policy.waivers,
@@ -578,14 +578,14 @@ export async function revalidateReceiptRecoveryRuns(request, client, verifiedChi
   ];
   for (const tuple of tuples) {
     const current = await client.getRun(String(tuple.runId));
+    const verifiedChild = verifiedChildren.find((child) => child.runId === String(tuple.runId));
     requireValue(
       String(current.id) === String(tuple.runId) &&
         Number(current.run_attempt) === Number(tuple.runAttempt) &&
-        current.head_sha === request.candidateBinding.request.toolingSha &&
+        current.head_sha ===
+          (verifiedChild?.workflowSha ?? request.candidateBinding.request.toolingSha) &&
         current.status === "completed" &&
-        current.conclusion ===
-          (verifiedChildren.find((child) => child.runId === String(tuple.runId))?.conclusion ??
-            "success"),
+        current.conclusion === (verifiedChild?.conclusion ?? "success"),
       "original producer or child current attempt changed: " + tuple.runId,
     );
   }
@@ -938,12 +938,16 @@ async function main() {
     };
     const client = createReleaseEvidenceClient(request.repository);
     await revalidateReceiptRecoveryRuns(request, client, verified.children);
+    const originalParent = await client.getRunAttempt(
+      request.originalParent.runId,
+      request.originalParent.runAttempt,
+    );
     client.verifyQualificationAdmission({
       descriptor: request.qualificationAdmission,
       repository: request.repository,
       candidateSha: manifest.targetSha,
-      qualificationSha: manifest.targetSha,
-      workflowRef: request.children.normalCi.workflowRef,
+      qualificationSha: request.candidateBinding.request.toolingSha,
+      workflowRef: originalParent.head_branch,
     });
     verifyReceiptRecoveryAuthority(request.repository, producer, false);
     writeFileSync(

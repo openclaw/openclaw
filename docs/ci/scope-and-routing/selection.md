@@ -193,6 +193,31 @@ assertion. Run it with `pnpm test:docker:published-driver-linked-root`. No CI
 workflow selects this lane; `ci-published-driver-update.yml` runs only the
 scoped-restore mode.
 
+`OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX=1` installs into an
+`install-cli.sh`-shaped prefix (`tools/node-v<version>` beside a `tools/node`
+link), which OpenClaw owns. `OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP` then runs the
+candidate's own updater once more after the published driver's update:
+`switch` checks adoption of the plain directory and the release switch,
+and `rollback` gives the new release a Doctor that fails after activation and
+checks the link points back. `launcher` replaces the prefix's `bin/openclaw`
+with an absolute link, which the candidate's staged launcher does not match,
+checks that the update takes the swap and records why, then runs a second
+update that adopts the layout again. With the linked-root mode, `rebind`
+starts from published `2026.10.9`, whose service install binds the service to a
+release's real path, and checks that the candidate replaces that release in
+place, its restart rebinds the service to the package path, and the next update
+switches releases. `in-place` starts the same way, stops the Gateway, updates
+with `--no-restart`, and checks that the replaced release serves the new version
+after a service restart. The Gateway is stopped first because a running one can
+restart itself into the replaced package while update Doctor stops it, which
+fails any `--no-restart` package update; that race is not specific to releases. Run them with
+`pnpm test:docker:published-driver-release-adoption`,
+`pnpm test:docker:published-driver-release-rollback`,
+`pnpm test:docker:published-driver-release-launcher`,
+`pnpm test:docker:published-driver-release-rebind`, and
+`pnpm test:docker:published-driver-release-in-place`. No CI workflow selects
+these lanes.
+
 After the Docker cell, the same job reuses its verified candidate tarball for the
 [native systemd survivor flow](/help/testing-updates-plugins#native-systemd-update-matrix),
 initially against published `2026.10.9`. Its separate fifteen-minute step requires

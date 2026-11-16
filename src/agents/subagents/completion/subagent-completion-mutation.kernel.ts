@@ -390,6 +390,9 @@ function mutateRequesterBatch(
       subagent.pauseReason !== "sessions_yield" &&
       subagent.expectsCompletionMessage === true &&
       (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+        (!params.outcome.delivered &&
+          subagent.delivery?.status === "failed" &&
+          subagent.delivery.disposition === "retryable") ||
         settleExpiredDelivery)
     ) {
       if (params.outcome.delivered) {

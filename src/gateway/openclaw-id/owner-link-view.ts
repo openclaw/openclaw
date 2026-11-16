@@ -8,6 +8,7 @@ import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import { listInviteViews } from "./invites-view.js";
+import { listMemberBrowserRequests } from "./member-browser-requests.js";
 import { describeMemberDevices } from "./membership-views.js";
 import { listNodeInviteViews } from "./node-invites.js";
 import type { createPublicationRetry } from "./publication-retry.js";
@@ -81,11 +82,18 @@ export async function readOwnerLinkStatus(params: {
   return {
     roles: [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
       .toSorted()
-      .map((name) => ({
-        name,
-        defined: defined(name),
-        requiresSandbox: defined(name) && definitions[name]?.sandbox === "required",
-      })),
+      .map((name) => {
+        const definition = defined(name) ? definitions[name] : undefined;
+        return definition
+          ? {
+              name,
+              defined: true as const,
+              sessions: definition.sessions.others,
+              requiresSandbox: definition.sandbox === "required",
+              admin: definition.scopes.includes("operator.admin"),
+            }
+          : { name, defined: false as const, requiresSandbox: false };
+      }),
     sandboxBackend,
     linked: Boolean(state),
     clawId: record?.claw_id,
@@ -103,6 +111,7 @@ export async function readOwnerLinkStatus(params: {
       : undefined,
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
     members: members.map((member) => Object.assign(member, { roleDefined: defined(member.role) })),
+    browserRequests: listMemberBrowserRequests(record, members, Math.floor(Date.now() / 1000)),
     existingProfiles: await (await getAuthority()).inviteProfiles(),
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
     nodes: Object.entries(state?.nodes ?? {})

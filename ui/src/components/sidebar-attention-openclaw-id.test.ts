@@ -47,7 +47,7 @@ afterEach(() => {
 
 function setup(
   read: () => Promise<OpenClawIdStatusResult>,
-  requests: Pick<OpenClawIdPeopleLink, "invites" | "nodeInvites"> = {},
+  requests: Pick<OpenClawIdPeopleLink, "invites" | "nodeInvites" | "browserRequests"> = {},
 ) {
   let enabled = true;
   let publication: OpenClawIdPublication = superseded;
@@ -308,4 +308,50 @@ it("schedules the next time-left change, not only the expiry", async () => {
   const lastHour = now + 216_000_000 - 1_800_000;
   expect(attention?.nextChangeAt(lastHour)).toBe(lastHour + 5_000);
   expect(attention?.nextChangeAt(now + 216_000_000)).toBeUndefined();
+});
+
+it.each(["local_operator", "tunnel"] as const)(
+  "projects bounded member browser notices with a usable %s owner action",
+  async (channel) => {
+    const now = Date.now();
+    const request = {
+      requestId: "request-one",
+      accountId: "raw-account-id",
+      displayName: "Alice Example",
+      email: "alice@example.test",
+      label: "Safari on iOS",
+      location: "Example City",
+      requestedAt: Math.floor(now / 1000),
+      expiresAt: Math.floor(now / 1000) + 1800,
+    };
+    const gateway = client(
+      vi.fn(async (method: string) =>
+        method === "openclawId.status"
+          ? { ...tunnelOwner, channel }
+          : { link: { browserRequests: [request] } },
+      ),
+    );
+    const attention = await readOpenClawIdAttention(gateway, () => true);
+    expect(attention?.items(now)).toMatchObject([
+      {
+        kind: "openClawIdBrowserRequest",
+        label: "Browser request from Alice Example",
+        detail:
+          "Safari on iOS · 30m left\nalice@example.test\nLocation reported by OpenClaw ID: Example City",
+        arrivedAtMs: request.requestedAt * 1000,
+        action: { kind: "openClawIdBrowserApproval", remote: channel === "tunnel" },
+      },
+    ]);
+    expect(JSON.stringify(attention?.items(now))).not.toContain("raw-account-id");
+    expect(attention?.nextChangeAt(now)).toBe(now + 5000);
+    expect(attention?.items(request.expiresAt * 1000)).toEqual([]);
+    expect(attention?.nextChangeAt(request.expiresAt * 1000)).toBeUndefined();
+  },
+);
+
+it("does not read browser requests for a non-owner, even with administrative scopes", async () => {
+  const request = vi.fn(async () => ({ ...tunnelOwner, owner: false }));
+  const attention = await readOpenClawIdAttention(client(request), () => true);
+  expect(attention?.items(Date.now())).toEqual([]);
+  expect(request.mock.calls).toEqual([["openclawId.status", {}]]);
 });

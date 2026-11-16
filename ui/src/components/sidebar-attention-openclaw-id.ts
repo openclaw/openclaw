@@ -137,14 +137,58 @@ export async function readOpenClawIdAttention(
       : null;
   const key = buildOpenClawIdKeyAttention(status, link?.publication);
   const requests = link ? listJoinRequests(link) : [];
+  const browsers = link?.browserRequests ?? [];
+  const pendingBrowsers = (nowMs: number) =>
+    browsers.filter((request) => request.expiresAt * 1000 > nowMs);
   const pendingAt = (nowMs: number) => requests.filter((request) => request.decideByMs > nowMs);
   return {
     items: (nowMs) => [
       ...(key ? [key] : []),
       ...pendingAt(nowMs).map((request) => joinRequestAttention(request, nowMs)),
+      ...pendingBrowsers(nowMs).map((request): SidebarAttentionItem => ({
+        type: "attention",
+        category: "system",
+        kind: "openClawIdBrowserRequest",
+        severity: "warning",
+        icon: "monitor",
+        requiresAction: true,
+        dismissal: null,
+        signature: JSON.stringify(["member-browser", request.requestId, request.requestedAt]),
+        label: t("openclawId.browserRequestClaim", {
+          name: request.displayName || request.email || t("openclawId.browserRequestMember"),
+        }),
+        detail: [
+          t("openclawId.browserRequestContext", {
+            browser: request.label,
+            time: formatDurationHuman(request.expiresAt * 1000 - nowMs),
+          }),
+          request.email && request.email !== request.displayName ? request.email : null,
+          request.location
+            ? t("openclawId.browserRequestLocation", { location: request.location })
+            : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        meta: {
+          status: t("openclawId.browserRequestUnverified"),
+          context: t("openclawId.browserRequestContext", {
+            browser: request.label,
+            time: formatDurationHuman(request.expiresAt * 1000 - nowMs),
+          }),
+        },
+        arrivedAtMs: request.requestedAt * 1000,
+        action: {
+          kind: "openClawIdBrowserApproval",
+          remote: status.channel === "tunnel",
+          label: t("openclawId.approveNewDevice"),
+        },
+      })),
     ],
     nextChangeAt: (nowMs) => {
-      const pending = pendingAt(nowMs);
+      const pending = [
+        ...pendingAt(nowMs),
+        ...pendingBrowsers(nowMs).map((request) => ({ decideByMs: request.expiresAt * 1000 })),
+      ];
       return pending.length
         ? Math.min(
             ...pending.map((request) =>

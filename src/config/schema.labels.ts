@@ -185,7 +185,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.workspaceOnly": "apply_patch Workspace-Only",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
-  "tools.loopDetection.enabled": "Tool-loop Detection",
+  "tools.loopDetection.enabled": "Tool Repeat Guard",
   "tools.fs.workspaceOnly": "Workspace-only FS tools",
   "tools.sessions.visibility": "Session Tools Visibility",
   "tools.sessions.allowThreadTargets": "Allow Thread Send Targets",

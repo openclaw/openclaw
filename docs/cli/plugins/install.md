@@ -339,6 +339,12 @@ requires a local path that already exists. For a noninteractive local link,
 pass `--force` after reviewing the source; it confirms provenance but does not
 copy or overwrite the linked directory.
 
+On POSIX systems, a local path is resolved the way the filesystem traverses it:
+in `./link/../my-plugin`, `link` is followed before `..` applies, so the plugin
+installed is the one `ls ./link/../my-plugin` shows. The final path segment
+keeps its spelling, so a linked install records a symlinked plugin directory
+as typed.
+
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not
 imported or executed until they are explicitly enabled. For local development,

@@ -61,6 +61,19 @@ export function setDeviceTokenBindingsLoading(next: Promise<void>): void {
   loading = next;
 }
 
+/** Prepare durable bindings, then read the current owner at the point of effect. */
+export async function prepareDeviceTokenBindingLookup(): Promise<
+  (deviceId: string, role: string) => string | undefined
+> {
+  await loading;
+  return (deviceId, role) => {
+    if (owner === "unreadable") {
+      throw new Error("OpenClaw ID device-token bindings are unavailable");
+    }
+    return owner?.lookup(deviceId, role);
+  };
+}
+
 /**
  * Decides whether a verified device token may be used on this connection.
  * `peerKey` is the relayed connection's authenticated W, or undefined for any

@@ -26,14 +26,16 @@ import {
 import { templatesAddHandlers } from "./templates-add.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
-const { resolveSource, greeting, skills, registry, probe, workspaceWrite } = vi.hoisted(() => ({
-  resolveSource: vi.fn(),
-  greeting: vi.fn(),
-  skills: { preflight: vi.fn(), install: vi.fn() },
-  registry: { detail: vi.fn(), artifact: vi.fn(), security: vi.fn(), download: vi.fn() },
-  probe: { preflight: vi.fn(), artifact: vi.fn() },
-  workspaceWrite: { fail: undefined as string | undefined, attempt: vi.fn() },
-}));
+const { resolveSource, greeting, dependencyReport, skills, registry, probe, workspaceWrite } =
+  vi.hoisted(() => ({
+    resolveSource: vi.fn(),
+    greeting: vi.fn(),
+    dependencyReport: vi.fn(),
+    skills: { preflight: vi.fn(), install: vi.fn() },
+    registry: { detail: vi.fn(), artifact: vi.fn(), security: vi.fn(), download: vi.fn() },
+    probe: { preflight: vi.fn(), artifact: vi.fn() },
+    workspaceWrite: { fail: undefined as string | undefined, attempt: vi.fn() },
+  }));
 // mock-isolation: Registry delivery of the Template is external I/O. Admission, the
 // workspace writer, installers, config writes and session finalization stay real.
 vi.mock("../../templates/clawhub-source.js", async (original) => ({
@@ -105,6 +107,7 @@ vi.mock("../../infra/fs-safe.js", async (original) => {
 vi.mock("./agents-onboarding.js", async (original) => ({
   ...(await original<typeof import("./agents-onboarding.js")>()),
   startAgentOnboardingConversation: greeting,
+  startTemplateDependencyConversation: dependencyReport,
 }));
 // mock-isolation: There is no websocket roster in this request-owner composition.
 vi.mock("./session-change-event.js", () => ({ emitSessionsChanged: vi.fn() }));
@@ -245,6 +248,7 @@ async function withGateway(
         setRuntimeConfigSnapshot(config);
         getRuntimeConfigWriteApplication(event)?.claim()?.settle("applied");
       });
+      greeting.mockImplementation(async (...args) => args[5]?.());
       skills.preflight.mockResolvedValue({
         ok: true,
         action: "install",
@@ -392,21 +396,24 @@ it.each<{
   },
 );
 
-it("creates the Template's agent without a plan, then hands the outcome to its first turn", async () => {
+it("creates the Template's agent without a plan and reports dependencies after its first turn", async () => {
   await withGateway(async (gateway) => {
     const source = await writeTemplate(gateway.root);
     deliver(source);
     const atGreeting: { skill?: boolean; mcp?: boolean; pending?: boolean } = {};
-    greeting.mockImplementation(async (_options, agentId: string) => {
-      atGreeting.skill = await exists(
-        path.join(gateway.workspace(agentId), "skills", "itinerary", "SKILL.md"),
-      );
-      const listed = await listConfiguredMcpServers();
-      atGreeting.mcp = listed.ok && "docs" in listed.mcpServers;
-      atGreeting.pending = (
-        await readSessionEntryReadOnlyInWorker({ agentId, sessionKey })
-      )?.initializationPending;
-    });
+    greeting.mockImplementation(
+      async (_options, agentId: string, _session, _opening, _prompt, onStarted) => {
+        onStarted?.();
+        atGreeting.skill = await exists(
+          path.join(gateway.workspace(agentId), "skills", "itinerary", "SKILL.md"),
+        );
+        const listed = await listConfiguredMcpServers();
+        atGreeting.mcp = listed.ok && "docs" in listed.mcpServers;
+        atGreeting.pending = (
+          await readSessionEntryReadOnlyInWorker({ agentId, sessionKey })
+        )?.initializationPending;
+      },
+    );
 
     const [ok, result] = await gateway.add(chatAdd);
 
@@ -471,11 +478,21 @@ it("creates the Template's agent without a plan, then hands the outcome to its f
       sessionKey,
       "template",
       buildTemplateOpeningMessage(
-        { failures: [], mcpServers: ["docs"] },
+        { failures: [], mcpServers: [] },
         { agentId: "travel-copilot", sessionKey },
+        true,
       ),
+      expect.any(Function),
     ]);
-    expect(atGreeting).toEqual({ skill: true, mcp: true, pending: undefined });
+    expect(atGreeting.pending).toBeUndefined();
+    expect(dependencyReport).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      { agentId: "travel-copilot", sessionKey },
+      { failures: [], mcpServers: ["docs"] },
+    );
+    expect(dependencyReport.mock.invocationCallOrder[0]).toBeGreaterThan(
+      greeting.mock.invocationCallOrder[0]!,
+    );
     expect(gateway.events).toEqual([
       { stage: "agent-admitted", agentId: "travel-copilot" },
       { stage: "agent-ready", agentId: "travel-copilot" },
@@ -542,8 +559,12 @@ it.each([false, true])(
         url: "https://internal.example.com/docs",
       });
       expect(result).not.toHaveProperty("initializationPending");
-      const prompt = greeting.mock.calls.at(-1)![4] as string;
-      expect(prompt).toContain('The Gateway added these servers: ["search"]');
+      // A retried failed opening gets the settled report; a successful opening
+      // gets a separate dependency-results turn instead.
+      const prompt = retry
+        ? (greeting.mock.calls.at(-1)![4] as string)
+        : JSON.stringify(dependencyReport.mock.calls.at(-1)![2]);
+      expect(prompt).toContain("search");
       const report = (
         await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
       )?.templateSetup?.report;
@@ -566,6 +587,46 @@ it.each([false, true])(
     });
   },
 );
+
+it("keeps each bundled plugin failure paired with its declaration after referenced plugins", async () => {
+  await withGateway(async (gateway) => {
+    await writeTemplate(gateway.root);
+    await fs.cp(
+      path.join(gateway.root, "plugins/trip-notes"),
+      path.join(gateway.root, "plugins/other-notes"),
+      { recursive: true },
+    );
+    deliver(
+      await writeTemplate(gateway.root, {
+        ...travelCopilot,
+        plugins: [expedia, { path: "plugins/trip-notes" }, { path: "plugins/other-notes" }],
+      }),
+    );
+    await gateway.state.writeConfig({
+      ...gateway.config(),
+      plugins: { entries: { "trip-notes": { enabled: false } } },
+    });
+    const [ok, result] = await gateway.add(chatAdd);
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ status: "partial", readiness: { ready: false } });
+    expect(dependencyReport.mock.calls.at(-1)![2]).toMatchObject({
+      failures: [
+        {
+          kind: "plugin",
+          name: "plugins/trip-notes",
+          reason: expect.stringContaining("Plugin plugins/trip-notes is disabled by host policy"),
+        },
+        {
+          kind: "plugin",
+          name: "plugins/other-notes",
+          reason: expect.stringContaining("Plugin plugins/other-notes is disabled by host policy"),
+        },
+      ],
+    });
+    expect(registry.detail).not.toHaveBeenCalled();
+    expect(registry.download).not.toHaveBeenCalled();
+  });
+});
 
 it.each(["fetch", "workspace", "manifest collision"] as const)(
   "leaves no agent and no chat when the Template %s fails, and a repeated Add succeeds",
@@ -701,7 +762,9 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     expect(skills.install).toHaveBeenCalledTimes(installs);
     expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
     expect(greeting).toHaveBeenCalledTimes(2);
-    expect(greeting.mock.calls[1]![4]).toBe(firstPrompt);
+    expect(firstPrompt).toContain("still installing declared");
+    expect(greeting.mock.calls[1]![4]).not.toContain("still installing declared");
+    expect(greeting.mock.calls[1]![4]).toContain('The Gateway added these servers: ["docs"]');
 
     // The client can miss completion and retain its Retry action after the
     // one-shot setup receipt has been consumed. Reconcile, never create a copy.
@@ -721,5 +784,66 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     const [missingOk] = await gateway.add({ ...chatAdd, agentId: "removed-agent", resume: true });
     expect(missingOk).toBe(false);
     expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
+  });
+});
+
+it("starts live setup while a declared skill install is still pending", async () => {
+  await withGateway(async (gateway) => {
+    deliver(await writeTemplate(gateway.root));
+    const release = Promise.withResolvers<void>();
+    const install = skills.install.getMockImplementation()!;
+    skills.install.mockImplementation(async (...args) => {
+      await release.promise;
+      return await install(...args);
+    });
+    const added = gateway.add(chatAdd);
+    try {
+      await vi.waitFor(() => expect(skills.install).toHaveBeenCalled(), { timeout: 15000 });
+      await vi.waitFor(() => expect(greeting).toHaveBeenCalled(), { timeout: 2000 });
+      await vi.waitFor(async () => {
+        const saved = await readSessionEntryReadOnlyInWorker({
+          agentId: "travel-copilot",
+          sessionKey,
+        });
+        expect(saved?.templateSetup).toMatchObject({
+          dependenciesPending: true,
+          openingComplete: true,
+        });
+      });
+      expect(gateway.events).toContainEqual({ stage: "agent-ready", agentId: "travel-copilot" });
+      expect(
+        await exists(path.join(gateway.workspace("travel-copilot"), "skills/goplaces/SKILL.md")),
+      ).toBe(false);
+    } finally {
+      release.resolve();
+      await added;
+    }
+  });
+});
+
+it("retries a failed dependency report without repeating the completed opening or installs", async () => {
+  await withGateway(async (gateway) => {
+    deliver(await writeTemplate(gateway.root));
+    dependencyReport.mockRejectedValueOnce(new Error("Fixture report turn failed"));
+    const [ok, first] = await gateway.add(chatAdd);
+    expect(ok).toBe(true);
+    expect(first).toMatchObject({ status: "partial", initializationPending: true });
+    const receipt = (
+      await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
+    )?.templateSetup;
+    expect(receipt).toMatchObject({
+      openingComplete: true,
+      report: { failures: [], mcpServers: ["docs"] },
+    });
+    expect(receipt).not.toHaveProperty("dependenciesPending", true);
+    const installs = skills.install.mock.calls.length;
+    const sources = resolveSource.mock.calls.length;
+    const [retryOk, result] = await gateway.add({ ...chatAdd, resume: true });
+    expect(retryOk).toBe(true);
+    expect(result).toMatchObject({ status: "complete", sessionKey });
+    expect(greeting).toHaveBeenCalledOnce();
+    expect(dependencyReport).toHaveBeenCalledTimes(2);
+    expect(skills.install).toHaveBeenCalledTimes(installs);
+    expect(resolveSource).toHaveBeenCalledTimes(sources);
   });
 });

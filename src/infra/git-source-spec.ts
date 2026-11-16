@@ -1,7 +1,7 @@
 import path from "node:path";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveUserPath } from "./home-dir.js";
+import { resolveUserFilesystemPath } from "./home-dir.js";
 
 const GIT_SPEC_PREFIX = "git:";
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
@@ -162,7 +162,7 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
     const repo = stripGitSuffix(base.replace(/^github\.com\//i, ""));
     normalized = { url: `https://github.com/${repo}.git`, label: repo };
   } else if (hasHttpUrlPrefix(base) || isGitUrl(base) || localPath) {
-    const url = localPath ? resolveUserPath(base) : base;
+    const url = localPath ? resolveUserFilesystemPath(base) : base;
     normalized = { url, label: normalizeGitLabel(url) };
   } else {
     return null;
