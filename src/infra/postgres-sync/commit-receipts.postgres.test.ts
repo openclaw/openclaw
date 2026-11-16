@@ -30,7 +30,7 @@ const connection = typeof configured === "string" ? configured : undefined;
 describe.skipIf(!connection)("PostgreSQL domain commit receipts", () => {
   const admin = new Client({ connectionString: connection });
   const schema = `receipts_${randomUUID().replaceAll("-", "")}`;
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => void | Promise<void>> = [];
   const run = withEngineStoreAdmission;
 
   function open() {
@@ -92,9 +92,9 @@ describe.skipIf(!connection)("PostgreSQL domain commit receipts", () => {
     await admin.query(`CREATE SCHEMA "${schema}"; CREATE TABLE "${schema}".entries (id text)`);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0).toReversed()) {
-      cleanup();
+      await cleanup();
     }
     vi.restoreAllMocks();
   });

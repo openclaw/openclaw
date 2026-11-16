@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -22,6 +21,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -646,10 +646,9 @@ describe("plugin runtime session work admission", () => {
 it("allows legacy SQL checks before dispatch and honors live commit revocation", async () => {
   const state = await createOpenClawTestState({ layout: "state-only" });
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  const originalMkdir = fsPromises.mkdir;
   let phase: string | undefined;
   let workspace: string;
-  let mkdirCalled = false;
+  let snapshotCompleted = false;
   probe.admission(admission, (request, grant, admit) => {
     phase = request.stage;
     try {
@@ -658,11 +657,12 @@ it("allows legacy SQL checks before dispatch and honors live commit revocation",
       phase = undefined;
     }
   });
-  vi.spyOn(fsPromises, "mkdir").mockImplementation((dir, options) => {
-    if (dir === workspace) {
-      mkdirCalled = true;
+  probe.command(stateWorker, async (command, args, scope) => {
+    const result = await scope.execute(command, args);
+    if (command.type === "workspace.snapshotAndRegister") {
+      snapshotCompleted = true;
     }
-    return originalMkdir(dir, options);
+    return result;
   });
   try {
     runOpenClawStateWriteTransaction(() => undefined);
@@ -673,12 +673,12 @@ it("allows legacy SQL checks before dispatch and honors live commit revocation",
       "typed-revocation",
     ] as const) {
       workspace = state.path(mode);
-      mkdirCalled = false;
       if (mode !== "initial-refusal") {
         fs.mkdirSync(workspace);
         fs.writeFileSync(`${workspace}/AGENTS.md`, "Synthetic workspace instructions.\n");
       }
       const before = await readWorkspaceStateSnapshot(workspace, { readOnly: true });
+      snapshotCompleted = false;
       const refusal = new Error("plugin authority revoked");
       const pending = createRuntimeAgent().ensureAgentWorkspace({
         dir: workspace,
@@ -692,7 +692,7 @@ it("allows legacy SQL checks before dispatch and honors live commit revocation",
         },
         beforePersistentApply() {
           expect(phase).toBeUndefined();
-          if (mode === "initial-refusal" || (mode === "legacy-refusal" && mkdirCalled)) {
+          if (mode === "initial-refusal" || (mode === "legacy-refusal" && snapshotCompleted)) {
             throw refusal;
           }
           expect(

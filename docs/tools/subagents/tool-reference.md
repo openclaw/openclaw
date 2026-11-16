@@ -337,8 +337,16 @@ announcing children before answering. It does not collect Swarm results:
 collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
 Code Mode, and do not send completion notifications.
 
+`sessions_yield` also awaits wake-armed background commands that the current
+run started: the exec running result says so. Their first exit resumes the
+yielded run with the exit result, bounded by the command's `timeoutSeconds`.
+This is how a hidden subagent or an isolated cron run waits for a command,
+because ending such a run's turn returns its final result instead of waiting.
+A yielded subagent resumes as its original task; a cron run resumes in place,
+and the resumed turn's reply is the run's result.
+
 In automation turns, including cron jobs and jobs running in an existing session,
-`sessions_yield` returns `status: "yielded"` and ends the current model turn.
+`sessions_yield` for children returns `status: "yielded"` and ends the current model turn.
 The scheduler delivers child output under the job's delivery policy; yielding
 does not register an interactive requester continuation or an incoming-message
 wait, even with `waitFor: "message"`.
@@ -392,7 +400,7 @@ message: those completions resume the session. There, `waitFor: "message"` is
 not applied. The yield is an ordinary child wait, the requester gets no pause
 notice, and the `yielded` result carries a `note` saying so. Omit `waitFor`
 when yielding for your own children.
-Without a real pending child/runtime completion or this explicit message intent,
+Without a real pending child/runtime completion, an awaited background command, or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
 the child run instead of completing it. For a child with announced completion,

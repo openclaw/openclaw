@@ -179,9 +179,12 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
+  const admittedWorkspace =
+    context.admittedWorkspace === undefined
+      ? undefined
+      : canonicalWorkspacePath(context.admittedWorkspace);
   const workspaceBlocked =
-    configuredWorkspaceConflict ||
-    (workspaceExistsOnDisk && context.admittedWorkspace !== workspace);
+    configuredWorkspaceConflict || (workspaceExistsOnDisk && admittedWorkspace !== workspace);
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
@@ -430,6 +433,7 @@ export async function buildTemplateAddPlan(params: {
   );
   const bundledSkillNames = new Set<string>();
   const bundledSkillTargets = new Set<string>();
+  const bundledPluginTargets = new Map<string, string>();
   for (const pkg of templateDependencyInventory(params.manifest)) {
     const collection = pkg.kind === "skill" ? "skills" : "plugins";
     const index = params.manifest[collection].findIndex((entry) =>
@@ -453,6 +457,7 @@ export async function buildTemplateAddPlan(params: {
         skillNames: bundledSkillNames,
         skillTargets: bundledSkillTargets,
         referencedSkillTargets,
+        pluginTargets: bundledPluginTargets,
       });
       actions.push(planned.action);
       capabilityChanges.push(planned.capabilityChange);

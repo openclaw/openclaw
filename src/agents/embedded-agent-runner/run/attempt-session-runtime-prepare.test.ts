@@ -682,6 +682,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       };
       const reader: SessionEntryCohortReader = {
         database: { agentId: target.agentId, path: target.storePath, env: target.env },
+        identity: { key: "file:1:1", canonicalPath: target.storePath },
         sessionKey: target.sessionKey,
         logicalAgentId: target.agentId,
         storePaths: [target.storePath],

@@ -16,6 +16,8 @@ import {
 import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
 export type SqliteWorkerOperationContext = {
+  /** Native source checks finish before the live authority cells are observed. */
+  assertPhysicalSourceCurrent?: () => void;
   port: MessagePort;
   databaseAdmissionDeadlineAtMs?: number;
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
@@ -37,7 +39,7 @@ export type NativeCommitReceipt = {
 };
 
 // The private MessagePort already detached this receipt from its sender.
-export function isNativeCommitReceipt(value: unknown): value is NativeCommitReceipt {
+function isNativeCommitReceipt(value: unknown): value is NativeCommitReceipt {
   return (
     isRecord(value) &&
     value.version === 1 &&
@@ -45,6 +47,16 @@ export function isNativeCommitReceipt(value: unknown): value is NativeCommitRece
     Number.isSafeInteger(value.sequence) &&
     value.sequence >= 1 &&
     Object.hasOwn(value, "facts")
+  );
+}
+
+function isNativeSettlementReceipt(
+  value: unknown,
+): value is { kind: "completed" | "unknown"; committed?: NativeCommitReceipt } {
+  return (
+    isRecord(value) &&
+    (value.kind === "completed" || value.kind === "unknown") &&
+    (value.committed === undefined || isNativeCommitReceipt(value.committed))
   );
 }
 
@@ -84,7 +96,7 @@ export type RetainedWorkerTransactionAdmission = {
   readonly nativeStopped?: Promise<void>;
 };
 
-export function resolveSqliteWorkerFinishSettlement(
+function resolveSqliteWorkerFinishSettlement(
   settlement: SqliteWorkerNativeSettlement | undefined,
   committed: SqliteWorkerNativeSettlementOwner["committed"],
   outcome?: "not-entered",
@@ -98,16 +110,22 @@ export function resolveSqliteWorkerFinishSettlement(
 
 /** Observe each finish after the previously installed handler, including failure. */
 export function observeSqliteWorkerAdmissionFinish(
-  admission: { finish(outcome?: "not-entered"): void },
+  admission: { finish(outcome?: "not-entered"): void | Promise<void> },
   observer: () => void,
 ): void {
   const finish = admission.finish.bind(admission);
   admission.finish = (outcome) => {
+    let pending: void | Promise<void>;
     try {
-      finish(outcome);
-    } finally {
+      pending = finish(outcome);
+    } catch (error) {
       observer();
+      throw error;
     }
+    if (pending) {
+      return pending.finally(observer);
+    }
+    return observer();
   };
 }
 
@@ -254,4 +272,96 @@ export function assertSqliteWorkerCommitReceiptPending(
       "closed",
     );
   }
+}
+
+/** Host publication retains only native receipts after its operation releases authority. */
+export function createSqliteWorkerNativeReceiptOwner(
+  inOwnerContext: (operation: () => void) => void,
+  recordFailure: (error: unknown) => void,
+) {
+  const commitObservers: ((committed: { facts: unknown }) => void)[] = [];
+  let observingCommit = false;
+  let committed: SqliteWorkerNativeSettlementOwner["committed"];
+  let nativeReceiptSequence = 0;
+  let settlement: SqliteWorkerNativeSettlement | undefined;
+  const invalidProtocol = (kind: "commit receipt" | "native settlement") =>
+    recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, "outcome-unknown"));
+  const installCommitted = (receipt: NativeCommitReceipt): void => {
+    // Each private port delivers receipts in order; repeated receipts remain idempotent.
+    if (receipt.sequence <= nativeReceiptSequence) {
+      return;
+    }
+    nativeReceiptSequence = receipt.sequence;
+    const publication = { facts: receipt.facts };
+    committed = publication;
+    observingCommit = true;
+    try {
+      inOwnerContext(() => {
+        for (const observer of commitObservers) {
+          observer(publication);
+        }
+      });
+    } catch (error) {
+      recordFailure(
+        Object.assign(
+          new SqliteWorkerError("SQLite committed facts publication failed", "outcome-unknown"),
+          { cause: error },
+        ),
+      );
+    } finally {
+      observingCommit = false;
+    }
+  };
+  return {
+    get committed() {
+      return committed;
+    },
+    get settlement() {
+      return settlement;
+    },
+    get observingCommit() {
+      return observingCommit;
+    },
+    observe(observer: (committed: { facts: unknown }) => void) {
+      commitObservers.push(observer);
+    },
+    receive(message: unknown): boolean {
+      if (isRecord(message) && message.kind === "native-commit") {
+        const receipt = message.committed;
+        if (!isNativeCommitReceipt(receipt)) {
+          invalidProtocol("commit receipt");
+          return true;
+        }
+        installCommitted(receipt);
+        return true;
+      }
+      if (isRecord(message) && message.kind === "native-settlement") {
+        const value = message.settlement;
+        if (!isNativeSettlementReceipt(value)) {
+          invalidProtocol("native settlement");
+          return true;
+        }
+        if (value.committed !== undefined) {
+          installCommitted(value.committed);
+        }
+        settlement = {
+          kind: value.kind,
+          ...(committed ? { committed } : {}),
+        };
+        return true;
+      }
+      return false;
+    },
+    finish(outcome?: "not-entered") {
+      settlement = resolveSqliteWorkerFinishSettlement(settlement, committed, outcome);
+      // Preserve an active observer iteration when publication itself ends custody.
+      if (observingCommit) {
+        queueMicrotask(() => {
+          commitObservers.length = 0;
+        });
+      } else {
+        commitObservers.length = 0;
+      }
+    },
+  };
 }

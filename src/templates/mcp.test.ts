@@ -12,8 +12,9 @@ import {
 } from "./mcp.js";
 
 const SERVER = { command: "uvx", args: ["fixture-mcp"] };
+const SERVER_WITH_TIMEOUTS = { ...SERVER, requestTimeoutMs: 30_000, connectionTimeoutMs: 5_000 };
 
-function fixturePlan(ids: string[]) {
+function fixturePlan(ids: string[], details: Record<string, unknown> = SERVER) {
   return {
     agent: { finalId: "main" },
     actions: ids.map((id) => ({
@@ -21,7 +22,7 @@ function fixturePlan(ids: string[]) {
       id,
       action: "configure" as const,
       target: `mcp.servers.${id}`,
-      details: SERVER,
+      details,
       blocked: false,
     })),
   };
@@ -110,3 +111,22 @@ it("keeps an earlier server in refs when a later action cannot start", async () 
   await expect(rollbackStatelessTemplateMcpServers(refs)).resolves.toEqual([]);
   expect(await configured("fixture")).toBeUndefined();
 });
+
+it.each([{ existing: false }, { existing: true }])(
+  "stores manifest timeouts in seconds as config milliseconds (already configured: $existing)",
+  async ({ existing }) => {
+    if (existing) {
+      await mcpConfigInternal.set({ name: "fixture", server: SERVER_WITH_TIMEOUTS });
+    }
+    const refs: PersistedTemplateMcpServerRef[] = [];
+    await installTemplateMcpServersStateless(
+      fixturePlan(["fixture"], { ...SERVER, timeout: 30, connectTimeout: 5 }),
+      { refs },
+    );
+
+    expect(refs).toEqual([
+      expect.objectContaining({ relationship: existing ? "referenced" : "managed" }),
+    ]);
+    expect(await configured("fixture")).toEqual(SERVER_WITH_TIMEOUTS);
+  },
+);

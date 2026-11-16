@@ -4,7 +4,7 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -15,6 +15,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as subagentDepth from "../agents/subagents/spawn/subagent-depth.js";
 import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
@@ -96,17 +97,19 @@ function reserveAgain(entry: { runId: string; groupId?: string }) {
   });
 }
 
-function gateRequesterRead(afterRead = false) {
+function gateRequesterRead() {
   const gate = createDeferred();
+  const entered = createDeferred();
   const read = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
   const spy = vi
     .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
     .mockImplementationOnce(async (params) => {
-      const target = afterRead ? await read(params) : undefined;
+      const target = await read(params);
+      entered.resolve();
       await gate.promise;
-      return afterRead ? expectDefined(target, "prepared requester") : read(params);
+      return target;
     });
-  return { gate, spy };
+  return { gate, entered, spy };
 }
 
 describe("queued collector session projection", () => {
@@ -266,9 +269,23 @@ describe("queued collector session projection", () => {
 
   it("keeps native spawn's normalized duplicate-label contract", async () => {
     const label = `  ${"Shared collector title ".repeat(4)}  `;
-    const { gate, spy } = gateRequesterRead();
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const readDepth = subagentDepth.getSubagentDepthFromSessionStoreInWorker;
+    const spy = vi
+      .spyOn(subagentDepth, "getSubagentDepthFromSessionStoreInWorker")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await gate.promise;
+        return readDepth(...args);
+      });
     const first = spawnCollector(label);
     try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "First collector skipped depth preparation",
+      );
       // Finish the second preparation while the first still owns FIFO admission.
       const second = await spawnCollector(label);
       gate.resolve();
@@ -292,14 +309,51 @@ describe("queued collector session projection", () => {
     }
   });
 
+  it("withdraws FIFO admission when depth preparation fails", async () => {
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const spy = vi
+      .spyOn(subagentDepth, "getSubagentDepthFromSessionStoreInWorker")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await gate.promise;
+        throw new Error("depth preparation failed");
+      });
+    const first = spawnCollector("Failed depth");
+    const failed = expect(first).rejects.toThrow("depth preparation failed");
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "First collector skipped depth preparation",
+      );
+      const second = await spawnCollector("Surviving collector");
+      expect(second.status).toBe("accepted");
+      expect(launchedRunIds).toEqual([]);
+      gate.resolve();
+      await failed;
+      await waitForLaunch(expectDefined(second.runId, "surviving collector run"));
+      expect(launchedRunIds).toEqual([second.runId]);
+    } finally {
+      gate.resolve();
+      await failed;
+      spy.mockRestore();
+    }
+  });
+
   it("withdraws FIFO admission after requester acquisition is cancelled", async () => {
-    const { gate, spy } = gateRequesterRead(true);
+    const { gate, entered, spy } = gateRequesterRead();
     const abort = new AbortController();
     const effectsStarted = vi.fn();
     const spawn = (label: string, assertActive?: () => void) =>
       spawnCollector(label, { onSpawnEffectsStart: effectsStarted, assertActive });
     const first = spawn("Failed requester", () => abort.signal.throwIfAborted());
     try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "First collector skipped requester preparation",
+      );
       const second = await spawn("Surviving collector");
       expect(second.status).toBe("accepted");
       expect(launchedRunIds).toEqual([]);

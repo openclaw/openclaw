@@ -429,7 +429,9 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
           export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-qa-smoke-scope.mts")).href)};
           export { isCiDocumentationPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
-            console.log("changed-node-plan-options:" + JSON.stringify(options));
+            console.log("changed-node-plan-options:" + JSON.stringify({ ...options,
+              volumeContext: options.volumeContext && { ...options.volumeContext, environment: undefined },
+            }));
             if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {
               options.onFallback("stub owner selection");
             }
@@ -595,6 +597,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "ci-node-test-capacity.mts",
       "vitest-shard-metadata.mts",
       "ci-skills-python-plan.mjs",
+      "ci-test-observations.mjs",
       "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);

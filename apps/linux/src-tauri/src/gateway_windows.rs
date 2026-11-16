@@ -1445,13 +1445,12 @@ impl GatewayWindows {
                 }
                 let view = app
                     .get_webview("main")
-                    .ok_or("The dashboard is no longer available.")?;
+                    .ok_or("This window is no longer available.")?;
                 let current = view
                     .url()
-                    .map_err(|_| "Could not read the current dashboard address.")?;
-                view.navigate(current).map_err(|_| {
-                    "Could not reload the current dashboard. Open Connection Settings to retry."
-                })?;
+                    .map_err(|_| "Could not read the current address.")?;
+                view.navigate(current)
+                    .map_err(|_| "Could not reload OpenClaw. Open Connection Settings to retry.")?;
                 Ok(true)
             }
         }
@@ -1511,7 +1510,7 @@ impl GatewayWindows {
         url: &Url,
     ) -> Result<DocumentRegistration, String> {
         if !crate::external_browser_url_allowed(url) {
-            return Err("Invalid Gateway dashboard address.".into());
+            return Err("Invalid Gateway address.".into());
         }
         let origin = url.origin().ascii_serialization();
         let grant = {
@@ -1646,6 +1645,36 @@ impl GatewayWindows {
         if current {
             crate::window_chrome::loading(&webview);
         }
+    }
+
+    /// External package links reuse the selected document; they never connect or install.
+    /// Called on the main thread, like the existing dashboard navigation owner.
+    pub(crate) fn open_clawhub_review(
+        &self,
+        app: &AppHandle,
+        review: &crate::deep_links::ClawHubReview,
+    ) -> Result<(), String> {
+        const UNAVAILABLE: &str =
+            "Connect to a Gateway in the main window, then open the ClawHub link again.";
+        if !self.ready_document(app, "main") {
+            return Err(UNAVAILABLE.into());
+        }
+        let target = {
+            let state = self.routing.lock().map_err(|_| STALE)?;
+            if state.closing {
+                return Err(STALE.into());
+            }
+            let document = state
+                .windows
+                .get("main")
+                .and_then(|route| route.document.as_ref())
+                .filter(|document| document.phase == NavigationPhase::Active)
+                .ok_or(UNAVAILABLE)?;
+            review.dashboard_url(&document.url)
+        };
+        let view = app.get_webview("main").ok_or(UNAVAILABLE)?;
+        self.navigate_document(&view, target)?;
+        Ok(())
     }
 
     pub fn navigate_document(&self, view: &Webview, url: Url) -> Result<bool, String> {
@@ -2468,7 +2497,7 @@ fn replace_document(
     }
     let owner = app.state::<GatewayWindows>();
     let window = app.get_window(label).ok_or(STALE)?;
-    retire_document(app, label, "Could not replace the Gateway dashboard.")?;
+    retire_document(app, label, "Could not switch this window to the Gateway.")?;
     let size = window
         .inner_size()
         .map_err(|_| "Could not measure the Gateway window.")?;
@@ -2499,7 +2528,7 @@ fn replace_document(
         });
     let view = window
         .add_child(builder, LogicalPosition::new(0, 0), size)
-        .map_err(|_| "Could not open the Gateway dashboard.")?;
+        .map_err(|_| "Could not open OpenClaw for this Gateway.")?;
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(&view)
         .map_err(|_| "Could not prepare Gateway window controls.")?;
@@ -3152,7 +3181,7 @@ fn notice_script(message: &str) -> String {
     format!("window.dispatchEvent(new CustomEvent('openclaw:gateway-notice',{{detail:{detail}}}));")
 }
 
-fn show_error(app: &AppHandle, label: &str, error: &str) {
+pub(crate) fn show_error(app: &AppHandle, label: &str, error: &str) {
     let owner = app.state::<GatewayWindows>();
     let mut local_notice = true;
     let document = owner.routing.lock().ok().and_then(|mut state| {

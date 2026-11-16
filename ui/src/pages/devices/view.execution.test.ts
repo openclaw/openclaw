@@ -204,6 +204,9 @@ describe("devices execution settings", () => {
     };
     const container = renderDevicesContainer(props);
     const select = container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')!;
+    expect(select.querySelector('option[value="__gateway__"]')?.textContent).toBe(
+      "Computer running OpenClaw",
+    );
     selectValue(select, "second", true);
 
     expect(onExecApprovalsTargetChange).toHaveBeenCalledWith("node", "second");
