@@ -4268,7 +4268,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/acp/control-plane/manager.terminal-signals.test.ts",
   "src/agents/agent-bundle-mcp-reload.test.ts",
   "src/agents/agent-create.test.ts",
-  "src/agents/agent-harness-completion-delivery.test.ts",
   "src/agents/agent-lifecycle-registry.test.ts",
   "src/agents/agent-tools.model-provider-collision.test.ts",
   "src/agents/auth-profiles/store-owner-publication.test.ts",
