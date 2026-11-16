@@ -56,7 +56,7 @@ export async function settleHostExecDescendants(
   }
   session.cleanupUncertain ||= extinction?.status === "uncertain";
   if (extinction?.status === "released" && extinction.survivors.length > 0) {
-    const lines = await adoptExecSurvivors(session, extinction.survivors);
+    const lines = adoptExecSurvivors(session, extinction.survivors);
     if (lines.length > 0) {
       finalOutcome = withNote(session, finalOutcome, lines.join("\n"));
     }

@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { tryReadDiskSpace } from "../infra/disk-space.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "../infra/boundary-path.js";
-import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
-import { tryReadDiskSpace } from "../infra/disk-space.js";
+} from "../infra/path-existence.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { createPluginSourceValidationError } from "./plugin-instance-error.js";
 

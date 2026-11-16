@@ -303,6 +303,10 @@ type SessionEntryCore = SessionEntryProvenance &
     templateSetup?: {
       source: { packageName: string; version?: string };
       report: import("../../templates/conversation.js").TemplateSetupReport;
+      /** Workspace is ready; dependency installation can overlap the first conversation turn. */
+      dependenciesPending?: true;
+      /** Avoid replaying the greeting when Retry only needs to report dependency results. */
+      openingComplete?: true;
     };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
     pluginExtensionSlotKeys?: Record<string, Record<string, string>>;

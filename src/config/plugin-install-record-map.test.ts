@@ -35,9 +35,11 @@ describe("plugin install record maps", () => {
         source: "git",
         spec: "git:github.com/acme/repo@main",
         gitDirectory: " plugins/demo ",
+        installPath: "/state/git/repo/ plugins/demo ",
       },
     });
     expect(records?.demo?.gitDirectory).toBe(" plugins/demo ");
+    expect(records?.demo?.installPath).toBe("/state/git/repo/ plugins/demo ");
     expect(
       parsePluginInstallRecordMap(JSON.parse(serializePluginInstallRecordMap(records!))),
     ).toEqual(records);

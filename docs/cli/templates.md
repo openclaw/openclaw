@@ -513,6 +513,7 @@ and project paths. `--json` retains the original field values for machine proces
 
 ## See also
 
+- [Agents and Templates](/concepts/agents-and-templates)
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)

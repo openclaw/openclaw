@@ -7,12 +7,21 @@ import {
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginNpmGenerationProjectDir,
+  resolveRecordedPluginPath,
 } from "./install-paths.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store-path.js";
+
+it("preserves absolute recorded path whitespace while retaining legacy user-path resolution", () => {
+  const literal = path.resolve("/state/git/repo", "plugins/demo ");
+  expect(resolveRecordedPluginPath(literal)).toBe(literal);
+  expect(resolveRecordedPluginPath("  ~/plugins/demo  ", { HOME: "/operator" })).toBe(
+    path.resolve("/operator/plugins/demo"),
+  );
+});
 
 const artifactDirs = [
   [resolveDefaultPluginExtensionsDir, "extensions"],

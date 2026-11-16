@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "./types.plugins.js";
 import { StrictPluginInstallRecordSchema } from "./zod-schema.installs.js";
@@ -87,7 +88,8 @@ function parsePluginInstallRecord(value: unknown): PluginInstallRecord | null {
   const record = parsed.data;
   for (const field of NORMALIZED_STRING_FIELDS) {
     const fieldValue = record[field];
-    if (fieldValue === undefined) {
+    // Absolute install paths are produced by installers, not padded user input.
+    if (fieldValue === undefined || (field === "installPath" && path.isAbsolute(fieldValue))) {
       continue;
     }
     const normalized = fieldValue.trim();

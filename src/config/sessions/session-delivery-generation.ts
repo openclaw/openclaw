@@ -35,10 +35,7 @@ import {
   projectSessionSharingEntry,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
-import type {
-  SessionEntryCreationOperation,
-  SessionSharingEntry,
-} from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { createLeaseDiagnostics } from "./session-delivery-generation-diagnostics.js";
@@ -99,9 +96,7 @@ async function prepareSessionGenerationLease(
   assertCurrent: SessionSourceAssertion;
   assertNativeTransactionCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
-  readSessionSettings: () =>
-    | Readonly<Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">>
-    | undefined;
+  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
   prepareRead: () => Promise<void> | undefined;
   release: () => void;
   bindCreation: (
@@ -522,9 +517,9 @@ async function prepareSessionGenerationLease(
         },
         fields: generation.exactTranscript
           ? ["sessionId", "lifecycleRevision"]
-          : generation.lifecycleRevision === null
-            ? []
-            : ["lifecycleRevision"],
+          : generation.exactLifecycle
+            ? ["lifecycleRevision"]
+            : [],
         assertCurrent: () => readCurrent(),
         assertHostCurrent: assertActive,
         refuse: () => {

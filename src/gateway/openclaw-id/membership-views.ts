@@ -8,6 +8,7 @@ import {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { StoredClaw } from "./claw-store.js";
 import { listInviteViews } from "./invites-view.js";
+import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { listNodeInviteViews } from "./node-invites.js";
 import type { OwnerDeviceView } from "./owner-devices-view.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
@@ -62,22 +63,15 @@ export async function readMemberView(
 }
 
 /** The full membership projection, disclosed only to an active owner device. */
-export async function readOwnerView(current: StoredClaw | undefined, peerKey: string) {
+export async function readOwnerView(
+  current: StoredClaw | undefined,
+  peerKey: string,
+  readProfiles: OpenClawIdMemberProfiles["read"],
+) {
   const state = current?.authority;
   if (!state) {
     return undefined;
   }
-  const [nodeInvites, members] = await Promise.all([
-    listNodeInviteViews(current, Math.floor(Date.now() / 1000)),
-    Promise.all(
-      Object.entries(state.members).map(async ([account_id, member]) => ({
-        account_id,
-        role: member.role,
-        peer_keys: member.peer_keys,
-        devices: await describeMemberDevices(member),
-      })),
-    ),
-  ]);
   const now = Math.floor(Date.now() / 1000);
   const owners = activeOwnerDevices(state, now);
   if (
@@ -86,6 +80,20 @@ export async function readOwnerView(current: StoredClaw | undefined, peerKey: st
   ) {
     return undefined;
   }
+  const profiles = await readProfiles(Object.keys(state.members));
+  const [nodeInvites, members] = await Promise.all([
+    listNodeInviteViews(current, Math.floor(Date.now() / 1000)),
+    Promise.all(
+      Object.entries(state.members).map(async ([account_id, member]) => ({
+        account_id,
+        display_name: profiles[account_id]?.displayName ?? null,
+        email: profiles[account_id]?.email ?? null,
+        role: member.role,
+        peer_keys: member.peer_keys,
+        devices: await describeMemberDevices(member),
+      })),
+    ),
+  ]);
   return {
     claw_id: state.claw_id,
     seq: state.seq,

@@ -2,6 +2,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
@@ -85,8 +86,12 @@ it.each(["ready", "initialization-failed"] as const)(
         event: "templates.add.progress",
         payload: { ...saved, stage: "agent-ready" },
       });
+      expect(context.chatSubmissions.creationFor(saved.sessionKey)?.admitted).toBe(true);
+      expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBe(composer);
+      expect(composer.canAdopt()).toBe(false);
       apply.resolve({ ...saved, status: "complete", readiness: { ready: true } });
-      await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
+      await applying;
+      expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined();
       const transfer = takeCreatedComposer(
         context,
         saved.sessionKey,
@@ -123,183 +128,229 @@ it.each(["ready", "initialization-failed"] as const)(
   },
 );
 
-it("retries retained Template setup only on click in the same chat and composer", async () => {
-  const { request, context, navigate, replace, publishEvent } = await createLoadedPage({
-    templatesEnabled: true,
-    riskConsentRequired: true,
-  });
-  const original = request.getMockImplementation()!;
-  const first = createDeferredCore<unknown>();
-  const second = createDeferredCore<unknown>();
-  let attempts = 0;
-  request.mockImplementation((method, params, options) => {
-    if (method === "templates.add.apply") {
-      attempts += 1;
-      options?.onSent?.(attempts === 1 ? "partial-setup" : "retry-setup");
-      return attempts === 1 ? first.promise : second.promise;
-    }
-    return original(method, params, options);
-  });
-  // Consent was already given at the catalog seam; retry must reuse it, not re-add.
-  const applying = addTemplateAgent(context, template, true);
-  const creation = context.chatSubmissions.creation;
-  const composer = context.chatSubmissions.readCreate()!.composer!;
-  composer.setMessage("Buffered follow-up");
-  expect(composer.enqueue()).toBe(true);
-  composer.setMessage("Draft before setup failed");
-  const view = mountSolid(() =>
-    createComponent(CreationComposerView, { composer, onOpenImage: () => {} }),
-  );
-  onTestFinished(view.unmount);
-  const saved = {
-    agentId: "workflow-operator",
-    sessionKey: "agent:workflow-operator:team-room",
-  };
-  first.resolve({
-    ...saved,
-    status: "partial",
-    agentRetained: true,
-    initializationPending: true,
-    readiness: { ready: false },
-    error: { code: "verification_failed", message: "Template verification failed" },
-  });
-  await applying;
-  expect(attempts).toBe(1);
-  await waitForSolid(() => expect(view.getByRole("button", { name: "Retry setup" })).toBeDefined());
-  // Editing the retained draft must not erase the recovery action.
-  composer.setMessage("Draft edited after setup failed");
-  await waitForSolid(() =>
-    expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", false),
-  );
-  const retry = view.getByRole("button", { name: "Retry setup" });
-  retry.click();
-  retry.click();
-  expect(attempts).toBe(2);
-  expect(context.chatSubmissions.creation).toBe(creation);
-  expect(context.chatSubmissions.readCreate()?.composer).toBe(composer);
-  expect(composer.acceptedSessionKey).toBe(saved.sessionKey);
-  expect(composer.canAdopt()).toBe(false);
-  await waitForSolid(() =>
-    expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", true),
-  );
-  const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
-  expect(applies).toHaveLength(2);
-  expect(applies[1]?.[1]).toEqual({
-    mode: "chat",
-    agentId: saved.agentId,
-    resume: true,
-    source,
-    acknowledgeClawHubRisk: true,
-  });
-  expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(0);
-  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-  expect(request.mock.calls.filter(([method]) => method === "sessions.create")).toHaveLength(0);
-  publishEvent({
-    type: "event",
-    event: "templates.add.progress",
-    payload: { ...saved, requestId: "retry-setup", stage: "agent-ready" },
-  });
-  second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
-  await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
-  const transfer = takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client);
-  expect(transfer?.draft).toBe("Draft edited after setup failed");
-  expect(transfer?.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
-  transfer?.complete();
-  expect(context.router.getState().location.pathname).toBe("/chat/workflow-operator");
-  expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(1);
-  expect(replace).not.toHaveBeenCalled();
-  expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(2);
-  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-});
-
-it("recovers admitted Template A after creating B while A fails in the background", async () => {
-  const { request, context, navigate, publishEvent } = await createLoadedPage({
-    templatesEnabled: true,
-  });
-  const original = request.getMockImplementation()!;
-  const first = createDeferredCore<unknown>();
-  const retry = createDeferredCore<unknown>();
-  let attempts = 0;
-  request.mockImplementation((method, params, options) => {
-    if (method === "templates.add.apply") {
-      attempts += 1;
-      options?.onSent?.("cross-chat-" + attempts);
-      if (attempts === 2) {
-        return Promise.resolve({
-          agentId: "second-agent",
-          sessionKey: "agent:second-agent:team-room",
-          status: "complete",
-          readiness: { ready: true },
-        });
+it.each([false, true])(
+  "retries retained Template setup in the same chat and composer (reconnect=%s)",
+  async (reconnect) => {
+    const { request, context, navigate, replace, publishEvent, setPhase } = await createLoadedPage({
+      templatesEnabled: true,
+      riskConsentRequired: true,
+    });
+    const original = request.getMockImplementation()!;
+    const first = createDeferredCore<unknown>();
+    const second = createDeferredCore<unknown>();
+    let attempts = 0;
+    request.mockImplementation((method, params, options) => {
+      if (method === "templates.add.apply") {
+        attempts += 1;
+        options?.onSent?.(attempts === 1 ? "partial-setup" : "retry-setup");
+        return attempts === 1 ? first.promise : second.promise;
       }
-      return attempts === 1 ? first.promise : retry.promise;
+      return original(method, params, options);
+    });
+    // Consent was already given at the catalog seam; retry must reuse it, not re-add.
+    const applying = addTemplateAgent(context, template, true);
+    const creation = context.chatSubmissions.creation;
+    const composer = context.chatSubmissions.readCreate()!.composer!;
+    composer.setMessage("Buffered follow-up");
+    expect(composer.enqueue()).toBe(true);
+    composer.setMessage("Draft before setup failed");
+    const view = mountSolid(() =>
+      createComponent(CreationComposerView, { composer, onOpenImage: () => {} }),
+    );
+    onTestFinished(view.unmount);
+    const saved = {
+      agentId: "workflow-operator",
+      sessionKey: "agent:workflow-operator:team-room",
+    };
+    first.resolve({
+      ...saved,
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      readiness: { ready: false },
+      error: { code: "verification_failed", message: "Template verification failed" },
+    });
+    await applying;
+    expect(attempts).toBe(1);
+    await waitForSolid(() =>
+      expect(view.getByRole("button", { name: "Retry setup" })).toBeDefined(),
+    );
+    // Editing the retained draft must not erase the recovery action.
+    composer.setMessage("Draft edited after setup failed");
+    await waitForSolid(() =>
+      expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", false),
+    );
+    if (reconnect) {
+      setPhase("reconnecting");
+      view.getByRole("button", { name: "Retry setup" }).click();
+      expect(attempts).toBe(1);
+      Object.assign(context.gateway.snapshot, { client: createTestGatewayClient(request) });
+      setPhase("connected");
+      await waitForSolid(() => expect(context.agents.state.agentsList).not.toBeNull());
+      expect(composer.canDisplay()).toBe(true);
     }
-    return original(method, params, options);
-  });
-  const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
-  const applying = addTemplateAgent(context, template, false);
-  const composer = context.chatSubmissions.readCreateComposer(saved.sessionKey)!;
-  composer.setMessage("A buffered follow-up");
-  expect(composer.enqueue()).toBe(true);
-  composer.setMessage("A unfinished draft");
-  publishEvent({
-    type: "event",
-    event: "templates.add.progress",
-    payload: { ...saved, requestId: "cross-chat-1", stage: "agent-admitted" },
-  });
-  await waitForSolid(() => expect(context.agents.state.pendingAgent).toBeUndefined());
-  await addTemplateAgent(
-    context,
-    { ...template, agentId: "second-agent", agentName: "Second agent" },
-    false,
-  );
-  await waitForSolid(() =>
-    expect(context.router.getState().location.pathname).toBe("/chat/second-agent"),
-  );
-  first.resolve({
-    ...saved,
-    status: "partial",
-    agentRetained: true,
-    initializationPending: true,
-    readiness: { ready: false },
-    error: { code: "verification_failed", message: "A setup failed" },
-  });
-  await applying;
-  expect(context.router.getState().location.pathname).toBe("/chat/second-agent");
-  expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBeUndefined();
-  context.navigate("chat", { pathname: "/chat/workflow-operator" });
-  await waitForSolid(() =>
-    expect(context.router.getState().location.pathname).toBe("/chat/workflow-operator"),
-  );
-  const recovered = context.chatSubmissions.readCreateComposer(saved.sessionKey);
-  expect(recovered).toBe(composer);
-  expect(context.chatSubmissions.creationFor(saved.sessionKey)?.admitted).toBe(false);
-  expect(recovered?.message).toBe("A unfinished draft");
-  expect(recovered?.inputs.map((input) => input.text)).toEqual(["A buffered follow-up"]);
-  const view = mountSolid(() =>
-    createComponent(CreationComposerView, { composer: recovered!, onOpenImage: () => {} }),
-  );
-  onTestFinished(view.unmount);
-  await waitForSolid(() =>
-    expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", false),
-  );
-  expect(attempts).toBe(2);
-  view.getByRole("button", { name: "Retry setup" }).click();
-  expect(attempts).toBe(3);
-  const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
-  expect(applies[2]?.[1]).toEqual({ mode: "chat", source, agentId: saved.agentId, resume: true });
-  retry.resolve({ ...saved, status: "complete", readiness: { ready: true } });
-  await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
-  expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined();
-  const transfer = takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client);
-  expect(transfer?.draft).toBe("A unfinished draft");
-  expect(transfer?.inputs.map((input) => input.text)).toEqual(["A buffered follow-up"]);
-  transfer?.complete();
-  expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(3);
-  expect(
-    request.mock.calls.filter(([method]) => method === "chat.send" || method === "sessions.create"),
-  ).toHaveLength(0);
-});
+    const retry = view.getByRole("button", { name: "Retry setup" });
+    retry.click();
+    retry.click();
+    expect(attempts).toBe(2);
+    expect(context.chatSubmissions.creation).toBe(creation);
+    expect(context.chatSubmissions.readCreate()?.composer).toBe(composer);
+    expect(composer.acceptedSessionKey).toBe(saved.sessionKey);
+    expect(composer.canAdopt()).toBe(false);
+    await waitForSolid(() =>
+      expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", true),
+    );
+    const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
+    expect(applies).toHaveLength(2);
+    expect(applies[1]?.[1]).toEqual({
+      mode: "chat",
+      agentId: saved.agentId,
+      resume: true,
+      source,
+      acknowledgeClawHubRisk: true,
+    });
+    expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(
+      0,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.create")).toHaveLength(0);
+    publishEvent({
+      type: "event",
+      event: "templates.add.progress",
+      payload: { ...saved, requestId: "retry-setup", stage: "agent-ready" },
+    });
+    expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBe(composer);
+    expect(composer.canAdopt()).toBe(false);
+    second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
+    await waitForSolid(() =>
+      expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined(),
+    );
+    const transfer = takeCreatedComposer(
+      context,
+      saved.sessionKey,
+      context.gateway.snapshot.client,
+    );
+    expect(transfer?.draft).toBe("Draft edited after setup failed");
+    expect(transfer?.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
+    transfer?.complete();
+    expect(context.router.getState().location.pathname).toBe("/chat/workflow-operator");
+    expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
+      2,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+  },
+);
+
+it.each([false, true])(
+  "recovers Template A after creating B while A fails (live: %s)",
+  async (live) => {
+    const { request, context, navigate, publishEvent } = await createLoadedPage({
+      templatesEnabled: true,
+    });
+    const original = request.getMockImplementation()!;
+    const first = createDeferredCore<unknown>();
+    const retry = createDeferredCore<unknown>();
+    let attempts = 0;
+    request.mockImplementation((method, params, options) => {
+      if (method === "templates.add.apply") {
+        attempts += 1;
+        options?.onSent?.("cross-chat-" + attempts);
+        if (attempts === 2) {
+          return Promise.resolve({
+            agentId: "second-agent",
+            sessionKey: "agent:second-agent:team-room",
+            status: "complete",
+            readiness: { ready: true },
+          });
+        }
+        return attempts === 1 ? first.promise : retry.promise;
+      }
+      return original(method, params, options);
+    });
+    const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
+    const applying = addTemplateAgent(context, template, false);
+    const composer = context.chatSubmissions.readCreateComposer(saved.sessionKey)!;
+    composer.setMessage("A buffered follow-up");
+    expect(composer.enqueue()).toBe(true);
+    composer.setMessage("A unfinished draft");
+    publishEvent({
+      type: "event",
+      event: "templates.add.progress",
+      payload: { ...saved, requestId: "cross-chat-1", stage: "agent-admitted" },
+    });
+    await waitForSolid(() => expect(context.agents.state.pendingAgent).toBeUndefined());
+    if (live) {
+      publishEvent({
+        type: "event",
+        event: "templates.add.progress",
+        payload: { ...saved, requestId: "cross-chat-1", stage: "agent-ready" },
+      });
+    }
+    await addTemplateAgent(
+      context,
+      { ...template, agentId: "second-agent", agentName: "Second agent" },
+      false,
+    );
+    await waitForSolid(() =>
+      expect(context.router.getState().location.pathname).toBe("/chat/second-agent"),
+    );
+    first.resolve({
+      ...saved,
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      readiness: { ready: false },
+      error: { code: "verification_failed", message: "A setup failed" },
+    });
+    await applying;
+    expect(context.router.getState().location.pathname).toBe("/chat/second-agent");
+    expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBeUndefined();
+    context.navigate("chat", { pathname: "/chat/workflow-operator" });
+    await waitForSolid(() =>
+      expect(context.router.getState().location.pathname).toBe("/chat/workflow-operator"),
+    );
+    const recovered = context.chatSubmissions.readCreateComposer(saved.sessionKey);
+    expect(recovered).toBe(composer);
+    expect(context.chatSubmissions.creationFor(saved.sessionKey)?.admitted).toBe(live);
+    expect(recovered?.message).toBe("A unfinished draft");
+    expect(recovered?.inputs.map((input) => input.text)).toEqual(["A buffered follow-up"]);
+    const view = mountSolid(() =>
+      createComponent(CreationComposerView, { composer: recovered!, onOpenImage: () => {} }),
+    );
+    onTestFinished(view.unmount);
+    await waitForSolid(() =>
+      expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", false),
+    );
+    expect(attempts).toBe(2);
+    if (live) {
+      context.navigate("chat", { pathname: "/chat/second-agent" });
+      expect(context.chatSubmissions.readSessionSetupComposer(saved.sessionKey)).toBe(composer);
+    }
+    view.getByRole("button", { name: "Retry setup" }).click();
+    expect(attempts).toBe(3);
+    const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
+    expect(applies[2]?.[1]).toEqual({ mode: "chat", source, agentId: saved.agentId, resume: true });
+    retry.resolve({ ...saved, status: "complete", readiness: { ready: true } });
+    await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
+    expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined();
+    const transfer = takeCreatedComposer(
+      context,
+      saved.sessionKey,
+      context.gateway.snapshot.client,
+    );
+    expect(transfer?.draft).toBe("A unfinished draft");
+    expect(transfer?.inputs.map((input) => input.text)).toEqual(["A buffered follow-up"]);
+    transfer?.complete();
+    expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(live ? 4 : 3);
+    expect(
+      request.mock.calls.filter(
+        ([method]) => method === "chat.send" || method === "sessions.create",
+      ),
+    ).toHaveLength(0);
+  },
+);
 
 it.each([false, true])(
   "retires settled partial routing with its Gateway scope (background=%s)",
@@ -383,3 +434,75 @@ it("asks for an id its roster does not use and retries the id the Gateway admitt
   pendingChat.composer!.recovery!.retry();
   expect(applies()[1]?.[1]).toEqual({ mode: "chat", source, agentId: "harbor-3", resume: true });
 });
+
+it.each([false, true])(
+  "keeps live setup custody and same-agent Retry (canonical route=%s)",
+  async (canonical) => {
+    const { request, context, publishEvent } = await createLoadedPage({ templatesEnabled: true });
+    const original = request.getMockImplementation()!;
+    const first = createDeferredCore<unknown>();
+    const second = createDeferredCore<unknown>();
+    let attempts = 0;
+    request.mockImplementation((method, params, options) => {
+      if (method !== "templates.add.apply") {
+        return original(method, params, options);
+      }
+      options?.onSent?.("live-" + ++attempts);
+      return attempts === 1 ? first.promise : second.promise;
+    });
+    const applying = addTemplateAgent(context, template, false);
+    const composer = context.chatSubmissions.readCreate()!.composer!;
+    composer.setMessage("Buffered follow-up");
+    expect(composer.enqueue()).toBe(true);
+    composer.setMessage("Draft while setup runs");
+    const provisional = context.chatSubmissions.creation!.sessionKey;
+    const agentId = canonical ? "workflow-operator-2" : "workflow-operator";
+    const saved = { agentId, sessionKey: "agent:" + agentId + ":team-room" };
+    for (const stage of ["agent-admitted", "agent-ready"]) {
+      publishEvent({
+        type: "event",
+        event: "templates.add.progress",
+        payload: { ...saved, requestId: "live-1", stage },
+      });
+    }
+    expect(context.router.getState().location.pathname).toBe("/chat/" + agentId);
+    if (canonical) {
+      expect(context.chatSubmissions.creationFor(provisional)).toBeUndefined();
+    }
+    expect(context.chatSubmissions.creationFor(saved.sessionKey)?.admitted).toBe(true);
+    expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBe(composer);
+    expect(composer.canAdopt()).toBe(false);
+    expect(
+      takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client),
+    ).toBeUndefined();
+    first.resolve({
+      ...saved,
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      error: { code: "template_opening_failed", message: "Opening failed after attachment" },
+    });
+    await applying;
+    expect(composer.recovery).toBeDefined();
+    expect(composer.message).toBe("Draft while setup runs");
+    expect(composer.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
+    composer.recovery!.retry();
+    expect(attempts).toBe(2);
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.add.apply")[1]?.[1],
+    ).toMatchObject({ agentId: saved.agentId, resume: true });
+    second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
+    await waitForSolid(() =>
+      expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined(),
+    );
+    const transfer = takeCreatedComposer(
+      context,
+      saved.sessionKey,
+      context.gateway.snapshot.client,
+    );
+    expect(transfer?.draft).toBe("Draft while setup runs");
+    expect(transfer?.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
+    transfer?.complete();
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+  },
+);

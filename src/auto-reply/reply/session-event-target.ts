@@ -186,7 +186,11 @@ export async function captureSessionEventTargetForHost(
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
-      if (caller.sessionEventToolsAllow) {
+      // A session-scoped surface is this session's own policy, so its follow-ups need no ceiling.
+      const sessionScopedSurface =
+        caller.sessionEventToolsAllowSessionScoped === true &&
+        resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
+      if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
           caller.sessionEventToolsAllow.length > 512 ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)
@@ -298,56 +302,6 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
   }
 }
 
-export type SessionEventTargetFollow =
-  | { status: "current" }
-  | { status: "deleted" }
-  | { status: "new-lifecycle"; sessionId: string; lifecycleRevision?: string };
-
-/**
- * Move a retained target to its key's current row while the conversation is the same.
- * The lifecycle revision identifies the conversation: compaction installs a new session
- * id under the same revision. Reset, /new, rewind and branch switch mint a new revision,
- * and delete removes the row. The target keeps its captured authority in all cases.
- */
-export async function followSessionEventTargetForHost(
-  target: SessionEventTarget,
-): Promise<SessionEventTargetFollow> {
-  assertSessionEventTargetCurrent(target);
-  if (!target.sessionId || !target.agentId || !target.sessionKey || !target.storePath) {
-    // An absent origin stays pinned; admission decides about creation.
-    return { status: "current" };
-  }
-  const { withSessionEntryReadOnlyInWorker } =
-    await import("../../config/sessions/session-entry-read-runtime.js");
-  const entry = await withSessionEntryReadOnlyInWorker(
-    {
-      agentId: target.agentId,
-      storePath: target.storePath,
-      sessionKey: target.sessionKey,
-      env: targetScopes.get(target)?.env,
-    },
-    () => assertSessionEventTargetCurrent(target),
-    async (read) => {
-      if (!read.ok) {
-        throw read.error;
-      }
-      return read.value;
-    },
-  );
-  if (!entry?.sessionId) {
-    return { status: "deleted" };
-  }
-  if (entry.lifecycleRevision !== target.lifecycleRevision) {
-    return {
-      status: "new-lifecycle",
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-    };
-  }
-  target.sessionId = entry.sessionId;
-  return { status: "current" };
-}
-
 /** Deferred producers retain snapshots; only admitted consumption holds live generation facts. */
 export async function prepareSessionEventTargetForHost(
   target: SessionEventTarget,
@@ -410,6 +364,12 @@ export async function prepareSessionEventTargetForHost(
     }
     assertAcceptance();
     lease.assertCurrent();
+    // The lease follows the key; later admission pins the chat's current transcript.
+    const current = lease.readSessionSettings();
+    if (current) {
+      target.sessionId = current.sessionId;
+      target.lifecycleRevision = current.lifecycleRevision;
+    }
     const retained = lease;
     const assertTargetCurrent = () => {
       assertSessionEventTargetCurrent(target);
