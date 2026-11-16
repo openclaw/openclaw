@@ -4,7 +4,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   removeGatewayTempHome as removeGatewayTempHomeOwner,
   setupGatewayTempHome as setupGatewayTempHomeOwner,
-} from "./gateway.test-support.home.js";
+} from "./gateway-temp-home.test-support.js";
 import { removeGatewayTempHome, setupGatewayTempHome } from "./gateway.test-support.js";
 
 describe("setupGatewayTempHome", () => {
@@ -13,7 +13,7 @@ describe("setupGatewayTempHome", () => {
     async () => {
       expect(setupGatewayTempHome).toBe(setupGatewayTempHomeOwner);
       expect(removeGatewayTempHome).toBe(removeGatewayTempHomeOwner);
-      const helperUrl = new URL("./gateway.test-support.home.ts", import.meta.url);
+      const helperUrl = new URL("./gateway-temp-home.test-support.ts", import.meta.url);
       const result = await runNodeScript(
         (workerArgv) => [
           ...workerArgv(helperUrl).slice(0, -1),

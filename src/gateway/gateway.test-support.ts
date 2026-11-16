@@ -8,7 +8,7 @@ export {
   createGatewayConfigPath,
   removeGatewayTempHome,
   setupGatewayTempHome,
-} from "./gateway.test-support.home.js";
+} from "./gateway-temp-home.test-support.js";
 
 let gatewayTestSeq = 0;
 
