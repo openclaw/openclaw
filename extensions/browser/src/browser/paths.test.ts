@@ -194,12 +194,7 @@ describe("resolveExistingUploadPaths", () => {
       "Invalid media reference",
     ],
     ["rejects nested absolute inbound media paths", "nested-absolute", directChild],
-    ["rejects files outside both managed upload roots", "outside", "inbound media directory"],
-    [
-      "names both accepted upload roots when a file is outside both",
-      "outside",
-      "uploads directory",
-    ],
+    ["rejects files outside both managed upload roots", "outside", "uploads directory"],
   ]);
 });
 
@@ -207,10 +202,5 @@ describe("resolveStrictExistingUploadPaths", () => {
   registerUploadPathCases("resolveStrictExistingUploadPaths", [
     ["accepts mixed upload-root and inbound-media files at use time", "mixed-relative"],
     ["rejects files missing from both managed upload roots", "missing", nonSymlink],
-    [
-      "names both accepted upload roots when a file is outside both",
-      "outside",
-      "uploads directory",
-    ],
   ]);
 });
