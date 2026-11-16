@@ -2,6 +2,7 @@ import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readCronOperatorSnapshot } from "../../cron/operator-source-snapshot.js";
 import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import {
@@ -211,7 +212,10 @@ export function buildSessionEventContext(params: {
     ctx.SessionCreation = {
       via: "cron",
       actor: automation.job.createdActor ?? { type: "system" },
-      sandbox: resolveCreatorSandbox(params.cfg, { actor: automation.job.createdActor }),
+      sandbox: resolveCreatorSandbox(params.cfg, {
+        actor: automation.job.createdActor,
+        openclawIdPrincipal: readCronOperatorSnapshot(automation.job)?.openclawIdPrincipal,
+      }),
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }

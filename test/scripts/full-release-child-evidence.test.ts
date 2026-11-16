@@ -50,7 +50,7 @@ function fixture(role = "normalCi") {
   };
 }
 
-function seal(data = fixture(), runAttempt = 1) {
+function seal(data = fixture(), runAttempt = 1, targetInput = TARGET) {
   const role = data.role;
   const spec = releaseChildSpec(role);
   const root = tempDirs.make("frv-child-receipt-");
@@ -66,7 +66,7 @@ function seal(data = fixture(), runAttempt = 1) {
     JSON.stringify({
       inputs: {
         dispatch_id: `full-release-validation-77-1${spec.suffix}`,
-        target_ref: TARGET,
+        target_ref: targetInput,
         release_scope: "full",
       },
     }),
@@ -188,6 +188,15 @@ describe("full release child evidence producer", () => {
     );
   });
 
+  it("seals independent Q without substituting the dispatched C", () => {
+    const data = fixture();
+    data.run.head_sha = SHA;
+    expect(sealed(data).evidence).toMatchObject({ targetSha: TARGET, workflowSha: SHA });
+    const { result } = seal(data, 1, SHA);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exact dispatched product source");
+  });
+
   it("seals a complete paginated attempt without a monolithic metadata response", () => {
     const data = fixture();
     for (let index = 0; index < 100; index++) {
@@ -230,11 +239,6 @@ describe("full release child evidence producer", () => {
   });
 
   it.each<[string, (data: ReturnType<typeof fixture>) => void, string]>([
-    [
-      "workflow SHA different from the target",
-      (data) => void (data.run.head_sha = SHA),
-      "does not match the target SHA",
-    ],
     [
       "stale run attempt",
       (data) => void (data.run.run_attempt = 2),

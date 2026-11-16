@@ -150,7 +150,8 @@ const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
 calls[args[1]] = (calls[args[1]] ?? 0) + 1;
-const failure = response.fixtureErrorOnce ?? response.fixtureError;
+const failure = calls[args[1]] >= (response.fixtureErrorOnRead ?? 1)
+  ? response.fixtureErrorOnce ?? response.fixtureError : undefined;
 delete response.fixtureErrorOnce;
 writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
 if (failure) { process.stderr.write(failure); process.exit(1); }
@@ -340,7 +341,7 @@ function publicationReuseFixture(
   wrongQualifiedPackage = false,
 ) {
   const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
-  const test = fixture(TOOLING_SHA, workflowRef);
+  const test = fixture(SOURCE_SHA, workflowRef);
   const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
   const fullRef = `refs/heads/${workflowRef}`;
   const npmRun = {
@@ -356,7 +357,7 @@ function publicationReuseFixture(
     schema: "openclaw.npm-package-bundle/v1",
     packageName: test.raw.package.name,
     packageVersion: test.raw.package.version,
-    releaseSha: TOOLING_SHA,
+    releaseSha: SOURCE_SHA,
     tarballName: test.raw.package.fileName,
     tarballSha256: test.raw.package.sha256,
     producer: test.raw.producer,
@@ -372,7 +373,7 @@ function publicationReuseFixture(
     401,
   );
   test.raw.artifact.digest = rawArchive.metadata.digest.slice("sha256:".length);
-  const qualifiedManifest = JSON.stringify({ sourceSha: TOOLING_SHA });
+  const qualifiedManifest = JSON.stringify({ sourceSha: SOURCE_SHA });
   test.qualified.manifestSha256 = sha256(Buffer.from(qualifiedManifest));
   const qualifiedArchive = test.artifactFiles(
     test.qualified.artifact.name,
@@ -390,7 +391,7 @@ function publicationReuseFixture(
   const receipt = (stage: string, runId: string, outputs: Record<string, string>) => ({
     schema: "openclaw.full-release-artifact-receipt/v1",
     ...artifactRequest(),
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     workflowRef,
     stage,
     dispatchId: `full-release-validation-51-1-artifacts-${stage}`,
@@ -407,11 +408,11 @@ function publicationReuseFixture(
     "artifact-receipt.json",
     receipt("npm", "81", bundleOutputs(test.raw, qualifiedReceipt)),
   );
-  const artifactName = `docker-release-${TOOLING_SHA}-1`;
+  const artifactName = `docker-release-${SOURCE_SHA}-1`;
   const dockerManifest = {
     schemaVersion: 1,
     repository: REPOSITORY,
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     toolingSha: TOOLING_SHA,
     tag: "v2026.8.1",
     version: "2026.8.1",
@@ -511,7 +512,7 @@ function publicationReuseFixture(
   const sdk = sdkArchive.metadata;
   const pluginArchive = withPayloads
     ? test.artifactFiles(
-        `plugin-npm-prepared-${TOOLING_SHA}-101-1`,
+        `plugin-npm-prepared-${SOURCE_SHA}-101-1`,
         { "prepared.json": "{}" },
         false,
         101,
@@ -547,14 +548,14 @@ function publicationReuseFixture(
     valid: true,
     directRoot: true,
     current: { conclusion: "success" },
-    root: { runId: "51", targetSha: TOOLING_SHA },
+    root: { runId: "51", targetSha: SOURCE_SHA },
     manifest: {
       workflowName: "Full Release Validation",
       runId: "51",
       runAttempt: "1",
       sourceParentRunAttempt: 1,
       workflowSha: TOOLING_SHA,
-      targetSha: TOOLING_SHA,
+      targetSha: SOURCE_SHA,
       workflowRef,
       workflowFullRef: fullRef,
       publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: plugin },
@@ -567,7 +568,7 @@ function publicationReuseFixture(
 import assert from "node:assert/strict";
 const value = (key) => process.argv[process.argv.indexOf(key) + 1];
 const qualification = JSON.parse(value("--qualification-reuse-json"));
-assert.equal(qualification.candidateSha, "${TOOLING_SHA}");
+assert.equal(qualification.candidateSha, "${SOURCE_SHA}");
 assert.equal(qualification.workflowRef, "${currentRef}");
 assert.equal(value("--verifier-source-sha"), "${"f".repeat(40)}");
 process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
@@ -610,9 +611,9 @@ console.log(JSON.stringify(result));
     env: {
       EVIDENCE_REUSE: "true",
       EVIDENCE_POLICY: "exact-target-full-validation-v1",
-      EVIDENCE_SHA: TOOLING_SHA,
+      EVIDENCE_SHA: SOURCE_SHA,
       EVIDENCE_ROOT_RUN_ID: "51",
-      TARGET_SHA: TOOLING_SHA,
+      TARGET_SHA: SOURCE_SHA,
       GITHUB_REF_NAME: currentRef,
       GITHUB_RUN_ID: "52",
       QUALIFICATION_INPUTS_JSON: "{}",
@@ -1118,6 +1119,21 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       );
     },
   );
+
+  it("preserves jobs API diagnostics while authenticating the raw producer", () => {
+    const test = fixture();
+    test.rawArtifact();
+    // The first read authenticates the producer; fail the preservation lookup.
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: test.jobs.length,
+      jobs: test.jobs,
+      fixtureErrorOnRead: 2,
+      fixtureError: "gh: Forbidden (HTTP 403): fixture jobs permission denied",
+    });
+    const result = test.wait("raw");
+    expectRejected(result, "HTTP 403");
+    expect(result.stderr).toContain("fixture jobs permission denied");
+  });
 
   it.each([
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],

@@ -210,7 +210,17 @@ export function trustedMainPackageFixture({
       status: base === head ? "identical" : "ahead",
     };
   };
+  const unsupported = () => {
+    throw new Error("Historical fixture does not contain candidate or reused artifacts");
+  };
   const client = {
+    validateChildReuse: unsupported,
+    getRunAttempt: unsupported,
+    verifyRetainedPublicationArtifacts: unsupported,
+    downloadArtifactArchive: unsupported,
+    getRunArtifacts: unsupported,
+    getArtifact: unsupported,
+    loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
     },

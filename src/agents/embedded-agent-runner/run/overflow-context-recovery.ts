@@ -392,7 +392,6 @@ export async function recoverEmbeddedRunOverflow(
       input.assertRecoveryActive();
       input.runParams.onAutoCompactionSucceeded?.(input.state.autoCompactionCount);
       input.assertRecoveryActive();
-      input.armPostCompactionGuard();
       if (parkedWorkBlocksContinuation) {
         log.warn(
           `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}, but parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,

@@ -480,6 +480,7 @@ export async function prepareAgentRunDispatch(
         activeRunAbort.controller.signal.throwIfAborted();
       },
       assertCompletionCurrent: () => assertInputOwnerCurrent(true),
+      onTranscriptCommitted: activeRunAbort.entry?.input.onTranscriptCommitted,
       abortSignal: activeRunAbort.controller.signal,
       getAbortStopReason: () => activeRunAbort.entry?.adapter.abortStopReason ?? "rpc",
       admittedSessionId: params.getAdmittedSessionId(),

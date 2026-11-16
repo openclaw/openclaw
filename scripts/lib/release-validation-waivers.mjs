@@ -17,10 +17,41 @@ const STABLE_114_CI_FAILURES = new Map([
   ["macos-swift (tests)", "macos-swift"],
 ]);
 
+const STABLE_114_D843_TARGET_SHA = "d843d6af39a42cd3c30084edbeabeece732fd93a";
+const STABLE_114_D843_CI_FAILURES = new Map([
+  ["checks-node-agentic-gateway-server-isolated-4", "checks-node-core-test-nondist-shard"],
+]);
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...[
+    {
+      childRole: "normalCi",
+      jobName: "checks-node-agentic-gateway-server-isolated-4",
+    },
+    {
+      childRole: "releaseChecksIndependent",
+      jobName: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+    },
+  ].map(({ childRole, jobName }) => ({
+    childRole,
+    jobName,
+    targetVersion: "2026.11.4",
+    targetSha: STABLE_114_D843_TARGET_SHA,
+    reason:
+      "Dallin Romney explicitly authorized these two failures on 2026-11-15 at 21:50 UTC " +
+      "for unchanged C/Q d843d6af39a42cd3c30084edbeabeece732fd93a. " +
+      "FRV 43759426550/1: child 43759963756/1 job 132952700537 recorded a catalog " +
+      "warm ownership-file read; child 43759969390/1 job 132953160694 recorded a " +
+      "missing required native read. Both original failures remain unresolved; " +
+      "catalog diagnostic replays are not a fix and the native replay was quota-blocked. " +
+      "Retain raw errors and artifacts. This grant accepts only the named terminal " +
+      "failed jobs on this exact candidate, not a test pass, not-run exemption or " +
+      "historical evidence relabeling. All other jobs, candidates, versions, required " +
+      "coverage, identity, integrity and publication approval remain blocking.",
+  })),
   ...["Native live gateway core", "Native live test harnesses"].map((suite) => ({
     targetVersion: "2026.11.4",
     targetSha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
@@ -247,19 +278,22 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  const stableCiFailures =
+    waiver.targetSha === STABLE_114_TARGET_SHA
+      ? STABLE_114_CI_FAILURES
+      : waiver.targetSha === STABLE_114_D843_TARGET_SHA
+        ? STABLE_114_D843_CI_FAILURES
+        : undefined;
   if (
     waiver.targetVersion === "2026.11.4" &&
-    waiver.targetSha === STABLE_114_TARGET_SHA &&
     waiver.childRole === "normalCi" &&
-    STABLE_114_CI_FAILURES.has(waiver.jobName)
+    stableCiFailures?.has(waiver.jobName)
   ) {
     return [
       {
         jobName: "openclaw/ci-gate",
         stepName: "Verify selected CI lanes",
-        causes: [
-          STABLE_114_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
-        ],
+        causes: [stableCiFailures.get(waiver.jobName) + " finished with failure (selected=true)"],
         exactCauses: true,
       },
     ];
@@ -317,6 +351,10 @@ function aggregateCauses(waiver) {
           jobName: "Verify release checks",
           stepName: "Verify release check results",
           causes: [cause],
+          ...(waiver.targetVersion === "2026.11.4" &&
+          waiver.targetSha === STABLE_114_D843_TARGET_SHA
+            ? { exactCauses: true }
+            : {}),
         },
       ];
     }

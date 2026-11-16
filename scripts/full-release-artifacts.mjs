@@ -386,7 +386,6 @@ async function reusePublicationArtifacts(env) {
     env.EVIDENCE_REUSE !== "true" ||
     env.EVIDENCE_POLICY !== "exact-target-full-validation-v1" ||
     env.EVIDENCE_SHA !== env.TARGET_SHA ||
-    env.TARGET_SHA !== env.PARENT_WORKFLOW_SHA ||
     !source?.qualificationAdmission
   ) {
     output({ publication_artifacts_reused: "false" });
@@ -1006,12 +1005,7 @@ async function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
 
 function assertNpmPreparationExecutionPreserved(request, runId, runAttempt, producer) {
   const sourceAttempt = Number(producer.runAttempt);
-  let sourceJobs;
-  try {
-    sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
-  } catch {
-    throw new Error("Raw npm bundle requires its unique exact completed producer job.");
-  }
+  const sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
   const sourceMatches = sourceJobs.filter(
     (job) => String(job.id) === producer.jobId && job.name === producer.jobName,
   );

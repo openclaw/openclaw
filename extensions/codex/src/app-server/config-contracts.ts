@@ -90,7 +90,6 @@ export type CodexAppServerRuntimeOptions = {
   remoteWorkspaceRoot?: string;
   nativeHookRelay?: { url: string; credentialDirectory: string };
   codeModeOnly: boolean;
-  loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexSandboxMode;
