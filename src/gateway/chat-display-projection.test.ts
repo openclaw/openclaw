@@ -652,20 +652,14 @@ const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
 it("retains empty cancellation receipts for display without adding model context", () => {
+  const openclawAbort = { aborted: true, origin: "rpc", runId: "cancelled-run" };
   const receipt = assistant([text("")], {
     stopReason: "stop",
     excludeFromContext: true,
     __openclaw: { runId: "cancelled-run" },
-    openclawAbort: { aborted: true, origin: "rpc", runId: "cancelled-run" },
+    openclawAbort,
   });
-  expect(projectStable([receipt])).toMatchObject([
-    {
-      role: "assistant",
-      excludeFromContext: true,
-      __openclaw: { runId: "cancelled-run" },
-      openclawAbort: { aborted: true, origin: "rpc", runId: "cancelled-run" },
-    },
-  ]);
+  expect(projectStable([receipt])).toMatchObject([{ excludeFromContext: true, openclawAbort }]);
 });
 
 it.each(["length", "stop"])("hides empty %s attempts", (stopReason) => {

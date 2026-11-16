@@ -170,24 +170,17 @@ describe("installSessionToolResultGuard", () => {
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
     expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
+    // Completion facts are recorded before the capped result drops the child output.
     const collector = setup({ maxToolResultChars: 4_000 }).sm;
-    const completion = {
-      runId: "finished-run",
-      sessionKey: "agent:main:subagent:worker",
-      label: "Worker01",
-      status: "done",
-      result: "x".repeat(40_000),
-    };
+    const facts = { runId: "done-run", sessionKey: "agent:main:subagent:w", label: "W" };
+    const completion = { ...facts, status: "done", result: "x".repeat(40_000) };
     collector.appendMessage(call("call_1", "agents_wait"));
     collector.appendMessage({
       ...result(JSON.stringify({ completed: [completion] }), "agents_wait"),
       details: { completed: [completion] },
     });
-    const saved = messages(collector).find((message) => message.role === "toolResult");
-    expect(saved).toMatchObject({
-      subagentCompletions: [
-        { runId: completion.runId, sessionKey: completion.sessionKey, label: completion.label },
-      ],
+    expect(messages(collector).find((message) => message.role === "toolResult")).toMatchObject({
+      subagentCompletions: [facts],
     });
     expect(resultText(collector)).not.toContain(completion.result);
   });

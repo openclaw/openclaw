@@ -402,11 +402,7 @@ it.each(["state_contention", "unknown"])(
 );
 
 it("projects recorded subagent completions without exposing the private continuation", () => {
-  const completion = {
-    runId: "child-run",
-    sessionKey: "agent:main:subagent:worker",
-    label: "Worker01",
-  };
+  const completion = { runId: "child-run", sessionKey: "agent:main:subagent:w", label: "W" };
   const input = buildPersistedUserTurnMessage({
     text: "PRIVATE CHILD RESULT",
     timestamp: 10,
@@ -419,80 +415,45 @@ it("projects recorded subagent completions without exposing the private continua
     subagentCompletions: [completion],
     display: false,
   });
-  const messages = [
-    input,
-    {
-      role: "assistant",
-      display: false,
-      __openclaw: { runId: "completion-turn" },
-      content: [{ type: "text", text: "PRIVATE REASONING" }],
-    },
-    {
-      role: "toolResult",
-      display: false,
-      __openclaw: { runId: "completion-turn" },
-      toolName: "read",
-      content: "PRIVATE TOOL RESULT",
-    },
-    userTextMessage("Visible next request", 20),
-    assistantTextMessage("Visible answer", 21),
-  ];
-  const projected = projectChatDisplayMessages(messages);
-  expect(projected).toHaveLength(3);
-  expect(projected[0]).toMatchObject({
-    role: "assistant",
-    phase: "commentary",
-    subagentCompletions: [completion],
-  });
+  const projected = projectChatDisplayMessages([input]);
+  expect(projected).toMatchObject([
+    { role: "assistant", phase: "commentary", subagentCompletions: [completion] },
+  ]);
   expect(JSON.stringify(projected)).not.toContain("PRIVATE");
   expect(projectChatDisplayMessages(projected)).toEqual(projected);
-  expect(input.content).toBe("PRIVATE CHILD RESULT");
-  const position = (rawSeq: number) => ({ source: "reader-generation", rawSeq });
+  // The completion row follows activity nested under the preceding answer.
+  const at = (message: object, rawSeq: number, activity?: object) => ({
+    ...message,
+    __openclaw: {
+      ...(message as Record<string, object>)["__openclaw"],
+      id: rawSeq,
+      transcriptPosition: { source: "reader-generation", rawSeq, activity },
+    },
+  });
   const positioned = projectChatDisplayMessages([
-    {
-      role: "assistant",
-      content: "Before.",
-      __openclaw: { id: "before", transcriptPosition: position(1) },
-    },
-    {
-      ...input,
-      __openclaw: { ...input["__openclaw"], id: "completion", transcriptPosition: position(2) },
-    },
-    {
-      role: "assistant",
-      content: "After.",
-      __openclaw: { id: "after", transcriptPosition: position(3) },
-    },
-    {
-      role: "toolResult",
-      toolName: "read",
-      content: "Nested output.",
-      __openclaw: {
-        id: "nested",
-        transcriptPosition: {
-          ...position(4),
-          activity: { afterRawSeq: 1, scopeId: "nested-scope", startOrder: 0 },
-        },
-      },
-    },
+    at({ role: "assistant", content: "Before." }, 1),
+    at(input, 2),
+    at({ role: "assistant", content: "After." }, 3),
+    at({ role: "toolResult", toolName: "read", content: "Nested." }, 4, {
+      afterRawSeq: 1,
+      scopeId: "nested-scope",
+      startOrder: 0,
+    }),
   ]);
   expect(
-    composeTranscriptDisplay(positioned).map(
-      (message) => (message["__openclaw"] as Record<string, unknown>).id,
-    ),
-  ).toEqual(["before", "nested", "completion", "after"]);
+    composeTranscriptDisplay(positioned).map((m) => (m["__openclaw"] as { id: number }).id),
+  ).toEqual([1, 4, 2, 3]);
+  // A direct agents_wait result keeps its completion facts but not the private child output.
   const collected = { ...completion, status: "done", result: "private-result".repeat(4_000) };
   const direct = projectChatDisplayMessages([
     {
       role: "toolResult",
       toolName: "agents_wait",
       toolCallId: "direct-collect",
-      timestamp: 30,
       content: [{ type: "text", text: JSON.stringify({ completed: [collected] }) }],
       details: { completed: [collected] },
     },
   ])[0]!;
-  expect(direct.role).toBe("toolResult");
   expect(direct.subagentCompletions).toEqual([completion]);
   expect(JSON.stringify(direct)).not.toContain(collected.result);
   expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);

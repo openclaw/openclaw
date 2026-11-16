@@ -386,37 +386,22 @@ describe("agents_wait", () => {
       timestamp: 2,
     });
     records.clear();
-    const completed = {
-      runId: "finished-child",
-      sessionKey: "agent:worker:subagent:finished",
-      status: "done",
-      label: "Worker01",
-    };
+    // Completion facts survive the display-limit omission; failed children are not completions.
+    const facts = { runId: "finished-child", sessionKey: "agent:worker:subagent:w", label: "W" };
+    const completed = [
+      { ...facts, status: "done", result: "x".repeat(40_000) },
+      { ...facts, runId: "not-finished", status: "failed" },
+    ];
     const large = createNestedToolActivity({
       ...activity.details,
-      result: {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              completed: [
-                { ...completed, result: "x".repeat(40_000) },
-                { ...completed, runId: "not-finished", status: "failed" },
-              ],
-            }),
-          },
-        ],
-      },
+      result: { content: [{ type: "text", text: JSON.stringify({ completed }) }] },
     });
     expect(large.details.result.content).toEqual([
       { type: "text", text: "[Nested tool output omitted: exceeds display limit]" },
     ]);
-    const serializedLarge = JSON.stringify(large);
-    expect(
-      readNestedToolActivity(JSON.parse(serializedLarge))?.details.subagentCompletions,
-    ).toEqual([
-      { runId: completed.runId, sessionKey: completed.sessionKey, label: completed.label },
-    ]);
+    const serialized = JSON.stringify(large);
+    const reread = readNestedToolActivity(JSON.parse(serialized));
+    expect(reread?.details.subagentCompletions).toEqual([facts]);
     const persisted = JSON.stringify(activity);
     const history = projectAgentHistoryActivity([
       { messageId: "persisted-wait", message: JSON.parse(persisted) },
