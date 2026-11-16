@@ -165,6 +165,11 @@ export function resolveToolOperationLabel(
       .filter(Boolean)
       .join(" ");
   }
+  if (name === "subagents" && args?.action === "list") {
+    return t(
+      `chat.toolCards.${byOutcome(outcome, "listingSubagents", "listedSubagents", "listSubagents")}`,
+    );
+  }
   const sessionLabel =
     name === "sessions_history"
       ? byOutcome(outcome, "readingChat", "readChat", "chatRead")

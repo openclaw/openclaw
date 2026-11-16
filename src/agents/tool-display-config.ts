@@ -308,7 +308,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     agents_wait: displayTool("clock", "Wait for Agents", ["ids", "timeoutSeconds"]),
     structured_output: displayTool("fileText", "Structured Output", ["result"]),
     subagents: {
-      icon: "users",
+      icon: "bot",
       title: "Subagents",
       actions: {
         list: displayAction("list", ["recentMinutes"]),

@@ -429,6 +429,17 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("names a subagent roster listing by its lifecycle action", async () => {
+    const groups = buildItems({
+      messages: [
+        createAssistantMessage([createToolCall("roster", "subagents", { action: "list" })]),
+        createToolResultMessage("roster", "subagents", '{"status":"ok","action":"list"}'),
+      ],
+    }).filter((item) => item.kind === "group");
+    await renderToolGroups(groups, {});
+    expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Listed subagents");
+  });
+
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(
       [
