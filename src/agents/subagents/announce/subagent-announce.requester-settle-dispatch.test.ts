@@ -85,6 +85,42 @@ describe("requester settle dispatch deadline", () => {
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
+  it.each([false, true])(
+    "retries saved-state rejection after admission with a bounded budget (persistent=%s)",
+    async (persistent) => {
+      const context = createContext();
+      const { child, completeBatch, params } = dispatchFixture();
+      useDirectDelivery();
+      const runIds: string[] = [];
+      startTurn.mockImplementation(async (turn) => {
+        acceptTurn(turn);
+        runIds.push(turn.preflight.request.idempotencyKey);
+        if (persistent || runIds.length === 1) {
+          throw Object.assign(new Error("Saved conversation state rejected"), {
+            code: "item_conflict",
+          });
+        }
+        finishTurn(turn.io, "Recovered child result.");
+      });
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+      await expect(run()).resolves.toBe(false);
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
+      using clock = vi.spyOn(Date, "now");
+      for (let attempt = 1; child.requesterSettleWake; attempt++) {
+        expect(attempt).toBeLessThan(3);
+        clock.mockReturnValue(child.requesterSettleWake.nextAttemptAt!);
+        await expect(run()).resolves.toBe(!persistent);
+      }
+      expect(runIds).toHaveLength(persistent ? 3 : 2);
+      expect(new Set(runIds).size).toBe(runIds.length);
+      expect(completeBatch).toHaveBeenCalledOnce();
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledTimes(persistent ? 3 : 2);
+    },
+  );
+
   it("keeps a followup completion owed while its policy is unavailable", async () => {
     const context = createContext();
     const { child, completeBatch, params } = dispatchFixture();

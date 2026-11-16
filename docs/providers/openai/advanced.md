@@ -326,10 +326,14 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     If the server rejects saved items with `item_conflict` before output starts,
     OpenClaw automatically retries once using saved conversation text and tool
     results, without the rejected item IDs, reasoning, or compaction checkpoint.
-    Opening a stream or reporting compaction progress does not count as output.
+    Opening a stream, reporting compaction progress, or receiving an un-emitted
+    text/reasoning snapshot inside a failed response does not count as output.
     Tool calls and results receive matching replacement IDs. The recovery is
     recorded in the transcript so later turns and reloads retain the repair.
-    Unaffected sessions keep their existing prompt prefix and continuation.
+    Completed tool calls retain their original argument JSON for exact replay after
+    a restart, including whitespace and large integers. Intentional argument edits
+    use the edited value. Older transcripts without those bytes use the recovery
+    above when rejected. Unaffected sessions keep their prompt prefix and continuation.
     Gateway logs record `item_conflict_recovery`, a session hash, and the outcome
     (`started`, `recovered`, `failed`, or `deferred`). If both requests fail, the reply offers
     retry, `/compact`, and model-switch guidance. A response that already produced
