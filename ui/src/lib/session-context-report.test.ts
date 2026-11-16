@@ -345,7 +345,13 @@ it("reads the bound instance's lifetime cost, flagging lower bounds and unpriced
   const { request, store } = setup();
   const owner = {};
   onTestFinished(() => store.unwatch(owner));
-  const usage = (totalCost: number, missingCostEntries = 0) => ({ totalCost, missingCostEntries });
+  const usage = (totalCost: number, missingCostEntries = 0) => ({
+    totalCost,
+    missingCostEntries,
+    input: 1_000,
+    cacheRead: 3_000,
+    cacheWrite: 0,
+  });
   const read = async (row: Record<string, unknown>, partial?: object) => {
     request.mockResolvedValueOnce({
       sessions: [{ key: target.sessionKey, sessionId: target.sessionId, ...row }],
@@ -363,6 +369,7 @@ it("reads the bound instance's lifetime cost, flagging lower bounds and unpriced
     usd: 99.14,
     partial: false,
     unpriced: false,
+    cacheHitRate: 0.75,
   });
   // The whole history, not today's calendar window, makes up the session total.
   expect(request).toHaveBeenCalledWith(

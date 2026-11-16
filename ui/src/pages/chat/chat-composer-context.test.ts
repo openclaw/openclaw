@@ -456,6 +456,22 @@ describe("renderChatComposer context usage", () => {
     }
   });
 
+  it("hides the run cache rate when any call did not report its cache split", () => {
+    const run = (cacheTelemetry: { state: string }) =>
+      renderComposer({
+        session: { estimatedCostUsd: 0.01 },
+        messages: [
+          { role: "user", content: "hi" },
+          assistant({ usage: { input: 10, cacheRead: 990, cacheWrite: 0 } }),
+          // A provider that reports prompt tokens without a cache split.
+          assistant({ usage: { input: 1_000, cacheRead: 0, cacheWrite: 0, cacheTelemetry } }),
+        ],
+        sessions: defaultSessions() as never,
+      });
+    expect(part(run({ state: "available" }), "stats")?.textContent).toContain("Cache49.50%");
+    expect(part(run({ state: "unavailable" }), "stats")?.textContent).not.toContain("Cache");
+  });
+
   it("omits the cost tooltip when every recorded cost is zero", () => {
     const container = renderComposer({
       session: { estimatedCostUsd: 0 },
