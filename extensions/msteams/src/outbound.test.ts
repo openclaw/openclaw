@@ -77,6 +77,31 @@ describe("msteamsOutbound cfg threading", () => {
     expect(msteamsOutbound.resolveEffectiveTextChunkLimit?.(params)).toBe(4000);
   });
 
+  it("keeps fenced code blocks balanced across the configured chunker", () => {
+    const fenced = "```py\n  a\n  b\n```\n\nend";
+    const expected = ["```py\n  a\n```", "```py\n  b\n```", "end"];
+    expect(msteamsOutbound.chunker?.(fenced, 14)).toEqual(expected);
+    expect(msteamsPlugin.outbound?.chunker?.(fenced, 14)).toEqual(expected);
+  });
+
+  it("sends a long fenced reply as chunks with balanced code fences", async () => {
+    const codeLines = Array.from({ length: 500 }, (_, i) => `print(${i})`).join("\n");
+    const text = `Here is the script:\n\n\`\`\`python\n${codeLines}\n\`\`\`\n\nDone.`;
+
+    await sendPayload({ ...defaultTarget, text, payload: { text } });
+
+    const sent = mocks.sendMessageMSTeams.mock.calls.map((call) => String(call[0]?.text));
+    expect(sent.length).toBeGreaterThan(1);
+    for (const chunk of sent) {
+      expect((chunk.match(/```/g) ?? []).length % 2).toBe(0);
+      expect(chunk.length).toBeLessThanOrEqual(4000);
+    }
+    const delivered = sent.join("");
+    expect(delivered).toContain("print(0)");
+    expect(delivered).toContain("print(499)");
+    expect(delivered).toContain("Done.");
+  });
+
   it.each([
     [
       "graph-team/19:channel@thread.tacv2",

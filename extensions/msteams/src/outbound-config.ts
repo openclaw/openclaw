@@ -1,5 +1,5 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
@@ -13,7 +13,7 @@ export function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number):
 // Discovery and the lazy sender share the same limits and delivery contract.
 export const msteamsOutboundConfig = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
   chunkerMode: "markdown",
   textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
