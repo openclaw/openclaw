@@ -8,7 +8,8 @@ import { log } from "../logger.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { makeAssistantFailureInput } from "./assistant-failure.test-support.js";
 
-vi.mock("../../../plugins/provider-failover.js", () => ({
+vi.mock("../../../plugins/provider-failover.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/provider-failover.js")>()),
   classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
 }));
 
