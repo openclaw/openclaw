@@ -1,3 +1,4 @@
 # Required regressions for compaction cursor recovery, physical branch/generation isolation,
-# and the real composer goal/queued-input browser flow: 462 net test lines minus 400 ordinary allowance.
-62
+# the real composer goal/queued-input flow, and committed-prefix browser readiness:
+# 480 net test lines minus the unchanged 400-line ordinary allowance.
+80
