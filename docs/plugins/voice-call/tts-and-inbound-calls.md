@@ -129,6 +129,24 @@ but it does **not** prove PSTN/VoIP caller-number ownership. Treat
 `allowFrom` as caller-ID filtering, not strong caller identity.
 </Warning>
 
+| `inboundPolicy` | Who is accepted                                                |
+| --------------- | -------------------------------------------------------------- |
+| `disabled`      | Nobody. Every inbound call is rejected.                        |
+| `allowlist`     | Callers whose caller ID is in `allowFrom`.                     |
+| `pairing`       | Callers in `allowFrom`, without callbacks. See the note below. |
+| `open`          | Any caller.                                                    |
+
+<Note>
+`inboundPolicy: "pairing"` does not start a pairing flow for phone callers. It
+is accepted by the config schema and currently applies the same caller-ID
+check as `allowlist`: a caller who is not in `allowFrom` is rejected, no pairing
+code is issued, and no approval request is created. With an empty `allowFrom`
+every inbound call is rejected. To let a new caller in, add their number to
+`allowFrom`. Realtime [callbacks](/plugins/voice-call/realtime-and-streaming)
+do not apply under `pairing`: admitting a recent outbound recipient who is not
+in `allowFrom` requires `inboundPolicy: "allowlist"`.
+</Note>
+
 Auto-responses use the agent system. Tune with `responseModel`,
 `responseSystemPrompt`, and `responseTimeoutMs`.
 
