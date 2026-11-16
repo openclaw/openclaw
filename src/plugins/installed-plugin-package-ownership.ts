@@ -2,7 +2,7 @@ import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveRecordedPluginPath } from "./install-paths.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
   resolveInstalledPluginIndexInstallOwner,
@@ -21,11 +21,11 @@ function collectDuplicateInstallRecordOwners(
   const ownersByPath = new Map<string, string>();
   const duplicateOwners = new Set<string>();
   for (const [installOwner, record] of Object.entries(index.installRecords)) {
-    const rawPath = record.installPath?.trim() || record.sourcePath?.trim();
-    if (!rawPath) {
+    const rawPath = record.installPath?.trim() ? record.installPath : record.sourcePath;
+    if (!rawPath?.trim()) {
       continue;
     }
-    const resolved = path.resolve(resolveUserPath(rawPath, env));
+    const resolved = resolveRecordedPluginPath(rawPath, env);
     const pathKey = safeRealpathSync(resolved, realpathCache) ?? resolved;
     const existingOwner = ownersByPath.get(pathKey);
     if (existingOwner && existingOwner !== installOwner) {
@@ -294,7 +294,7 @@ export function isPluginSourcePathInUse(
     if (!candidate?.trim()) {
       return false;
     }
-    const resolved = path.resolve(resolveUserPath(candidate, env));
+    const resolved = resolveRecordedPluginPath(candidate, env);
     const current = safeRealpathSync(resolved, realpathCache) ?? resolved;
     return isPathInside(target, current) || isPathInside(current, target);
   });
@@ -318,7 +318,7 @@ function createInstallRecordPathMatcher(
       candidates = [record.installPath, record.sourcePath]
         .filter((candidate): candidate is string => Boolean(candidate?.trim()))
         .map((candidate) => {
-          const absolutePath = path.resolve(resolveUserPath(candidate, env));
+          const absolutePath = resolveRecordedPluginPath(candidate, env);
           return safeRealpathSync(absolutePath, realpathCache) ?? absolutePath;
         });
       recordPaths.set(record, candidates);

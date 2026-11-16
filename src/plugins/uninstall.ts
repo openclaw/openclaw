@@ -18,6 +18,7 @@ import {
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
   resolvePluginNpmProjectsDir,
+  resolveRecordedPluginPath,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey, resolveRetainedContextEngineIds } from "./slots.js";
@@ -283,12 +284,12 @@ function resolveGitManagedInstall(params: {
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
 }): { installPath: string; parentDir: string } | null {
-  const installPath = params.installRecord?.installPath?.trim();
-  if (params.installRecord?.source !== "git" || !installPath) {
+  const installPath = params.installRecord?.installPath;
+  if (params.installRecord?.source !== "git" || !installPath?.trim()) {
     return null;
   }
 
-  let repoPath = installPath;
+  let repoPath = resolveRecordedPluginPath(installPath);
   if (params.installRecord.gitDirectory !== undefined) {
     let directory: string | undefined;
     try {

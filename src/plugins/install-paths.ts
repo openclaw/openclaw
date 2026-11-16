@@ -11,6 +11,14 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolveActivePluginInstallDir } from "./install-root-context.js";
 
+/** Resolve installer-produced absolute paths literally; retain user-path handling for legacy input. */
+export function resolveRecordedPluginPath(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.isAbsolute(input) ? path.resolve(input) : resolveUserPath(input, env);
+}
+
 /** Encodes arbitrary input as a safe plugin install filename. */
 export { safeDirName as safePluginInstallFileName };
 
