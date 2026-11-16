@@ -9,6 +9,15 @@ const TOOL_CALL_DISPLAY_NAMES = new Set(["dispatch_action", "tool_call"]);
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const GEMINI_OPENCLAW_MCP_TOOL_PREFIX = "mcp_openclaw_";
 
+/** Tool search dispatchers carry another tool's call; they are never the work itself. */
+export function isToolCallDispatcherName(name: string | undefined): boolean {
+  return TOOL_CALL_DISPLAY_NAMES.has(
+    stripOpenClawMcpToolPrefix(name ?? "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
 /** Strips the loopback MCP transport prefix so observers see gateway tool names. */
 export function stripOpenClawMcpToolPrefix(toolName: string): string {
   return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)

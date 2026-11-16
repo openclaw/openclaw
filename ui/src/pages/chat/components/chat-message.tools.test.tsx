@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
+import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -429,49 +430,71 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it.each([false, true])(
-    "names subagent lifecycle rows through tool search dispatch: %s",
-    async (dispatched) => {
-      // Tool search wraps both the call and its result; rows present the called tool.
-      const call = (id: string, name: string, args: unknown) =>
-        dispatched
-          ? createToolCall(id, "dispatch_action", { id: `openclaw:core:${name}`, args })
-          : createToolCall(id, name, args);
-      const result = (id: string, name: string, output: unknown) =>
-        createToolResultMessage(
-          id,
-          dispatched ? "dispatch_action" : name,
-          JSON.stringify(
-            dispatched
-              ? {
-                  tool: { id: name },
-                  result: { content: [{ type: "text", text: JSON.stringify(output) }] },
-                }
-              : output,
-          ),
-        );
-      const groups = buildItems({
-        messages: [
-          createAssistantMessage([
-            call("spawn", "sessions_spawn", { label: "Worker01", task: "Review." }),
-            call("roster", "subagents", { action: "list" }),
-          ]),
-          result("spawn", "sessions_spawn", {
-            status: "accepted",
-            runId: "run-1",
-            childSessionKey: "agent:main:subagent:worker-1",
-          }),
-          result("roster", "subagents", { status: "ok", action: "list" }),
+  it.each([false, true])("names subagent lifecycle rows (tool search: %s)", async (dispatched) => {
+    // Tool search records each call twice: the dispatch envelope and the nested call
+    // that carries the activity. Rows present the nested call, never the envelope.
+    const runId = "run-1";
+    const text = (value: unknown) => [{ type: "text", text: JSON.stringify(value) }];
+    const messages = (
+      [
+        [
+          "spawn",
+          "sessions_spawn",
+          { label: "Worker01", task: "Review." },
+          { status: "accepted", runId: "child", childSessionKey: "agent:main:subagent:w" },
         ],
-      }).filter((item) => item.kind === "group");
-      await renderToolGroups(groups, {});
-      expect(
-        [...harness.view.querySelectorAll(".chat-tool-msg-summary")].map((row) =>
-          row.textContent?.replace(/\s+/g, " ").trim(),
-        ),
-      ).toEqual(["Launched Worker01", "Listed subagents"]);
-    },
-  );
+        ["roster", "subagents", { action: "list" }, { status: "ok", action: "list" }],
+      ] as const
+    ).flatMap(([id, name, args, output], index): TestMessage[] => [
+      createAssistantMessage(
+        [
+          dispatched
+            ? createToolCall(id, "dispatch_action", { id: name, args })
+            : createToolCall(id, name, args),
+        ],
+        { __openclaw: { id: `${id}-call`, runId } },
+      ),
+      ...(dispatched
+        ? [
+            {
+              ...createNestedToolActivity({
+                runId,
+                scopeId: "scope",
+                afterEntryId: `${id}-call`,
+                startOrder: index,
+                parentToolCallId: id,
+                toolCallId: `tool_call:${id}:${name}:${index}`,
+                toolName: name,
+                input: args,
+                result: { content: text(output) },
+                isError: false,
+                startedAt: index,
+                timestamp: index,
+              }),
+              __openclaw: { id: `${id}-nested`, runId },
+            },
+          ]
+        : []),
+      createToolResultMessage(
+        id,
+        dispatched ? "dispatch_action" : name,
+        dispatched ? text({ tool: { id: name }, result: { content: text(output) } }) : text(output),
+        { isError: false, __openclaw: { id: `${id}-result`, runId } },
+      ),
+    ]);
+    const history = attachHistoryActivity(prepareChatHistoryFixture(messages));
+    const items = buildItems({ paneId: "dispatch", messages: history.messages });
+    renderActivityGroup(
+      items.filter((item) => item.kind === "group"),
+      { showReasoning: false, runActive: false },
+    );
+    await settleToolBridges(harness.view);
+    expect(
+      [
+        ...harness.view.querySelectorAll(".chat-tool-msg-summary, .chat-activity-group__summary"),
+      ].map((row) => row.textContent?.replace(/\s+/g, " ").trim()),
+    ).toEqual(["Launched Worker01", "Listed subagents"]);
+  });
 
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(

@@ -9,7 +9,7 @@
 # the cached-steer unit regression were removed; no room is allocated for growth.
 # The subagent roster listing label, the swarm e2e for coalesced launches and
 # per-outcome completion rows, the retained failed-child fact, and lifecycle rows
-# reached through tool-search dispatch add the last 51 lines.
-# Exact excess against integrated baseline 25c9790: 1356 net test lines minus the
+# reached through tool-search dispatch (envelope plus nested call) add the last 74 lines.
+# Exact excess against integrated baseline 25c9790: 1379 net test lines minus the
 # normal 400-line allowance.
-956
+979

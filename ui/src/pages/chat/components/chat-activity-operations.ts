@@ -1,7 +1,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  isToolCallDispatcherName,
+  unwrapToolCallForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
@@ -41,6 +44,20 @@ export function isExecutedCommandCard(card: ToolCard): boolean {
     call.name.trim().toLowerCase() === "exec" &&
     !(typeof args?.command === "string" && args.command.trim()) &&
     [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
+  );
+}
+
+/**
+ * A code-mode exec or a tool search dispatch only carries recorded child calls;
+ * its children are the operations, and the carrier stays inspector evidence.
+ */
+export function isInvocationContainer(group: ToolCallGroup<ToolCard>): boolean {
+  const call = unwrapToolCallForDisplay(group.card);
+  const args = asNullableRecord(call.args);
+  return (
+    (call.name.trim().toLowerCase() === "exec" &&
+      !(typeof args?.command === "string" && args.command.trim())) ||
+    (isToolCallDispatcherName(group.card.name) && group.children.length > 0)
   );
 }
 
@@ -99,13 +116,9 @@ export function projectActivityOperations(
   }));
   while (pending.length) {
     const { group, target, executionCards } = pending.pop()!;
-    const call = unwrapToolCallForDisplay(group.card);
-    const args = asNullableRecord(call.args);
     const activity = prepared.get(group.card);
     const showOutcome = retainsOwnOutcome(group.card, activity);
-    const execution =
-      call.name.trim().toLowerCase() === "exec" &&
-      !(typeof args?.command === "string" && args.command.trim());
+    const execution = isInvocationContainer(group);
     const visibleChildren = group.children.some((child) => visible.has(child));
     if (
       !showOutcome &&

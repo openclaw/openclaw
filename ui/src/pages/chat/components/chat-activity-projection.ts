@@ -19,6 +19,7 @@ import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { isActivityMessageGroup } from "../chat-turn-presentation.ts";
 import {
+  isInvocationContainer,
   isInlineCommandCard,
   isStandaloneActivity,
   descendantCards,
@@ -145,14 +146,7 @@ export function collectActivityGroup(
   original.sort((a, b) => order.get(a.card)! - order.get(b.card)!);
   const actionOrder = new Map(
     original
-      .filter((group) => {
-        const call = unwrapToolCallForDisplay(group.card);
-        return !(
-          group.children.length &&
-          call.name === "exec" &&
-          !asNullableRecord(call.args)?.command
-        );
-      })
+      .filter((group) => !(group.children.length && isInvocationContainer(group)))
       .map((group, index) => [group.card, index]),
   );
   const activityOrder = new Map(activity.map((item, index) => [item, index]));
