@@ -282,7 +282,7 @@ function cacheManifest(): NodeCacheManifest {
     "src/example.test.ts",
     "vitest.config.ts",
     "scripts/run-vitest.mjs",
-  ].map((path) => ({ path, bytes: 1, sha256: "b".repeat(64) }));
+  ].map((filePath) => ({ path: filePath, bytes: 1, sha256: "b".repeat(64) }));
   return {
     version: 2,
     mode: "node-compile-cache",
@@ -314,7 +314,9 @@ describe("Node compile-cache benchmark contract", () => {
     missing.expected = [];
     expect(() => validateNodeCacheManifest(missing)).toThrow("expected passed inventory");
     const runner = cacheManifest();
-    runner.inputs = runner.inputs.filter(({ path }) => path !== "scripts/run-vitest.mjs");
+    runner.inputs = runner.inputs.filter(
+      ({ path: filePath }) => filePath !== "scripts/run-vitest.mjs",
+    );
     expect(() => validateNodeCacheManifest(runner)).toThrow("lane input identity");
     const escaping = cacheManifest();
     escaping.seed.files[0]!.path = "../other";
@@ -326,7 +328,7 @@ describe("Node compile-cache benchmark contract", () => {
     const parse = reportFixture("strict-cases", undefined, expected);
     const assertions = expected.map((entry) => reportAssertion(entry.fullName));
     expect(parse(assertions).assertionCount).toBe(2);
-    expect(parse([...assertions].reverse()).assertionCount).toBe(2);
+    expect(parse(assertions.toReversed()).assertionCount).toBe(2);
     expect(() => parse([assertions[0]!, assertions[0]!])).toThrow("expected passed inventory");
     expect(() => parse([reportAssertion("other case"), assertions[1]!])).toThrow(
       "expected passed inventory",
@@ -349,10 +351,11 @@ describe("Node compile-cache benchmark contract", () => {
     expect(
       schedule.filter((_, index) => index % 2 === 0 && schedule[index]!.treatment === "disabled"),
     ).toHaveLength(10);
-    const records = schedule.map((plan) => ({
-      ...plan,
+    const records = schedule.map(({ pair, treatment }) => ({
+      pair,
+      treatment,
       status: "success" as const,
-      inclusiveMs: plan.treatment === "disabled" ? 100 : plan.pair <= 15 ? 90 : 110,
+      inclusiveMs: treatment === "disabled" ? 100 : pair <= 15 ? 90 : 110,
     }));
     expect(analyzeNodeCacheBenchmark(records)).toMatchObject({
       medianRatio: 0.9,
@@ -366,11 +369,9 @@ describe("Node compile-cache benchmark contract", () => {
       continueScreen: false,
     });
     expect(() => analyzeNodeCacheBenchmark(records.slice(1))).toThrow("complete ordered");
-    expect(() => analyzeNodeCacheBenchmark([...records].reverse())).toThrow("complete ordered");
+    expect(() => analyzeNodeCacheBenchmark(records.toReversed())).toThrow("complete ordered");
     expect(() =>
-      analyzeNodeCacheBenchmark(
-        records.map((record, index) => (index === 0 ? { ...record, inclusiveMs: null } : record)),
-      ),
+      analyzeNodeCacheBenchmark([{ ...records[0]!, inclusiveMs: null }, ...records.slice(1)]),
     ).toThrow("complete ordered");
   });
 
@@ -484,14 +485,17 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     const active = path.join(scratch, "active");
     mkdirSync(workload);
     mkdirSync(path.join(workload, "scripts"));
-    const manifest = cacheManifest();
-    manifest.lane = {
+    const nodeCacheManifest = cacheManifest();
+    nodeCacheManifest.lane = {
       id: "fixture",
       critical: true,
       config: "vitest.config.ts",
       files: ["case.test.ts"],
     };
-    manifest.expected = manifest.expected.map((entry) => ({ ...entry, file: "case.test.ts" }));
+    nodeCacheManifest.expected = nodeCacheManifest.expected.map((entry) => ({
+      ...entry,
+      file: "case.test.ts",
+    }));
     const report = {
       ...execution.counts,
       numTotalTests: 2,
@@ -501,11 +505,13 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
         {
           name: path.join(workload, "case.test.ts"),
           status: "passed",
-          assertionResults: manifest.expected.map(({ fullName, line, column, status }) => ({
-            fullName,
-            status,
-            location: { line, column },
-          })),
+          assertionResults: nodeCacheManifest.expected.map(
+            ({ fullName, line, column, status }) => ({
+              fullName,
+              status,
+              location: { line, column },
+            }),
+          ),
         },
       ],
     };
@@ -521,7 +527,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
       "case.test.ts": "fixture",
       "vitest.config.ts": "fixture",
     };
-    manifest.inputs = Object.entries(sources).map(([relative, bytes]) => {
+    nodeCacheManifest.inputs = Object.entries(sources).map(([relative, bytes]) => {
       writeFileSync(path.join(workload, relative), bytes);
       return { path: relative, bytes: Buffer.byteLength(bytes), sha256: sha256(bytes) };
     });
@@ -546,15 +552,15 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
       "-qm",
       "fixture",
     ]);
-    manifest.workloadSha = git(["rev-parse", "HEAD"]);
-    manifest.runtime = {
+    nodeCacheManifest.workloadSha = git(["rev-parse", "HEAD"]);
+    nodeCacheManifest.runtime = {
       node: process.version,
       v8: process.versions.v8,
       platform: process.platform,
       architecture: process.arch,
       executableSha256: sha256(readFileSync(process.execPath)),
     };
-    manifest.pnpmSha256 = manifest.runtime.executableSha256;
+    nodeCacheManifest.pnpmSha256 = nodeCacheManifest.runtime.executableSha256;
     // Fixture preparation is external to the controller and its timed boundary.
     const env = buildBenchmarkCommandEnv(
       path.join(active, "home"),
@@ -573,12 +579,12 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     expect(seeded.status, seeded.stderr).toBe(0);
     renameSync(path.join(active, "node-compile"), seed);
     rmSync(scratch, { recursive: true });
-    manifest.seed = { files: readNodeCacheSeed(seed) };
-    validateNodeCacheManifest(manifest);
+    nodeCacheManifest.seed = { files: readNodeCacheSeed(seed) };
+    validateNodeCacheManifest(nodeCacheManifest);
     const context = {
       workloadDir: workload,
       seedDir: seed,
-      manifest,
+      manifest: nodeCacheManifest,
       pnpmBin: process.execPath,
       outputDir: path.join(root, "output"),
       scratchDir: scratch,
@@ -622,7 +628,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     expect(readFileSync(path.join(context.outputDir, "terminal-manifest.json"), "utf8")).toBe(
       terminal,
     );
-    manifest.expected[0]!.fullName = "missing expected case";
+    nodeCacheManifest.expected[0]!.fullName = "missing expected case";
     const failed = { ...context, outputDir: path.join(root, "failed") };
     await expect(runNodeCacheBenchmark(failed)).rejects.toThrow("expected passed inventory");
     expect(
@@ -634,7 +640,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     });
     expect(existsSync(path.join(scratch, "active"))).toBe(false);
     expect(existsSync(path.join(failed.outputDir, "pair-1-seeded.json"))).toBe(false);
-    expect(readNodeCacheSeed(seed)).toEqual(manifest.seed.files);
+    expect(readNodeCacheSeed(seed)).toEqual(nodeCacheManifest.seed.files);
   },
   60_000,
 );

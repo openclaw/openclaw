@@ -445,19 +445,23 @@ type NodeCacheContext = {
 export function readNodeCacheSeed(root: string): NodeCacheManifest["seed"]["files"] {
   const files: NodeCacheManifest["seed"]["files"] = [];
   const visit = (dir: string) => {
-    if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink())
+    if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink()) {
       throw new Error("Node cache seed must contain only regular directories and files");
+    }
     for (const name of readdirSync(dir).toSorted()) {
       const file = path.join(dir, name);
       const stat = lstatSync(file);
-      if (stat.isDirectory()) visit(file);
-      else if (stat.isFile())
+      if (stat.isDirectory()) {
+        visit(file);
+      } else if (stat.isFile()) {
         files.push({
           path: path.relative(root, file).split(path.sep).join("/"),
           bytes: stat.size,
           sha256: sha256(readFileSync(file)),
         });
-      else throw new Error("Node cache seed must contain only regular directories and files");
+      } else {
+        throw new Error("Node cache seed must contain only regular directories and files");
+      }
     }
   };
   visit(root);
@@ -470,7 +474,7 @@ function assertSeed(context: NodeCacheContext) {
     JSON.stringify(
       files
         .toSorted((a, b) => a.path.localeCompare(b.path))
-        .map(({ path, bytes, sha256 }) => [path, bytes, sha256]),
+        .map(({ path: filePath, bytes, sha256: digest }) => [filePath, bytes, digest]),
     );
   if (key(actual) !== key(context.manifest.seed.files)) {
     throw new Error("Node cache seed identity differs");
@@ -490,14 +494,19 @@ export function restoreNodeCacheSeed(seed: string, destination: string) {
     for (const name of readdirSync(dir)) {
       const file = path.join(dir, name);
       const stat = lstatSync(file);
-      if (stat.isDirectory()) makeWritable(file);
-      else if (stat.isFile()) chmodSync(file, 0o600);
-      else throw new Error("Restored Node cache contains a non-regular entry");
+      if (stat.isDirectory()) {
+        makeWritable(file);
+      } else if (stat.isFile()) {
+        chmodSync(file, 0o600);
+      } else {
+        throw new Error("Restored Node cache contains a non-regular entry");
+      }
     }
   };
   makeWritable(destination);
-  if (JSON.stringify(readNodeCacheSeed(destination)) !== JSON.stringify(expected))
+  if (JSON.stringify(readNodeCacheSeed(destination)) !== JSON.stringify(expected)) {
     throw new Error("Restored Node cache bytes differ");
+  }
 }
 
 function assertPreparedInputs(context: NodeCacheContext) {
@@ -530,11 +539,11 @@ function ownedDirectory(dir: string) {
   };
 }
 
-export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<void> {
-  const workload = realpathSync(context.workloadDir);
-  const seed = path.resolve(context.seedDir);
-  const output = path.resolve(context.outputDir);
-  const scratch = path.resolve(context.scratchDir);
+export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<void> {
+  const workload = realpathSync(input.workloadDir);
+  const seed = path.resolve(input.seedDir);
+  const output = path.resolve(input.outputDir);
+  const scratch = path.resolve(input.scratchDir);
   const roots = [workload, seed, output, scratch];
   if (
     roots.some((root, i) =>
@@ -548,10 +557,10 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
       throw new Error("Benchmark paths must have physical parents");
     }
   }
-  const pnpm = realpathSync(context.pnpmBin);
-  const runtime = context.manifest.runtime;
-  context = {
-    ...context,
+  const pnpm = realpathSync(input.pnpmBin);
+  const runtime = input.manifest.runtime;
+  const context = {
+    ...input,
     pnpmBin: pnpm,
     workloadDir: workload,
     seedDir: seed,
@@ -569,8 +578,9 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
     ) {
       throw new Error("Prepared benchmark runtime identity differs");
     }
-    if (gitOutput(workload, ["rev-parse", "HEAD"]) !== context.manifest.workloadSha)
+    if (gitOutput(workload, ["rev-parse", "HEAD"]) !== context.manifest.workloadSha) {
       throw new Error("Prepared workload SHA differs");
+    }
     assertPreparedInputs(context);
     assertSeed(context);
     if (gitOutput(workload, ["status", "--porcelain=v1", "--untracked-files=all"])) {
@@ -607,7 +617,7 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
           "GNU time child CPU only; parent restore/admission/cleanup CPU and RSS unavailable",
       });
       let allSettled = true;
-      let failure: unknown;
+      let failure: Error | undefined;
       const records: NodeCacheMeasurement[] = [];
       try {
         await withVitestPairDeadline(async (deadline) => {
@@ -636,7 +646,7 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
             let env: NodeJS.ProcessEnv | null = null;
             let settled = true;
             let cleaned = false;
-            let caseFailure: unknown;
+            let caseFailure: Error | undefined;
             let result: RunCommandResult | undefined;
             let execution: BenchmarkExecutionSummary | null = null;
             let cpu: ReturnType<typeof parseGnuTime> | null = null;
@@ -648,8 +658,11 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
               checkScratch();
               checkActive = ownedDirectory(active);
               mkdirSync(runRoot);
-              if (plan.treatment === "seeded") restoreNodeCacheSeed(seed, nodeCache);
-              else mkdirSync(nodeCache);
+              if (plan.treatment === "seeded") {
+                restoreNodeCacheSeed(seed, nodeCache);
+              } else {
+                mkdirSync(nodeCache);
+              }
               env = buildBenchmarkCommandEnv(
                 path.join(active, "home"),
                 path.join(active, "state"),
@@ -669,8 +682,9 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
               });
               settled = true;
               phases.executePersistAndJoinMs = elapsed() - phases.prepareMs;
-              if (result.exitCode !== 0)
+              if (result.exitCode !== 0) {
                 throw new Error(id + " exited with status " + result.exitCode);
+              }
               cpu = parseGnuTime(timePath);
               execution = parseVitestExecutionReport(
                 reportPath,
@@ -692,7 +706,7 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
                   cleaned = true;
                   phases.cleanupMs = elapsed() - cleanupStart;
                 } catch (error) {
-                  caseFailure ??= error;
+                  caseFailure ??= normalizeError(error);
                 }
               }
             }
@@ -710,13 +724,15 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
               systemCpuMs: cpu?.systemCpuMs ?? null,
               processTreeSettled: settled,
               cleanup: cleaned ? "removed-owned-active" : "retained-or-not-created",
-              ...(caseFailure ? { error: normalizeError(caseFailure).message } : {}),
+              ...(caseFailure ? { error: caseFailure.message } : {}),
             };
             // The summary cannot time its own serialization. A failed write aborts
             // the experiment rather than admitting an unrecorded pair.
             checkOutput();
             writeJsonAtomic(path.join(output, id + ".json"), record);
-            if (caseFailure) throw caseFailure;
+            if (caseFailure) {
+              throw caseFailure;
+            }
             records.push(record);
           }
         });
@@ -728,11 +744,13 @@ export async function runNodeCacheBenchmark(context: NodeCacheContext): Promise<
           try {
             assertInputs();
           } catch (error) {
-            failure ??= error;
+            failure ??= normalizeError(error);
           }
         }
       }
-      if (failure) throw failure;
+      if (failure) {
+        throw failure;
+      }
       writeJsonAtomic(path.join(output, "analysis.json"), analyzeNodeCacheBenchmark(records));
       checkScratch();
       rmdirSync(scratch);

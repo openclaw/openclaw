@@ -1,0 +1,2 @@
+# Preserve full Node-cache lifecycle and Node/Bun runtime-routing coverage.
+1

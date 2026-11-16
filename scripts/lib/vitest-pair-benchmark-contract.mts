@@ -126,12 +126,14 @@ export function validateNodeCacheManifest(value: unknown): NodeCacheManifest {
   const fail = (message: string): never => {
     throw new Error(`Node cache manifest: ${message}`);
   };
-  const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+  const digest = (candidate: unknown) =>
+    typeof candidate === "string" && /^[0-9a-f]{64}$/u.test(candidate);
   if (!isRecord(value) || value.version !== 2 || value.mode !== "node-compile-cache") {
     return fail("expected version 2 node-compile-cache mode");
   }
-  if (typeof value.workloadSha !== "string" || !SHA_RE.test(value.workloadSha))
+  if (typeof value.workloadSha !== "string" || !SHA_RE.test(value.workloadSha)) {
     return fail("invalid workload SHA");
+  }
   const lane = value.lane;
   if (
     !isRecord(lane) ||
@@ -139,13 +141,19 @@ export function validateNodeCacheManifest(value: unknown): NodeCacheManifest {
     !/^[a-z0-9-]+$/u.test(lane.id) ||
     !Array.isArray(lane.files) ||
     lane.files.length === 0
-  )
+  ) {
     return fail("one nonempty lane is required");
+  }
   assertSafeRelativePath(lane.config, "lane.config");
-  for (const file of lane.files) assertSafeRelativePath(file, "lane.files");
-  if (new Set(lane.files).size !== lane.files.length) return fail("duplicate lane files");
-  if (!Array.isArray(value.expected) || value.expected.length === 0)
+  for (const file of lane.files) {
+    assertSafeRelativePath(file, "lane.files");
+  }
+  if (new Set(lane.files).size !== lane.files.length) {
+    return fail("duplicate lane files");
+  }
+  if (!Array.isArray(value.expected) || value.expected.length === 0) {
     return fail("expected passed inventory is required");
+  }
   for (const entry of value.expected) {
     if (
       !isRecord(entry) ||
@@ -161,8 +169,9 @@ export function validateNodeCacheManifest(value: unknown): NodeCacheManifest {
       return fail("invalid expanded passed case");
     }
   }
-  if (new Set(value.expected.map((entry) => entry.file)).size !== lane.files.length)
+  if (new Set(value.expected.map((entry) => entry.file)).size !== lane.files.length) {
     return fail("expected inventory must cover every file");
+  }
   const runtime = value.runtime;
   if (
     !isRecord(runtime) ||
@@ -174,25 +183,36 @@ export function validateNodeCacheManifest(value: unknown): NodeCacheManifest {
     !runtime.architecture ||
     !digest(runtime.executableSha256) ||
     !digest(value.pnpmSha256)
-  )
+  ) {
     return fail("pinned Linux Node runtime and pnpm digests required");
+  }
   const files = (entries: unknown, label: string) => {
-    if (!Array.isArray(entries) || entries.length === 0) return fail(`${label} must be nonempty`);
-    for (const entry of entries) {
-      if (!isRecord(entry)) return fail(`invalid ${label} entry`);
-      assertSafeRelativePath(entry.path, `${label}.path`);
-      if (!Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0 || !digest(entry.sha256))
-        return fail(`invalid ${label} identity`);
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return fail(`${label} must be nonempty`);
     }
-    if (new Set(entries.map((entry) => entry.path)).size !== entries.length)
+    for (const entry of entries) {
+      if (!isRecord(entry)) {
+        return fail(`invalid ${label} entry`);
+      }
+      assertSafeRelativePath(entry.path, `${label}.path`);
+      if (!Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0 || !digest(entry.sha256)) {
+        return fail(`invalid ${label} identity`);
+      }
+    }
+    if (new Set(entries.map((entry) => entry.path)).size !== entries.length) {
       return fail(`duplicate ${label} path`);
+    }
     return entries;
   };
   const inputs = files(value.inputs, "inputs");
   for (const file of [...lane.files, lane.config, "scripts/run-vitest.mjs"]) {
-    if (!inputs.some((entry) => entry.path === file)) return fail("lane input identity is missing");
+    if (!inputs.some((entry) => entry.path === file)) {
+      return fail("lane input identity is missing");
+    }
   }
-  if (!isRecord(value.seed)) return fail("sealed seed is required");
+  if (!isRecord(value.seed)) {
+    return fail("sealed seed is required");
+  }
   files(value.seed.files, "seed files");
   return value as NodeCacheManifest;
 }
@@ -220,8 +240,9 @@ export function analyzeNodeCacheBenchmark(records: NodeCacheMeasurement[]) {
         record.inclusiveMs <= 0
       );
     })
-  )
+  ) {
     throw new Error("Node cache benchmark requires the complete ordered 20 valid pairs");
+  }
   const ratios = Array.from({ length: 20 }, (_, index) => {
     const pair = records.slice(index * 2, index * 2 + 2);
     return (

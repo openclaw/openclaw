@@ -50,12 +50,14 @@ function parseArgs(argv: string[]) {
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const mode = values.get("mode");
-  if (mode !== undefined && mode !== "node-compile-cache")
+  if (mode !== undefined && mode !== "node-compile-cache") {
     throw new Error(`unknown benchmark mode: ${mode}`);
+  }
   if (mode === "node-compile-cache") {
     for (const name of ["baseline", "baseline-sha", "candidate", "candidate-sha"]) {
-      if (values.has(name))
+      if (values.has(name)) {
         throw new Error(`--${name} is not supported in node-compile-cache mode`);
+      }
     }
     return {
       mode,
@@ -68,8 +70,9 @@ function parseArgs(argv: string[]) {
       scratchDir: required("scratch"),
     } as const;
   }
-  if (values.has("workload") || values.has("seed"))
+  if (values.has("workload") || values.has("seed")) {
     throw new Error("--workload and --seed require node-compile-cache mode");
+  }
   return {
     mode: "source-pair" as const,
     baselineDir: required("baseline"),
@@ -92,7 +95,7 @@ if (options.mode === "node-compile-cache") {
     ...options,
     manifest: validateNodeCacheManifest(JSON.parse(readFileSync(options.manifestPath, "utf8"))),
   });
-} else
+} else {
   await withTerminalManifest(options.outputDir, async () => {
     assertSingleWorkflowAttempt(options.runAttempt);
     await runVitestPairBenchmark({
@@ -106,3 +109,4 @@ if (options.mode === "node-compile-cache") {
       scratchDir: options.scratchDir,
     });
   });
+}
