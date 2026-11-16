@@ -39,7 +39,7 @@ const cardSaved = JSON.stringify({
 
 async function startTurn() {
   const server = await startMockServer();
-  const input: unknown[] = [makeUserInput("UXAGENT steps=2 chunks=4 interval=0")];
+  const input: unknown[] = [makeUserInput("UXAGENT steps=2 chunks=4 interval=0 label=REPLY")];
   const request = () => expectNonStreamingResponsesJson(server, { tools, input });
   const complete = (call: Record<string, unknown>, output: string) => {
     input.push(call, makeToolOutputWithCallId(String(call.call_id), output));
@@ -56,7 +56,12 @@ describe("UXAGENT fixture", () => {
     const closing = outputToolCall(await turn.complete(opened, cardSaved), "dispatch_action");
     expect(callArgs(closing)).toMatchObject({
       id: "progress_card",
-      args: { plan: [{ status: "completed" }, { status: "completed" }] },
+      args: {
+        plan: [
+          { step: expect.stringMatching(/^REPLY /), status: "completed" },
+          { step: expect.stringMatching(/^REPLY /), status: "completed" },
+        ],
+      },
     });
     expect(outputText(await turn.complete(closing, cardSaved))).toContain("UX-STREAM-END");
   });

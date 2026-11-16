@@ -79,9 +79,12 @@ const MOCK_MODEL = "mock-openai/gpt-5.6-luna";
 const SEED_PROMPT = process.env.IOS_BEHAVIOR_SEED_PROMPT ?? "UXSTREAM chunks=150 interval=0";
 const REPLY_PROMPT = process.env.IOS_BEHAVIOR_REPLY_PROMPT ?? "UXSTREAM chunks=300 interval=20";
 const AGENT_SEED_PROMPT =
-  process.env.IOS_BEHAVIOR_AGENT_SEED_PROMPT ?? "UXAGENT steps=4 chunks=150 interval=0";
+  process.env.IOS_BEHAVIOR_AGENT_SEED_PROMPT ?? "UXAGENT steps=4 chunks=150 interval=0 label=SEED";
 const AGENT_REPLY_PROMPT =
-  process.env.IOS_BEHAVIOR_AGENT_REPLY_PROMPT ?? "UXAGENT steps=4 chunks=300 interval=20";
+  process.env.IOS_BEHAVIOR_AGENT_REPLY_PROMPT ??
+  "UXAGENT steps=4 chunks=300 interval=20 label=REPLY";
+// The mock names the reply's plan steps after it; a real-model prompt has none, so no check.
+const AGENT_REPLY_LABEL = /\blabel=([A-Za-z]+)/.exec(AGENT_REPLY_PROMPT)?.[1];
 const replaySessions = values.sessions
   ?.split(",")
   .map((key) => key.trim())
@@ -425,8 +428,8 @@ type ScreenSample = {
   screen: { width: number; height: number };
   transcript?: Rect;
   exclude: Rect[];
-  /** The progress card read "Plan, N of N steps done": every agent fixture tool step succeeded. */
-  planComplete: boolean;
+  /** The progress card's label ("Plan, 4 of 4 steps done, Completed: …"), when one is drawn. */
+  plan?: string;
 };
 let screenCount = 0;
 const screensDir = path.join(outDir, "screens");
@@ -449,7 +452,7 @@ function readLayout(roots: AxNode[]): Layout {
   let transcript: Rect | undefined;
   let composerTop = Infinity;
   const exclude: Rect[] = [];
-  let planComplete = false;
+  let plan: string | undefined;
   const walk = (node: AxNode) => {
     const id = node.AXUniqueId ?? "";
     const text = node.AXLabel ?? "";
@@ -465,7 +468,9 @@ function readLayout(roots: AxNode[]): Layout {
         exclude.push(node.frame);
       }
       // The card above the composer has no identifier, only this label.
-      planComplete ||= /^Plan, (\d+) of \1 steps done/.test(text);
+      if (text.startsWith("Plan, ")) {
+        plan = text;
+      }
     }
     node.children?.forEach(walk);
   };
@@ -475,7 +480,7 @@ function readLayout(roots: AxNode[]): Layout {
     const bottom = Math.min(transcript.y + transcript.height, composerTop);
     transcript = { ...transcript, height: Math.max(0, bottom - transcript.y) };
   }
-  return { screen, transcript, exclude, planComplete };
+  return { screen, transcript, exclude, plan };
 }
 
 /**
@@ -514,8 +519,8 @@ async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
     const { layout } = layouts.reduce((best, entry) =>
       Math.abs(entry.t - t) < Math.abs(best.t - t) ? entry : best,
     );
-    const { screen, transcript, exclude, planComplete } = layout;
-    return { png, screen, transcript, exclude, planComplete };
+    const { screen, transcript, exclude, plan } = layout;
+    return { png, screen, transcript, exclude, plan };
   });
 }
 
@@ -955,12 +960,17 @@ function blankMatrix(): Record<string, Case> {
             result.gates[`keyboard ${keyboard} at send (setup)`] =
               keyboardAtSend === (keyboard === "up");
             result.gates["reply finished (setup)"] = replied;
-            if (content === "agent") {
+            if (content === "agent" && AGENT_REPLY_LABEL) {
               // The mock's last step closes the card only after every earlier step succeeded, and
               // the long reply follows it; a failed step ends the turn with a short error reply.
+              // The label tells this turn's card from the seed turn's, which also completed.
               result.gates["every agent tool step succeeded (setup)"] = sent
                 .flat()
-                .some((sample) => sample.planComplete);
+                .some(
+                  (sample) =>
+                    /^Plan, (\d+) of \1 steps done/.test(sample.plan ?? "") &&
+                    sample.plan?.includes(AGENT_REPLY_LABEL),
+                );
             }
             return result;
           },

@@ -91,7 +91,10 @@ export function resolveQaUxStream(
     }
   }
   if (completed < steps) {
-    return { events: buildAgentStepEvents(completed, steps, toolBody), deltaIntervalMs: 0 };
+    // `label=<word>` names this turn's plan steps, so a client can tell its card from an earlier
+    // turn's card in the same chat.
+    const label = /\blabel=([A-Za-z]+)/.exec(prompt)?.[1] ?? "Check";
+    return { events: buildAgentStepEvents(completed, steps, label, toolBody), deltaIntervalMs: 0 };
   }
   const text = buildUxStreamText(chunkCount * CHARS_PER_CHUNK);
   return {
@@ -107,7 +110,12 @@ export function resolveQaUxStream(
   };
 }
 
-function buildAgentStepEvents(step: number, steps: number, toolBody: Record<string, unknown>) {
+function buildAgentStepEvents(
+  step: number,
+  steps: number,
+  label: string,
+  toolBody: Record<string, unknown>,
+) {
   const commentary = {
     id: `msg_mock_ux_agent_${step}`,
     phase: "commentary" as const,
@@ -117,7 +125,7 @@ function buildAgentStepEvents(step: number, steps: number, toolBody: Record<stri
   // reconcile a plan left unfinished, which would add a turn after the reply.
   const last = step === steps - 1;
   const plan = Array.from({ length: steps }, (_, index) => ({
-    step: `Check ${WORDS[index % WORDS.length]} ${index + 1}`,
+    step: `${label} ${WORDS[index % WORDS.length]} ${index + 1}`,
     status: last || index < step ? "completed" : index === step ? "in_progress" : "pending",
   }));
   const marker = `ux-agent-step-${step + 1}`;
