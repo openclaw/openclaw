@@ -136,7 +136,11 @@ function recoveryUseAttention(
       }),
     },
     arrivedAtMs: use.usedAt * 1000,
-    action: { kind: "navigate", routeId: "plugin", search: PEOPLE_PAGE_SEARCH },
+    action: {
+      kind: "navigate",
+      routeId: "plugin",
+      search: `${PEOPLE_PAGE_SEARCH}&${new URLSearchParams({ "p.member": use.accountId, "p.device": use.peerKey })}`,
+    },
   };
 }
 

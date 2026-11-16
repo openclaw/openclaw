@@ -151,20 +151,21 @@ async function applyMembershipChange(
   if (body.seq !== state.seq + 1) {
     return refuse(state, "seq_conflict", `expected seq ${state.seq + 1}`);
   }
-  const result = await applyTarget({ ...state, seq: body.seq }, body.target, authority, context);
+  const result = await applyTarget({ ...state, seq: body.seq }, body, authority, context);
   return result.ok ? result : { ...result, state };
 }
 
 // Dispatches a MembershipChange target. `state` already carries the new seq.
 async function applyTarget(
   state: AuthorityState,
-  target: SignedStatement<"MembershipChange">["body"]["target"],
+  body: SignedStatement<"MembershipChange">["body"],
   authority: Authority,
   context: WriteContext,
 ): Promise<AuthorityResult> {
+  const target = body.target;
   switch (target.op) {
     case "set_member_recovery_kit":
-      return setMemberRecoveryKit(state, target, authority);
+      return setMemberRecoveryKit(state, target, authority, body.issued_at);
     case "add_member_device":
       return addMemberDevice(state, target, authority, context.now);
     case "add_node":

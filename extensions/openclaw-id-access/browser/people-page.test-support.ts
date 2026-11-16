@@ -1,7 +1,11 @@
 import { formatEd25519PublicKey } from "@openclaw/openclaw-id-protocol";
+import type * as UI from "openclaw/plugin-sdk/control-ui";
+import { expect, vi } from "vitest";
+import type { Invite, MemberRecoveryUse, StatusResult } from "./types.js";
+
+export const { default: plugin } = await import("./index.js");
+export const disposers: Array<() => void> = [];
 import type { ControlUiHost as Host, ControlUiPage } from "openclaw/plugin-sdk/control-ui";
-import { vi } from "vitest";
-import type { Invite, StatusResult } from "./types.js";
 
 export const pendingInvite: Invite = {
   inviteId: "inv-1",
@@ -19,6 +23,16 @@ export const pendingInvite: Invite = {
     decideBy: 1_800_086_400,
     reported: { email: "member@example.test", displayName: "Mia", locationHint: "Falkenstein, DE" },
   },
+};
+
+export const recoveryUse: MemberRecoveryUse = {
+  seq: 8,
+  accountId: "acct-mira",
+  memberName: "Mira <Example>",
+  deviceLabel: "Firefox <Linux>",
+  peerKey: `iroh:${"1".repeat(64)}`,
+  peerFp: `fp:${"1".repeat(64)}`,
+  usedAt: 1_800_000_000,
 };
 
 export function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
@@ -122,6 +136,11 @@ export function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
       rows: [{ key: "agent:main:trip", derivedTitle: "Trip ideas" }],
       normalizeKey: (key: string) => key,
     },
+    navigation: {
+      pageHref: ({ id, params = {} }: UI.ControlUiPageTarget) =>
+        `/console/plugin?${new URLSearchParams({ plugin: "openclaw-id-access", id, ...Object.fromEntries(Object.entries(params).map(([key, value]) => [`p.${key}`, value])) })}`,
+      openPage: vi.fn(),
+    },
     ui: { registerPage, registerNavigation },
     components: { mountSelectPicker },
   } as unknown as Host;
@@ -145,3 +164,38 @@ export function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
 
 export const rolePicker = (container: HTMLElement) =>
   container.querySelector<HTMLSelectElement>('select[aria-label="Role"]');
+export async function mountPage(
+  statuses: StatusResult[],
+  submitResult?: unknown,
+  params: Readonly<Record<string, string>> = {},
+) {
+  const harness = hostFor([statuses[0]!, ...statuses], submitResult);
+  const { host, request, registerPage, controller } = harness;
+  const stop = await plugin.activate(host);
+  if (typeof stop === "function") {
+    disposers.push(stop);
+  }
+  await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
+  const [page] = registerPage.mock.calls[0]!;
+  expect(page).toMatchObject({ id: "access", label: "Remote access" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const context: UI.ControlUiViewContext = {
+    host,
+    props: params,
+    signal: controller.signal,
+    presented: true,
+    mountDefault: () => () => {},
+  };
+  const view = page.mount(container, context);
+  const dispose = () => view?.dispose?.();
+  disposers.push(dispose);
+  return {
+    ...harness,
+    request,
+    container,
+    dispose,
+    update: (props: Readonly<Record<string, string>>) => view?.update?.({ ...context, props }),
+  };
+}
+

@@ -228,6 +228,8 @@ approvals (`{ kind: "owner", by: "root" | fp(D) }`) are independent roots of tha
 ## Member recovery kit
 
 One optional `MemberRecord.recovery_kit.device_pub` lists a recovery-only member device.
+Its `saved_at` is the signed registration statement’s `issued_at` in Unix seconds, exposed
+through the existing member and owner membership projections for display.
 It has no peer key and is never admitted to the tunnel, included in relay snapshots or bound
 as a Discovery device. Its only authority is signing `add_member_device` for that same current
 account, including over the mailbox. Normal member-device approvals still require the tunnel.

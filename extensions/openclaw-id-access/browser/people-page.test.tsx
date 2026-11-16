@@ -1,14 +1,22 @@
 /* @vitest-environment jsdom */
 
 import { render } from "@solidjs/web";
-import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { PeoplePage } from "./people-page.js";
-import { button, hostFor, linked, pendingInvite, rolePicker } from "./people-page.test-support.js";
-import type { MemberRecoveryUse, StatusResult } from "./types.js";
+import {
+  button,
+  disposers,
+  hostFor,
+  linked,
+  mountPage,
+  pendingInvite,
+  plugin,
+  recoveryUse,
+  rolePicker,
+} from "./people-page.test-support.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -19,42 +27,6 @@ vi.mock("./owner-signing.js", () => ({
   signMembershipChange: vi.fn(async (_link: unknown, target: unknown) => ({ signed: target })),
   signAsOwner: vi.fn(async () => ({ signed: "cap" })),
 }));
-
-const { default: plugin } = await import("./index.js");
-const disposers: Array<() => void> = [];
-
-const recoveryUse: MemberRecoveryUse = {
-  seq: 8,
-  accountId: "acct-mira",
-  memberName: "Mira <Example>",
-  deviceLabel: "Firefox <Linux>",
-  peerKey: `iroh:${"1".repeat(64)}`,
-  peerFp: `fp:${"1".repeat(64)}`,
-  usedAt: 1_800_000_000,
-};
-
-async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
-  const harness = hostFor([statuses[0]!, ...statuses], submitResult);
-  const { host, request, registerPage, controller } = harness;
-  const stop = await plugin.activate(host);
-  if (typeof stop === "function") {
-    disposers.push(stop);
-  }
-  await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
-  const [page] = registerPage.mock.calls[0]!;
-  expect(page).toMatchObject({ id: "access", label: "Remote access" });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const view = page.mount(container, {
-    host,
-    props: {},
-    signal: controller.signal,
-    presented: true,
-  } as UI.ControlUiViewContext);
-  const dispose = () => view?.dispose?.();
-  disposers.push(dispose);
-  return { ...harness, request, container, dispose };
-}
 
 describe("Access page", () => {
   afterEach(() => {
@@ -790,8 +762,91 @@ describe("Access page", () => {
     await vi.waitFor(() =>
       expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(0),
     );
-    expect(history()?.textContent).toContain("Mira <Example> used a recovery kit");
+    expect(history()?.textContent).toContain("Mira <Example> (removed) used a recovery kit");
     expect(history()?.textContent).toContain("Browser added: Firefox <Linux>");
+  });
+
+  it("opens the exact recovery member and browser, reuses confirmed removal, and updates retained routes", async () => {
+    const device = {
+      peerKey: recoveryUse.peerKey,
+      deviceFp: recoveryUse.peerFp,
+      label: recoveryUse.deviceLabel,
+      approvedBy: { kind: "member_recovery_kit" as const, device_fp: recoveryUse.peerFp },
+      connections: 0,
+      lastSeenAt: null,
+      lastSeen: recoveryUse.usedAt,
+      runs: [],
+    };
+    const member = {
+      accountId: recoveryUse.accountId,
+      displayName: recoveryUse.memberName,
+      role: "operator",
+      peerKeys: [device.peerKey],
+      devices: [
+        { ...device, peerKey: `iroh:${"2".repeat(64)}`, label: "Existing browser" },
+        device,
+      ],
+      recoveryKit: true,
+    };
+    const other = {
+      accountId: "other-account",
+      displayName: "Other Member",
+      role: "viewer",
+      peerKeys: [],
+      devices: [],
+    };
+    const harness = await mountPage(
+      [
+        linked({ invites: [], members: [other, member], recoveryUses: [recoveryUse] }),
+        linked({
+          invites: [],
+          members: [other, { ...member, peerKeys: [], devices: [] }],
+          recoveryUses: [recoveryUse],
+        }),
+        linked({ invites: [], members: [other], recoveryUses: [recoveryUse] }),
+      ],
+      {},
+      { member: member.accountId, device: device.peerKey },
+    );
+    const row = () => harness.container.querySelector<HTMLElement>(".ocid-access__row--member")!;
+    await vi.waitFor(() =>
+      expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(1),
+    );
+    expect(row().textContent).toContain(member.displayName);
+    expect(row().textContent).not.toContain(other.displayName);
+    const highlighted = row().querySelector<HTMLElement>(".ocid-access__device--highlighted")!;
+    expect(highlighted.textContent).toContain(device.label);
+    expect(row().querySelector(".ocid-access__device")).toBe(highlighted);
+    button(highlighted, "Remove device")!.click();
+    await vi.waitFor(() => expect(button(highlighted, `Remove ${device.label}`)).toBeDefined());
+    expect(harness.request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+    button(highlighted, `Remove ${device.label}`)!.click();
+    await vi.waitFor(() =>
+      expect(harness.request).toHaveBeenCalledWith("openclawId.authority", {
+        action: "submit",
+        statement: { signed: { op: "revoke_device", peer_key: device.peerKey } },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(row().textContent).toContain(
+        "This browser has been removed. It no longer has access.",
+      ),
+    );
+    expect(harness.container.textContent).toContain(`${device.label} removed`);
+    expect(row().querySelector(".ocid-access__device--highlighted")).toBeNull();
+    harness.emit();
+    await vi.waitFor(() =>
+      expect(harness.container.textContent).toContain(
+        "This member has been removed. Their devices no longer have access.",
+      ),
+    );
+    expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(0);
+    harness.update({ member: other.accountId });
+    await vi.waitFor(() => expect(row().textContent).toContain(other.displayName));
+    harness.update({});
+    await vi.waitFor(() =>
+      expect(harness.container.querySelector(".ocid-access__row--owner")).not.toBeNull(),
+    );
   });
 
   it("is read-only in a browser that is not an owner device", async () => {

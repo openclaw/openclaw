@@ -40,6 +40,7 @@ export function setMemberRecoveryKit(
     { op: "set_member_recovery_kit" }
   >,
   authority: Authority,
+  issuedAt: UnixSeconds,
 ): AuthorityResult {
   if (
     authority.kind !== "root" &&
@@ -73,7 +74,10 @@ export function setMemberRecoveryKit(
       ...state,
       members: {
         ...state.members,
-        [target.account_id]: { ...rest, ...(key ? { recovery_kit: { device_pub: key } } : {}) },
+        [target.account_id]: {
+          ...rest,
+          ...(key ? { recovery_kit: { device_pub: key, saved_at: issuedAt } } : {}),
+        },
       },
     },
     [{ type: "publish_snapshot" }],

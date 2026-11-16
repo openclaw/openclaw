@@ -69,26 +69,29 @@ describe("Gateway member recovery", () => {
       hostname: claw.prep.hostname,
       root_fp: await fingerprint(formatEd25519PublicKey(claw.root.publicKey)),
     });
-    expect(
-      await claw.authority.submit(
-        await claw.sign(
-          {
-            op: "set_member_recovery_kit",
-            account_id: "recovery-member",
-            device_pub: formatEd25519PublicKey(kit.publicKey),
-          },
-          mail.signer,
-        ),
-        "tunnel",
-      ),
-    ).toMatchObject({ ok: true });
+    const registration = await claw.sign(
+      {
+        op: "set_member_recovery_kit",
+        account_id: "recovery-member",
+        device_pub: formatEd25519PublicKey(kit.publicKey),
+      },
+      mail.signer,
+    );
+    expect(await claw.authority.submit(registration, "tunnel")).toMatchObject({ ok: true });
     const restarted = createOpenClawIdAuthority(store);
     await restarted.load();
     const { service } = serviceFor(restarted);
     expect(await restarted.memberView(mail.peerKey)).toMatchObject({
       account_id: "recovery-member",
       role: "viewer",
-      recovery_kit: { device_pub: formatEd25519PublicKey(kit.publicKey) },
+      recovery_kit: {
+        device_pub: formatEd25519PublicKey(kit.publicKey),
+        saved_at: registration.body.issued_at,
+      },
+    });
+    expect((await restarted.ownerView(claw.w1))?.members[0]?.recovery_kit).toEqual({
+      device_pub: formatEd25519PublicKey(kit.publicKey),
+      saved_at: registration.body.issued_at,
     });
     expect((await service.linkStatus()).members).toMatchObject([{ recoveryKit: true }]);
     const browser = await generateEd25519Signer();

@@ -391,7 +391,11 @@ it("shows each recovery use with a literal time and dismisses only that use acro
     detail: "Firefox on Linux was added. Review access in Access → People.",
     arrivedAtMs: 1_800_000_000_000,
     meta: { status: expect.stringMatching(/2027/) },
-    action: { kind: "navigate", routeId: "plugin", search: "?plugin=openclaw-id-access&id=access" },
+    action: {
+      kind: "navigate",
+      routeId: "plugin",
+      search: `?plugin=openclaw-id-access&id=access&${new URLSearchParams({ "p.member": recoveryUse.accountId, "p.device": recoveryUse.peerKey })}`,
+    },
   });
   expect(entry.dismissal).toEqual({
     kind: "openClawIdRecoveryUse",

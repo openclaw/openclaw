@@ -52,6 +52,10 @@ async function setup() {
 describe("member recovery-only device authority", () => {
   it("recovers the invited account and role without admitting the kit key", async () => {
     const f = await setup();
+    expect(f.state.members[f.identity.account_id]?.recovery_kit).toEqual({
+      device_pub: f.kit.pub,
+      saved_at: WORLD_NOW - 10,
+    });
     expect(isAdmitted(f.state, formatIrohEndpointKey(rawPublicKey(f.kit.pub)), WORLD_NOW)).toBe(
       false,
     );
@@ -149,11 +153,21 @@ describe("member recovery-only device authority", () => {
       mailbox,
     );
     const nextKit = await worldKey("replacement-member-kit");
-    const replaced = await submitStatement(
-      recovered.state,
-      await signChange(recovered.state, f.browser.signer, { ...f.set, device_pub: nextKit.pub }),
-      direct,
+    const replacement = await signStatement(
+      "MembershipChange",
+      {
+        claw_id: recovered.state.claw_id,
+        seq: recovered.state.seq + 1,
+        issued_at: WORLD_NOW - 2,
+        target: { ...f.set, device_pub: nextKit.pub },
+      },
+      f.browser.signer,
     );
+    const replaced = await submitStatement(recovered.state, replacement, direct);
+    expect(replaced.state.members[f.identity.account_id]?.recovery_kit).toEqual({
+      device_pub: nextKit.pub,
+      saved_at: WORLD_NOW - 2,
+    });
     expect(replaced.ok).toBe(true);
     expect(isAdmitted(replaced.state, f.browser.peer, WORLD_NOW)).toBe(true);
     expect(

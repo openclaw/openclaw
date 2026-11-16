@@ -80,7 +80,7 @@ export type MemberDevice = {
 export type MemberRecord = {
   role: MemberRole;
   /** One offline recovery-only signing device; never a browsing peer key. */
-  recovery_kit?: { device_pub: Ed25519PublicKey };
+  recovery_kit?: { device_pub: Ed25519PublicKey; saved_at: UnixSeconds };
   devices?: Partial<Record<IrohEndpointKey, MemberDevice>>;
   peer_keys: IrohEndpointKey[];
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
