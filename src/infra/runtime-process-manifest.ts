@@ -1,8 +1,18 @@
-import { createRuntimeProcessEntrypoint } from "./runtime-process-entrypoint.ts";
-
 // Keep subprocess metadata independent of executable launcher declarations.
 export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
-  const runtimeProcessEntrypoint = createRuntimeProcessEntrypoint(currentModuleUrl);
+  const runtimeProcessEntrypoint = (
+    path: string,
+    distModulePath = path,
+    extension = ".js",
+    sourceExtension?: ".ts" | ".mts" | ".mjs",
+  ) =>
+    ({
+      currentModuleUrl,
+      sourceModulePath: `src/${path}${sourceExtension ?? ".ts"}`,
+      sourceExtension,
+      sourceWorkerName: path.startsWith("infra/") ? path.slice("infra/".length) : `../${path}`,
+      distWorkerPath: `${distModulePath}${extension}`,
+    }) as const;
   const loaderFreeEntrypoint = (modulePath: string) =>
     runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
 
