@@ -135,11 +135,12 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     const missingVisibleReplyResult = (): SubagentAnnounceDeliveryResult => {
       const terminal = resolveAgentRunWaitTerminalFacts(directAnnounceRecord ?? {});
       const aborted =
-        !automaticEvidence.mayHaveSent &&
-        !hasCompletionSideEffect &&
-        (directAnnounceResult?.meta?.aborted === true ||
-          (terminal && classifyAgentRunTerminalOutcome(terminal) === "cancellation"));
+        directAnnounceResult?.meta?.aborted === true ||
+        (terminal && classifyAgentRunTerminalOutcome(terminal) === "cancellation");
+      const retryAborted =
+        aborted && directAnnounceRecord?.replaySafe === true && !automaticEvidence.mayHaveSent;
       const stateConflict =
+        !aborted &&
         !automaticEvidence.mayHaveSent &&
         isAnnounceSavedStateConflict(directAnnounceResult?.meta?.error);
       return {
@@ -155,7 +156,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           : stateConflict
             ? summarizeDeliveryError(directAnnounceResult?.meta?.error)
             : "completion agent did not produce a visible reply",
-        ...(requesterCompletedSuccessfully || stateConflict || aborted
+        ...(requesterCompletedSuccessfully || stateConflict || retryAborted
           ? { disposition: "retryable" as const }
           : {}),
       };

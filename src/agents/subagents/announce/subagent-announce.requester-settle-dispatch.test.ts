@@ -119,6 +119,7 @@ describe("requester settle dispatch deadline", () => {
                 true,
                 {
                   status: "timeout",
+                  replaySafe: true,
                   ...(returned
                     ? {
                         result: {

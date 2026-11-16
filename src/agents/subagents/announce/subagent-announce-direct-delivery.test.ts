@@ -464,8 +464,21 @@ it.each([
   ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
   [
     "cancelled requester turn",
-    { status: "timeout", stopReason: "rpc" },
+    { status: "timeout", stopReason: "rpc", replaySafe: true },
     { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "cancelled requester with unknown effects",
+    { status: "timeout", stopReason: "rpc" },
+    { disposition: undefined, reason: "requester_aborted" },
+  ],
+  [
+    "effectful tool before cancellation",
+    {
+      status: "timeout",
+      result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
+    },
+    { disposition: undefined, reason: "requester_aborted" },
   ],
   [
     "committed progress before cancellation",
@@ -486,7 +499,7 @@ it.each([
         ],
       },
     },
-    { disposition: undefined, reason: "visible_reply_missing" },
+    { disposition: undefined, reason: "requester_aborted" },
   ],
   [
     "saved-state conflict with intentional suppression",
