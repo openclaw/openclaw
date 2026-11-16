@@ -24,7 +24,12 @@ import { bindTemplateLifecycleTrust, projectTemplateAddPlan } from "./gateway-pl
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./packages.js";
 import { projectTemplatePluginCapabilityReviews } from "./plugin-capability-review.js";
-import type { TemplateAddPlan, TemplatePackagePreflight, TemplateReadResult } from "./types.js";
+import type {
+  TemplateAddPlan,
+  TemplateAddPlanContext,
+  TemplatePackagePreflight,
+  TemplateReadResult,
+} from "./types.js";
 
 type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
 
@@ -92,6 +97,7 @@ export type GatewayTemplateAddPlanningContext = {
   /** Trusted in-flight creation receipt; never a wire field. */
   admittedWorkspace?: string;
   packagePreflight?: TemplatePackagePreflight;
+  resolvePreferredModel?: TemplateAddPlanContext["resolvePreferredModel"];
 };
 
 export async function buildGatewayTemplateAddPlan(
@@ -122,6 +128,9 @@ export async function buildGatewayTemplateAddPlan(
       existingAgentIds,
       existingWorkspacePaths: existingWorkspaces,
       ...(context.admittedWorkspace ? { admittedWorkspace: context.admittedWorkspace } : {}),
+      ...(context.resolvePreferredModel
+        ? { resolvePreferredModel: context.resolvePreferredModel }
+        : {}),
       // Most Templates have no MCP declarations. Do not read and validate the
       // entire authored host configuration for an unrelated requirement type.
       existingMcpServers:

@@ -167,13 +167,15 @@ export async function createTemplateAgentFromChat(
     };
     // Only the agent and its files decide whether creation proceeds, and only they
     // are bound into the retry checkpoint. Dependencies are planned once it exists.
-    const config = (await input.getPlanningContext()).config;
+    const planningContext = await input.getPlanningContext();
+    const { config } = planningContext;
     const planned = await buildGatewayTemplateAddPlan(
       {
         ...source,
         manifest: { ...source.manifest, skills: [], plugins: [], mcpServers: {}, automations: [] },
       },
       {
+        ...planningContext,
         config: withoutAgent(config, agentId),
         sourceMcpServers: {},
         agentId,
