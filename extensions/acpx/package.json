@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.11.4",
+  "version": "2026.10.33",
   "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "repository": {
     "type": "git",
@@ -48,7 +48,7 @@
       "pluginApi": ">=2026.11.4"
     },
     "build": {
-      "openclawVersion": "2026.11.4"
+      "openclawVersion": "2026.10.33"
     },
     "release": {
       "publishToClawHub": true,

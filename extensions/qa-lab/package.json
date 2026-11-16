@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qa-lab",
-  "version": "2026.11.4",
+  "version": "2026.10.33",
   "private": true,
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",

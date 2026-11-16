@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tokenjuice",
-  "version": "2026.11.4",
+  "version": "2026.10.33",
   "description": "OpenClaw tokenjuice exec output compaction plugin",
   "repository": {
     "type": "git",
@@ -36,7 +36,7 @@
       "pluginApi": ">=2026.11.4"
     },
     "build": {
-      "openclawVersion": "2026.11.4",
+      "openclawVersion": "2026.10.33",
       "bundledDist": false
     },
     "release": {
