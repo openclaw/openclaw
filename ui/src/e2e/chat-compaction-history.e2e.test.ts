@@ -111,10 +111,7 @@ suite.define(() => {
             stream: "compaction",
             data: { phase: "start" },
           });
-          await page
-            .locator(".chat-compaction")
-            .getByText("Compacting context…", { exact: true })
-            .waitFor();
+          await page.locator(".chat-compaction--active").waitFor();
           await gateway.deferNext("chat.send");
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.fill("Run the final verification next.");
