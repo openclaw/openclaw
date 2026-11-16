@@ -133,6 +133,7 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
             compacted: true,
             compactionKind: "server-endpoint",
           });
+          expect(deniedDatabaseCalls).toEqual([]);
         };
 
         await compact();
