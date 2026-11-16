@@ -95,6 +95,16 @@ export function formatCronCadence(job: Pick<CronJob, "schedule">) {
   const every = (value: number | bigint, unit: "minute" | "hour") =>
     t("cron.scheduleLabel.every", { duration: formatUnit({ value, unit, unitDisplay: "long" }) });
   if (s.kind === "every") {
+    // One whole hour, day or week reads as its word, like the matching cron shapes.
+    if (s.everyMs === 3_600_000) {
+      return t("cron.scheduleLabel.hourly");
+    }
+    if (s.everyMs === 86_400_000) {
+      return t("cron.scheduleLabel.daily");
+    }
+    if (s.everyMs === 604_800_000) {
+      return t("cron.scheduleLabel.weekly");
+    }
     const parts = resolveExactDurationParts(s.everyMs);
     return parts
       ? t("cron.scheduleLabel.every", {

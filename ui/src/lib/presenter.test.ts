@@ -160,6 +160,10 @@ describe("formatCronCadence", () => {
     expect(cron("0 */6 * * *")).toBe("Every 6 hours");
     expect(cron("*/20 * * * *")).toBe("Every 20 minutes");
     expect(cadence({ kind: "every", everyMs: 5 * 3_600_000 })).toBe("Every 5 hours");
+    expect(cadence({ kind: "every", everyMs: 3_600_000 })).toBe("Hourly");
+    expect(cadence({ kind: "every", everyMs: 24 * 3_600_000 })).toBe("Daily");
+    expect(cadence({ kind: "every", everyMs: 7 * 24 * 3_600_000 })).toBe("Weekly");
+    expect(cadence({ kind: "every", everyMs: 2 * 24 * 3_600_000 })).toBe("Every 2 days");
     expect(cron("0 9 1 1 *")).toBe("0 9 1 1 *");
     expect(cadence({ kind: "at", at: "2026-11-21T15:00:00.000Z" })).toBe("Once");
   });
