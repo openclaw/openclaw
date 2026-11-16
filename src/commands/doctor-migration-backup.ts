@@ -44,9 +44,9 @@ import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.med
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import {
   getDoctorMigrationFullBackup,
-  hasUpdateDoctorMigrationCapture,
   recordDoctorMigrationFullBackup,
 } from "../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
