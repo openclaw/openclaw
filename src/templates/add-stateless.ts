@@ -88,6 +88,11 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
     planDigest?: string;
     sourceIntegrity?: string;
     assertCurrent: () => Promise<void>;
+    /**
+     * The caller created this admission and removes it when the Template's agent
+     * configuration was never committed: rethrow that failure instead of reporting a kept agent.
+     */
+    discardOnFailure?: true;
   };
   assertForwardCurrent?: () => void;
   assertReviewedConfig?: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
@@ -404,6 +409,12 @@ export async function applyTemplateAddPlanStateless(
             message: `${coerceErrorMessage(error)} Owned instruction cleanup failed: ${coerceErrorMessage(cleanupError)}. The agent and chat were kept.`,
           });
         }
+      }
+      if (!configCommitted && options.admittedAgent?.discardOnFailure) {
+        // The workspace is about to be removed with its admission; a later agent
+        // at this path must seed its own bootstrap.
+        await releaseBootstrapDeferral?.();
+        throw error;
       }
       return result("partial", {
         code,
