@@ -358,7 +358,9 @@ waits remain in the existing `workspaceWait` field. These timings include work
 performed while guests run;
 they are not pause durations. OpenClaw records pending results and
 rollback journals in SQLite. Imports into the private checkout keep runtimes paused
-through settlement. New shell calls and command preparation wait for an active
+through settlement. A conflict-free retry whose file edits are already applied
+accepts the remaining receipt without writing another recovery journal. Conflicted
+results retain their durable acceptance marker. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing

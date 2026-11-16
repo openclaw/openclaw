@@ -97,13 +97,8 @@ export async function proveResumedBaseRefresh(params: {
     pending_target: "projection",
   });
   expect(await readSource(projection)).toBe("refreshed\n");
-  // The next turn is stopped before writing; the bytes it inherited must stay applied.
+  // Acceptance retries must not journal files already applied by the interrupted turn.
   stopAt.stage = "projection-journal";
-  await expect(withLocalWorkspaceProjection(owner, (state) => state.reuse())).rejects.toThrow(
-    "turn stopped",
-  );
-  expect(await readSource(projection)).toBe("refreshed\n");
-  stopAt.stage = undefined;
   await withLocalWorkspaceProjection(owner, (state) => state.reuse());
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
     base_commit: selectedBase,
