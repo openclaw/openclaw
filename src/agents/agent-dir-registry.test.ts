@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as boundaryPath from "../infra/boundary-path.js";
 import * as directoryWatch from "../infra/directory-watch-host.js";
+import * as pathExistence from "../infra/path-existence.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   isPathOwnedByAnotherRegisteredAgent as ownedByOther,
@@ -163,7 +163,7 @@ describe("agent directory registry", () => {
     fs.mkdirSync(agentDir, { recursive: true });
     try {
       using _ = observeOwners([{ agentId: "main", agentDir }]);
-      using realpath = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestor");
+      using realpath = vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestor");
       using synchronous = vi.spyOn(fs.realpathSync, "native");
       await vi.advanceTimersByTimeAsync(30_000);
       await Promise.all(realpath.mock.results.map((result) => result.value));
@@ -213,7 +213,7 @@ describe("agent directory registry", () => {
       fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
       expect(unregisterDir({ agentId: "main", agentDir })).toBe(false);
       expect(ownedByOther({ agentId: "other", pathname: original })).toBe(true);
-      using realpath = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestor");
+      using realpath = vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestor");
       await vi.advanceTimersByTimeAsync(30_000);
       await Promise.all(realpath.mock.results.map((result) => result.value));
       expect(ownerOf(agentDir)).toBeUndefined();

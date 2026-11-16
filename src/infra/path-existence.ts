@@ -49,6 +49,18 @@ export async function realpathExistingAncestor(candidate: string): Promise<strin
   }
 }
 
+export function resolveIdentityPathViaExistingAncestorSync(targetPath: string): string {
+  const fallback = path.resolve(targetPath);
+  // Identity aliases must converge even after an intermediate realpath failure,
+  // or ownership and lock callers can split one resource into separate identities.
+  return realpathExistingAncestorSync(fallback) ?? fallback;
+}
+
+export async function resolveIdentityPathViaExistingAncestor(targetPath: string): Promise<string> {
+  const fallback = path.resolve(targetPath);
+  return (await realpathExistingAncestor(fallback)) ?? fallback;
+}
+
 /** Only definite absence, including a non-directory ancestor, permits an absent verdict. */
 export function pathMayExistSync(filePath: string): boolean {
   try {
