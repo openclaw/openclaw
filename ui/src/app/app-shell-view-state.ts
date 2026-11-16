@@ -16,6 +16,7 @@ import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginPageLabel } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
+import { navigationSectionForPage } from "../plugins/navigation-sections.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
@@ -199,8 +200,17 @@ export function readShellView(host: ShellViewHost) {
     !nativeEmbed &&
     !onboarding &&
     !settingsTakeover &&
-    sidebarViewForPage(activeRoute, activePluginRef ? pluginTabKey(activePluginRef) : undefined) ===
-      undefined;
+    sidebarViewForPage(
+      activeRoute,
+      activePluginRef ? pluginTabKey(activePluginRef) : undefined,
+      Boolean(
+        activePluginRef &&
+        navigationSectionForPage(
+          context.plugins.registrations("navigation"),
+          pluginTabKey(activePluginRef),
+        ),
+      ),
+    ) === undefined;
   const navCollapsed = () =>
     !nativeEmbed &&
     (navigationSnapshot.navCollapsed || navPageHidden) &&

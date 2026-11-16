@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { navigationSectionForPage } from "../plugins/navigation-sections.ts";
 import { automationsFiltered } from "./app-sidebar-automations-filter.tsx";
 import { dashboardsFiltered } from "./app-sidebar-dashboards-filter.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
@@ -103,6 +104,18 @@ export function SidebarPageHeader(props: { host: AppSidebarRenderHost; route: Na
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <span class="sidebar-panel-header__title">{titleForRoute(props.route, t)}</span>
+    </SidebarPanelHeader>
+  );
+}
+
+/** A plugin page that lists its child items heads them with its own navigation label. */
+export function SidebarPluginSectionHeader(props: { host: AppSidebarRenderHost }) {
+  const label = () =>
+    navigationSectionForPage(props.host.pluginNavigation(), props.host.activePluginTabId)?.value
+      .label;
+  return (
+    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
+      <span class="sidebar-panel-header__title">{label()}</span>
     </SidebarPanelHeader>
   );
 }

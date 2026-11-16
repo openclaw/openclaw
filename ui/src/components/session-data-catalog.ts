@@ -47,7 +47,13 @@ export interface SessionDataInputs {
   readonly connected: boolean;
   readonly navigationVisible: boolean;
   readonly navigationCollapsed: boolean;
-  readonly navigationView: "sessions" | "online" | "dashboards" | "automations" | "customize";
+  readonly navigationView:
+    | "sessions"
+    | "online"
+    | "dashboards"
+    | "automations"
+    | "customize"
+    | "plugin";
   readonly contextualSidebar?: ContextualSidebar;
   readonly sidebarAgentsMode: "chip" | "roster";
   shouldPublishSessionData(): boolean;
