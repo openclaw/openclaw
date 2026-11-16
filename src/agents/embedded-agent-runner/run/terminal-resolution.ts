@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   retainSilentFinalPayloads,
   setReplyPayloadMetadata,
@@ -463,6 +464,9 @@ async function completeEmbeddedRun(
       ? {
           kind: "incomplete_turn" as const,
           message: storageFailureText ?? formatErrorMessage(terminalFailure),
+          code:
+            extractErrorCode(terminalFailure) ??
+            resolveCurrentAttemptAssistant(input.attempt)?.errorCode,
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }

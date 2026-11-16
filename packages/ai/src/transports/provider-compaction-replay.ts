@@ -24,7 +24,7 @@ export {
   readOpenAIResponsesItemRecoveryAnchor,
 } from "./openai-responses-compaction-replay.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string; enabled?: boolean };
+type ReplayIdentity = { sessionId?: string; enabled?: boolean };
 type ReplayMessage = { role: string };
 type ReplayPressureEstimator = {
   text(value: string): number;
