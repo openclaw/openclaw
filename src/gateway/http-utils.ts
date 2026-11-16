@@ -22,6 +22,7 @@ import {
   isSubagentSessionKey,
   isValidAgentId,
   normalizeAgentId,
+  parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
@@ -77,6 +78,16 @@ class GatewaySessionKeyOverrideError extends Error {
   }
 }
 
+class GatewaySessionKeyAgentMismatchError extends Error {
+  constructor(agentId: string) {
+    super(
+      `Selected agent '${agentId}' does not match the agent in \`x-openclaw-session-key\`. ` +
+        "Use an agent header or model alias that matches the session key, or omit both.",
+    );
+    this.name = "GatewaySessionKeyAgentMismatchError";
+  }
+}
+
 class InvalidGatewayModelError extends Error {
   constructor() {
     super("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
@@ -101,7 +112,11 @@ export function isGatewayAgentRequestError(err: unknown): err is Error {
 }
 
 export function isGatewayRequestContextError(err: unknown): err is Error {
-  return isGatewayAgentRequestError(err) || err instanceof GatewaySessionKeyOverrideError;
+  return (
+    isGatewayAgentRequestError(err) ||
+    err instanceof GatewaySessionKeyOverrideError ||
+    err instanceof GatewaySessionKeyAgentMismatchError
+  );
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
@@ -229,16 +244,52 @@ export function resolveAgentIdForRequest(params: {
     }
     const agentId = normalizeAgentId(headerAgent);
     assertKnownAgentId(agentId, cfg);
+    assertSessionKeyAgentAgrees(params.req, agentId);
     return agentId;
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
   if (fromModel) {
     assertKnownAgentId(fromModel, cfg);
+    assertSessionKeyAgentAgrees(params.req, fromModel);
     return fromModel;
   }
 
+  // A generic model with no agent header carries no owner. The session key's
+  // agent prefix is the only explicit owner on the request, so it wins over
+  // the configured default. Otherwise the request resolves to one agent here
+  // and the command runner rejects it for belonging to another.
+  const sessionKeyAgent = resolveAgentIdFromSessionKeyHeader(params.req, cfg);
+  if (sessionKeyAgent) {
+    return sessionKeyAgent;
+  }
+
   return resolveDefaultAgentId(cfg);
+}
+
+/** Agent named by an `agent:<id>:` session key, when that agent is configured. */
+function resolveAgentIdFromSessionKeyHeader(
+  req: IncomingMessage,
+  cfg = getRuntimeConfig(),
+): string | undefined {
+  const explicit = getHeader(req, "x-openclaw-session-key")?.trim();
+  if (!explicit) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(explicit);
+  if (!parsed?.agentId || !isValidAgentId(parsed.agentId)) {
+    return undefined;
+  }
+  const agentId = normalizeAgentId(parsed.agentId);
+  return listAgentIds(cfg).includes(agentId) ? agentId : undefined;
+}
+
+/** Rejects a selector that names a different agent than the session key does. */
+function assertSessionKeyAgentAgrees(req: IncomingMessage, agentId: string): void {
+  const sessionKeyAgent = resolveAgentIdFromSessionKeyHeader(req);
+  if (sessionKeyAgent && sessionKeyAgent !== agentId) {
+    throw new GatewaySessionKeyAgentMismatchError(agentId);
+  }
 }
 
 async function isReservedSessionKeyOverride(sessionKey: string, agentId: string): Promise<boolean> {
