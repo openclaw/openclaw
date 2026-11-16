@@ -1,11 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiMockPresenceUser } from "../test-helpers/control-ui-e2e-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
@@ -139,24 +136,9 @@ suite.define(() => {
     if (!mobile) {
       await surface.locator(".chat-pr__publication-status > summary").click();
     }
-    const capture = async (stage: string) => {
-      if (!process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-        return;
-      }
-      const frame = await takeControlUiScreenshotFrame(page, surface, [action], {
-        animations: "disabled",
-        elements: [surface],
-      });
-      const file = path.join(suite.artifactDir, "publication-" + width + "-" + stage);
-      await writeFile(file + ".png", frame.png);
-      await writeFile(file + "-detail.png", frame.elements[0]!.png);
-      console.log("Publication proof:", file + ".png");
-    };
-    await capture("publishing");
     const prior = await gateway.deferNext("sessions.github.status");
     await action.click();
     await gateway.waitForRequest("sessions.github.status", { after: prior });
-    await capture("checking");
     await expect.poll(() => action.isDisabled()).toBe(true);
     expect(await action.getAttribute("aria-busy")).toBe("true");
     expect(await action.textContent()).toContain("Loading");
@@ -167,7 +149,6 @@ suite.define(() => {
     });
     await expect.poll(() => action.isEnabled()).toBe(true);
     await surface.getByText("Synthetic status check unavailable.", { exact: true }).waitFor();
-    await capture("failed");
     await gateway.deferNext("sessions.github.status");
     await action.click();
     await expect.poll(() => action.isDisabled()).toBe(true);
@@ -181,7 +162,6 @@ suite.define(() => {
     ).toBe(0);
     expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-    await capture("recovered");
   });
 
   it("carries the selected agent through the complete global publication flow", async () => {
