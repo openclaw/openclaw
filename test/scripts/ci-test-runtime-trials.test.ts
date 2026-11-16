@@ -23,7 +23,6 @@ const clawRouterFile = "src/decisions/clawrouter.integration.test.ts";
 const catalogWorkerFile = "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts";
 const websocketFile = "packages/ai/src/transports/openai-responses-websocket.test.ts";
 const websocketBunFiles = [
-  "packages/ai/src/transports/openai-responses-websocket-client.test.ts",
   "packages/ai/src/transports/openai-responses-runtime-cleanup.integration.test.ts",
 ];
 const codeModeFiles = [

@@ -113,7 +113,6 @@ const runtimeConsumers = [
     dir: "",
   },
   ...[
-    "test/openai-model-discovery-auth-order.test.ts",
     "test/plugin-npm-runtime-build.test.ts",
     "test/scripts/plugin-inventory-module-refs.test.ts",
     "test/scripts/qa-flow-bundle.test.ts",

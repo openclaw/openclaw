@@ -2972,7 +2972,6 @@
       "test/non-isolated-runner.sqlite.test.ts": 3,
       "test/non-isolated-runner.test.ts": 16,
       "test/official-channel-catalog.test.ts": 1,
-      "test/openai-model-discovery-auth-order.test.ts": 6,
       "test/openclaw-npm-postpublish-verify.test.ts": 1,
       "test/openclaw-npm-release-check.test.ts": 1,
       "test/openclaw-prepack.test.ts": 4,
