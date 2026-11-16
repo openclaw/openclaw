@@ -44,7 +44,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
-import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
+import {
+  normalizeOpenAIResponsesReasoningReplayItem,
+  replayOpenAIResponsesToolArguments,
+} from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -222,7 +225,6 @@ export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
-  authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
   mutableInput?: boolean;
@@ -265,7 +267,6 @@ function convertResponsesMessagesWithStyle(
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
   });
   const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
   const sanitizeIdPart = (part: string) => {
@@ -310,7 +311,6 @@ function convertResponsesMessagesWithStyle(
   };
   const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
   if (replayPlan.itemRecovery) {
@@ -557,11 +557,11 @@ function convertResponsesMessagesWithStyle(
             call_id: replayCallId(callId),
             name: block.name,
             ...(block.async ? { async: true } : {}),
-            arguments: providerStyle
-              ? JSON.stringify(block.arguments)
-              : typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
+            arguments: replayOpenAIResponsesToolArguments(
+              block,
+              providerStyle,
+              msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
+            ),
           });
           previousReplayItemWasReasoning = false;
         }
