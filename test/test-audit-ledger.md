@@ -990,9 +990,19 @@ account shapes, missing-owner repair hints and all three model-status routes.
 Test code changes by +10/-4 lines; production and shared support are unchanged.
 
 Direct execution of both original teardown bodies with an injected removal
-failure preserves the exact error but skips environment restoration. Runtime
-fault injection and clean consumer qualification remain pending in the native
-PR workspace; the source worktree has no qualified dependency installation.
+failure preserves the exact error but skips environment restoration. The same
+fault in each actual Vitest afterAll hook confirms that the baseline leaves all
+three fixture environment variables stubbed, while the candidate restores all
+three. Both preserve the exact removal error and report the expected teardown
+failure. Observations precede emergency cleanup; temporary instrumentation was
+restored byte for byte.
+
+The clean baseline and candidate each pass all four cases. Baseline wall time
+was 73.44 seconds including cold worker compilation; the warm candidate took
+11.33 seconds (8.19 seconds reported by Vitest). These are qualification
+observations, not speed-comparison data. Independent preservation and full local
+ClawSweeper review found no actionable issue. This closes the earlier channel
+and model fixture environment-restoration follow-up.
 
 ## Pending qualification and proof repairs
 
