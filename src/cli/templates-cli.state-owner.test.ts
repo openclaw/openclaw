@@ -119,6 +119,29 @@ describe("Template Add CLI state ownership", () => {
     expect(fixture.transport.request).not.toHaveBeenCalled();
   });
 
+  it("previews another Add of a ${VAR} MCP Template once the variable is set", async () => {
+    const statuspage = {
+      command: "npx",
+      args: ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      env: { STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}" },
+    };
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({
+        gateway: { controlUi: { experimental: { templates: true } } },
+        mcp: { servers: { statuspage } },
+      }),
+    );
+    await fs.writeFile(
+      source,
+      `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "demo" }, mcpServers: { statuspage } })}\n---\n`,
+    );
+    vi.stubEnv("STATUSPAGE_TOKEN", "synthetic-token");
+
+    await runTemplatesAddCommand(source, { dryRun: true, json: true });
+    expect(output).toEqual([expect.objectContaining({ blockers: [] })]);
+  });
+
   it("adds a ClawHub Template through the running owner without local mutation", async () => {
     plan.target.agentId = "demo-2";
     result.agentId = "demo-2";

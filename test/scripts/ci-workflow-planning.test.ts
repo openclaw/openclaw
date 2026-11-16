@@ -822,6 +822,7 @@ function runDiffBaseFixture(options: {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
+  reportCommand?: string;
   task?:
     | "guards"
     | "guards-architecture"
@@ -933,6 +934,9 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     );
   }
   const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
+  if (options.reportCommand) {
+    scripts["deadcode:report"] = options.reportCommand;
+  }
   if (options.types?.compose) {
     // The full-path root-coverage probe must see the actual package alias.
     scripts["tsgo:test"] = (
@@ -8745,6 +8749,29 @@ describe("ci workflow guards", () => {
     expect(concreteBase.outputs.sha).toBe(concreteBase.eventBaseSha);
     expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
+
+  it.each([false, true])(
+    "uses combined finding coverage only with the exact target capability (frozen=%s)",
+    (frozenTarget) => {
+      const scripts = ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"];
+      const combined = runCheckShardFixture({
+        task: "dependencies",
+        frozenTarget,
+        scripts,
+        reportCommand: "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all",
+      });
+      expect(combined.status, combined.output).toBe(0);
+      expect(combined.calls).toEqual(["deadcode:report"]);
+      const oldReport = runCheckShardFixture({
+        task: "dependencies",
+        frozenTarget,
+        scripts,
+        reportCommand: "pnpm deadcode:full && pnpm deadcode:exports",
+      });
+      expect(oldReport.status, oldReport.output).toBe(0);
+      expect(oldReport.calls.toSorted()).toEqual(scripts.toSorted());
+    },
+  );
 
   it.each([false, true])("uses all three stable deadcode checks for frozen=%s", (frozenTarget) => {
     const result = runCheckShardFixture({

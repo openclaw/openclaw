@@ -881,7 +881,7 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(await f.git("rev-parse", "ORIG_HEAD")).toBe(originalHead);
       expect(await f.git("show", "ORIG_HEAD:newer-base.txt")).toBe("base advanced after PR");
       if (boundRuntime) {
-        // Canonical acceptance precedes guest mutation, so recovery must retain later guest writes.
+        // Canonical acceptance precedes the guest freeze for projection application.
         expect(runtime?.isPaused()).toBe(false);
         await fs.writeFile(path.join(f.projection, "during-install.txt"), "later guest write\n");
       }
