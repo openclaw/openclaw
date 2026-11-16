@@ -34,14 +34,15 @@ delivery notice. The child result remains available in its session and the
 to answer the user: later parent turns own any outstanding answer. A child task
 itself still owes its result; this quiet settlement applies to the parent reviewing it.
 
-An interrupted requester completion turn is not a quiet settlement. Typed cancellation,
-worker timeout, preparation invalidation, and saved-state or transcript conflicts
-retain the existing bounded retry schedule when replay is safe: three attempts,
-with 30-second and two-minute delays. Cancellation before dispatch also uses that
-schedule. Every retryable settle outcome keeps its wake; exhausting the budget
-records a permanent failure and the existing blocked-delivery notice. Runs with
-committed or unknown effects remain failed for explicit recovery instead of
-repeating their work.
+A requester completion turn commits the child results to the requester transcript
+before it calls the model. From that point the results are delivered, whatever the
+turn does next: a provider outage, a timeout or a Stop shows its own error in the
+chat, and the next turn reads the results from the transcript. They are never replayed.
+
+Results that no turn committed stay owed. Cancellation before dispatch, a refused
+dispatch, worker timeout, preparation invalidation and transcript conflicts keep the
+wake pending with its last error, and the sweeper wakes it again. There is no attempt
+limit, retry ladder or expiry.
 Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
@@ -112,8 +113,7 @@ completion admission when execution-identity collection is enabled.
 
 Completion inputs retain their own turn identity across compaction and runtime
 context messages. If transcript persistence rejects a completion because its
-keyed input belongs to a closed turn, delivery records a permanent failure with
-the error. It does not retry other models or keep scheduling the same completion.
+keyed input belongs to a closed turn, the results were not committed and stay owed.
 
 Direct child-result delivery records its transcript mirror after work already
 queued on the requester session. The send settles without waiting for that

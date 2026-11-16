@@ -41,7 +41,7 @@ it.for([
   { kind: "block", visibleFinal: false },
   { kind: "block", visibleFinal: true },
 ] as const)(
-  "retains committed consumption when a continuation is cancelled (%j)",
+  "delivers a committed result when its continuation is cancelled (%j)",
   async ({ kind, visibleFinal }) => {
     const batch = [raw(), { ...raw(), runId: "second-result" }].map((entry) =>
       Object.assign(entry, {
@@ -109,7 +109,7 @@ it.for([
     expect(result.records).toHaveLength(2);
     for (const { subagent } of result.records) {
       expect(subagent.delivery).toMatchObject({
-        status: visibleFinal ? "failed" : "delivered",
+        status: "delivered",
         requesterDelivery: { state: "consumed", runId },
       });
       if (kind === "requesterBatch") {

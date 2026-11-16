@@ -65,6 +65,13 @@ function dispatchFixture(child = settledChild()) {
   return { child, completeBatch, params: wakeParams(child, completeBatch) };
 }
 
+// The lifecycle owner records the transcript commit on the batch, as in production.
+const recordConsumption: Wake["recordRequesterDelivery"] = async (batch, fact) => {
+  for (const entry of batch) {
+    entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+  }
+};
+
 type Turn = Pick<AgentTurnStartRequest, "preflight" | "io" | "controllerInput">;
 function acceptTurn({ preflight, io }: Turn, cached?: true) {
   const runId = preflight.request.idempotencyKey;
@@ -107,8 +114,9 @@ describe("requester settle dispatch deadline", () => {
     { persistent: false, returned: true, failure: "timeout" },
     { persistent: true, returned: true, failure: "timeout" },
   ])(
-    "retries interrupted settlement with a bounded budget ($persistent, returned=$returned, aborted=$aborted, failure=$failure)",
+    "keeps interrupted settlement owed with no attempt limit ($persistent, returned=$returned, aborted=$aborted, failure=$failure)",
     async ({ persistent, returned, aborted, failure }) => {
+      const failingAttempts = persistent ? 4 : 1;
       const context = createContext();
       const { child, completeBatch, params } = dispatchFixture();
       useDirectDelivery();
@@ -116,7 +124,7 @@ describe("requester settle dispatch deadline", () => {
       startTurn.mockImplementation(async (turn) => {
         acceptTurn(turn);
         runIds.push(turn.preflight.request.idempotencyKey);
-        if (persistent || runIds.length === 1) {
+        if (runIds.length <= failingAttempts) {
           if (failure === "timeout") {
             turn.io.emitFinal([
               true,
@@ -198,47 +206,45 @@ describe("requester settle dispatch deadline", () => {
       }
       expect(completeBatch).not.toHaveBeenCalled();
       expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
-      using clock = vi.spyOn(Date, "now");
-      for (let attempt = 1; child.requesterSettleWake; attempt++) {
-        expect(attempt).toBeLessThan(3);
-        clock.mockReturnValue(child.requesterSettleWake.nextAttemptAt!);
-        await expect(run()).resolves.toBe(!persistent);
+      // Each failed attempt leaves the result owed; the next wake runs it again.
+      for (let attempt = 2; attempt <= failingAttempts; attempt++) {
+        await expect(run()).resolves.toBe(false);
+        expect(completeBatch).not.toHaveBeenCalled();
+        expect(child.requesterSettleWake).toMatchObject({ status: "pending" });
       }
-      expect(runIds).toHaveLength(persistent ? 3 : 2);
+      await expect(run()).resolves.toBe(true);
+      expect(runIds).toHaveLength(failingAttempts + 1);
       expect(new Set(runIds).size).toBe(runIds.length);
       expect(completeBatch).toHaveBeenCalledOnce();
-      if (persistent) {
-        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
-          delivered: false,
-          disposition: "permanent_failure",
-        });
-      }
+      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
       await expect(run()).resolves.toBe(false);
-      expect(startTurn).toHaveBeenCalledTimes(persistent ? 3 : 2);
+      expect(startTurn).toHaveBeenCalledTimes(failingAttempts + 1);
     },
   );
 
   it.each([
     new WorkerTaskError("worker task timed out", "timeout"),
     new SessionWorkStartChangedError("Session target preparation outlived its attempt"),
-  ])("does not repeat unknown effects after execution ($name)", async (error) => {
+  ])("does not repeat a committed turn that failed after execution ($name)", async (error) => {
     const context = createContext();
-    const { child, completeBatch, params } = dispatchFixture();
+    const { child, completeBatch } = dispatchFixture();
+    const params = wakeParams(child, completeBatch, { recordRequesterDelivery: recordConsumption });
     useDirectDelivery();
     startTurn.mockImplementation(async (turn) => {
       acceptTurn(turn);
+      await turn.controllerInput?.onTranscriptCommitted?.(turn.preflight.request.idempotencyKey);
       turn.io.emitExecutionStarted?.();
       throw error;
     });
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    await expect(run()).resolves.toBe(false);
-    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ disposition: "permanent_failure" });
+    await expect(run()).resolves.toBe(true);
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
     expect(child.requesterSettleWake).toBeUndefined();
     await expect(run()).resolves.toBe(false);
     expect(startTurn).toHaveBeenCalledOnce();
   });
 
-  it("bounds cancellation before dispatch instead of retiring path none as a permanent failure", async () => {
+  it("keeps a result owed while cancellation refuses every dispatch", async () => {
     const context = createContext();
     const { child, completeBatch, params } = dispatchFixture();
     useDirectDelivery();
@@ -247,22 +253,13 @@ describe("requester settle dispatch deadline", () => {
     );
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
     using clock = vi.spyOn(Date, "now");
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 4; attempt++) {
       await expect(run()).resolves.toBe(false);
       expect(startTurn).not.toHaveBeenCalled();
-      if (attempt < 3) {
-        expect(completeBatch).not.toHaveBeenCalled();
-        expect(child.requesterSettleWake).toMatchObject({
-          status: "pending",
-          attemptCount: attempt,
-        });
-        expect(child.requesterSettleWake?.nextAttemptAt).toBeGreaterThan(Date.now());
-        clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
-      }
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: attempt });
+      clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
     }
-    expect(completeBatch).toHaveBeenCalledOnce();
-    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ disposition: "permanent_failure" });
-    expect(child.requesterSettleWake).toBeUndefined();
   });
 
   it("keeps a followup completion owed while its policy is unavailable", async () => {
@@ -658,7 +655,7 @@ describe("requester settle dispatch deadline", () => {
   });
 
   it.each(["unavailable", "admitted", "accepted replay", "ambiguous"] as const)(
-    "retains only a definite pre-admission refusal: %s",
+    "keeps a result no turn committed owed: %s",
     async (failure) => {
       const context = createContext();
       const createFacade = context.createAgentTurnFacade;
@@ -682,26 +679,16 @@ describe("requester settle dispatch deadline", () => {
       const run = () =>
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
-      if (failure === "unavailable") {
-        expect(startTurn).not.toHaveBeenCalled();
-        expect(completeBatch).not.toHaveBeenCalled();
-        expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
-        using clock = vi.spyOn(Date, "now");
-        clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
-        context.createAgentTurnFacade = createFacade;
-        startTurn.mockImplementation(async ({ preflight, io }) => {
-          io.emitAcceptance([
-            true,
-            { runId: preflight.request.idempotencyKey, status: "accepted" },
-          ]);
-          finishTurn(io, "Continuation.");
-        });
-        await expect(run()).resolves.toBe(true);
-      } else {
-        expect(completeBatch).toHaveBeenCalledOnce();
-        await expect(run()).resolves.toBe(false);
-      }
-      expect(startTurn).toHaveBeenCalledOnce();
+      expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
+      context.createAgentTurnFacade = createFacade;
+      startTurn.mockImplementation(async ({ preflight, io }) => {
+        io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
+        finishTurn(io, "Continuation.");
+      });
+      await expect(run()).resolves.toBe(true);
+      expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 1 : 2);
       expect(completeBatch).toHaveBeenCalledOnce();
     },
   );
@@ -765,6 +752,7 @@ describe("requester settle dispatch deadline", () => {
               if (!operation) {
                 throw new Error("expected requester operation");
               }
+              await controllerInput?.onTranscriptCommitted?.(request.idempotencyKey);
               markReplyOperationExecutionStarted(operation);
               operation.setPhase("running");
               io.emitExecutionStarted?.();
@@ -808,7 +796,7 @@ describe("requester settle dispatch deadline", () => {
       useDirectDelivery(requesterSnapshot(cfg));
       const wake = withGateway(context, () =>
         maybeWakeRequesterAfterAllChildrenSettled({
-          ...wakeParams(child, completeBatch),
+          ...wakeParams(child, completeBatch, { recordRequesterDelivery: recordConsumption }),
           signal: stop.signal,
         }),
       );
@@ -836,7 +824,8 @@ describe("requester settle dispatch deadline", () => {
         } else {
           stop.abort(new Error("requester stopped"));
         }
-        await expect(wake).resolves.toBe(outcome === "final");
+        // The turn committed its input: the result is delivered whatever the turn did next.
+        await expect(wake).resolves.toBe(true);
         expect(startTurn).toHaveBeenCalledOnce();
         expect(deliver).toHaveBeenCalledOnce();
         expect(timedOut).toHaveBeenCalledTimes(outcome === "runtime timeout" ? 1 : 0);
@@ -848,16 +837,10 @@ describe("requester settle dispatch deadline", () => {
             expect.objectContaining({ delivered: true, requesterVisibleFinalDelivered: true }),
             expect.any(Function),
           );
-        } else if (outcome === "runtime timeout") {
-          // The requester consumed the continuation; its failed outcome is recorded once.
+        } else {
           expect(acceptedSignal?.aborted).toBe(true);
           expect(completeBatch).toHaveBeenCalledOnce();
-          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
-        } else {
-          // A stopped evaluation leaves the durable wake owed.
-          expect(acceptedSignal?.aborted).toBe(true);
-          expect(completeBatch).not.toHaveBeenCalled();
-          expect(child.requesterSettleWake).toBeDefined();
+          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
         }
         const later = vi.fn();
         let laterClaim: ReturnType<typeof getCurrentSessionControllerClaim>;
