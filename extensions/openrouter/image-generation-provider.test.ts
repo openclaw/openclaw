@@ -180,6 +180,25 @@ describe("openrouter image generation provider", () => {
     });
   });
 
+  it("forwards non-Gemini geometry to the dedicated image endpoint", async () => {
+    respond({ data: [{ b64_json: "cG5n" }] });
+
+    await generateImage({
+      model: "bytedance-seed/seedream-5-5",
+      aspectRatio: "16:9",
+      resolution: "2K",
+    });
+
+    expect(postRequest()).toMatchObject({
+      url: "https://openrouter.ai/api/v1/images",
+      body: {
+        model: "bytedance-seed/seedream-5-5",
+        aspect_ratio: "16:9",
+        resolution: "2K",
+      },
+    });
+  });
+
   it.each([
     { name: "without references", inputImages: undefined, inputReferences: undefined },
     {

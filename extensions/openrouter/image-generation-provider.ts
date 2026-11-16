@@ -235,6 +235,8 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
       const imageConfig = buildImageConfig(req, model);
       const count = resolveIntegerOption(req.count, 1, { min: 1, max: MAX_IMAGE_RESULTS });
       const canonicalBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
+      const aspectRatio = normalizeOptionalString(req.aspectRatio);
+      const resolution = normalizeOptionalString(req.resolution);
       const inputReferences = (req.inputImages ?? []).map((image) => ({
         type: "image_url",
         image_url: { url: toImageDataUrl(image) },
@@ -244,8 +246,8 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             model,
             prompt: req.prompt,
             n: 1,
-            ...(imageConfig.aspect_ratio ? { aspect_ratio: imageConfig.aspect_ratio } : {}),
-            ...(imageConfig.image_size ? { resolution: imageConfig.image_size } : {}),
+            ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+            ...(resolution ? { resolution } : {}),
             ...(inputReferences.length > 0 ? { input_references: inputReferences } : {}),
           }
         : {
