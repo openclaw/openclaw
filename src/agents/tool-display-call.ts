@@ -51,9 +51,13 @@ export function unwrapToolCallForDisplay<Name extends string | undefined>(call: 
 /** A dispatcher result wraps the called tool's result; present that inner output. */
 export function unwrapToolResultTextForDisplay(text: string): string {
   const parsed = text.trimStart().startsWith("{") ? safeParseJsonRecord(text) : undefined;
-  const content = asOptionalRecord(parsed?.result)?.content;
+  const result = asOptionalRecord(parsed?.result);
+  const content = result?.content;
   if (!isRecord(parsed?.tool) || !Array.isArray(content)) {
     return text;
+  }
+  if (content.length === 0) {
+    return JSON.stringify(result);
   }
   return content
     .flatMap((block) => {

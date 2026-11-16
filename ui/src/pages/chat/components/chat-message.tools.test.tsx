@@ -541,6 +541,38 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("keeps dispatcher-wrapped collection errors visible when result content is empty", async () => {
+    const worker = {
+      runId: "done-dispatched",
+      sessionKey: "agent:main:subagent:worker",
+      label: "Worker",
+      status: "done",
+    };
+    const output = JSON.stringify({
+      tool: { id: "agents_wait" },
+      result: {
+        content: [],
+        completed: [worker],
+        pending: [],
+        errors: [{ runId: "gone-dispatched", error: "not_found" }],
+      },
+    });
+    const groups = buildItems({
+      messages: [
+        createAssistantMessage([
+          createToolCall("wait-dispatched", "agents_wait", {
+            ids: [worker.runId, "gone-dispatched"],
+          }),
+        ]),
+        createToolResultMessage("wait-dispatched", "agents_wait", output),
+      ],
+    }).filter((item) => item.kind === "group");
+
+    await renderToolGroups(groups, {});
+    expectCount("button.chat-tool-msg-summary", 1);
+    expect(harness.view.textContent).toContain("Worker finished");
+  });
+
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(
       [
