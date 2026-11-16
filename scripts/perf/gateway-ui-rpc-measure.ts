@@ -1278,13 +1278,13 @@ function summaries() {
             }
           : undefined;
       };
-      const rpcMetric = (phase: string, key: string) =>
+      const rpcMetric = (eventPhase: string, key: string) =>
         metric((sample) => {
           const value = sample.server.events.find(
             (event) =>
               event.method === method &&
-              event.phase === phase &&
-              (phase !== "response" || event.firstResponse !== false),
+              event.phase === eventPhase &&
+              (eventPhase !== "response" || event.firstResponse !== false),
           )?.[key];
           return typeof value === "number" ? value : undefined;
         });

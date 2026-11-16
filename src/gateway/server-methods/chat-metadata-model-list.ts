@@ -239,13 +239,13 @@ export function createChatMetadataModelList(params: {
         return prepare(selection, authority);
       }
       if (requesterProfileId && selection.request.params.view !== "provider-config") {
-        const authority = captureUserProfileModelAccountLinksAuthority(
+        const linksAuthority = captureUserProfileModelAccountLinksAuthority(
           captureOpenClawStateReadContext().admission,
           requesterProfileId,
         );
         // Personal-account links are read under the requesting human's authority.
         const links = await listUserProfileAuthLinksAsync(requesterProfileId);
-        if (!authority()) {
+        if (!linksAuthority()) {
           return { isCurrent: () => false, read: () => ({ models: [] }) };
         }
         // Private account credentials and discovery stay within the requesting human's authority.
@@ -254,7 +254,7 @@ export function createChatMetadataModelList(params: {
         }
         const projection = await prepare(selection);
         return {
-          isCurrent: () => authority() && projection.isCurrent(),
+          isCurrent: () => linksAuthority() && projection.isCurrent(),
           read: (): ModelsListResult => ({
             ...projection.read(),
             accountSelection: { kind: "automatic", label: "Automatic account selection" },

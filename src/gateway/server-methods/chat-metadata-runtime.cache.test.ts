@@ -233,9 +233,9 @@ test.each([
                 isCurrent: () => entry.lifecycleRevision === `revision-${index}`,
               };
               if (shared) {
-                scope.withCurrent = async (consume) => {
+                scope.withCurrent = async <T>(consume: () => T): Promise<Awaited<T>> => {
                   scope.assertCurrent?.();
-                  return consume();
+                  return await consume();
                 };
               }
               const result = await harness.runtime.readModelsList({
@@ -298,10 +298,10 @@ test.each(["resolve", "reject"] as const)(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const firstError = new Error("evicted projection failed");
-    let first: Promise<unknown> | undefined;
+    const reads: Promise<unknown>[] = [];
     onTestFinished(async () => {
       release.resolve();
-      await first;
+      await Promise.allSettled(reads);
       await harness.runtime.stop();
     });
     await harness.refresh();
@@ -314,10 +314,11 @@ test.each(["resolve", "reject"] as const)(
       const models = [{ ...facts.modelCatalog.entries[0]!, id: "old", name: "old" }];
       return { modelCatalog: models, models };
     });
-    first = harness.read({ agentId: "agent-0" }).then(
+    const first = harness.read({ agentId: "agent-0" }).then(
       (value) => value,
       (error: unknown) => error,
     );
+    reads.push(first);
     await Promise.race([
       entered.promise,
       first.then((result) => {
@@ -359,7 +360,9 @@ test("coalesces stale projection waiters onto the replacement", async () => {
   const previous = await harness.buildProjection.mock.results[0]!.value;
   harness.invalidProjections.add(previous);
   let waiters = 0;
-  const withCurrent: CurrentReadAuthority["withCurrent"] = async (consume) => {
+  const withCurrent: CurrentReadAuthority["withCurrent"] = async <T>(
+    consume: () => T,
+  ): Promise<Awaited<T>> => {
     const value = consume();
     if (value === false) {
       if (++waiters === 2) {
@@ -412,7 +415,7 @@ test("an evicted model-list rejection preserves the replacement preparation", as
       let current = true;
       let firstRead = true;
       const authority: CurrentReadAuthority = {
-        async withCurrent(consume) {
+        async withCurrent<T>(consume: () => T): Promise<Awaited<T>> {
           if (firstRead) {
             firstRead = false;
             entered.resolve();

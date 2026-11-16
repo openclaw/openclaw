@@ -100,13 +100,13 @@ export async function buildModelsListResult(
 
 /** Prepares catalog work once; the returned reader revalidates native readiness without I/O. */
 export async function prepareModelsListResult({
-  preparationAuthority: authority,
+  preparationAuthority,
   ...params
 }: BuildModelsListResultParams): Promise<PreparedModelsListResult> {
-  const { source } = params;
-  const scope = params.readScope;
+  const { source, readScope: scope } = params;
   const publicationScope = params.publicationScope ?? scope;
   const draft = scope?.draftAccountSelection;
+  let authority = preparationAuthority;
   authority ??= draft
     ? {
         withCurrent: publicationScope?.withCurrent,
