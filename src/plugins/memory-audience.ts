@@ -1,9 +1,9 @@
-import {
-  isSessionDeliveryGenerationRevokedError,
-  prepareChatLease,
-  type ChatLease,
-} from "../config/sessions/session-delivery-generation.js";
+import { isSessionDeliveryGenerationRevokedError } from "../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../config/sessions/transcript-lease.js";
 import type {
   InternalSessionEntry,
   SessionEntry,
@@ -18,7 +18,7 @@ import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-type
 const MAX_LINEAGE_HOPS = 64;
 const SESSION_ID_PATTERN = /^[a-f0-9-]{36}$/;
 
-type GenerationLease = ChatLease;
+type GenerationLease = TranscriptLease;
 
 // One record per minted audience. A delegated record owns its child-session
 // lease and borrows its parent's record, so either side going stale rejects it.
@@ -111,13 +111,19 @@ async function leaseSessionGeneration(params: {
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
 }): Promise<GenerationLease | undefined> {
   try {
-    return await prepareChatLease(
+    // A grant holds the incarnation it was minted in: a reset ends it, a compaction successor
+    // keeps it.
+    return await acquireTranscriptLease(
       chatRef({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
       }),
-      params.entry ? undefined : { absent: true },
+      {
+        sessionId: params.entry?.sessionId ?? null,
+        lifecycleRevision: params.entry?.lifecycleRevision,
+      },
+      { exact: "lifecycle" },
     );
   } catch (error) {
     if (isSessionDeliveryGenerationRevokedError(error)) {

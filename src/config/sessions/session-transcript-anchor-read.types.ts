@@ -14,7 +14,7 @@ export type SessionTranscriptAnchorEntry = Pick<
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
-  /** The requested leaf is the active leaf, one of its ancestors, or the empty view. */
+  /** The requested leaf is the active leaf or one of its ancestors; `null` only when empty. */
   onActivePath?: boolean;
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;

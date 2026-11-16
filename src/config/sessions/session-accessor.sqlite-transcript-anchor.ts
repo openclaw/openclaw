@@ -53,15 +53,15 @@ export function readActiveTranscriptEntryIdentityInSnapshot(
   );
 }
 
-/** The empty view (`null`) is the prefix of every active path. */
+/** The leaf or one of its ancestors; `null` matches only an empty transcript. */
 export function isOnActivePathInProjection(
   projection: CurrentTranscriptProjection,
   entryId: string | null,
 ): boolean {
   return (
-    entryId === null ||
     projection.state.leafEventId === entryId ||
-    readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) !== undefined
+    (entryId !== null &&
+      readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) !== undefined)
   );
 }
 

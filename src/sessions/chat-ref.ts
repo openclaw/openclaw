@@ -14,9 +14,11 @@ export function chatRef(value: {
   storePath: string;
   sessionKey: string;
 }): ChatRef {
-  return Object.freeze({
+  const address = Object.freeze({
     agentId: value.agentId,
     storePath: value.storePath,
     sessionKey: value.sessionKey,
-  }) as ChatRef;
+  });
+  // SAFETY: the brand marks a value built here from exactly these three fields.
+  return address as ChatRef;
 }

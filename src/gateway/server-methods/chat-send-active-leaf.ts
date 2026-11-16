@@ -8,9 +8,10 @@ export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 /**
  * A send continues the branch its sender saw. It is admitted while the sender's leaf is
- * still on the active path: the exact leaf, an ancestor that later appends extended, or an
- * empty view. A rewind, branch switch or reset away from that leaf refuses it. Stop acts
- * before send admission, so it also refuses a reset away from the sender's `requestedSessionId`.
+ * still on the active path: the exact leaf, or an ancestor that later appends extended. A
+ * rewind, branch switch or reset away from that leaf refuses it, as does a reset away from
+ * `requestedSessionId`. An empty view is a prefix of any path for a message (`acceptEmptyView`);
+ * Stop needs the transcript to still be empty, so it never cancels work it did not see.
  */
 export function assertExpectedLeafActive(
   session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath"> & {
@@ -18,6 +19,7 @@ export function assertExpectedLeafActive(
   },
   expectedLeafEntryId: string | null,
   requestedSessionId?: string,
+  options?: { acceptEmptyView?: true },
 ) {
   const onActivePath =
     session.transcript?.onActivePath ??
@@ -26,7 +28,7 @@ export function assertExpectedLeafActive(
     throw new Error("Chat admission omitted its worker-prepared active path");
   }
   if (
-    !onActivePath ||
+    (!onActivePath && !(options?.acceptEmptyView && expectedLeafEntryId === null)) ||
     (requestedSessionId !== undefined && requestedSessionId !== session.entry?.sessionId)
   ) {
     throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);

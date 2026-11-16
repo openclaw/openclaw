@@ -13,7 +13,7 @@ import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-w
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
 
-/** Like the SQLite projection: the leaf, an active ancestor, or the empty view is on the path. */
+/** Like the SQLite projection: the leaf or an active ancestor; `null` only when empty. */
 function readActivePathFacts(
   window: SessionActorMemoryWindow,
   entryId: string | null,
@@ -21,9 +21,9 @@ function readActivePathFacts(
   const navigation = createSessionActorMemoryHistoryNavigation(window);
   return {
     onActivePath:
-      entryId === null ||
-      navigation.tree.leafId === entryId ||
-      navigation.active.some(({ event }) => isRecord(event) && event.id === entryId),
+      (navigation.tree.leafId ?? null) === entryId ||
+      (entryId !== null &&
+        navigation.active.some(({ event }) => isRecord(event) && event.id === entryId)),
   };
 }
 

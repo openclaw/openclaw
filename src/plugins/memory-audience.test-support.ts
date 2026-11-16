@@ -28,9 +28,17 @@ class FakeRevokedError extends Error {
   readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
 }
 
-// A chat lease follows the key: only the row's presence (or leased absence) matters.
-function assertGeneration(input: { sessionKey: string; absent: boolean }) {
-  if (fakeSessionOwner.rows.has(input.sessionKey) === input.absent) {
+// Like the real lease: an incarnation pin holds the lifecycle revision, not the transcript id.
+function assertGeneration(input: {
+  sessionKey: string;
+  sessionId: string | null;
+  lifecycleRevision: string | null;
+}) {
+  const row = fakeSessionOwner.rows.get(input.sessionKey);
+  if (
+    Boolean(row) !== (input.sessionId !== null) ||
+    (row?.lifecycleRevision ?? null) !== input.lifecycleRevision
+  ) {
     throw new FakeRevokedError("The original session generation no longer accepts this delivery.");
   }
 }
@@ -38,8 +46,11 @@ function assertGeneration(input: { sessionKey: string; absent: boolean }) {
 /** Module factory for `config/sessions/session-delivery-generation.js`. */
 export const fakeSessionGenerationModule = {
   isSessionDeliveryGenerationRevokedError: (error: unknown) => error instanceof FakeRevokedError,
-  prepareChatLease: async (chat: { sessionKey: string }, options?: { absent?: true }) => {
-    const input = { sessionKey: chat.sessionKey, absent: options?.absent === true };
+  prepareLeaseFacts: async (input: {
+    sessionKey: string;
+    sessionId: string | null;
+    lifecycleRevision: string | null;
+  }) => {
     assertGeneration(input);
     let active = true;
     fakeSessionOwner.activeLeases += 1;
