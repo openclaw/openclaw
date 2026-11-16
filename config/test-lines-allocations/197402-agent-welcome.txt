@@ -1,3 +1,4 @@
-# PR #197402: 10 lines above the 400-line allowance for config/Template
-# preservation, bootstrap-first setup Retry, and welcome/Add browser boundaries.
-10
+# PR #197402: 26 lines above the 400-line allowance for config/Template
+# preservation, bootstrap-first setup Retry, welcome/Add browser boundaries,
+# and exact JSON failure-envelope/one-diagnostic assertions in the repaired CI fixture.
+26

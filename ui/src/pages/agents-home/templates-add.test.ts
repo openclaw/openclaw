@@ -282,8 +282,8 @@ describe("Template Add", () => {
       await waitForSolid(() => expect(prompt()).toHaveProperty("disabled", false));
       prompt()!.click();
       await waitForSolid(() => expect(find(".templates-trust-warning")).not.toBeNull());
-      const selected = calls(request, "templates.add.apply")[0]![1];
-      expect(selected).toEqual({ ...chatAdd, initialPrompt: "Set up a repository" });
+      const selected = { ...chatAdd, initialPrompt: "Set up a repository" };
+      expect(calls(request, "templates.add.apply")[0]![1]).toEqual(selected);
       find(".templates-add-consent__actions .btn.primary")!.click();
       await waitForSolid(() => expect(calls(request, "templates.add.apply")).toHaveLength(2));
       expect(calls(request, "templates.add.apply")[1]![1]).toEqual({

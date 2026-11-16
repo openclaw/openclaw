@@ -35,6 +35,7 @@ export async function acquireOverflowCompactionPreparedModelRuntime(
       ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
       : undefined,
     metadataSnapshot,
+    modelCatalog: { entries: [], routeVariants: [] },
     createStores: () => ({ authStorage: {}, modelRegistry: {} }),
   };
   return {
