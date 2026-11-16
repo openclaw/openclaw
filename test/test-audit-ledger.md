@@ -1054,6 +1054,21 @@ formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independen
 preservation and local ClawSweeper review found no actionable issue. The shared
 cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
 
+### Source scan fixture cleanup custody
+
+At `10f6b53ce51827256689604e821c34a7f5e84323`, the source-file scan fixture empties
+its directory tracker before removal succeeds. Reuse the shared cleanup owner
+after the existing pending-scan settlement and reset. All five declarations /
+eight expanded cases remain, including refill concurrency, source ordering,
+pre/post-read limits, decoding, mapper error behavior and live file mutations
+through both collect and map. Keep the asynchronous hook and the `rm` import
+used by the deletion mutation. Production and shared-helper code are unchanged.
+
+Direct execution of the original hook preserves the injected removal error and
+waits for pending work, but forgets the failed root and never retries it.
+Actual Vitest-hook failure/settlement/retry proof and clean consumer runs are
+pending in the native PR workspace.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
