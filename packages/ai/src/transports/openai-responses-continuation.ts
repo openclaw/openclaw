@@ -256,8 +256,9 @@ function normalizeAssistantReplayInput(
   input: readonly unknown[],
   fromResponse = false,
   ignoreCachedItemIds = false,
+  replayedInput?: readonly unknown[],
 ): unknown[] {
-  return input.map((item) => {
+  return input.map((item, index) => {
     if (!isRecord(item)) {
       return item;
     }
@@ -288,9 +289,13 @@ function normalizeAssistantReplayInput(
       stableItem.call_id = canonicalizeToolCallId(stableItem.call_id, itemId);
     }
     if (fromResponse && item.type === "function_call") {
-      // Only provider output crosses terminal admission; sent arguments must retain real type edits.
-      const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
-      stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
+      // Exact-byte transcripts already match; only normalize older, parsed calls.
+      // Already-sent input stays strict so a real edit cannot reuse an old response.
+      const replayed = replayedInput?.[index];
+      if (!isRecord(replayed) || replayed.arguments !== stableItem.arguments) {
+        const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
+        stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
+      }
     }
     if (item.type === "message" && Array.isArray(stableItem.content)) {
       stableItem.content = stableItem.content.map((part) => {
@@ -356,7 +361,7 @@ export function responsesContinuationPrefixFingerprint(
   return sha256StableValue(
     projectJsonObject([
       ...normalizeAssistantReplayInput(input),
-      ...normalizeAssistantReplayInput(output, true),
+      ...normalizeAssistantReplayInput(output, true, false, output),
     ]),
   ).digest;
 }
@@ -407,7 +412,12 @@ export function resolveResponsesContinuationRequest(
   const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
     jsonValuesEqual(
       replayedToolRound,
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
+      normalizeAssistantReplayInput(
+        continuation.lastResponseItems,
+        true,
+        ignoreCachedItemIds,
+        replayedToolRoundInput,
+      ),
     ),
   );
   const historyCurrentInput = currentInput.slice(0, previousInput.length);

@@ -309,6 +309,8 @@ export interface ToolCall {
    * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
    */
   partialJson?: string;
+  /** Provider argument bytes paired with their normalized value for exact replay. */
+  argumentsSignature?: { value: string; raw: string };
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }

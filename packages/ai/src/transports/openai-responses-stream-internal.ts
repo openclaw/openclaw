@@ -209,7 +209,7 @@ export async function processResponsesStream<TApi extends Api>(
     item: CompletedToolCall,
     outputIndex: number | undefined,
     streamingToolCall: StreamingToolCallState | undefined,
-    validated: Pick<ToolCall, "name" | "arguments">,
+    validated: Pick<ToolCall, "name" | "arguments" | "argumentsSignature">,
   ): void => {
     const identity = {
       type: item.type,
@@ -668,11 +668,12 @@ export async function processResponsesStream<TApi extends Api>(
             streamedArguments !== completedArguments
               ? parseJsonObjectPreservingUnsafeIntegers(streamedArguments)
               : null;
-          let validated: Pick<ToolCall, "name" | "arguments">;
+          let validated: Pick<ToolCall, "name" | "arguments" | "argumentsSignature">;
           try {
             validated = resolveCompletedResponsesToolCall(item, {
               name: streamingToolCall?.providerName,
               arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
+              rawArguments: parsedStreamedArguments ? streamedArguments : undefined,
             });
           } catch (error) {
             // Preserve the original validation code and bounded argument diagnostics.

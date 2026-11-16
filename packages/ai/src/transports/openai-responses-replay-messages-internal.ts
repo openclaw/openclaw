@@ -43,6 +43,7 @@ import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoi
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import {
   normalizeOpenAIResponsesReasoningReplayItem,
+  replayOpenAIResponsesToolArguments,
   resolveReplayableResponsesMessageId,
 } from "./openai-responses-replay.js";
 import {
@@ -580,11 +581,11 @@ function convertResponsesMessagesWithStyle(
             call_id: callId,
             name: block.name,
             ...(block.async ? { async: true } : {}),
-            arguments: providerStyle
-              ? JSON.stringify(block.arguments)
-              : typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
+            arguments: replayOpenAIResponsesToolArguments(
+              block,
+              providerStyle,
+              msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
+            ),
           });
           previousReasoningHasId = false;
         }

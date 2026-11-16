@@ -1,0 +1,2 @@
+202
+# Real Responses transport regressions: exact bytes, source identity and edit invalidation; reasoning-control and context-usage fingerprint consumers.
