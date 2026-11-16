@@ -14,6 +14,7 @@ import {
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { emitTranscriptResize } from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -433,9 +434,9 @@ it.each([
   expect(searchContainer.querySelector("input")).toBeNull();
   if (loaded) {
     expect(access.open).not.toHaveBeenCalled();
-    expect(requireElement(threadContainer, sourceSelector).classList.contains(replyTarget)).toBe(
-      true,
-    );
+    const target = requireElement(threadContainer, sourceSelector);
+    emitTranscriptResize(expectDefined(target.closest(".chat-virtual-row"), "reply row"), 800, 100);
+    await waitForSolid(() => expect(target.classList.contains(replyTarget)).toBe(true));
   } else {
     expect(access.open).toHaveBeenCalledWith(sourceId);
   }
