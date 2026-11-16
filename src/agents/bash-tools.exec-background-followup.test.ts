@@ -752,7 +752,9 @@ test("resumes a hidden subagent on exit only after sessions_yield awaits the com
     expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
     expect(started.followUp).not.toContain("wakes this conversation");
     if (yielded) {
-      const awaited = listYieldAwaitableExecs("hidden-run");
+      // Another agent on the same raw session key is a different chat.
+      expect(listYieldAwaitableExecs({ agentId: "research", sessionKey })).toEqual([]);
+      const awaited = listYieldAwaitableExecs({ agentId: "main", sessionKey });
       expect(awaited.map((session) => session.id)).toEqual([started.sessionId]);
       awaitExecsForYield(awaited);
     }
@@ -777,12 +779,12 @@ test("resumes a yielded cron run in place with the exit instead of a session eve
     runId: "cron-yield-run",
     sessionsYieldAvailabilityRef: { value: true },
   });
-  using resume = openExecYieldResume("cron-yield-run");
+  using resume = openExecYieldResume({ agentId: "main", sessionKey });
   const release = path.join(state.workspaceDir, "release-cron-yield");
   try {
     const started = runningSession((await exec("cron-yield", waitForRelease(release))).details);
     expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
-    awaitExecsForYield(listYieldAwaitableExecs("cron-yield-run"));
+    awaitExecsForYield(listYieldAwaitableExecs({ agentId: "main", sessionKey }));
     await fs.writeFile(release, "release");
     expect(await withinTest(resume.next(signal), signal)).toMatch(
       /^Exec completed \([^)]*\):\nWAITER_DONE$/,

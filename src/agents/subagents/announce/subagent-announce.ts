@@ -125,7 +125,6 @@ type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDi
   roundOneReply?: string;
   /** Cached pre-wake result for legacy runs without terminal facts. */
   fallbackReply?: string;
-  completionRequesterLifecycleRevision?: string;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
   /** Refresh database currency before child-session reads or effects. */
@@ -605,8 +604,6 @@ async function runSubagentAnnounceFlowBound(
           requesterIsSubagent,
           expectsCompletionMessage,
           completionTarget: params.completionTarget,
-          completionRequesterSessionId: params.completionRequesterSessionId,
-          completionRequesterLifecycleRevision: params.completionRequesterLifecycleRevision,
           directIdempotencyKey,
           onDeliveryResult: reportDeliveryResult,
           signal: params.signal,

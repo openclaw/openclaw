@@ -74,7 +74,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/gateway.continuation-skip-bootstrap.integration.test.ts",
   "src/gateway/github-personal-publication-outcomes.test.ts",
   "src/gateway/github-personal-publication.lifecycle.test.ts",
-  "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-pr-attribution.test.ts",
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",

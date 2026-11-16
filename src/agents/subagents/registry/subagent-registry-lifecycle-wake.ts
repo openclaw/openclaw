@@ -607,8 +607,6 @@ export function scheduleRequesterSettleWake(
                   agentId: entry.requesterAgentId,
                   sessionKey: requesterSessionKey,
                   storePath: entry.requesterStorePath,
-                  expectedSessionId: entry.completionRequesterSessionId,
-                  expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
                   idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
                   text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
                   assertCurrent: () => {

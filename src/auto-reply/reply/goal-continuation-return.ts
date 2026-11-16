@@ -205,9 +205,6 @@ export function promoteGoalContinuationYield(params: {
       (entry) =>
         entry.requesterSessionKey !== sessionKey ||
         entry.requesterAgentId !== base.run.agentId ||
-        (entry.completionRequesterSessionId !== undefined &&
-          (entry.completionRequesterSessionId !== continuation.sessionId ||
-            entry.completionRequesterLifecycleRevision !== continuation.lifecycleRevision)) ||
         entry.requesterSettleWake?.rearmGeneration !== params.rearmGeneration ||
         entry.requesterSettleWake?.requesterYieldBatch !== true,
     )

@@ -11,7 +11,7 @@
 # per-outcome completion rows, the retained failed-child fact, and lifecycle rows
 # reached through tool-search dispatch (envelope plus nested call), announced child
 # failure outcomes and error-bearing collection waits add the remaining lines.
-# Exact excess against integrated baseline fcf29c4: 1433 net test lines minus the
+# Exact excess against integrated baseline 9bfad2b: 1425 net test lines minus the
 # normal 400-line allowance. Final review removes the obsolete empty-Stop fixture,
 # fixes lint-safe dispatch setup, and checks mixed completion/error details.
-1033
+1025
