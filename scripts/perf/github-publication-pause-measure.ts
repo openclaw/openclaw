@@ -11,6 +11,8 @@
  *
  * Run two baseline controls, then five interleaved A/B pairs. Allocation profiling
  * is a separate pass (--allocation), never mixed with unprofiled timing samples.
+ * Node 26 also reports cumulative main-isolate allocation without sampling;
+ * workers, child processes, and native buffers are outside that allocation counter.
  * The unchanged tree has 62k files/1.1 GB. Its upstream adds 512 MiB of unique
  * historical objects then replaces them with small current files. This local Git
  * server declines filtering, so the real fetch downloads history while the final
@@ -114,6 +116,7 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { Session } from "node:inspector/promises";
+import { getHeapStatistics } from "node:v8";
 import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
 import * as projectionOperation from "./worker-environments/local-workspace-projection-operation.js";
@@ -236,6 +239,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const cpu = process.cpuUsage();
   const threadCpu = process.threadCpuUsage();
   const heapBefore = process.memoryUsage();
+  const allocatedBefore = getHeapStatistics().total_allocated_bytes;
   const started = performance.now();
   const beforeLoad = os.loadavg();
   console.log("publication-pause: measured owner starts");
@@ -257,6 +261,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const processCpu = process.cpuUsage(cpu);
   const mainCpu = process.threadCpuUsage(threadCpu);
   const heapAfter = process.memoryUsage();
+  const mainAllocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
   let sampledAllocationBytes: number | null = null;
   if (allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -286,7 +291,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
-    heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs, phaseMs,
+    heapBefore, heapAfter, mainAllocatedBytes, sampledAllocationBytes, fetched, pauseMs, phaseMs,
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
     totalPauseMs: pauseMs.reduce((sum, value) => sum + value, 0), maxPauseMs: Math.max(0, ...pauseMs),
     pausedAtReturn: runtime.isPaused(), outcome, failure, verified: false,

@@ -376,8 +376,9 @@ Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
 immutable result owns the source bytes, staged-file materialization, Git patch
 preparation, and temporary-file cleanup run with the guest resumed. Imports pause
 again before confirming the target and applying changes; edits made during
-preparation cause a visible conflict and remain saved. Base refreshes also prepare
-canonical merge trees, temporary checkouts, and patches with the guest running.
+preparation cause a visible conflict and remain saved. After synchronizing both
+workspaces, base refreshes prepare the canonical pre-merge snapshot, merge trees,
+temporary checkouts, and patches with the guest running.
 The target is checked again under pause before application; concurrent guest
 writes are preserved as conflicts. Successful two-sided transfers resume before
 temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutations

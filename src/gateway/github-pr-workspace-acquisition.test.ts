@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import * as sourceIntegration from "./github-publication-base-refresh.js";
+import * as publicationGit from "./github-publication-git-transport.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
@@ -134,6 +135,28 @@ describe("PR source acquisition", () => {
       "changed while cloud reconciliation was being prepared",
     );
     expect(edited).toBe(true);
+    expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+      "concurrent guest work\n",
+    );
+  });
+
+  it("preserves guest writes during the canonical pre-merge snapshot", async () => {
+    const f = await fixture({ fork: true });
+    const runtime = await bindFixtureRuntime(f);
+    using _ = runtime.projection;
+    const capture = publicationGit.captureSettledGitHubPublicationWorkspaceSnapshot;
+    let captures = 0;
+    using captureSpy = vi.spyOn(publicationGit, "captureSettledGitHubPublicationWorkspaceSnapshot");
+    captureSpy.mockImplementation(async (...args) => {
+      // Initial pristine admission stays frozen; the next snapshot reads only the host.
+      if (++captures === 2) {
+        expect(runtime.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "pr.txt"), "concurrent guest work\n");
+      }
+      return capture(...args);
+    });
+    await expect(f.invoke()).rejects.toThrow("conflict");
+    expect(captures).toBe(2);
     expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
       "concurrent guest work\n",
     );

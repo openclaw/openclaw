@@ -289,6 +289,7 @@ export async function integrateManagedWorkspaceSource(
           if (!continuingIntegration) {
             await state.synchronize("canonical");
             await state.synchronize("projection");
+            await quiescence?.resume();
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
               await integrationSource?.accept();
