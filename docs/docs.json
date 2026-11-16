@@ -1675,6 +1675,7 @@
               {
                 "group": "Agent runtime",
                 "pages": [
+                  "concepts/agents-and-templates",
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",

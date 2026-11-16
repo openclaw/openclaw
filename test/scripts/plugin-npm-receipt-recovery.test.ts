@@ -44,7 +44,8 @@ it.each([false, true])(
     };
     const revalidateAuthority = vi.fn();
     authenticated.mockResolvedValue({
-      evidence: { current: { manifest, workflowRefProof: "receipt-backed-recovery-v1" } },
+      evidence: { current: { manifest } },
+      qualification: { kind: "recovery", candidateSha: c, qualificationSha: q },
       revalidateAuthority,
     });
     const policy = "original immutable Q policy";
