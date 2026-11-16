@@ -141,6 +141,24 @@ describe("transcripts CLI", () => {
     }
   });
 
+  it.each([
+    ["--metadata", "--transcript"],
+    ["--dir", "--metadata"],
+    ["--dir", "--transcript"],
+  ])("rejects %s with %s before materializing files", async (first, second) => {
+    const session = sessionFixture("export-proof");
+    await store.writeSession(session);
+
+    await expect(runJson("path", session.sessionId, first, second)).rejects.toThrow(
+      "Choose only one of --dir, --metadata, or --transcript.",
+    );
+    await expect(
+      fs.stat(path.join(store.sessionDir(session), "metadata.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("sanitizes stored summary control bytes at the show boundary", async () => {
     await writeSession("legacy-summary");
     const database = openOpenClawStateDatabase();

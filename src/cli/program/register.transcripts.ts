@@ -119,6 +119,9 @@ export function registerTranscriptsCli(program: Command): void {
     .option("--transcript", "Materialize and print transcript.jsonl")
     .option("--json", "Print JSON")
     .action(async (selector: string, options: TranscriptsPathOptions): Promise<void> => {
+      if ([options.dir, options.metadata, options.transcript].filter(Boolean).length > 1) {
+        throwExpectedCliError("Choose only one of --dir, --metadata, or --transcript.");
+      }
       const store = createStore();
       const entry = await store.readSessionEntry(selector);
       if (!entry) {
