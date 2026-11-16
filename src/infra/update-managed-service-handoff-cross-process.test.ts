@@ -329,7 +329,7 @@ describe("managed service update handoff cross-process lease", () => {
           expect(helperPid).not.toBe(started.pid);
           expect(launcher?.pid).toBe(started.pid);
           expect(isPidAlive(helperPid)).toBe(true);
-          expect(claimManagedServiceUpdateHandoff(identity)).toBe(true);
+          expect(await claimManagedServiceUpdateHandoff(identity)).toBe(true);
 
           process.kill(helperPid, "SIGKILL");
           await withinTest(
@@ -343,7 +343,7 @@ describe("managed service update handoff cross-process lease", () => {
           await expect(fs.readFile(helperExitPath, "utf8")).resolves.toBe(String(helperPid));
           expect(isPidAlive(helperPid)).toBe(false);
           expect(isPidAlive(started.pid)).toBe(true);
-          expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
+          expect(await claimManagedServiceUpdateHandoff(identity)).toBe(false);
 
           let payload = current.payload_json;
           if (replacement === "owner") {
@@ -695,3 +695,10 @@ childProcess.spawnSync = function(command, args, options) {
     },
   );
 });
+
+vi.mock("./update-managed-service-handoff-worker.js", async (original) => ({
+  ...(await original<typeof import("./update-managed-service-handoff-worker.js")>()),
+  prepareManagedHandoffParentStore: (
+    await import("./update-managed-service-handoff-worker.test-support.js")
+  ).prepareManagedHandoffParentStoreForTest,
+}));

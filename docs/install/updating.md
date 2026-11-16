@@ -53,6 +53,13 @@ backup.
 
 ## Update implementation contract
 
+Gateway update handoff preparation and its parent-side lease reads, identity checks,
+and cleanup run in the existing handoff worker. Slow coordinator filesystem work
+does not block the serving Gateway. Parking and terminal commit still await exact
+lease ownership; signal admission uses the already-owned local lifecycle. The
+installed Gateway must contain this repair. Detached helpers keep their existing
+lease format, synchronous store owner, and recovery behavior.
+
 A newer Doctor recognizes retained update captures whose state directory used
 an older Windows short-path spelling. Scope comparison resolves the recorded
 state directory and configuration parent without changing sealed capture bytes
