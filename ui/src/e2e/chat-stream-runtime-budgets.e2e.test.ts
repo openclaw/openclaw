@@ -289,34 +289,21 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
       };
       scope.ocToolProjectionProbe = probe;
       let seq = seqSeed;
-      // A terminal event publishes immediately and resets the owner's 80 ms clock.
-      for (const [stream, data, sequence] of [
-        [
-          "tool",
-          { name: "edit", phase: "result", toolCallId: "call-0", result: "warmup", isError: false },
-          seqSeed - 2,
-        ],
-        ["item", warmup, seqSeed - 1],
-      ] as const) {
+      const emitAgent = (stream: string, data: unknown, sequence = ++seq) =>
         gateway.emit("agent", {
+          data,
           runId: targetRunId,
+          seq: sequence,
           sessionKey: "main",
           stream,
-          data,
-          seq: sequence,
           ts: Date.now(),
         });
-      }
-      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
-        gateway.emit("agent", {
-          data: { name: "edit", phase, toolCallId: "call-1", ...data },
-          runId: targetRunId,
-          seq: ++seq,
-          sessionKey: "main",
-          stream: "tool",
-          ts: Date.now(),
-        });
-      };
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) =>
+        emitAgent("tool", { name: "edit", phase, toolCallId: "call-1", ...data });
+      // A terminal event publishes immediately and resets the owner's 80 ms clock.
+      const warmupResult = { name: "edit", phase: "result", toolCallId: "call-0", isError: false };
+      emitAgent("tool", { ...warmupResult, result: "warmup" }, seqSeed - 2);
+      emitAgent("item", warmup, seqSeed - 1);
       const firstCards = () =>
         [...document.querySelectorAll(".chat-tool-row")].filter((row) =>
           [...row.querySelectorAll(".chat-tool-row__file-link, .chat-tool-row__target")].some(
@@ -334,14 +321,7 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         sessionKey: "main",
         state: "delta",
       });
-      gateway.emit("agent", {
-        data: activity,
-        runId: targetRunId,
-        seq: ++seq,
-        sessionKey: "main",
-        stream: "item",
-        ts: Date.now(),
-      });
+      emitAgent("item", activity);
       emitToolPhase("start", { args: { path: "src/file-1.ts" } });
       setTimeout(() => emitToolPhase("update", { partialResult: "partial output 1" }), 10);
       setTimeout(() => emitToolPhase("input_delta", { diff: { added: 1, removed: 1 } }), 20);
@@ -647,21 +627,20 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
+      // An earlier running call creates the activity group; expand it so the probe sees rows.
+      const call0 = { name: "edit", phase: "start", toolCallId: "call-0" };
       for (const [stream, data, seq] of [
         ["item", toolFloodActivity(0, "start"), TOOL_FLOOD_SEQ_SEED - 4],
-        [
-          "tool",
-          { name: "edit", phase: "start", toolCallId: "call-0", args: { path: "src/file-0.ts" } },
-          TOOL_FLOOD_SEQ_SEED - 3,
-        ],
+        ["tool", { ...call0, args: { path: "src/file-0.ts" } }, TOOL_FLOOD_SEQ_SEED - 3],
       ] as const) {
+        const ts = Date.now();
         await gateway.emitGatewayEvent("agent", {
           runId,
           sessionKey: "main",
           stream,
           data,
           seq,
-          ts: Date.now(),
+          ts,
         });
       }
       const activity = page.locator(".chat-activity-group > .chat-activity-group__summary");
