@@ -110,6 +110,20 @@ it.each([false, true])("probes pre-handshake IPC failures (broken: %s)", (broken
   expect(readChildRuntimeViability({ execPath }).available).toBe(!broken);
 });
 
+it.each([
+  {
+    execPath: "/fixture/replaced-node",
+    stderr: "node: error while loading shared libraries: libsimdutf.so.37",
+    status: 127,
+  },
+  { execPath: process.execPath, stderr: "", status: 1 },
+])("latches a replaced runtime that cannot launch: $status", ({ execPath, stderr, status }) => {
+  mockProbe({ stderr, status, signal: null });
+  const failure = classifyChildRuntimeFailure({ execPath, error: new Error("IPC closed") });
+  expect(failure).toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE" });
+  expect(readChildRuntimeViability({ execPath }).available).toBe(false);
+});
+
 it("retains prepared refusals across other paths and honors a later same-path failure", async () => {
   const directory = directories.make("openclaw-runtime-publication-");
   const missing = path.join(directory, "missing");

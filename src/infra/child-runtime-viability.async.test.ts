@@ -21,5 +21,5 @@ it("diagnoses a failed launch without synchronous runtime filesystem checks", as
   expect(error).toMatchObject({ code: "EACCES", path: process.execPath });
   expect(calls).toEqual([]);
   expect(access.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(1);
-  expect(stat.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(1);
+  expect(stat.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(2);
 });

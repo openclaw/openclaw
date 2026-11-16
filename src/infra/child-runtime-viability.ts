@@ -83,6 +83,17 @@ export async function prepareChildRuntimeViability(params?: {
       available = publishRuntimeViability(execPath, error).available;
     }
   }
+  if (available && execPath === runtime.initialPath) {
+    // Only a replaced binary is re-probed so a healthy startup runtime costs no extra spawn.
+    const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
+    if (identity !== undefined && identity !== runtime.initialIdentity) {
+      const probe = await probeChildRuntimeExecutable(execPath);
+      if (probe.status !== 0 && probe.status !== null) {
+        recordUnavailableRuntime(execPath, probe.error);
+        available = false;
+      }
+    }
+  }
   return {
     publish: () => ({
       execPath,
@@ -228,7 +239,9 @@ function classifyRuntimeProbe(
       (probe.signal === "SIGABRT" ||
         hasErrnoCode(probe.error, "ENOEXEC") ||
         hasErrnoCode(probe.error, "EACCES") ||
-        hasErrnoCode(probe.error, "EPERM")));
+        hasErrnoCode(probe.error, "EPERM") ||
+        // A replaced runtime that exits non-zero cannot serve workers, whatever its stderr says.
+        probe.status !== 0));
   return unavailable ? recordUnavailableRuntime(execPath, cause) : undefined;
 }
 
