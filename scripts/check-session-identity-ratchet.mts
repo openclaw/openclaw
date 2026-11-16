@@ -67,7 +67,7 @@ function collectCurrent(root: string, staged: boolean) {
         "-F",
         ...TOKENS.flatMap((token) => ["-e", token]),
         "--",
-        ...ROOTS.map((root) => `${root}/**/*.ts`),
+        ...ROOTS.map((sourceRoot) => `${sourceRoot}/**/*.ts`),
         ...EXCLUDE,
       ],
       { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
