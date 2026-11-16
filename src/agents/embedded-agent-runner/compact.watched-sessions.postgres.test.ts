@@ -69,9 +69,9 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
           activateDiscovery();
           return await acquirePreparedRuntime(...args);
         });
-        onTestFinished(() =>
-          acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquirePreparedRuntime),
-        );
+        onTestFinished(() => {
+          acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquirePreparedRuntime);
+        });
         buildConfiguredAgentSystemPromptMock.mockImplementation(buildConfiguredAgentSystemPrompt);
         createOpenClawCodingToolsMock.mockReturnValue(
           ["sessions_history", "sessions_list", "read"].map((name) => ({
