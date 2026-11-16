@@ -1,0 +1,5 @@
+# Member-browser approval crosses canonical identity, signed admission, owner-only
+# Inbox navigation, original-deadline reload, and atomic SQLite persistence boundaries.
+# Separate ordering, bounded saturation/replay, and full-capacity restart regressions
+# prove contracts that UI mocks or pure metadata tests cannot replace.
+515

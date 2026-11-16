@@ -44,7 +44,9 @@ function ApprovalRow(props: {
         {(member) => (
           <p class="openclaw-id-devices__description">
             {t("openclawId.approvalMemberClaim", { member: member().name })}
-            <Show when={member().email}>
+            <br />
+            {t("openclawId.approvalMemberRequest")}
+            <Show when={member().email && member().email !== member().name}>
               <br />
               {member().email}
             </Show>
@@ -82,7 +84,7 @@ function ApprovalRow(props: {
           </div>
         )}
       </Show>
-      <Show when={props.request.code || !inactive()}>
+      <Show when={!props.request.member && (props.request.code || !inactive())}>
         <div
           class={[
             "openclaw-id-approval__number",
@@ -117,7 +119,7 @@ function ApprovalRow(props: {
       </Show>
       <Show when={!inactive()}>
         <Show when={props.request.member}>
-          <label class="openclaw-id-approval__expiry">
+          <label class="openclaw-id-approval__expiry openclaw-id-approval__member-code">
             <span>{t("openclawId.approvalMemberCode")}</span>
             <input
               type="text"
@@ -150,14 +152,6 @@ function ApprovalRow(props: {
         <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
           <button
             type="button"
-            class="btn"
-            disabled={props.request.busy}
-            onClick={() => void props.owner.decide(props.request.id, false)}
-          >
-            {t("openclawId.approvalDeny")}
-          </button>
-          <button
-            type="button"
             class="btn primary"
             disabled={
               props.request.busy ||
@@ -175,7 +169,19 @@ function ApprovalRow(props: {
               );
             }}
           >
-            {t("openclawId.approvalApprove")}
+            {t(
+              props.request.member
+                ? "openclawId.approvalMemberApprove"
+                : "openclawId.approvalApprove",
+            )}
+          </button>
+          <button
+            type="button"
+            class="btn"
+            disabled={props.request.busy}
+            onClick={() => void props.owner.decide(props.request.id, false)}
+          >
+            {t(props.request.member ? "openclawId.approvalMemberDeny" : "openclawId.approvalDeny")}
           </button>
         </openclaw-modal-actions>
       </Show>
@@ -190,7 +196,7 @@ function ApprovalRow(props: {
   );
 }
 
-/** Shows pending requests with their six-digit matching numbers; never offers an unsigned approval. */
+/** Shows owner-device codes or a member-read code input; never offers an unsigned approval. */
 export function showOwnerApprovalDialog(params: {
   client: GatewayBrowserClient;
   onDevices: () => void;

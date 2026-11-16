@@ -130,6 +130,7 @@ async function setup(
   });
   const first = message("start", {
     ...start,
+    ...(memberAccount ? { expires_at: ts + 1800 } : {}),
     ...(invalid === "node" ? { node: { ...macNode, peer_key: start.peer_key } } : {}),
     commit: invalid === "commitment" ? "00".repeat(32) : commit,
   });
@@ -202,7 +203,9 @@ async function setup(
       }
       if (params.operation === "send") {
         const { payload } = JSON.parse(params.body as string);
-        operations.push(payload.step);
+        operations.push(
+          payload.kind === "member_browser_request" ? `notice:${payload.action}` : payload.step,
+        );
         if (payload.step === "accept") {
           if (invalid === "point") {
             queue.push(message("key", { eph_pub: bytesToHex(ephN.publicKey) }));
@@ -333,7 +336,7 @@ describe("local original-D SAS approval", () => {
   it("denies a member request without a membership write", async () => {
     const f = await setup(false, undefined, undefined, "alice");
     await owner.decide(f.id, false);
-    expect(f.operations).toEqual(["accept", "abort"]);
+    expect(f.operations).toEqual(["accept", "notice:cancel", "abort"]);
     expect(f.read().submitted).toBeUndefined();
   });
   it("approves an app's node in the same change, bound by the compared number", async () => {
@@ -441,5 +444,19 @@ describe("local original-D SAS approval", () => {
     expect(f.operations).toEqual(["accept"]);
     owner.stop();
     expect(owner.read().requests).toEqual([]);
+  });
+  it("keeps member approval live past five minutes and retires it at the original thirty-minute bound", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-11-01T00:00:00.000Z"));
+    const expires = Date.now() + 1_800_000;
+    const f = await setup(false, undefined, undefined, "alice");
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(owner.read().requests[0]).toMatchObject({ id: f.id, member: { name: "Alice" } });
+    expect(owner.read().requests[0]?.expired).not.toBe(true);
+    await vi.advanceTimersByTimeAsync(expires - Date.now());
+    expect(owner.read().requests[0]).toMatchObject({ id: f.id, expired: true });
+    await owner.decide(f.id, true, null, "482917");
+    expect(f.operations).toEqual(["accept"]);
+    expect(f.read().submitted).toBeUndefined();
   });
 });

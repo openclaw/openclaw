@@ -31,8 +31,13 @@ afterEach(() => {
   fixture.decide.mockReset();
 });
 
-it.each(["light", "dark"])("requires member-read code in the %s owner dialog", async (theme) => {
-  await page.viewport(1040, 900);
+it.each([
+  ["light", 390],
+  ["dark", 390],
+  ["light", 1440],
+  ["dark", 1440],
+] as const)("requires member-read code in the %s %s owner dialog", async (theme, width) => {
+  await page.viewport(width, 900);
   document.documentElement.dataset.theme = theme;
   const stop = startOpenClawIdFeatureLifetime();
   // SAFETY: the mocked approval owner is the only consumer of this client in this presentation proof.
@@ -40,12 +45,19 @@ it.each(["light", "dark"])("requires member-read code in the %s owner dialog", a
   try {
     await expect
       .poll(() => document.body.textContent)
-      .toContain("This browser says they are Alice Example");
+      .toContain("This request says it’s from Alice Example");
     const approve = () =>
       [...document.querySelectorAll("button")].find(
-        (b) => b.textContent?.trim() === "The numbers match",
+        (b) => b.textContent?.trim() === "Approve browser",
       )!;
     expect(approve().disabled).toBe(true);
+    expect(
+      [...document.querySelectorAll("openclaw-modal-actions button")].map((b) =>
+        b.textContent?.trim(),
+      ),
+    ).toEqual(["Approve browser", "Deny request"]);
+    expect(document.body.textContent).not.toMatch(/482\s?917/);
+    expect(document.querySelector(".openclaw-id-approval__number")).toBeNull();
     expect(document.querySelector('input[type="number"]')).toBeNull();
     await Promise.all(
       document
@@ -54,9 +66,15 @@ it.each(["light", "dark"])("requires member-read code in the %s owner dialog", a
         .map((animation) => animation.finished.catch(() => {})),
     );
     await page.screenshot({
-      path: `./.vitest/ocf551/owner-member-code-${theme}.png`,
+      path: `./.vitest/ocf551/owner-member-code-${theme}-${width}.png`,
     });
     const input = document.querySelector<HTMLInputElement>('input[inputmode="numeric"]')!;
+    expect(input.value).toBe("");
+    const inputBox = input.getBoundingClientRect();
+    const labelBox = input.closest("label")!.getBoundingClientRect();
+    const textBox = input.closest("label")!.querySelector("span")!.getBoundingClientRect();
+    expect(inputBox.width).toBeGreaterThan(labelBox.width - 2);
+    expect(inputBox.top).toBeGreaterThan(textBox.bottom);
     input.value = "000000";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await expect.poll(() => approve().disabled).toBe(true);
@@ -71,7 +89,7 @@ it.each(["light", "dark"])("requires member-read code in the %s owner dialog", a
         .map((animation) => animation.finished.catch(() => {})),
     );
     await page.screenshot({
-      path: `./.vitest/ocf551/owner-member-compared-${theme}.png`,
+      path: `./.vitest/ocf551/owner-member-compared-${theme}-${width}.png`,
     });
     approve().click();
     expect(fixture.decide).toHaveBeenCalledWith("synthetic-member", true, null, "482917");

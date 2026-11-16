@@ -1,6 +1,7 @@
 // Browser-owned SAS approver. Private ephemeral state never leaves this origin or enters Solid.
 import {
   bytesToHex,
+  MEMBER_BROWSER_REQUEST_TTL_SECONDS,
   fingerprint,
   formatEd25519PublicKey,
   generateEphemeralKey,
@@ -196,7 +197,8 @@ export function createOwnerApproval(
       attempts.size >= 16 ||
       attempts.has(payload.request_id) ||
       !isRandomId(payload.request_id) ||
-      message.received_at < now() - 300 ||
+      message.received_at <
+        now() - (d.member_account_id ? MEMBER_BROWSER_REQUEST_TTL_SECONDS : 300) ||
       message.received_at > now() + 30 ||
       d.claw_id !== mail!.clawId ||
       !isEd25519PublicKey(d.device_pub) ||
@@ -206,6 +208,16 @@ export function createOwnerApproval(
       d.label.length > 64 ||
       typeof d.commit !== "string" ||
       !/^[a-f0-9]{64}$/.test(d.commit)
+    ) {
+      return;
+    }
+    const expires = d.member_account_id ? d.expires_at : message.received_at + 300;
+    if (
+      typeof expires !== "number" ||
+      !Number.isSafeInteger(expires) ||
+      expires <= now() ||
+      expires >
+        message.received_at + (d.member_account_id ? MEMBER_BROWSER_REQUEST_TTL_SECONDS : 300)
     ) {
       return;
     }
@@ -233,7 +245,7 @@ export function createOwnerApproval(
         return;
       }
       member = {
-        name: current.displayName || current.email || current.accountId,
+        name: current.displayName || current.email || "Member",
         email: current.email,
         location:
           typeof message.location_hint === "string" ? message.location_hint.slice(0, 256) : null,
@@ -254,7 +266,7 @@ export function createOwnerApproval(
       },
       commitment: d.commit,
       sender,
-      expires: message.received_at + 300,
+      expires,
       ephemeral: await generateEphemeralKey(),
       busy: false,
     };
@@ -466,6 +478,19 @@ export function createOwnerApproval(
       publish();
       try {
         if (!approve) {
+          if (a.start.member_account_id) {
+            await mail!.call("send", {
+              to: "gateway",
+              payload: {
+                kind: "member_browser_request",
+                action: "cancel",
+                request_id: id,
+                member_account_id: a.start.member_account_id,
+                label: a.start.label,
+                expires_at: a.expires,
+              },
+            });
+          }
           await send(a, "abort", { reason: "sas_mismatch" });
           drop(id, true);
           return;

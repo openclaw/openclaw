@@ -122,14 +122,14 @@ describe("local owner matching-number dialog", () => {
     });
     const approve = () =>
       [...document.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("The numbers match"),
+        button.textContent?.includes("Approve browser"),
       )!;
     await vi.waitFor(() =>
-      expect(document.body.textContent).toContain("This browser says they are Alice"),
+      expect(document.body.textContent).toContain("This request says it’s from Alice"),
     );
-    expect(document.body.textContent).toContain(
-      "reads you this same code over a channel you trust",
-    );
+    expect(document.body.textContent).toContain("reads you the code over a channel you trust");
+    expect(document.body.textContent).not.toMatch(/482\s?917/);
+    expect(document.querySelector(".openclaw-id-approval__number")).toBeNull();
     expect(document.querySelector('input[type="number"]')).toBeNull();
     expect(approve().disabled).toBe(true);
     const input = document.querySelector<HTMLInputElement>('input[inputmode="numeric"]')!;

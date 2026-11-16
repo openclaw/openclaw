@@ -50,6 +50,7 @@ import {
 } from "./claw-store.js";
 import { nextPeopleExpiry } from "./invite-expiry.js";
 import { withSweptInvites, resolveReport, resolvedInvite } from "./invite-sweep.js";
+import { createBrowserRequestHandler, retainBrowserRequests } from "./member-browser-requests.js";
 import {
   canonicalMemberProfiles,
   retainMemberProfiles,
@@ -136,14 +137,8 @@ export function createOpenClawIdAuthority(
     let current = needsAllowlistUpgrade(stored)
       ? await upgradeToAllowlist(stored, nowSeconds())
       : stored;
-    current = upgradeNodeCollections(current);
-    if (
-      Object.keys(current.authority?.members ?? {}).some(
-        (id) => !Object.hasOwn(current.member_approved_at ?? {}, id),
-      )
-    ) {
-      current = await retainMemberProfiles(stored, current, profiles);
-    }
+    current = retainBrowserRequests(upgradeNodeCollections(current), nowSeconds());
+    current = await retainMemberProfiles(stored, current, profiles);
     if (current !== stored) {
       await store.write(current);
     }
@@ -181,7 +176,8 @@ export function createOpenClawIdAuthority(
   };
 
   const commit = async (candidate: StoredClaw, assertCurrent?: () => void) => {
-    const next = await retainMemberProfiles(record, candidate, profiles);
+    const retained = retainBrowserRequests(candidate, nowSeconds(), record);
+    const next = await retainMemberProfiles(record, retained, profiles);
     const previous = record;
     assertCurrent?.();
     try {
@@ -218,6 +214,7 @@ export function createOpenClawIdAuthority(
     if (
       previous?.authority !== next.authority ||
       previous?.invite_reports !== next.invite_reports ||
+      previous?.member_browser_requests !== next.member_browser_requests ||
       previous?.owner_profile !== next.owner_profile ||
       previous?.discovery.owner_account_id !== next.discovery.owner_account_id
     ) {
@@ -315,6 +312,7 @@ export function createOpenClawIdAuthority(
 
     /** Reads member display from the canonical profile owner, never as access authority. */
     memberProfiles: profiles.read,
+    memberBrowserRequest: createBrowserRequestHandler({ serialize, load, commit }),
     /** Eligible local profiles for owner-selected invitations; never membership authority. */
     inviteProfiles: profiles.inviteProfiles,
 
@@ -751,7 +749,7 @@ export function createOpenClawIdAuthority(
 
     /** Next time-derived People change in the loaded record, even with the tunnel offline. */
     nextPeopleExpiry(): number | undefined {
-      return nextPeopleExpiry(record?.authority, nowSeconds());
+      return nextPeopleExpiry(record, nowSeconds());
     },
 
     /**

@@ -110,6 +110,7 @@ it("migrates prior approved reports into OCID profiles before dropping their sou
   };
   record.token_bindings = [];
   delete record.member_approved_at;
+  delete record.member_browser_requests;
   const legacy = createCorePluginStateKeyedStore<unknown>({
     ownerId: "core:openclaw-id",
     namespace: "claw",

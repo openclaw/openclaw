@@ -32,7 +32,8 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   action:
     | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
     | { kind: "askCustodian"; alert: CustodianAlert }
-    | { kind: "openClawIdRecovery"; label: string };
+    | { kind: "openClawIdRecovery"; label: string }
+    | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;
 };

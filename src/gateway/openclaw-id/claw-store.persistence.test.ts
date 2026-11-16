@@ -5,6 +5,7 @@ import { afterEach, expect, vi } from "vitest";
 import {
   formatIrohEndpointKey,
   signStatement,
+  type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -62,12 +63,111 @@ it("rolls every section back when a later section fails inside the real writer t
   expect(await readStoredClaw()).toMatchObject(record);
 });
 
+it("restores browser notices and cancellation receipts without changing membership or profiles", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const store = { read: readStoredClaw, write: writeStoredClaw };
+  const claw = await linkedClaw(store);
+  const peer = formatIrohEndpointKey(new Uint8Array(32).fill(42));
+  expect(
+    await claw.authority.submit(
+      await claw.sign({
+        op: "add",
+        account_id: "member",
+        role: "viewer",
+        peer_keys: [peer],
+        invite_id: null,
+      }),
+      "tunnel",
+    ),
+  ).toMatchObject({ ok: true });
+  const before = structuredClone(claw.authority.current()!.authority);
+  const now = Math.floor(Date.now() / 1000);
+  const message: MailboxMessage = {
+    message_id: "browser-mail",
+    claw_id: claw.clawId,
+    to: "gateway",
+    from: {
+      account_id: "member",
+      display_name: "Untrusted",
+      email: null,
+      device_fp: null,
+      reported_by: "openclaw-id",
+    },
+    received_at: now,
+    expires_at: now + 86400,
+    location_hint: "x".repeat(400),
+    payload: {
+      kind: "member_browser_request",
+      request_id: "a".repeat(32),
+      action: "request",
+      member_account_id: "member",
+      label: "Browser",
+      expires_at: now + 1800,
+    },
+  };
+  const profiles = await claw.authority.memberProfiles(["member"]);
+  expect(await claw.authority.memberBrowserRequest(message)).toMatchObject({
+    ok: true,
+    events: [],
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const reopened = createOpenClawIdAuthority(store);
+  await reopened.load();
+  expect(reopened.current()?.authority).toEqual(before);
+  expect(reopened.current()?.member_browser_requests?.member?.notice).toMatchObject({
+    requestId: "a".repeat(32),
+    location: "x".repeat(256),
+  });
+  expect(await reopened.memberProfiles(["member"])).toEqual(profiles);
+  if (message.payload.kind !== "member_browser_request") {
+    throw new Error("fixture");
+  }
+  message.payload.action = "cancel";
+  expect(await reopened.memberBrowserRequest(message)).toMatchObject({ ok: true });
+  for (const char of ["b", "c", "d", "e"]) {
+    message.payload.request_id = char.repeat(32);
+    expect(await reopened.memberBrowserRequest(message)).toMatchObject({ ok: true });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  const canceled = createOpenClawIdAuthority(store);
+  message.payload.action = "request";
+  message.payload.request_id = "a".repeat(32);
+  expect(await canceled.memberBrowserRequest(message)).toMatchObject({
+    ok: false,
+    code: "replayed",
+  });
+  expect(canceled.current()?.member_browser_requests?.member?.notice).toBeNull();
+  expect(canceled.current()?.member_browser_requests?.member?.terminal).toHaveLength(3);
+  expect(canceled.current()?.member_browser_requests?.member?.blockedUntil).toBe(
+    message.payload.expires_at,
+  );
+  message.payload.request_id = "b".repeat(32);
+  expect(await canceled.memberBrowserRequest(message)).toMatchObject({
+    ok: false,
+    code: "replayed",
+  });
+  message.payload.request_id = "e".repeat(32);
+  expect(await canceled.memberBrowserRequest(message)).toMatchObject({
+    ok: false,
+    code: "rate_limited",
+  });
+  expect(canceled.current()?.authority).toEqual(before);
+});
+
 it("moves prior rows without losing bindings and refuses an incomplete partitioned record", async ({
   state,
 }) => {
   state.applyEnv();
   // A small monolithic predecessor fits the old value cap and represents an existing installation.
-  const record = { ...fullClaw(), authority: null, invite_reports: {}, token_bindings: [] };
+  const record = {
+    ...fullClaw(),
+    authority: null,
+    invite_reports: {},
+    member_browser_requests: {},
+    token_bindings: [],
+  };
   const store = createCorePluginStateKeyedStore<unknown>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
