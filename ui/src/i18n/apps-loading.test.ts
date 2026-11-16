@@ -20,7 +20,7 @@ describe("Apps English loading", () => {
   ])("loads complete fallback copy before $surface can render", async ({ load }) => {
     const { manager } = await loadI18n();
     expect(manager.t("tabs.apps")).toBe("Apps");
-    expect(manager.t("appsPage.heroTitle")).toBe("appsPage.heroTitle");
+    expect(manager.t("appsPage.sectionMobile")).toBe("appsPage.sectionMobile");
 
     await manager.setLocale("de");
     await load();
@@ -29,7 +29,7 @@ describe("Apps English loading", () => {
       expect(manager.t(key)).toBe(value);
     }
     expect(manager.t("common.health")).toBe("Gesundheit");
-    expect(manager.t("appsPage.heroTitle")).toBe("Take OpenClaw everywhere");
+    expect(manager.t("appsPage.sectionMobile")).toBe("On your phone");
     expect(manager.t("appsPage.cards.ios.title")).toBe("iPhone");
     expect(manager.t("appsPage.ctaChromeWebStore")).toBe("Chrome Web Store");
   });

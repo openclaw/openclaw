@@ -232,7 +232,7 @@ function CardCta(props: {
   primary: boolean;
   onNavigate: AppsProps["onNavigate"];
 }) {
-  const className = () => ["apps-card__cta", { "apps-card__cta--primary": props.primary }];
+  const className = () => ["btn btn--sm apps-card__cta", { primary: props.primary }];
   return (
     <Show
       when={props.cta.kind === "internal" ? props.cta : undefined}
@@ -259,6 +259,9 @@ function CardCta(props: {
 function AppCardView(props: { card: AppCard; options: AppsProps }) {
   const macGatewayLaunchUrl = () =>
     props.card.id === "macos" ? props.options.macGatewayLaunchUrl : null;
+  // A card whose only action is its docs link has nothing to lead with.
+  const docsOnly = () =>
+    props.card.ctas.length === 1 && props.card.ctas[0]?.labelKey === "appsPage.ctaDocs";
   return (
     <article class="apps-card">
       <div
@@ -293,7 +296,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
         <div class="apps-card__ctas">
           <Show when={macGatewayLaunchUrl()}>
             {(url) => (
-              <a class="apps-card__cta apps-card__cta--primary" href={url()}>
+              <a class="btn btn--sm primary apps-card__cta" href={url()}>
                 {t("appsPage.ctaOpenMac")}
               </a>
             )}
@@ -302,7 +305,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
             {(cta, index) => (
               <CardCta
                 cta={cta}
-                primary={index() === 0 && !macGatewayLaunchUrl()}
+                primary={index() === 0 && !macGatewayLaunchUrl() && !docsOnly()}
                 onNavigate={props.options.onNavigate}
               />
             )}
@@ -340,25 +343,21 @@ function AppSectionView(props: { section: AppSection; options: AppsProps }) {
 export function Apps(props: AppsProps) {
   return (
     <div class="apps-page">
-      <section class="apps-hero">
-        <h2 class="apps-hero__title">{t("appsPage.heroTitle")}</h2>
-        <p class="apps-hero__tagline">{t("appsPage.heroTagline")}</p>
-      </section>
       <For each={APP_SECTIONS}>
         {(section) => <AppSectionView section={section} options={props} />}
       </For>
-      <section class="apps-section" aria-label={t("appsPage.sectionCommunity")}>
+      <section class="apps-section apps-community" aria-label={t("appsPage.sectionCommunity")}>
         <h2 class="settings-section__heading">{t("appsPage.sectionCommunity")}</h2>
-        <nav class="apps-community" aria-label={t("appsPage.sectionCommunity")}>
+        <nav class="apps-community__links" aria-label={t("appsPage.sectionCommunity")}>
           <For each={COMMUNITY_LINKS}>
             {(link) => (
               <a
-                class="apps-pill"
+                class="btn btn--sm apps-community__link"
                 href={link.href}
                 target={EXTERNAL_LINK_TARGET}
                 rel={buildExternalLinkRel()}
               >
-                <span class="apps-pill__icon" aria-hidden="true">
+                <span class="apps-community__icon" aria-hidden="true">
                   {link.icon()}
                 </span>
                 <span>{t(link.labelKey)}</span>

@@ -55,7 +55,7 @@ it.each([
   try {
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
-      expect(mounted.getByRole("heading", { name: "Take OpenClaw everywhere" })).toBeVisible(),
+      expect(mounted.getByRole("heading", { level: 1, name: "Apps" })).toBeVisible(),
     );
     expect(mounted.queryByRole("heading", { name: "Plugin apps" })).toBeNull();
     expect(mounted.queryByRole("button", { name: "Configure MCP servers" })).toBeNull();
