@@ -244,7 +244,7 @@ describe("qa test file scenario runner", () => {
       stderr: "native scenario failed\n",
     }));
     const firstScenario = {
-      ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts"),
+      ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.commands.test.ts"),
       id: "first-native-scenario",
     };
     const laterScenario = {

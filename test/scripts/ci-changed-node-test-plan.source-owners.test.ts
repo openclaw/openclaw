@@ -111,9 +111,9 @@ describe("CI changed Node test plan", () => {
   it.each([
     [
       "qa/scenarios/runtime/cloud-worker-admission-authority.yaml",
-      ["extensions/qa-lab/src/coverage-report.test.ts"],
+      ["extensions/qa-lab/src/cli-coverage.runtime.test.ts"],
     ],
-    ["taxonomy.yaml", ["extensions/qa-lab/src/coverage-report.test.ts"]],
+    ["taxonomy.yaml", ["extensions/qa-lab/src/cli-coverage.runtime.test.ts"]],
     ["apps/macos/Sources/OpenClaw/DebugSettings.swift", ["test/scripts/native-app-i18n.test.ts"]],
     ["apps/ios/WatchApp/Sources/WatchInboxView.swift", ["test/scripts/native-app-i18n.test.ts"]],
     [
@@ -134,7 +134,7 @@ describe("CI changed Node test plan", () => {
     ["apps/android/app/src/test/Screen.kt", []],
   ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
     const readers = [
-      "extensions/qa-lab/src/coverage-report.test.ts",
+      "extensions/qa-lab/src/cli-coverage.runtime.test.ts",
       "extensions/github-copilot/replay-policy.test.ts",
       "test/scripts/native-app-i18n.test.ts",
     ];

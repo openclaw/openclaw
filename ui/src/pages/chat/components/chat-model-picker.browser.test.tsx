@@ -12,6 +12,7 @@ import {
   modelControlSelector,
   modelOption,
   modelPickerProps,
+  modelPickerReadiness,
   waitForModelMenu,
 } from "./chat-model-picker.test-support.tsx";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
@@ -84,7 +85,10 @@ function mountPicker(optionsReady = true) {
       await waitForModelMenu(picker);
       if (params.modelOptions.length) {
         await waitForSolid(() =>
-          expect(picker.querySelector("[data-chat-model-option]")).not.toBeNull(),
+          expect(
+            picker.querySelector("[data-chat-model-option]"),
+            modelPickerReadiness(picker, "options"),
+          ).not.toBeNull(),
         );
       }
     }
