@@ -5,6 +5,7 @@ import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  loadNpmPackageVersions,
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
   resolveNpmPackArchiveMetadata,
@@ -71,6 +72,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
@@ -113,6 +115,35 @@ it.each([
 ] as const)("resolveArchiveSourcePath rejects %s", async (expected, resolvePath) => {
   expectPackError(await resolveArchiveSourcePath(await resolvePath()), [expected]);
 });
+
+it.each(["darwin", "linux", "win32"] as const)(
+  "isolates noninteractive npm stdin only on macOS (platform: %s)",
+  async (platform) => {
+    const archivePath = await createArchive();
+    const signal = new AbortController().signal;
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+
+    mockPackCommandResult({ stdout: JSON.stringify(["1.2.3"]) });
+    expect(await loadNpmPackageVersions({ packageName: packFields.name, killProcessTree: true, signal }))
+      .toEqual(["1.2.3"]);
+    mockPackCommandResult({ stdout: JSON.stringify(packFields) });
+    expect(await resolveNpmSpecMetadata({ spec: packFields.name, signal })).toMatchObject({ ok: true });
+    mockPackCommandResult({ stdout: JSON.stringify([packEntry]) });
+    expect(await packNpmSpecToArchive({ spec: packFields.name, timeoutMs: 1000, cwd, signal }))
+      .toMatchObject({ ok: true });
+    expect(await resolveNpmPackArchiveMetadata({ archivePath, signal })).toMatchObject({ ok: true });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(4);
+    for (const [, options] of runCommandWithTimeoutMock.mock.calls) {
+      expect(options).toMatchObject({ killProcessTree: true, signal });
+      if (platform === "darwin") {
+        expect(options.input).toBe("");
+      } else {
+        expect(options).not.toHaveProperty("input");
+      }
+    }
+  },
+);
 
 describe("resolveNpmSpecMetadata", () => {
   it("normalizes npm 12 view JSON", async () => {

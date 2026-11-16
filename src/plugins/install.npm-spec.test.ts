@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
 import {
@@ -561,7 +561,30 @@ beforeEach(() => {
   process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("installPluginFromNpmSpec", () => {
+  it.each(["darwin", "linux", "win32"] as const)(
+    "isolates all setup npm subprocesses only on macOS (platform: %s)",
+    async (platform) => {
+      const pkg = codexPackage("1.0.0", { materializesRootOpenClaw: true });
+      mockPackages([pkg]);
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+
+      expect(await installNpm(pkg.spec)).toMatchObject({ ok: true, pluginId: "codex" });
+      const commands = runCommandMock.mock.calls.map(([argv]) => npmCommandArgs(argv)?.[0]);
+      expect(commands).toEqual(expect.arrayContaining(["view", "install", "uninstall"]));
+      expect(runCommandMock.mock.calls.some(([argv]) => isNpmPeerPlannerInstallCommand(argv))).toBe(true);
+      for (const [, options] of runCommandMock.mock.calls) {
+        expect(options.killProcessTree).toBe(true);
+        if (platform === "darwin") {
+          expect(options.input).toBe("");
+        } else {
+          expect(options).not.toHaveProperty("input");
+        }
+      }
+    },
+  );
   registerNpmUpdateMetadataTests({
     getNpmRoot: () => npmRoot,
     installPluginFromNpmSpec: installNpm,
