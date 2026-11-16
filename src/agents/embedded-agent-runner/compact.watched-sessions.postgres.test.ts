@@ -9,6 +9,7 @@ import {
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
 } from "./compact.hooks.harness.js";
+import { getCurrentPluginMetadataSnapshotMock } from "./compact.hooks.metadata.test-support.js";
 
 // Load the harness before database owners: its module reset must not split their admission state.
 const { compactEmbeddedAgentSessionDirect } = await loadCompactHooksHarness();
@@ -82,15 +83,18 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
             }
           });
         onTestFinished(() => admissionGuard.mockRestore());
-        // The synthetic lease skips metadata discovery. Restore its async preparation so
-        // auth planning consumes the same machine-state fact as a real prepared runtime.
+        // The synthetic lease skips metadata preparation and its current-snapshot scope.
+        // Restore both contracts so auth planning consumes the prepared runtime's facts.
         acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (...args) => {
           const activateDiscovery = await prepareBundledDiscoveryMode(args[0].env);
           activateDiscovery();
-          return await acquirePreparedRuntime(...args);
+          const lease = await acquirePreparedRuntime(...args);
+          getCurrentPluginMetadataSnapshotMock.mockReturnValue(lease.snapshot.metadataSnapshot);
+          return lease;
         });
         onTestFinished(() => {
           acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquirePreparedRuntime);
+          getCurrentPluginMetadataSnapshotMock.mockReset();
         });
         buildConfiguredAgentSystemPromptMock.mockImplementation(buildConfiguredAgentSystemPrompt);
         createOpenClawCodingToolsMock.mockReturnValue(
