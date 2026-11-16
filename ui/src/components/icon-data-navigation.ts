@@ -52,23 +52,19 @@ export const navigationIconData = {
     ["path", { mask: "url(#cu-gauge)", fill: "currentColor", d: "M3.34 19a10 10 0 1 1 17.32 0z" }],
   ]),
   automations: strokeIconData([
-    ["path", { d: "M12 6v6l1.6 1" }],
-    ["path", { d: "M14.59 21.66A10 10 0 1 1 21.9 10.61" }],
-    [
-      "path",
-      { d: "M20 12.5 16.6 18h2.6l-.7 4.5 4-6h-2.7z", fill: "currentColor", "stroke-width": "1" },
-    ],
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+    ["path", { d: "M12 6v6l4 2" }],
   ]),
   automationsFilled: strokeIconData([
     [
       "mask",
-      { id: "cu-bolt" },
+      { id: "cu-clock" },
       [
         ["rect", { width: "24", height: "24", fill: "#fff", stroke: "none" }],
         [
           "path",
           {
-            d: "M12 6.4V12l1.6 1",
+            d: "M12 6.5V12l3.6 1.8",
             stroke: "#000",
             "stroke-width": "2",
             "stroke-linecap": "round",
@@ -76,23 +72,9 @@ export const navigationIconData = {
             fill: "none",
           },
         ],
-        [
-          "path",
-          {
-            d: "M20 12.5 16.6 18h2.6l-.7 4.5 4-6h-2.7z",
-            fill: "#000",
-            stroke: "#000",
-            "stroke-width": "3.6",
-            "stroke-linejoin": "round",
-          },
-        ],
       ],
     ],
-    ["circle", { mask: "url(#cu-bolt)", fill: "currentColor", cx: "12", cy: "12", r: "10" }],
-    [
-      "path",
-      { d: "M20 12.5 16.6 18h2.6l-.7 4.5 4-6h-2.7z", fill: "currentColor", "stroke-width": "1" },
-    ],
+    ["circle", { mask: "url(#cu-clock)", fill: "currentColor", cx: "12", cy: "12", r: "10" }],
   ]),
   sessions: strokeIconData([
     [
