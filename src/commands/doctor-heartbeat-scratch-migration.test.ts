@@ -253,6 +253,36 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(rerun).toEqual({ changes: [], warnings: [] });
   });
 
+  it("removes a partially written archive so the next run can retry", async () => {
+    const content = `# Operations\n\ntasks:\n  - name: inbox\n    interval: 1h\n    prompt: Check inbox\n`;
+    const fixture = await createFixture(content);
+    const archiveDir = path.join(fixture.stateDir, "backups", "heartbeat-migration");
+    const original = fs.writeFile;
+    const failed = vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+      if (data === content) {
+        await original(target, data.slice(0, 8), options);
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      }
+      return original(target, data, options);
+    });
+
+    const first = await migrate(fixture.cfg);
+    failed.mockRestore();
+    expect(first.changes).toEqual([]);
+    expect(first.warnings.join("\n")).toContain("was not migrated: disk full");
+    // A failed content write must not strand an exclusive file: the retry reads
+    // any leftover bytes back as a permanent archive collision.
+    await expect(fs.readdir(archiveDir)).resolves.toEqual([]);
+
+    const retried = await migrate(fixture.cfg);
+    expect(retried.warnings).toEqual([]);
+    expect(retried.changes).toHaveLength(1);
+    await expect(fs.access(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const archives = await fs.readdir(archiveDir, { withFileTypes: true });
+    const snapshot = archives.find((entry) => entry.isFile())!;
+    await expectFile(path.join(archiveDir, snapshot.name), content);
+  });
+
   it.each([
     { completedId: "main", deleted: false, separateWorkspace: false },
     { completedId: "ollama", deleted: false, separateWorkspace: false },
