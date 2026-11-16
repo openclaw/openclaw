@@ -1,11 +1,12 @@
 import { redo, undo } from "@codemirror/commands";
-import { StateEffect } from "@codemirror/state";
+import { EditorState, StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { createRoot } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { readComposerSkillReferences } from "../../lib/chat/skill-references.ts";
 import {
   focusComposerInput,
   readComposerEditor,
@@ -14,6 +15,7 @@ import {
 } from "../../lib/composer-input.ts";
 import { createReferenceComposerBinding } from "../../lib/reactive/composer-editor.ts";
 import "../../test-helpers/load-styles.ts";
+import { composerSkillExtension } from "./components/composer-editor-skills.ts";
 
 function fixture(value: string, person = false) {
   replaceSlashCommands([
@@ -123,27 +125,40 @@ it("leaves code, escaped dollars, shell variables and unknown skills literal", a
   expect(f.surface.querySelectorAll(".chat-composer-skill")).toHaveLength(1);
 });
 
-it("retains skill DOM and performs no reconciliation transaction on owner echoes", async () => {
-  const f = fixture("$clawhub ");
-  await expect.poll(f.chip).not.toBeNull();
-  const chip = f.chip();
-  let echoes = 0;
-  f.view().dispatch({
-    effects: StateEffect.appendConfig.of(
-      EditorView.updateListener.of((update) => {
-        echoes += update.transactions.filter(
-          (transaction) => !transaction.docChanged && transaction.isUserEvent("input.complete"),
-        ).length;
-      }),
-    ),
-  });
-  focusComposerInput(f.input);
-  selectComposerInput(f.input, f.input.value.length, f.input.value.length);
-  await userEvent.keyboard("Look for a useful skill.");
-  await vi.waitFor(() => expect(f.input.value).toBe("$clawhub Look for a useful skill."));
-  expect(f.chip()).toBe(chip);
-  expect(echoes).toBe(0);
-});
+it.each(["$clawhub ", "`code` $clawhub prose ", "~~~\ncode\n~~~\n\n$clawhub prose "])(
+  "retains skill DOM without rescanning ordinary edits in %s",
+  async (prefix) => {
+    const f = fixture(prefix);
+    await expect.poll(f.chip).not.toBeNull();
+    const chip = f.chip();
+    let echoes = 0;
+    f.view().dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.updateListener.of((update) => {
+          echoes += update.transactions.filter(
+            (transaction) => !transaction.docChanged && transaction.isUserEvent("input.complete"),
+          ).length;
+        }),
+      ),
+    });
+    focusComposerInput(f.input);
+    selectComposerInput(f.input, f.input.value.length, f.input.value.length);
+    const scans = vi.spyOn(String.prototype, "matchAll");
+    let skillScans: number;
+    try {
+      await userEvent.keyboard("Look for a useful skill.");
+      skillScans = scans.mock.calls.filter(([pattern]) =>
+        String(pattern).startsWith("/\\$"),
+      ).length;
+    } finally {
+      scans.mockRestore();
+    }
+    await vi.waitFor(() => expect(f.input.value).toBe(prefix + "Look for a useful skill."));
+    expect(skillScans).toBe(0);
+    expect(f.chip()).toBe(chip);
+    expect(echoes).toBe(0);
+  },
+);
 
 it.each([false, true])(
   "highlights a completed typed skill when the caret leaves it (rich=%s)",
@@ -191,4 +206,116 @@ it("uses canonical skill identity before normalized names or display aliases", a
     )
     .toEqual(["Hyphen skill", "Underscore skill"]);
   expect(f.input.value).toBe("$foo-bar $foo_bar ");
+});
+
+it("maps unaffected skills and invalidates token, escape, command and code changes", async () => {
+  const f = fixture("@Alex use $clawhub after", true);
+  await expect.poll(f.chip).not.toBeNull();
+  const cases = [
+    ["hello $clawhub after", 0, 0, "please "],
+    ["hello $clawhub after", 14, 19, "later"],
+    ["$clawhu after", 7, 7, "b"],
+    ["\\ $clawhub", 1, 2, ""],
+    ["$clawhub", 0, 0, "/say "],
+    ["/say $clawhub", 0, 5, ""],
+    ["$clawhub", 0, 0, "    "],
+    ["    $clawhub", 0, 4, ""],
+    ["$clawhub", 0, 0, "~~~\n"],
+    ["~~~\n$clawhub\n~~~", 0, 4, ""],
+    ["Intro `x` $clawhub ``tail``", 7, 8, ""],
+    ["Intro `` $clawhub ``tail``", 7, 7, "x"],
+    ["Intro `code\n=====\n$clawhub`", 17, 17, "x"],
+    ["Intro `code\n_____\n$clawhub`", 17, 17, "x"],
+    ["Intro\n        text\n    $clawhub", 14, 18, ""],
+  ] as const;
+  for (const [before, from, to, insert] of cases) {
+    f.input.value = before;
+    syncComposerInput(f.input);
+    await expect.poll(() => f.view().state.doc.toString()).toBe(before);
+    f.view().dispatch({ changes: { from, to, insert }, userEvent: "input.complete" });
+    const expected = readComposerSkillReferences(f.input.value).map((item) => item.label);
+    expect(
+      [...f.surface.querySelectorAll(".chat-composer-skill")].map((node) => node.textContent),
+    ).toEqual(expected);
+  }
+});
+
+it("keeps single-line prose edits local and reparses combined indentation", async () => {
+  const f = fixture("$clawhub " + "ordinary prose ".repeat(5000));
+  await expect.poll(f.chip).not.toBeNull();
+  // Count this extension, not the host's required raw-value publication.
+  const state = EditorState.create({
+    doc: f.input.value,
+    extensions: composerSkillExtension(f.input),
+  });
+  const doc = state.doc;
+  const read = vi.spyOn(doc, "sliceString");
+  try {
+    expect(
+      state.update({ changes: { from: doc.length, insert: "x" }, userEvent: "input.type" }).state
+        .doc.length,
+    ).toBe(doc.length + 1);
+    expect(read.mock.calls.every(([from, to]) => (to ?? doc.length) - from < 100)).toBe(true);
+  } finally {
+    read.mockRestore();
+  }
+  f.input.value = "Intro\n\n  $clawhub";
+  syncComposerInput(f.input);
+  await expect.poll(() => f.view().state.doc.toString()).toBe("Intro\n\n  $clawhub");
+  expect(f.chip()).not.toBeNull();
+  f.view().dispatch({
+    changes: [
+      { from: 7, insert: " " },
+      { from: 8, insert: " " },
+    ],
+  });
+  expect(f.input.value).toBe("Intro\n\n    $clawhub");
+  expect(f.chip()).toBeNull();
+});
+
+it("matches canonical skill parsing after structural and ordinary owner edits", () => {
+  const f = fixture("");
+  const documents = [
+    "Intro $clawhub after",
+    "Intro \u0060x\u0060 $clawhub \u0060\u0060tail\u0060\u0060",
+    "Intro\n\n    $clawhub\n\nAfter $clawhub",
+    "~~~ js\n$clawhub\n~~~\n$clawhub",
+    "1. \u0060code\n   $clawhub\u0060\n$clawhub",
+    "Intro \u0060code\n=====\n$clawhub\u0060",
+    "Intro \u0060code\n_____\n$clawhub\u0060",
+    "a | b\n:--- | ---:\n$clawhub | \u0060code\u0060",
+    "![\u0060$clawhub\u0060][label]\n\n[label]: /asset\n$clawhub",
+    "/say $clawhub",
+  ];
+  const insertions = ["x", " ", "", "\n", "\u0060", "[", "\\", "$clawhub", "   "];
+  for (const document of documents) {
+    const initial = EditorState.create({
+      doc: document,
+      extensions: composerSkillExtension(f.input),
+    });
+    for (let offset = 0; offset <= document.length; offset++) {
+      for (const insert of insertions) {
+        const state = initial.update({
+          changes: {
+            from: offset,
+            to: Math.min(document.length, offset + (offset % 3)),
+            insert,
+          },
+          userEvent: "input.complete",
+        }).state;
+        const actual: Array<[number, number]> = [];
+        for (const ranges of state.facet(EditorView.decorations)) {
+          if (typeof ranges === "function") {
+            throw new Error("Skill decorations must be state-owned");
+          }
+          ranges.between(0, state.doc.length, (from, to) => {
+            actual.push([from, to]);
+          });
+        }
+        expect(actual, JSON.stringify({ document, offset, insert })).toEqual(
+          readComposerSkillReferences(state.doc.toString()).map(({ start, end }) => [start, end]),
+        );
+      }
+    }
+  }
 });

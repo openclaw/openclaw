@@ -41,7 +41,14 @@ function decorations(value: string, editingAt?: number) {
       return [Decoration.replace({ widget: new SkillChip(name, label) }).range(start, end)];
     }),
   );
-  return { ranges, editing, hasDollar: value.includes("$") };
+  return {
+    ranges,
+    editing,
+    hasDollar: value.includes("$"),
+    plain: !/[`~\t]| {4}/u.test(value),
+    images: value.includes("!["),
+    firstContent: value.search(/\S/u),
+  };
 }
 
 const skillDecorations = StateField.define<ReturnType<typeof decorations>>({
@@ -78,6 +85,43 @@ const skillDecorations = StateField.define<ReturnType<typeof decorations>>({
       if (!hasDollar) {
         return value;
       }
+    }
+    // Map ordinary edits. Token and Markdown-structure changes still use the
+    // canonical parser, including combined changes in the resulting document.
+    // Image reference labels can change code interpretation at a distance, so
+    // image-bearing drafts deliberately retain the full parse.
+    let reparse = value.images || value.editing !== undefined;
+    transaction.changes.iterChanges((from, to, newFrom, newTo, inserted) => {
+      if (reparse) {
+        return;
+      }
+      const doc = transaction.startState.doc;
+      const removed = doc.sliceString(from, to);
+      const added = inserted.toString();
+      const line = !value.plain ? doc.lineAt(from) : undefined;
+      reparse =
+        from <= value.firstContent ||
+        /[$`~\t\\[\]!|]/u.test(removed + added) ||
+        (line !== undefined &&
+          (from <= line.from + 4 ||
+            /^[ \t]/u.test(line.text) ||
+            /^ {0,3}(?:[\d>#*+_=:-]|`{3,}|~{3,})/u.test(line.text) ||
+            /[\r\n]/u.test(removed + added))) ||
+        /[$`~\\[\]!|]/u.test(
+          doc.sliceString(Math.max(0, from - 1), from) + doc.sliceString(to, to + 1),
+        ) ||
+        / {4}/u.test(transaction.newDoc.sliceString(Math.max(0, newFrom - 3), newTo + 3));
+      // Inspect only the contiguous token suffix, not the entire (possibly huge) line.
+      for (let at = from; !reparse && at > 0; at--) {
+        const char = doc.sliceString(at - 1, at);
+        if (!/[-a-zA-Z0-9_:]/u.test(char)) {
+          reparse = char === "$";
+          break;
+        }
+      }
+    });
+    if (!reparse) {
+      return { ...value, ranges: value.ranges.map(transaction.changes) };
     }
     const text = transaction.newDoc.toString();
     return decorations(

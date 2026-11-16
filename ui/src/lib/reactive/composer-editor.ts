@@ -1,6 +1,5 @@
 import type { HumanMention } from "../chat/chat-types.ts";
 import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "../chat/human-mentions.ts";
-import { readComposerSkillReferences } from "../chat/skill-references.ts";
 import { registerComposerActivation } from "../composer-input.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
@@ -18,33 +17,37 @@ export function createReferenceComposerBinding(
     const native = new AbortController();
     let composing = false;
     let editingSkillValue: string | undefined;
+    let nativeEdit: InputEvent | undefined;
     let entryHistory:
       | import("../../pages/chat/components/composer-editor-mentions.tsx").ComposerMentionSnapshot
       | undefined;
-    let mountEditor:
-      | typeof import("../../pages/chat/components/composer-editor-references.ts").mountReferenceComposerEditor
+    let previousInput: typeof entryHistory;
+    let feature:
+      | typeof import("../../pages/chat/components/composer-editor-references.ts")
       | undefined;
-    let editor: ReturnType<NonNullable<typeof mountEditor>> | undefined;
+    let editor: ReturnType<NonNullable<typeof feature>["mountReferenceComposerEditor"]> | undefined;
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
-    const hasReferences = () =>
-      mentions().length > 0 ||
-      readComposerSkillReferences(
-        node.value,
-        editingSkillValue === node.value ? node.selectionStart : undefined,
-      ).length > 0;
     // A transfer mounts for its own insertion, which the editor's history then owns.
     function activate(forTransfer = false) {
-      if (!native.signal.aborted && !composing && (forTransfer || hasReferences()) && mountEditor) {
-        editor = mountEditor(
+      if (!native.signal.aborted && !composing && feature) {
+        editor = feature.mountReferenceComposerEditor(
           node,
           getMentions,
           application,
-          forTransfer || (entryHistory?.value === node.value && !mentions().length)
-            ? undefined
-            : entryHistory,
+          entryHistory,
           avatarUrls,
+          forTransfer,
+          (nativeEdit?.inputType === "insertText" && !nativeEdit.defaultPrevented) ||
+            editingSkillValue === node.value
+            ? node.selectionStart
+            : undefined,
+          previousInput,
         );
-        entryHistory = undefined;
+        if (!editor) {
+          return;
+        }
+        entryHistory = previousInput = undefined;
+        nativeEdit = undefined;
         // Retire only after a successful handoff; a failed mount keeps native editing.
         native.abort();
         stopActivation();
@@ -53,8 +56,7 @@ export function createReferenceComposerBinding(
     const loader = createIdleImport(
       () => import("../../pages/chat/components/composer-editor-references.ts"),
       (module) => {
-        mountEditor = module.mountReferenceComposerEditor;
-        activate();
+        feature = module;
       },
     );
     const snapshot = () => ({
@@ -72,6 +74,7 @@ export function createReferenceComposerBinding(
       () => {
         if (!composing && !mentions().length) {
           entryHistory = snapshot();
+          previousInput = undefined;
         }
       },
       { signal: native.signal },
@@ -82,9 +85,11 @@ export function createReferenceComposerBinding(
       (event) => {
         if (!composing) {
           editingSkillValue = event.inputType === "insertText" ? node.value : undefined;
-          // Keep the pre-insertion snapshot for the first skill handoff, just as
-          // a picker selection does. Undo must remove a native paste, not replay it.
-          if (!readComposerSkillReferences(node.value).length) {
+          nativeEdit = undefined;
+          // Keep both sides until the lazy feature can distinguish a skill
+          // insertion from a literal dollar followed by a person query.
+          previousInput = entryHistory;
+          if (!feature || !feature.readComposerSkillReferences(node.value).length) {
             entryHistory = snapshot();
           }
           requestActivation();
@@ -107,8 +112,9 @@ export function createReferenceComposerBinding(
     function requestActivation() {
       if (editor) {
         editor.sync();
-      } else if (!composing && hasReferences()) {
-        // The load callback fires once; a later mention must still activate.
+      } else if (!composing && (mentions().length || node.value.includes("$"))) {
+        // Handoff stays outside the Solid apply phase even after this module
+        // loaded for an earlier literal dollar. Mention widgets create roots.
         void loader.load().then(
           () => activate(),
           () => undefined,
@@ -169,6 +175,9 @@ export function createReferenceComposerBinding(
       node,
       "beforeinput",
       (event) => {
+        // Native input listeners can run microtasks between callbacks. An owner
+        // echo must already know this is typing before our input callback runs.
+        nativeEdit = event;
         const copied = dropped;
         dropped = undefined;
         if (event.inputType === "insertFromDrop") {
@@ -196,12 +205,7 @@ export function createReferenceComposerBinding(
       },
       { signal: native.signal },
     );
-    if (hasReferences()) {
-      void loader.load().then(
-        () => activate(),
-        () => undefined,
-      );
-    }
+    requestActivation();
     return () => {
       native.abort();
       stopActivation();

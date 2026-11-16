@@ -1,0 +1,2 @@
+# PR 199688: retain red/green coverage for native undo, incremental token/Markdown boundaries, and canonical-parser parity requested in the performance qualification.
+28

@@ -28,9 +28,14 @@ export function composerAtomicEditing(
     }
     // Typing the separator we inserted steps over it instead of doubling it.
     const typed = transaction.startState.selection.main;
-    let insertedText = "";
+    let insertedText: string | undefined = "";
     transaction.changes.iterChanges((_fromA, _toA, _fromB, _toB, text) => {
-      insertedText += text.toString();
+      // Only single-character separator edits need their text. Do not serialize
+      // a large paste merely to compare it with an apostrophe or a space.
+      insertedText =
+        insertedText !== undefined && insertedText.length + text.length <= 1
+          ? insertedText + text.toString()
+          : undefined;
     });
     if (
       transaction.isUserEvent("input.type") &&
@@ -71,25 +76,39 @@ export function composerAtomicEditing(
     // Preserve the protocol boundary for every surviving chip, including IME
     // composition and deletion of its adjacent whitespace. A required separator
     // cannot be removed while that would merge the recipient into another word.
-    chips.between(0, transaction.startState.doc.length, (chipFrom, chipTo) => {
-      const from = transaction.changes.mapPos(chipFrom, 1, MapMode.TrackAfter);
-      const to = transaction.changes.mapPos(chipTo, -1, MapMode.TrackBefore);
-      if (from === null || to === null || to - from !== chipTo - chipFrom) {
-        return;
-      }
-      if (before?.test(transaction.newDoc.sliceString(Math.max(0, from - 2), from))) {
-        separators.push({
-          from,
-          ...(transaction.isUserEvent("input") && transaction.state.selection.main.head === from
-            ? { caret: from }
-            : {}),
-        });
-      }
-      if (
-        after.test(transaction.newDoc.sliceString(to, Math.min(transaction.newDoc.length, to + 2)))
-      ) {
-        separators.push({ from: to });
-      }
+    let visitedFrom = -1;
+    transaction.changes.iterChangedRanges((changedFrom, changedTo) => {
+      chips.between(
+        Math.max(0, changedFrom - 2),
+        Math.min(transaction.startState.doc.length, changedTo + 2),
+        (chipFrom, chipTo) => {
+          // Ordered change windows can overlap the same chip. Inspect it only once.
+          if (chipFrom <= visitedFrom) {
+            return;
+          }
+          visitedFrom = chipFrom;
+          const from = transaction.changes.mapPos(chipFrom, 1, MapMode.TrackAfter);
+          const to = transaction.changes.mapPos(chipTo, -1, MapMode.TrackBefore);
+          if (from === null || to === null || to - from !== chipTo - chipFrom) {
+            return;
+          }
+          if (before?.test(transaction.newDoc.sliceString(Math.max(0, from - 2), from))) {
+            separators.push({
+              from,
+              ...(transaction.isUserEvent("input") && transaction.state.selection.main.head === from
+                ? { caret: from }
+                : {}),
+            });
+          }
+          if (
+            after.test(
+              transaction.newDoc.sliceString(to, Math.min(transaction.newDoc.length, to + 2)),
+            )
+          ) {
+            separators.push({ from: to });
+          }
+        },
+      );
     });
     if (!separators.length) {
       return transaction;
