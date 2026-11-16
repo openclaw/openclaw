@@ -276,26 +276,20 @@ export class ComposerDictationOwner extends EventTarget {
     void this.stop({ commit: false });
   };
 
-  private readonly handleVisibilityChange = (): void => {
-    if (document.visibilityState === "hidden") {
-      this.leaveWindow();
+  // Leaving the window interrupts capture but keeps dictated text in the draft.
+  // The browser's microphone permission prompt (Safari, Chrome) blurs the window
+  // while the microphone is still opening, so a blur waits until listening: Allow
+  // then starts listening and a denial reports its error. A hidden page still ends
+  // dictation at any point.
+  private readonly handleWindowLeave = (event: Event): void => {
+    if (
+      event.type === "visibilitychange" ? document.visibilityState !== "hidden" : this.connecting
+    ) {
+      return;
     }
-  };
-
-  // The browser's microphone permission prompt (Safari, Chrome) takes focus from
-  // the page while the microphone is still opening. Keep waiting so Allow starts
-  // listening and a denial reports its error; once listening, blur ends dictation.
-  private readonly handleWindowBlur = (): void => {
-    if (this.phase !== "connecting") {
-      this.leaveWindow();
-    }
-  };
-
-  // Losing the window interrupts capture but keeps dictated text in the draft.
-  private leaveWindow(): void {
     this.clearClickSuppression();
     void this.finishActive();
-  }
+  };
 
   private canHold(): boolean {
     return (
@@ -496,8 +490,8 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancellationListeners = new AbortController();
       const options = { signal: this.cancellationListeners.signal };
       listen(document, "keydown", this.handleDocumentKeyDown, options);
-      listen(document, "visibilitychange", this.handleVisibilityChange, options);
-      listen(window, "blur", this.handleWindowBlur, options);
+      listen(document, "visibilitychange", this.handleWindowLeave, options);
+      listen(window, "blur", this.handleWindowLeave, options);
     } else {
       this.cancellationListeners?.abort();
       this.cancellationListeners = null;

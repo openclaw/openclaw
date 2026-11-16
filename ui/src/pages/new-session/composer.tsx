@@ -532,11 +532,7 @@ export function NewSessionComposer(props: {
     >
       <Show when={options().dictationError}>
         {(error) => (
-          <InlineAlert
-            tone="danger"
-            role="alert"
-            class="new-session-page__error new-session-page__alert"
-          >
+          <InlineAlert tone="danger" class="new-session-page__error new-session-page__alert">
             {error()}
           </InlineAlert>
         )}

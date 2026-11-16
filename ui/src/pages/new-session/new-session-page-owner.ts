@@ -224,13 +224,12 @@ export class NewSessionPageOwner {
       onSubmit: () => void this.submit(),
     });
     // Dictation receipts reconcile draft availability before the page projection reads it.
-    // A failed start reports its error before it stops, so only a new start clears it.
-    let dictationActive = false;
+    // A new start clears the previous error. A failed start reports its error and
+    // stops in the same turn, so no change is published after it while connecting.
     this.dictation.subscribe(() => {
-      if (this.dictation.active && !dictationActive) {
+      if (this.dictation.dictation?.connecting) {
         this.dictationError = null;
       }
-      dictationActive = this.dictation.active;
       this.changed();
     });
   }
