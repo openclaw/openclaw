@@ -609,7 +609,7 @@ it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
 it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical }));
+  proveResumedBaseRefresh({ owner, root, repo, canonical, log: checkpointLog }));
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
