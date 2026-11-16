@@ -130,8 +130,29 @@ describe("backupRestoreCommand", () => {
         expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
         expect(report).not.toContain("\nforged");
         expect(result.targetPath).toBe(target);
-        expect(result.archivePath).toBe(archive);
+        expect(result.archivePath).toBe(
+          path.join(await fs.realpath(state.path("real")), `${text}.tar.gz `),
+        );
         expect(await fs.readFile(path.join(target, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "restores where a symlinked target folder's `..` leads, not to the lexical neighbor",
+    async () => {
+      await withState(async (state) => {
+        await fs.mkdir(state.path("physical", "nested"), { recursive: true });
+        await fs.symlink(state.path("physical", "nested"), state.path("target-link"));
+        await writeArchive({ archivePath: state.path("backup.tar.gz") });
+        const result = await backupRestoreCommand(createTestRuntime(), {
+          archive: state.path("backup.tar.gz"),
+          target: `${state.path("target-link")}/../restored`,
+        });
+        const restored = path.join(await fs.realpath(state.path("physical")), "restored");
+        expect(result.targetPath).toBe(restored);
+        expect(await fs.readFile(path.join(restored, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+        await expect(fs.stat(state.path("restored"))).rejects.toThrow();
       });
     },
   );

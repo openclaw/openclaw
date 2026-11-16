@@ -27,10 +27,18 @@ function responseMessage(id: string, text: string) {
   return { type: "message", id, role: "assistant", status: "completed", content };
 }
 
-it.each(["healthy", "recovered", "failed-repair", "deferred", "deferred-internal"] as const)(
+it.each([
+  "healthy",
+  "legacy",
+  "recovered",
+  "snapshot-recovered",
+  "failed-repair",
+  "deferred",
+  "deferred-internal",
+] as const)(
   "preserves Responses replay across a cold runner reopen (%s)",
   async (mode) => {
-    const conflictingReplay = mode !== "healthy";
+    const conflictingReplay = mode !== "healthy" && mode !== "legacy";
     const deferred = mode.startsWith("deferred");
     await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
       const sessionId = "responses-cold-prefix";
@@ -101,28 +109,34 @@ it.each(["healthy", "recovered", "failed-repair", "deferred", "deferred-internal
           if (
             conflictingReplay &&
             ((mode === "failed-repair" && requests.length === 5) ||
+              // Only cold replay resends this ciphertext; the repair drops rejected reasoning.
               payload.input.some((value) => {
                 const item = value as Record<string, unknown>;
-                return item.id === "fc_response_1" && item.arguments !== "{ }";
+                return item.encrypted_content === "encrypted_response_1";
               }))
           ) {
             conflicts++;
-            if (deferred) {
+            if (deferred || mode === "snapshot-recovered") {
               const item = responseMessage("msg_partial", "Already started.");
               const events = [
-                { type: "response.output_item.added", item, output_index: 0 },
-                {
-                  type: "response.output_text.delta",
-                  item_id: item.id,
-                  output_index: 0,
-                  content_index: 0,
-                  delta: "Already started.",
-                },
+                ...(deferred
+                  ? [
+                      { type: "response.output_item.added", item, output_index: 0 },
+                      {
+                        type: "response.output_text.delta",
+                        item_id: item.id,
+                        output_index: 0,
+                        content_index: 0,
+                        delta: "Already started.",
+                      },
+                    ]
+                  : []),
                 {
                   type: "response.failed",
                   response: {
                     id: "resp_failed",
                     status: "failed",
+                    output: [item],
                     error: { code: "item_conflict", message: "Stored item content differs." },
                   },
                 },
@@ -139,7 +153,9 @@ it.each(["healthy", "recovered", "failed-repair", "deferred", "deferred-internal
           }
           const comparable = effectiveInput.map((value) => {
             const item = value as Record<string, unknown>;
+            // Provider item IDs render no tokens; cold replay omits unverifiable ones.
             return item.type === "function_call" ||
+              item.type === "reasoning" ||
               (item.type === "message" && item.role === "assistant")
               ? omitWireFields(item, ["id", "status"])
               : item;
@@ -164,7 +180,7 @@ it.each(["healthy", "recovered", "failed-repair", "deferred", "deferred-internal
                   id: "fc_" + id,
                   call_id: "call_" + id,
                   name: "cache_probe",
-                  arguments: conflictingReplay && requests.length === 1 ? "{ }" : "{}",
+                  arguments: requests.length === 1 && mode !== "legacy" ? "{ }" : "{}",
                 }
               : responseMessage("msg_" + id, "synthetic answer"),
           ];
@@ -270,6 +286,15 @@ it.each(["healthy", "recovered", "failed-repair", "deferred", "deferred-internal
         }
         expect(requests[1]?.previous_response_id).toBe("response_1");
         expect(requests[3]?.previous_response_id).toBeUndefined();
+        if (!conflictingReplay) {
+          expect(requests[3]?.input).toContainEqual(
+            expect.objectContaining({
+              type: "function_call",
+              call_id: "call_response_1",
+              arguments: mode === "legacy" ? "{}" : "{ }",
+            }),
+          );
+        }
         expect(conflicts).toBe(mode === "failed-repair" ? 2 : conflictingReplay ? 1 : 0);
         if (deferred) {
           expect(logInfo).toHaveBeenCalledWith(

@@ -279,8 +279,8 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
   return boundary?.type === "compaction" ? boundary : null;
 }
 
-export function projectSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
-  // Stored snapshots stay shared; mutable SDK edits detach before internal publication.
+/** Data projection only; an exclusive preparation worker does not publish a shared snapshot. */
+export function projectSessionModelContextData(branch: readonly SessionEntry[]): SessionEntry[] {
   const events = [...branch];
   for (let index = 0; index < events.length; index++) {
     const entry = events[index]!;
@@ -291,7 +291,12 @@ export function projectSessionModelContextEntries(branch: readonly SessionEntry[
       }
     }
   }
-  return freezeJsonSnapshot(cloneTranscriptView(events));
+  return events;
+}
+
+export function projectSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
+  // Stored snapshots stay shared; mutable SDK edits detach before internal publication.
+  return freezeJsonSnapshot(cloneTranscriptView(projectSessionModelContextData(branch)));
 }
 
 /** Reuse immutable text without sharing the freshly hydrated message containers. */

@@ -177,8 +177,6 @@ const ownerRoutedUnitTestPatterns = [
   "src/infra/update-managed-service-handoff-triage.test.ts",
   // Command compaction tests need the scoped runtime registry even when their
   // mocks live in a shared helper.
-  // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
-  "src/agents/agent-harness-completion-delivery.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/agent-command.operator-direct-root.test.ts",

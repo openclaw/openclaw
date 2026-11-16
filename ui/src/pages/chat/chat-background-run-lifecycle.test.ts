@@ -226,8 +226,8 @@ describe("self-woken continuation projection", () => {
     // One block per prompt; the earlier answer stays visible in place.
     expect(first!.parts.map((part) => [part.kind, chatItemGroups(part)[0]?.runId])).toEqual([
       ["group", "ask"],
-      ["group", "late"],
-      ["group", "settle"],
+      ["activity-run", "late"],
+      ["activity-run", "settle"],
       ["group", "settle"],
     ]);
     expect(first!.parts.map((part) => partContinuation(part))).toEqual([
@@ -263,5 +263,38 @@ describe("self-woken continuation projection", () => {
       "exec",
       undefined,
     ]);
+  });
+
+  it("keeps a settle wake's completion receipt in the answered block", () => {
+    const completion = { runId: "child", sessionKey: "agent:main:subagent:w", label: "W" };
+    const messages = [
+      row("ask", 1, "ask", { role: "user", content: "Review the change" }),
+      row("answer", 2, "ask", { content: "Long final answer", stopReason: "stop" }),
+      row("receipt", 3, "settle", {
+        phase: "commentary",
+        content: [{ type: "subagent_completion" }],
+        subagentCompletions: [completion],
+        __openclaw: {
+          id: "receipt",
+          seq: 3,
+          runId: "settle",
+          continuation: { source: "subagent" },
+        },
+      }),
+      row("settled", 4, "settle", { content: "W finished; all good.", stopReason: "stop" }),
+    ];
+    for (const showToolCalls of [true, false]) {
+      const sessionKey = `agent:main:dashboard:settle-receipt-${showToolCalls}`;
+      const items = buildChatItems(createProps({ sessionKey, messages, showToolCalls }));
+      const chain = projectTranscriptChain(items, {
+        sessionKey,
+        messages,
+        runWorking: false,
+        searchActive: false,
+      });
+      const [first, ...rest] = frames(chain);
+      expect(rest).toEqual([]);
+      expect(first!.parts.map((part) => partContinuation(part))).toContain("subagent");
+    }
   });
 });

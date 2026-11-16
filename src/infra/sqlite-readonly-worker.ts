@@ -187,15 +187,6 @@ export function isSqliteInspectionDeadlineOwnedByCaller(): boolean {
   return readOnlyWorkerScope.getStore()?.deadlineOwnedByCaller === true;
 }
 
-export function resolveSqliteInspectionSignal(signal?: AbortSignal): AbortSignal | undefined {
-  const scope = readOnlyWorkerScope.getStore();
-  return scope
-    ? signal
-      ? AbortSignal.any([signal, scope.controller.signal])
-      : scope.controller.signal
-    : signal;
-}
-
 /** Bind a one-shot inspection to the active scope's cancellation and close join. */
 export function runScopedSqliteInspection<T>(
   signal: AbortSignal | undefined,

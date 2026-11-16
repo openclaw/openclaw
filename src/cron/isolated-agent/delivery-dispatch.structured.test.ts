@@ -153,7 +153,7 @@ it.each(["cli", "descendant"] as const)(
 );
 
 it.each(["original", "reset"])(
-  "checks the %s session generation before admitted reasoning reaches the transport",
+  "delivers admitted reasoning to the %s conversation by its key",
   async (revision) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { common, send } = fixture();
@@ -178,15 +178,8 @@ it.each(["original", "reset"])(
         admittedReasoning: true,
         sessionGeneration,
       });
-      if (revision === "original") {
-        await expect(operation).resolves.toMatchObject({ status: "sent" });
-        expect(send.mock.calls.map(([, text]) => text)).toEqual(["Admitted reasoning"]);
-      } else {
-        await expect(operation).rejects.toThrow(
-          "The original session generation no longer accepts this delivery.",
-        );
-        expect(send).not.toHaveBeenCalled();
-      }
+      await expect(operation).resolves.toMatchObject({ status: "sent" });
+      expect(send.mock.calls.map(([, text]) => text)).toEqual(["Admitted reasoning"]);
     });
   },
 );
