@@ -24,7 +24,9 @@ const reservations = resolveGlobalSingleton(
 
 /** Explain the limit when a new service would cross it; undefined when there is room. */
 function serviceCapacityError(scopeKey: string | undefined): string | undefined {
-  const running = listRunningSessions().filter((session) => !session.exited && !session.adopted);
+  const running = listRunningSessions().filter(
+    (session) => session.independentService === true && !session.exited,
+  );
   const reserved = [...reservations];
   const inSession =
     running.filter((session) => session.scopeKey === scopeKey).length +
