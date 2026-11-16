@@ -82,6 +82,7 @@ export async function runLocalWorkspaceProjection<T>(
           markPhase: (phase) => markPhase(phase),
         }
       : undefined,
+    options.reason,
   );
   if (previous) {
     operations.current();
