@@ -372,6 +372,14 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-rail__pin[data-sidebar-entry^="route:"] .nav-item',
       );
+      // A rail without saved shortcuts starts with the default pins; clear them to start empty.
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Automations", "Customize", "Usage"]);
+      for (const entry of ["route:cron", "route:plugins", "route:usage"]) {
+        const menu = await openSidebarPinMenu(page, entry);
+        await menu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+      }
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
