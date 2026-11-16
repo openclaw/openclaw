@@ -25,6 +25,7 @@ export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   agentId: string;
   agentName?: string;
   agentDescription?: string;
+  recommendedPrompts?: string[];
   workspaceFiles: number;
   skills: number;
   plugins: number;

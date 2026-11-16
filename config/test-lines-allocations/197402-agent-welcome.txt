@@ -1,4 +1,3 @@
-# PR #197402: 294 net lines for optional config and Template Add preservation,
-# protocol/agent-list isolation, selected-agent welcome behavior, and browser
-# submission, incognito, responsive layout, and terminal retargeting coverage.
-294
+# PR #197402: 10 lines above the 400-line allowance for config/Template
+# preservation, bootstrap-first setup Retry, and welcome/Add browser boundaries.
+10

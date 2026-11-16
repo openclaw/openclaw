@@ -448,7 +448,10 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       detailRequest={detailRequest()}
       applying={applying() && view().applying}
       onConfirm={() => mutate(view().onConfirm)}
-      onSelectPrompt={(prompt) => mutate(() => view().onSelectPrompt(prompt))}
+      onSelectPrompt={(prompt) => {
+        const selectPrompt = view().onSelectPrompt;
+        mutate(() => selectPrompt(prompt));
+      }}
       onConfirmConsent={() => mutate(view().onConfirmConsent)}
     />
   );
