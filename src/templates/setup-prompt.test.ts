@@ -124,7 +124,13 @@ it("defers a selected task until bootstrap finishes, including questions across 
   expect(prompt).toContain("First complete BOOTSTRAP.md");
   expect(prompt).toContain("wait for the user's answers");
   expect(prompt).toContain("continue bootstrap across replies as needed");
+  expect(prompt).toContain(
+    "Begin conversational setup now; interactive bootstrap may continue across replies.",
+  );
+  expect(prompt).not.toContain("Finish conversational setup now, in this one turn");
   expect(prompt).toContain("If bootstrap is already complete or absent, address it now");
   expect(prompt).not.toContain("end by inviting the user to begin");
-  expect(buildTemplateOpeningMessage(report, agent)).not.toContain("Selected initial prompt:");
+  const withoutTask = buildTemplateOpeningMessage(report, agent);
+  expect(withoutTask).not.toContain("Selected initial prompt:");
+  expect(withoutTask).toContain("Finish conversational setup now, in this one turn");
 });

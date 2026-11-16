@@ -77,7 +77,10 @@ export function buildTemplateOpeningMessage(
         : "If there is none, end by inviting the user to begin."),
   ];
   return [
-    "Template setup (Gateway internal_system, sourceTool=template_add_setup). You were just created from a Template. The Gateway sent this message; the user cannot see it. Your workspace files and active agent configuration are ready. Finish conversational setup now, in this one turn, with your ordinary tools.",
+    "Template setup (Gateway internal_system, sourceTool=template_add_setup). You were just created from a Template. The Gateway sent this message; the user cannot see it. Your workspace files and active agent configuration are ready. " +
+      (initialPrompt
+        ? "Begin conversational setup now; interactive bootstrap may continue across replies. Use your ordinary tools."
+        : "Finish conversational setup now, in this one turn, with your ordinary tools."),
     ...(dependenciesPending
       ? [
           "The Gateway is still installing declared skills, bundled plugins and MCP servers alongside this turn. Do not wait for, inspect, install, or report those pending dependencies. Do not claim they are ready. Installation results that need attention will arrive in a separate internal message after this turn; a newly installed skill may become available on the next turn.",

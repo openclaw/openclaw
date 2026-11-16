@@ -315,7 +315,14 @@ review them for secrets before building or publishing.
 ### Welcome description and conversation starters
 
 Templates can reuse the optional `agent.description` metadata and define
-`agent.recommendedPrompts` directly in `CLAW.md` frontmatter:
+`agent.recommendedPrompts` directly in `CLAW.md` frontmatter.
+
+**Compatibility:** `agent.recommendedPrompts` requires a development build after
+OpenClaw 2026.11.4, or the first stable release containing this feature. OpenClaw
+2026.11.4 and older reject this field because Template agent schemas are strict.
+Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
+
+For builds that support conversation starters:
 
 ```yaml
 agent:
