@@ -17,8 +17,8 @@ import {
   onAgentEvent,
   getAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
-import type { SseEvent } from "./http-sse.test-support.js";
-export { parseSseEvents } from "./http-sse.test-support.js";
+
+type SseEvent = { event?: string; data: string };
 
 export async function emitEmbeddedLateCommentary(opts: unknown): Promise<void> {
   const runId = asOptionalObjectRecord(opts)?.runId;
@@ -82,6 +82,27 @@ export async function emitEmbeddedLateCommentary(opts: unknown): Promise<void> {
   } finally {
     subscription.unsubscribe();
   }
+}
+
+export function parseSseEvents(text: string): SseEvent[] {
+  const events: SseEvent[] = [];
+  const lines = text.split("\n");
+  let currentEvent: string | undefined;
+  let currentData: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event: ")) {
+      currentEvent = line.slice("event: ".length);
+    } else if (line.startsWith("data: ")) {
+      currentData.push(line.slice("data: ".length));
+    } else if (line.trim() === "" && currentData.length > 0) {
+      events.push({ event: currentEvent, data: currentData.join("\n") });
+      currentEvent = undefined;
+      currentData = [];
+    }
+  }
+
+  return events;
 }
 
 export function collectSseEventTypes(events: readonly SseEvent[]): string[] {

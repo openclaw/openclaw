@@ -6,7 +6,10 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
-import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
+import {
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+  type SessionWorkStartChangedError,
+} from "../config/sessions/work-start-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -51,16 +54,17 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   if (err instanceof ToolAuthorizationError) {
     return { status: 403, error: { message: err.message, type: "permission_error" } };
   }
-  const conflict = collectNestedErrorCandidates(err).find(isSessionWorkStartInvalidatedError);
+  const conflict = collectNestedErrorCandidates(err).find(
+    (error): error is Pick<SessionWorkStartChangedError, "code" | "message"> =>
+      isRecord(error) &&
+      error.code === SESSION_WORK_START_CHANGED_ERROR_CODE &&
+      typeof error.message === "string",
+  );
   if (conflict) {
-    // Changed/invalidated work starts are retryable conflicts, not internal errors.
     return {
       status: 409,
       error: {
-        message:
-          conflict instanceof Error
-            ? conflict.message
-            : "Session changed while starting work. Retry.",
+        message: conflict.message,
         type: "invalid_request_error",
         code: conflict.code,
       },
