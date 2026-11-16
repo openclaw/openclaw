@@ -3,6 +3,7 @@ import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
@@ -38,7 +39,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     canonicalizePathForContainment(resolveStateDir()),
   ]);
   if (isPathInside(canonicalStateDir, canonicalTarget)) {
-    throw new Error(
+    throwExpectedCliError(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
   }
@@ -50,7 +51,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
     if (isPathInside(sourcePath, canonicalTarget)) {
-      throw new Error(
+      throwExpectedCliError(
         `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
       );
     }
@@ -61,10 +62,10 @@ async function prepareRestoreTarget(targetPath: string): Promise<{ created: bool
   try {
     const stat = await fs.lstat(targetPath);
     if (!stat.isDirectory()) {
-      throw new Error(`Backup restore target must be a directory: ${targetPath}`);
+      throwExpectedCliError(`Backup restore target must be a directory: ${targetPath}`);
     }
     if ((await fs.readdir(targetPath)).length > 0) {
-      throw new Error(`Backup restore target directory must be empty: ${targetPath}`);
+      throwExpectedCliError(`Backup restore target directory must be empty: ${targetPath}`);
     }
     return { created: false };
   } catch (error) {
@@ -90,7 +91,7 @@ function assertRestoreCapacity(targetPath: string, extractionBytes: number): voi
     path.resolve(targetPath) === path.resolve(diskSpace.checkedPath)
       ? targetPath
       : `${targetPath} (volume checked at ${diskSpace.checkedPath})`;
-  throw new Error(
+  throwExpectedCliError(
     `Backup restore requires ${formatDiskSpaceBytes(requiredBytes)} of free space at ${location} (${formatDiskSpaceBytes(extractionBytes)} archive data plus ${formatDiskSpaceBytes(BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES)} reserve), but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available. Choose a target on a volume with enough free space.`,
   );
 }
@@ -299,10 +300,10 @@ export async function backupRestoreCommand(
   const postgresConnectionEnv = options.postgresConnectionEnv;
   if (postgresConnectionEnv !== undefined) {
     if (!isValidEnvSecretRefId(postgresConnectionEnv)) {
-      throw new Error("--postgres-connection-env requires an environment variable name.");
+      throwExpectedCliError("--postgres-connection-env requires an environment variable name.");
     }
     if (!process.env[postgresConnectionEnv]?.trim()) {
-      throw new Error(
+      throwExpectedCliError(
         `--postgres-connection-env: ${postgresConnectionEnv} is not set; nothing was restored.`,
       );
     }
@@ -328,12 +329,12 @@ export async function backupRestoreCommand(
     );
   }
   if (options.localCompanion && manifest.profile !== "local-companion") {
-    throw new Error(
+    throwExpectedCliError(
       "--local-companion requires a local-companion checkpoint; no PostgreSQL data was imported.",
     );
   }
   if (postgresConnectionEnv !== undefined && databaseRestoreCandidates.length === 0) {
-    throw new Error(
+    throwExpectedCliError(
       "--postgres-connection-env requires an archive with PostgreSQL stores; nothing was restored.",
     );
   }

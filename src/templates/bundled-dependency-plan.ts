@@ -90,6 +90,12 @@ export async function planBundledTemplateDependency(params: {
           : pluginCollision !== undefined
             ? `Bundled plugins ${pluginCollision} and ${dependency.path} both have plugin id ${JSON.stringify(preflight.installId)}; keep one of them.`
             : (preflight.message ?? "Bundled dependency identity is incomplete."),
+        ...(!collision &&
+        pluginCollision === undefined &&
+        preflight.code === "plugin_disabled" &&
+        preflight.allowlistPluginId
+          ? { allowlistPluginId: preflight.allowlistPluginId }
+          : {}),
       }
     : undefined;
   const action: TemplateAddPlanAction = {
