@@ -145,10 +145,6 @@ describe("Gateway member recovery", () => {
         usedAt: expect.any(Number),
       };
       expect((await service.linkStatus()).recoveryUses).toEqual([use]);
-      expect(
-        (await restarted.memberView(peer))?.devices.find((device) => device.peer_key === peer)
-          ?.label,
-      ).toBe(use.deviceLabel);
       expect((await createOpenClawIdAuthority(store).load())?.member_recovery_uses).toEqual([use]);
       expect(await applyMailboxMessage(recoveryMail, sink)).toMatchObject([
         { ok: false, code: "seq_conflict" },
@@ -161,6 +157,7 @@ describe("Gateway member recovery", () => {
         devices: expect.arrayContaining([
           expect.objectContaining({
             peer_key: peer,
+            label: use.deviceLabel,
             approved_by: {
               kind: "member_recovery_kit",
               device_fp: await fingerprint(formatEd25519PublicKey(kit.publicKey)),
