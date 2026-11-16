@@ -122,6 +122,7 @@ const nodeRequiredFiles = new Set([
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
+  "test/scripts/vitest-pair-benchmark.test.ts",
   // Portable catalog lifecycle plus a separate V8 planner-count proof.
   "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",
@@ -503,6 +504,21 @@ export function resolveCiTestRuntimeSelections(
     : resolveAllRuntimeSelections(selection, policy, cwd);
 }
 
+/** Restrict execution, not policy: Node exceptions and native Bun keep their original membership. */
+export function filterCiTestRuntimeSelections(
+  selections: CiTestRuntimeSelection[],
+  env: NodeJS.ProcessEnv,
+): CiTestRuntimeSelection[] {
+  const runtime = env.OPENCLAW_CI_TEST_RUNTIME?.trim();
+  if (!runtime) {
+    return selections;
+  }
+  if (runtime !== "node" && runtime !== "bun") {
+    throw new Error(`Invalid OPENCLAW_CI_TEST_RUNTIME: ${runtime}; expected node or bun`);
+  }
+  return selections.filter((selection) => selection.runtime === runtime);
+}
+
 // Measurement consumes the same runtime and CLI owners as execution. It never
 // discovers files or changes a selection; opaque inputs have no denominator.
 export function resolveCiTestRuntimeInventory(
@@ -549,16 +565,17 @@ export function resolveCiTestRuntimeInventory(
 }
 
 /** Match the shard runner's original process envelopes without splitting or dropping coverage. */
-export function ciTestShardRequiresBun(
+export function ciTestShardRuntimes(
   shard: TestShard,
   policy: CiTestRuntimePolicy,
   cwd = process.cwd(),
-): boolean {
+): TestRuntime[] {
   const selections = shard.targets?.length
     ? shard.targets.map((target) => ({ ...shard, targets: [target] }))
     : shard.groups?.length
       ? shard.groups.map((group) => ({
           ...group,
+          vitestArgs: group.vitestArgs ?? shard.vitestArgs,
           env: {
             ...shard.env,
             ...group.env,
@@ -570,7 +587,18 @@ export function ciTestShardRequiresBun(
           },
         }))
       : [shard];
-  return selections.some((selection) =>
-    resolveCiTestRuntimeSelections(selection, policy, cwd).some(({ runtime }) => runtime === "bun"),
+  const runtimes = new Set(
+    selections.flatMap((selection) =>
+      resolveCiTestRuntimeSelections(selection, policy, cwd).map(({ runtime }) => runtime),
+    ),
   );
+  return (["node", "bun"] as const).filter((runtime) => runtimes.has(runtime));
+}
+
+export function ciTestShardRequiresBun(
+  shard: TestShard,
+  policy: CiTestRuntimePolicy,
+  cwd = process.cwd(),
+): boolean {
+  return ciTestShardRuntimes(shard, policy, cwd).includes("bun");
 }

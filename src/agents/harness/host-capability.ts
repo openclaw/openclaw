@@ -34,7 +34,6 @@ import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -285,12 +284,6 @@ export function createAgentHarnessHostCapabilities(params: {
           }),
         }
       : {}),
-    loopDetection: cloneSnapshot(
-      resolveToolLoopDetectionConfig({
-        cfg: config,
-        agentId: attempt.agentId,
-      }),
-    ),
     trigger: attempt.trigger,
     approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,

@@ -55,6 +55,7 @@ export type WorkspaceManifestValueInputs = {
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.document": WorkspaceManifestValueInputs["workspace.manifest.capture"];
+  "workspace.manifest.initial": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.reference": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.file": {
     path: string;
@@ -124,6 +125,9 @@ export type WorkspaceManifestValueOutputs = {
   "workspace.manifest.snapshot": WorkspaceComputationHashResult<WorkspaceManifestSnapshot>;
   "workspace.manifest.document": WorkspaceComputationHashResult<
     Omit<WorkspaceManifestSnapshot, "manifest">
+  >;
+  "workspace.manifest.initial": WorkspaceComputationHashResult<
+    Omit<WorkspaceManifestSnapshot, "manifest"> & { projectionFingerprints: Uint8Array | null }
   >;
   "workspace.manifest.reference": WorkspaceComputationHashResult<string>;
   "workspace.manifest.file": WorkspaceComputationHashResult<

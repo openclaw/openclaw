@@ -92,8 +92,6 @@ export async function prepareSessionMutationFacts(
   const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
   const agentIds = [agentId, ...(parsedAgent ? [parsedAgent] : [])];
   const routing = captureSessionStoreInventoryRouting(environment, agentIds);
-  const storage =
-    params.storageReady && "ready" in params.storageReady ? params.storageReady : undefined;
   const admitted = new Map<string, DatabasePathIdentity>();
   let initialDiscovery = true;
 
@@ -135,6 +133,7 @@ export async function prepareSessionMutationFacts(
   const acquisition = createSessionSharingFactAcquisition({
     followLifecycle: params.followLifecycle,
     followTranscript: params.followTranscript,
+    storageReady: params.storageReady,
     scope: readScope,
     inspection,
     phases,
@@ -143,6 +142,7 @@ export async function prepareSessionMutationFacts(
     assertActive,
     assertRoutingCurrent: () => assertRoutingCurrent(params.cfg),
   });
+  const { storage, readiness } = acquisition;
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
@@ -304,6 +304,12 @@ export async function prepareSessionMutationFacts(
     ];
     for (const candidate of originalCandidates) {
       acquisition.retainCandidate(candidate);
+      const preparing = acquisition.pendingFirstUsePreparation(candidate);
+      if (preparing) {
+        await preparing;
+        assertActive();
+        assertRoutingCurrent(params.cfg);
+      }
       const opening =
         readPendingOpenClawAgentDatabaseIdentity(candidate.path) ??
         readPendingOpenClawAgentDatabaseIdentity(candidate.physicalPath);
@@ -421,10 +427,6 @@ export async function prepareSessionMutationFacts(
         acquisition.capture(candidate.path, initialStoreKeys, identity);
       }
     }
-    const readiness =
-      params.storageReady && "ready" in params.storageReady
-        ? params.storageReady.ready
-        : params.storageReady;
     const preparations = readiness ? [readiness] : [];
     for (const { candidate } of candidateIdentities) {
       const pending = getPendingOpenClawAgentDatabasePreparation(candidate.physicalPath, "read");
@@ -485,6 +487,16 @@ export async function prepareSessionMutationFacts(
         }
       }
     }
+    // Classify retained registry transitions against the physically qualified generation.
+    capturedSources.splice(
+      0,
+      capturedSources.length,
+      ...candidateIdentities.map(({ candidate, identity }) => ({
+        candidate,
+        identity: identity.key,
+        birthtime: identity.birthtime,
+      })),
+    );
     assertActive();
     registry.assertCurrent();
     initialDiscovery = false;
@@ -495,15 +507,6 @@ export async function prepareSessionMutationFacts(
     }
     let readFacts = () => facts!;
     const { candidates: discoveryCandidates, ...inventory } = discoveryInventory;
-    capturedSources.splice(
-      0,
-      capturedSources.length,
-      ...candidateIdentities.map(({ candidate, identity }) => ({
-        candidate,
-        identity: identity.key,
-        birthtime: identity.birthtime,
-      })),
-    );
     const inventoryRead = prepareSessionStoreTargetInventoryRead(
       discoveryInventory,
       registryFilter,

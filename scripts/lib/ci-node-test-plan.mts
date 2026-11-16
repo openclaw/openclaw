@@ -5149,9 +5149,9 @@ function createCompactNodeTestShardBundles(
     if (selectedTooling) {
       // Keep partition and timing identity separate from precise file selection.
       plannedGroups = plannedGroups.flatMap((planned) => {
-        const includePatterns = (
-          planned.group.includePatterns ?? listToolingGroupFiles(planned.group.configs)
-        )?.filter(
+        const originalPatterns =
+          planned.group.includePatterns ?? listToolingGroupFiles(planned.group.configs);
+        const includePatterns = originalPatterns?.filter(
           (file) =>
             (!selectedToolingFiles || selectedToolingFiles.has(file)) &&
             (includeTooling ||
@@ -5168,22 +5168,53 @@ function createCompactNodeTestShardBundles(
           !planned.group.requiresDist &&
           !planned.group.pretestBuildMode &&
           includePatterns.every((file) => selectedToolingTimings[file] !== undefined);
+        // Known files need not reserve the discarded siblings' wall time.
+        // Retain startup headroom per process; unknown selections keep the parent floor.
+        let seconds = measuredSelection
+          ? Math.max(
+              DEFAULT_WHOLE_GROUP_SECONDS,
+              estimateParallelToolingSeconds(
+                planned.group,
+                includePatterns,
+                options.runnerBackend,
+                selectedToolingTimings,
+              ),
+            )
+          : planned.seconds;
+        if (
+          options.runnerBackend === "github" &&
+          compactMode === "push" &&
+          reducedToolingTier &&
+          selectedToolingFiles === undefined &&
+          isParallelToolingGroup(planned.group) &&
+          planned.group.configs.length === 1 &&
+          planned.group.configs[0] === TOOLING_CONFIG &&
+          !planned.group.requiresDist &&
+          planned.group.pretestBuildMode === undefined &&
+          originalPatterns !== undefined &&
+          includePatterns.length < originalPatterns.length
+        ) {
+          const githubTimings = readToolingFileTimings("github");
+          const blacksmithTimings = readToolingFileTimings("blacksmith");
+          const complete = includePatterns.every((file) => {
+            const value = githubTimings[file] ?? blacksmithTimings[file];
+            return typeof value === "number" && Number.isFinite(value) && value >= 0;
+          });
+          if (complete) {
+            // Use the canonical GitHub estimator so Blacksmith fallback keeps its scale.
+            const reducedSeconds = Math.max(
+              DEFAULT_WHOLE_GROUP_SECONDS,
+              estimateParallelToolingSeconds(planned.group, includePatterns, "github"),
+            );
+            if (Number.isFinite(reducedSeconds) && reducedSeconds < planned.seconds) {
+              seconds = reducedSeconds;
+            }
+          }
+        }
         return [
           {
             group: { ...planned.group, includePatterns },
-            // Known files need not reserve the discarded siblings' wall time.
-            // Retain startup headroom per process; unknown selections keep the parent floor.
-            seconds: measuredSelection
-              ? Math.max(
-                  DEFAULT_WHOLE_GROUP_SECONDS,
-                  estimateParallelToolingSeconds(
-                    planned.group,
-                    includePatterns,
-                    options.runnerBackend,
-                    selectedToolingTimings,
-                  ),
-                )
-              : planned.seconds,
+            seconds,
           },
         ];
       });

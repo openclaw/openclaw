@@ -10,6 +10,7 @@ import "../../styles/plugins.css";
 import "../../styles/templates-catalog.css";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
+import { renderPackageMetadata } from "../plugins/overview.tsx";
 import { TemplatePreviewView } from "./template-preview-view.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplatesDetailView } from "./templates-detail-view.tsx";
@@ -23,6 +24,9 @@ function CatalogLoading() {
           <div class="plugin-catalog-detail__loading-card skeleton" />
           <div class="plugin-catalog-detail__loading-card skeleton" />
         </div>
+        <aside class="plugin-catalog-detail__sidebar">
+          {renderPackageMetadata({ loading: true })}
+        </aside>
       </div>
     </>
   );

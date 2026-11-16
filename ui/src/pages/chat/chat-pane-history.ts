@@ -361,7 +361,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       !this.presented ||
       !this.visuallyPresented ||
       !this.transcript.isPositionSettled ||
-      this.transcript.isProgrammaticScroll ||
       !upward ||
       root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.history.loadingOlder ||
@@ -370,6 +369,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     ) {
       return;
     }
+    this.transcript.cancelScroll();
     this.historyAutoLoadBlocked = false;
     this.historyObserverArmed = true;
     this.syncHistoryObserver();

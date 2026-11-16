@@ -186,7 +186,7 @@ async function injectGatewayMessage(
     return err(
       errorShape(
         ErrorCodes.UNAVAILABLE,
-        `failed to write transcript: ${appended.error ?? "unknown error"}`,
+        `failed to write chat history: ${appended.error ?? "unknown error"}`,
       ),
     );
   }

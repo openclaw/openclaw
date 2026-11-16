@@ -8,7 +8,7 @@ export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, automations, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
-export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
+export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past chats.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SEND_RESULT_GUIDANCE =
   'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later reply delivery state, and neither proves target completion.';

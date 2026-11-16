@@ -76,6 +76,12 @@ after transport cleanup. Workspace mutations release their payload and previous
 row captures after acknowledgement or recovery finishes, including failed writes;
 retaining an admission must not retain those completed workspace payloads.
 
+Workspace checkpoint acceptance references the fingerprint observations already
+saved by reservation. The writer checks the row revision and checkpoint roots
+before publishing those observations; the main thread retains the same published
+projection and decodes its fingerprint bytes once for receipt and acknowledgement.
+Checkpoint bytes, rollback journals, and persistence timing are unchanged.
+
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
 the worker's registry key. Request handlers release completed replies before
@@ -699,19 +705,23 @@ hot participant records share their actor-owned identity objects.
 Actor commands retain their immutable replica preimage for admission transport.
 The worker sends a reference only after matching its authoritative write token,
 and only while the entry object remains unchanged. Cold or mismatched revisions
-and replaced entries carry the complete entry. Main resolves references within
-that command; live policy and revocation checks still run at every admission.
+and replaced entries carry the complete entry. On a replica miss, the first
+transaction admission also supplies its write token. Main retains that already
+received entry until settlement, so subsequent unchanged admissions and the
+commit receipt can reference it even after pool eviction. Main resolves references
+within that command; live policy and revocation checks still run at every admission.
 
 Plain transcript append, bookkeeping patch, and lifecycle receipts use the same command-local
 reference when the entry is unchanged and initialization does not also expose it. Main restores the
-entry by reference to its deeply frozen replica preimage, without cloning it.
+entry by reference to its deeply frozen replica or admission preimage, without cloning it.
 Receipts that change the entry send changed fields and removed keys
 against that same token; the host rebuilds the outer entry while reusing unchanged
 frozen fields. Matching metadata publication postimages reuse that reconstructed
 entry instead of transferring a second copy. Settlement, publication, and commit
 observers only read the result.
-Unavailable preimages, turn results, and append initialization still transfer the complete
-entry to preserve their result aliases. A missing or mismatched reference refuses receipt restoration. Stored bytes and write authority are
+Append initialization still transfers the complete entry to preserve its result
+aliases. Admission preimages add no persistent cache: their lifetime is the
+existing command settlement, and replica count and byte budgets are unchanged. A missing or mismatched reference refuses receipt restoration. Stored bytes and write authority are
 unchanged.
 
 Replica lookups resolve configured path spellings through the existing admission

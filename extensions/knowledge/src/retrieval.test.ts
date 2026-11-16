@@ -379,6 +379,135 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   }
 });
 
+it("keyword search matches canonically equivalent Unicode spellings without rewriting stored text", async () => {
+  const f = await fixture();
+  const composed = "\u03AC\u03BB\u03C6\u03B1"; // άλφα, NFC (U+03AC)
+  const decomposed = "\u03B1\u0301\u03BB\u03C6\u03B1"; // άλφα, NFD (U+03B1 U+0301)
+  const unaccented = "\u03B1\u03BB\u03C6\u03B1"; // αλφα
+
+  const nfcPath = await f.put("nfc_note", "Greek", `The word ${composed} is saved composed.`);
+  const nfdPath = await f.put("nfd_note", "Greek", `The word ${decomposed} is decomposed.`);
+  await f.put("plain_note", "Greek", `The word ${unaccented} is unaccented.`);
+
+  // Capture full records (body, hash, revision) through the real service
+  // record_detail API before searching; a query that rewrote stored text would
+  // change these fields.
+  const recordOf = async (id: string) => (await f.service.record_detail({ id }, f.owner)).record!;
+  const fields = (record: any) => ({
+    body: record.body,
+    hash: record.hash,
+    revision: record.revision,
+  });
+  const canonicalWords: Record<string, { word: string; otherSpelling?: string }> = {
+    nfc_note: { word: composed, otherSpelling: decomposed },
+    nfd_note: { word: decomposed, otherSpelling: composed },
+    plain_note: { word: unaccented },
+  };
+  const before: Record<string, any> = {};
+  for (const id of Object.keys(canonicalWords)) {
+    before[id] = await recordOf(id);
+  }
+
+  // The service grep already returns full hits (snippets and citations); the
+  // compact projection is only produced by the agent surface.
+  const fullComposed = await f.service.grep({ query: composed }, f.owner);
+  const fullDecomposed = await f.service.grep({ query: decomposed }, f.owner);
+  const sorted = (result: any) => ids(result).toSorted();
+  const byComposed = sorted(fullComposed);
+  const byDecomposed = sorted(fullDecomposed);
+  // Red on the base: the composed query found only the composed note. Canonically
+  // equivalent spellings must retrieve the same records, in either direction.
+  expect(byComposed).toStrictEqual(byDecomposed);
+  expect(byComposed).toContain("nfc_note");
+  expect(byComposed).toContain("nfd_note");
+  // No broad accent folding: an unaccented query is a separate feature and must
+  // not reach the composed accented note.
+  expect(sorted(await f.service.grep({ query: unaccented }, f.owner))).not.toContain("nfc_note");
+
+  // Every full hit's snippet offsets slice the exact original record body (the
+  // bounded-snippet contract: snippet.text === body.slice(start, end)) and identify
+  // the canonical word each note authored, in its own verbatim normalization.
+  for (const result of [fullComposed, fullDecomposed]) {
+    for (const hit of result.hits) {
+      const { word, otherSpelling } = canonicalWords[hit.record.id]!;
+      const originalBody = before[hit.record.id]!.body as string;
+      expect(hit.snippet.text).toBe(originalBody.slice(hit.snippet.start, hit.snippet.end));
+      expect(hit.snippet.text).toContain(word);
+      if (otherSpelling) {
+        expect(hit.snippet.text).not.toContain(otherSpelling);
+      }
+    }
+  }
+
+  // Re-read the authored notes after searching: body, hash and revision of both the
+  // NFC- and NFD-authored records are unchanged by either canonical search.
+  expect(fields(await recordOf("nfc_note"))).toStrictEqual(fields(before.nfc_note));
+  expect(fields(await recordOf("nfd_note"))).toStrictEqual(fields(before.nfd_note));
+
+  // Stored text stays verbatim, in its authored normalization.
+  const nfcRaw = await readFile(nfcPath, "utf8"),
+    nfdRaw = await readFile(nfdPath, "utf8");
+  expect(nfcRaw).toContain(composed);
+  expect(nfdRaw).toContain(decomposed);
+  expect(nfdRaw).not.toContain(composed);
+
+  // A partially normalized Hangul token (neither fully NFC nor fully NFD) must
+  // still match through its original literal spelling: the unchanged index holds
+  // exactly the authored term, and replacing it with a canonical spelling would
+  // lose an existing exact match.
+  const mixed = "\uAC00\u1102\u1161"; // 가나: U+AC00 U+1102 U+1161
+  const nfcHangul = mixed.normalize("NFC"); // 가나
+  const nfdHangul = mixed.normalize("NFD"); // 가나
+  await f.put("hangul_note", "Hangul", `Saved verbatim: ${mixed}.`);
+  await f.put("hangul_nfc_note", "Hangul", `Saved composed: ${nfcHangul}.`);
+  const fullHangul = await f.service.grep({ query: mixed }, f.owner);
+  expect(sorted(fullHangul)).toStrictEqual(["hangul_nfc_note", "hangul_note"]);
+  // The hit cites the record's own spelling, not a canonical replacement.
+  const hangulHit = fullHangul.hits.find((h) => h.record.id === "hangul_note");
+  expect(hangulHit!.snippet.text).toContain(mixed);
+  // Canonical query directions of the same word stay equivalent; both reach the
+  // composed note, and only the literal query reaches the mixed stored token.
+  expect(sorted(await f.service.grep({ query: nfcHangul }, f.owner))).toStrictEqual(
+    sorted(await f.service.grep({ query: nfdHangul }, f.owner)),
+  );
+  expect(sorted(await f.service.grep({ query: nfcHangul }, f.owner))).toContain("hangul_nfc_note");
+
+  // The reported multi-token regression: a query mixing NFC and NFD across its
+  // words must still match the record storing exactly that mixed spelling; the
+  // whole-query canonical alternatives alone would drop the literal form.
+  const betaDecomposed = "\u03B2\u03B7\u0301\u03C4\u03B1"; // βήτα, NFD (U+03B7 U+0301)
+  await f.put("mixed_greek_note", "Mixed", `${composed} ${betaDecomposed} reported verbatim.`);
+  const mixedGreekQuery = `${composed} ${betaDecomposed}`;
+  expect(sorted(await f.service.grep({ query: mixedGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "phrase" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note"]);
+  // In any mode the mixed query reaches every row through its own word: each
+  // word's spelling group matches independently. The mixed record and both
+  // uniformly spelled άλφα notes surface; the unaccented note surfaces through
+  // the decomposed alternative (its combining marks fold away, the composed
+  // token does not), which the composed alternative alone would never reach.
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "any" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note", "nfc_note", "nfd_note", "plain_note"]);
+
+  // A uniformly spelled query must reach the mixed record word by word: per-word
+  // spelling alternatives in all/any modes match each word in any canonical form,
+  // so the same row is found from every spelling of the query. Phrase mode stays
+  // whole-phrase (documented accepted gap): a uniformly spelled phrase cannot
+  // match a record mixing NFC and NFD across its words.
+  const uniformGreekQuery = `${composed} ${betaDecomposed.normalize("NFC")}`;
+  expect(sorted(await f.service.grep({ query: uniformGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: uniformGreekQuery, mode: "any" }, f.owner)),
+  ).toContain("mixed_greek_note");
+  expect(await f.total({ query: uniformGreekQuery, mode: "phrase" })).toBe(0);
+});
+
 it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
