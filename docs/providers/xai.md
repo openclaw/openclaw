@@ -440,11 +440,16 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
         providers: {
           xai: {
             voiceId: "eve",
+            // Optional: lock speech to one stored xAI auth profile.
+            // profileId: "xai:subscription",
           },
         },
       },
     }
     ```
+
+    Set `profileId` to route TTS through one stored xAI auth profile. A pinned
+    profile is fail-closed and does not fall back to `apiKey` or `XAI_API_KEY`.
 
     <Note>
     OpenClaw uses xAI's batch `/v1/tts` endpoint for buffered synthesis,
@@ -585,6 +590,8 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
             xai: {
               model: "grok-voice-latest",
               voice: "eve",
+              // Optional: lock realtime voice to one stored xAI auth profile.
+              // profileId: "xai:subscription",
               // Opt in only if provider-side session replay is acceptable.
               sessionResumption: false,
             },
@@ -598,8 +605,10 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     Provider-owned config also resolves from
     `plugins.entries.voice-call.config.realtime.providers.xai` when Voice Call
     or shared realtime selectors reuse the same provider map. Supported keys are
-    `apiKey`, `baseUrl`, `model`, `voice`, `vadThreshold`, `silenceDurationMs`,
-    `prefixPaddingMs`, `reasoningEffort`, and `sessionResumption`.
+    `apiKey`, `profileId`, `baseUrl`, `model`, `voice`, `vadThreshold`,
+    `silenceDurationMs`, `prefixPaddingMs`, `reasoningEffort`, and
+    `sessionResumption`. A pinned `profileId` is fail-closed and does not fall
+    back to `apiKey` or `XAI_API_KEY`.
     `reasoningEffort` accepts only `high` or `none`, matching the xAI Voice Agent API.
 
     xAI's server VAD always creates responses and handles audio interruption.

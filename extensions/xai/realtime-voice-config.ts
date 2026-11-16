@@ -160,6 +160,7 @@ export function normalizeXaiRealtimeProviderConfig(config: RealtimeVoiceProvider
       value: raw.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.xai.apiKey",
     }),
+    profileId: normalizeOptionalString(raw.profileId),
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model),
     voice: normalizeXaiRealtimeVoice(raw.speakerVoice ?? raw.voice),

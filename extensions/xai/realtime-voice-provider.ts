@@ -3,6 +3,7 @@ import {
   isProviderAuthProfileConfigured,
   isProviderAuthProfileConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import {
   assertXaiRealtimeVoiceRequestSupported,
@@ -20,6 +21,7 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
     ...createXaiRealtimeVoiceProviderMetadata({
       isProviderAuthProfileConfigured,
       isProviderAuthProfileConfiguredAsync,
+      resolveApiKeyForProvider,
       resolveAgentDir,
     }),
     createBridge: (req) => {
@@ -35,7 +37,8 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
         prefixPaddingMs: config.prefixPaddingMs,
         reasoningEffort: config.reasoningEffort,
         sessionResumption: config.sessionResumption,
-        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg, req.agentId),
+        resolveApiKey: () =>
+          resolveXaiRealtimeApiKey(config.apiKey, req.cfg, req.agentId, config.profileId),
       });
     },
   };

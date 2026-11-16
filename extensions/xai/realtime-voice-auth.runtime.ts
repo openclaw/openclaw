@@ -7,16 +7,20 @@ export async function resolveXaiRealtimeApiKey(
   configApiKey: string | undefined,
   cfg: OpenClawConfig | undefined,
   agentId?: string,
+  profileId?: string,
 ): Promise<string> {
-  const direct =
-    normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
-  if (direct) {
-    return direct;
+  if (!profileId) {
+    const direct =
+      normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
+    if (direct) {
+      return direct;
+    }
   }
   const auth = await resolveApiKeyForProvider({
     provider: "xai",
     cfg,
     ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+    ...(profileId ? { profileId, lockedProfile: true } : {}),
   });
   const oauthKey = normalizeOptionalString(auth?.apiKey);
   if (oauthKey) {

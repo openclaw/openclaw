@@ -83,6 +83,7 @@ function normalizeXaiSpeechProviderConfig(rawConfig: Record<string, unknown>) {
       value: xai.apiKey,
       path: "tts.providers.xai.apiKey",
     }),
+    profileId: normalizeOptionalString(xai.profileId),
     baseUrl: normalizeXaiTtsBaseUrl(
       normalizeOptionalString(xai.baseUrl) ??
         normalizeOptionalString(process.env.XAI_BASE_URL) ??
@@ -98,6 +99,7 @@ function normalizeXaiSpeechProviderConfig(rawConfig: Record<string, unknown>) {
 export function readXaiSpeechProviderConfig(config: SpeechProviderConfig) {
   return {
     apiKey: normalizeOptionalString(config.apiKey),
+    profileId: normalizeOptionalString(config.profileId),
     baseUrl:
       normalizeOptionalString(config.baseUrl) ?? normalizeXaiTtsBaseUrl(process.env.XAI_BASE_URL),
     voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? "eve",
@@ -142,7 +144,9 @@ const parseXaiSpeechDirectiveToken = createSpeechDirectiveParser({
 export function createXaiSpeechProviderMetadata(
   context: Pick<
     PluginCapabilityCatalogHostContext,
-    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+    | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
+    | "resolveApiKeyForProvider"
   >,
 ): Omit<
   SpeechProviderPlugin,
@@ -169,6 +173,7 @@ export function createXaiSpeechProviderMetadata(
                 value: talkProviderConfig.apiKey,
                 path: "talk.providers.xai.apiKey",
               }),
+        profileId: normalizeOptionalString(talkProviderConfig.profileId) ?? base.profileId,
         baseUrl: baseUrl === undefined ? base.baseUrl : normalizeXaiTtsBaseUrl(baseUrl),
         voiceId: normalizeOptionalString(talkProviderConfig.voiceId) ?? base.voiceId,
         language:
@@ -190,11 +195,28 @@ export function createXaiSpeechProviderMetadata(
       };
     },
     // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
-      context.isProviderAuthProfileConfigured({ provider: "xai", cfg }),
-    isConfiguredAsync: async ({ providerConfig, cfg }) =>
-      Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
-      (await context.isProviderAuthProfileConfiguredAsync({ provider: "xai", cfg })),
+    isConfigured: ({ providerConfig, cfg }) => {
+      const config = readXaiSpeechProviderConfig(providerConfig);
+      return config.profileId
+        ? false
+        : Boolean(resolveDirectXaiAudioApiKey(config.apiKey)) ||
+            context.isProviderAuthProfileConfigured({ provider: "xai", cfg });
+    },
+    isConfiguredAsync: async ({ providerConfig, cfg }) => {
+      const config = readXaiSpeechProviderConfig(providerConfig);
+      return config.profileId
+        ? Boolean(
+            (
+              await context.resolveApiKeyForProvider({
+                provider: "xai",
+                cfg,
+                profileId: config.profileId,
+                lockedProfile: true,
+              })
+            )?.apiKey,
+          )
+        : Boolean(resolveDirectXaiAudioApiKey(config.apiKey)) ||
+            (await context.isProviderAuthProfileConfiguredAsync({ provider: "xai", cfg }));
+    },
   };
 }

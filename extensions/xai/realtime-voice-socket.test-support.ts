@@ -63,7 +63,7 @@ export const isProviderAuthProfileConfiguredAsyncMock = vi.fn(
 );
 
 export const resolveApiKeyForProviderMock = vi.fn(
-  async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({
+  async (_params: Record<string, unknown>): Promise<{ apiKey: string | undefined }> => ({
     apiKey: undefined,
   }),
 );
