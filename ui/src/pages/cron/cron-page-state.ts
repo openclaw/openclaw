@@ -485,10 +485,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function selectJob(job: CronJob, runId: string | null = null) {
-    const selection = cronRoute.resolveCronDetailSelection(cron, job, runId);
-    routeSelection.select(job.id, selection.runId);
-    pendingRunScroll = Boolean(selection.runId);
-    setDetailTab(selection.tab);
+    routeSelection.select(job.id, runId);
+    pendingRunScroll = Boolean(runId);
+    setDetailTab(cronRoute.resolveCronDetailTab(job, runId));
     cron.cronCreateOpen = false;
     // Inspecting another run of the current saved job must not discard its draft.
     if (cron.cronEditingJob !== job) {
@@ -496,7 +495,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       deliveryDirectory.openEditor();
     }
     // Claim the history target synchronously; fetch after its selected tab settles.
-    selectCronRunsForJob(cron, job.id, selection.runId);
+    selectCronRunsForJob(cron, job.id, runId);
     publishCronState();
     onSettled(() => void presentation.runTask(loadCronRuns));
   }
