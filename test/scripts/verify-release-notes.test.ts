@@ -608,6 +608,7 @@ syncBuiltinESMExports();
       "Copilot",
       "copilot",
       "COPILOT",
+      "release-helper[api]",
     ]) {
       expect(isEligibleHandle(handle)).toBe(false);
     }
@@ -708,6 +709,7 @@ process.exitCode = errors.length ? 1 : 0;
     "cumulative-wrong-record",
     "cumulative-conflicting-origin",
     "proxy",
+    "cli-multiline",
     "mixed-transport",
     "unrelated",
     "no-evidence",
@@ -841,6 +843,7 @@ process.exitCode = errors.length ? 1 : 0;
         '  if (mode === "transport") { errors.length = 0; console.error("authentication failed"); process.exitCode = 1; }',
         "}",
         'if (mode === "proxy" && errors.length) { console.error("octopool: graphql delegated to personal token"); console.error("error: GraphQL request failed"); }',
+        'if (mode === "cli-multiline" && errors.length) { console.error("gh: Missing issue"); console.error("Missing issue"); }',
         'if (mode === "mixed-transport" && errors.length) console.error("ECONNRESET");',
         "console.log(JSON.stringify({ data, errors }));",
         "process.exitCode ||= errors.length ? 1 : 0;",
@@ -877,7 +880,17 @@ process.exitCode = errors.length ? 1 : 0;
       env: { RECOVERY_CASE: mode, PATH: cwd + ":" + process.env.PATH },
     });
     expect(readFileSync(evidencePath, "utf8")).toBe(evidenceBytes);
-    if (!["source", "late", "adaptation", "cumulative", "proxy", "unrelated"].includes(mode)) {
+    if (
+      ![
+        "source",
+        "late",
+        "adaptation",
+        "cumulative",
+        "proxy",
+        "cli-multiline",
+        "unrelated",
+      ].includes(mode)
+    ) {
       expect(result.status, result.stderr).not.toBe(0);
       return;
     }

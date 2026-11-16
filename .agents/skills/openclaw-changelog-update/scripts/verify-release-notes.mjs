@@ -342,7 +342,8 @@ function fetchGithubApi(args) {
               response.errors.some(
                 (entry) =>
                   line === "error: GraphQL request failed" ||
-                  (typeof entry.message === "string" && line === "gh: " + entry.message),
+                  (typeof entry.message === "string" &&
+                    (line === "gh: " + entry.message || line === entry.message)),
               ),
           )
       ) {
@@ -500,6 +501,7 @@ export function isEligibleHandle(handle) {
     typeof handle === "string" &&
     handle.toLowerCase() !== "undefined" &&
     !handle.endsWith("[bot]") &&
+    !handle.endsWith("[api]") &&
     !excludedHandles.has(handle.toLowerCase())
   );
 }
