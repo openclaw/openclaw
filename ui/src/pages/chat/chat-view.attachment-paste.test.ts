@@ -177,6 +177,18 @@ describe("chat attachment paste", () => {
     },
   );
 
+  it("keeps a recovered text paste within maxlength", async () => {
+    const textarea = getComposerTextarea(renderChatView({ draft: "Draft: " }));
+    textarea.maxLength = 10;
+    textarea.focus();
+    textarea.setSelectionRange(7, 7);
+    textarea.dispatchEvent(createPasteEvent("dictated text"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(textarea.value).toBe("Draft: dic");
+  });
+
   it("preserves pasted-text presentation and restore behavior across handoff", async () => {
     const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
     const original = registerChatAttachmentPayload({

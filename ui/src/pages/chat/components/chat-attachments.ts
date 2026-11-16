@@ -140,6 +140,7 @@ export function appendChatAttachmentFiles(
 // Wispr Flow restore the previous clipboard right after their Cmd+V, so the
 // event's own snapshot is the only reliable copy of the text. Replacing the
 // original selection again is idempotent when the native insert did land.
+// Like native paste, the recovered insert keeps to maxlength.
 // Accepted edge case: the recovered insert is outside the native undo stack.
 function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
   const target = e.target;
@@ -157,7 +158,8 @@ function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
     ) {
       return;
     }
-    target.setRangeText(text, start, end, "end");
+    const room = target.maxLength < 0 ? text.length : target.maxLength - value.length + end - start;
+    target.setRangeText(text.slice(0, Math.max(0, room)), start, end, "end");
     target.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
     );
