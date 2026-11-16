@@ -31,6 +31,7 @@ import {
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
+import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -75,6 +76,7 @@ import {
 } from "./update-command-fresh-doctor.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
+import { settleOwedStepsAfterFinalization } from "./update-command-owed.js";
 import {
   collectPostCorePluginAdvisories,
   collectPostCorePluginFailureFacts,
@@ -524,14 +526,33 @@ async function updateFinalizeCommandInternal(
     const completionBudget = lifecycle.budget("completionCache");
     // Leave shutdown time inside the phase deadline so optional cache failures can settle.
     const completionTimeout = completionBudget - Math.min(1_000, completionBudget / 2);
+    let completionFailure: string | undefined;
     await lifecycle.run(
       "completionCache",
       async () =>
         opts.deferCompletionCache
           ? ("deferred" as const)
-          : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout, nodeRunner),
+          : await tryWriteCompletionCache(
+              root,
+              Boolean(opts.json),
+              completionTimeout,
+              nodeRunner,
+              (reason) => {
+                completionFailure = reason;
+              },
+            ),
       (result) => result,
     );
+    // A post-core child defers completion to its parent, which then owns owed steps too.
+    const owedSteps = opts.deferCompletionCache
+      ? []
+      : await settleOwedStepsAfterFinalization(
+          { runId: invokingRunId, env: process.env },
+          { root, completionFailure, timeoutMs: completionBudget },
+        );
+    for (const step of owedSteps) {
+      defaultRuntime.error(`Warning: ${formatUpdateOwedStep(step)}`);
+    }
 
     const gateway =
       interruptedGateway && pluginUpdate.status !== "error" && !retained
@@ -568,7 +589,10 @@ async function updateFinalizeCommandInternal(
       status:
         pluginUpdate.status === "error"
           ? "error"
-          : pluginUpdate.status === "warning" || doctorWarnings.length > 0 || retained
+          : pluginUpdate.status === "warning" ||
+              doctorWarnings.length > 0 ||
+              owedSteps.length > 0 ||
+              retained
             ? "warning"
             : "ok",
       mode: "finalize",
@@ -582,6 +606,7 @@ async function updateFinalizeCommandInternal(
       restart: gateway?.restart ?? false,
       ...(gateway?.verification ? { verification: gateway.verification } : {}),
       ...(recoveryRunIds.length ? { reconciledRuns } : {}),
+      ...(owedSteps.length ? { owedSteps } : {}),
       ...retained,
       phaseTimings: lifecycle.phaseTimings,
       postUpdate: {

@@ -885,6 +885,49 @@ when they invoke the new version's `update finalize`. Older parents may omit the
 warning from their own summary; the finalizer prints it and records it in update
 history.
 
+#### Owed steps
+
+Some follow-up steps are not needed for the new version to run. When one of them
+fails and the update otherwise succeeds, the update records the step as owed,
+with its reason, prints it as a warning, and exits 0. In `--json` output the
+warning is an advisory step, and the `run` record lists the owed step. Two steps
+can be owed:
+
+- **Shell completion refresh** (`shell-completion`): the completion cache or the
+  shell profile could not be refreshed after a core update.
+- **Gateway service definition refresh** (`service-definition`): the service
+  installer failed and the update continued on the previous definition, or the
+  definition still points outside the updated installation after the refresh.
+
+Required database migrations, refused or invalid configuration, Doctor refusals,
+and Gateway readiness are never owed. They still block completion. A failed or
+rolled-back update owes nothing, including a step recorded before it failed.
+
+Later commands settle what is owed:
+
+- The next `openclaw update` refreshes shell completion again, including when the
+  core is already current, where it does not prompt. A shell profile that still
+  loads completion the slow way keeps the step owed until an interactive update or
+  `openclaw completion --install` upgrades it.
+- An update settles an owed service definition refresh only when it refreshes the
+  service definition itself, as a core update with a restart does. Otherwise the
+  step stays owed and the update repeats the warning.
+- `openclaw update repair` refreshes the completion cache when it runs
+  finalization. It does not run the service installer. After its Doctor
+  maintenance, it settles the service definition step when the managed definition
+  targets the active installation, or when no managed service remains. A repair
+  that finds a healthy Gateway and skips finalization leaves owed steps unchanged.
+
+A retry that fails keeps the step owed, warns again, and does not fail the
+command. The command that retried it then holds the step in its own run. Gateway
+startup does not retry owed steps. See
+[Status and history](/cli/update/status-and-history#update-status) to inspect them.
+
+An updater records and retries owed steps only when its own version supports
+them. On the first update to a version that does, the previously installed
+updater runs these steps and still drops a failed shell completion refresh
+without a record.
+
 <a id="durable-serving-recovery" />
 
 ### Recovery limits

@@ -144,6 +144,17 @@ Repeated warnings appear once in the final report. If update Doctor deferred
 agent database path repair to preserve the rollback inventory, its warning points
 to `openclaw doctor --fix` without telling you to wait for the completed update.
 
+Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warning
+with its reason and what settles it. A successful update's headline counts it
+among its warnings. The newest of the last 50 runs that mentions a step decides
+whether it is still owed, so the warning stays visible after a later run that did
+not settle it. Failed and rolled-back runs owe nothing. JSON lists owed steps as
+`owedSteps` with `id`, `runId`, and `reason`; the field is absent when nothing is
+owed. `openclaw update repair --json` reports the steps it leaves owed in the
+same field, with `id` and `reason`. In the run record, an owed step is a
+`finalize:owed:<id>` step with status `skipped` and the reason in `detail`. The
+status becomes `completed` once the step is settled or a newer run holds it.
+
 When the Gateway is reachable, status also reads its recorded channel warnings
 without checking channel services. JSON exposes these as `channelIssues`. This
 includes blocked channel startup after a local plugin requests trusted runtime
