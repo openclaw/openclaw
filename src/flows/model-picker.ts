@@ -160,7 +160,7 @@ async function resolvePickerLogicalCatalog(params: {
   }
   const catalog = await resolveLogicalVisibleModelCatalog({
     cfg: params.cfg,
-    catalog: params.catalog,
+    catalog: params.catalog.filter((entry) => entry.inference?.chatEvidence !== "unlikely"),
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: params.defaultModel,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -180,8 +180,8 @@ async function resolvePickerLogicalCatalog(params: {
       });
     },
   });
-  // Picker sources encode product priority: live rows lead static/configured
-  // supplements. Logical projection must not replace that order with display sorting.
+  // Setup offers likely chat only; unlikely rows stay typeable. Picker sources encode product
+  // priority: live rows lead static/configured supplements; projection must not re-sort them.
   return catalog.toSorted((left, right) => {
     const leftKey =
       openAIModelCatalogRoutePolicy.resolveIdentity(left)?.key ?? modelCatalogEntryKey(left);

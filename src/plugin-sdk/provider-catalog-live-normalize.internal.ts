@@ -122,7 +122,8 @@ function isSafeLiveModelId(value: string): boolean {
   return true;
 }
 
-// Interim: a listed ID with no capability evidence is chat unless its name is a non-text family.
+// Weak evidence only: a listed ID without capability fields that names a non-text family is
+// unlikely chat, never declared non-chat (#198288 hid such rows; #199998 kept the ID rule).
 const NON_TEXT_MODEL_ID_PATTERN =
   /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|realtime|moderation|guard|(?:audio|image|video)(?!-text-to-text)|dall-e|flux|sdxl|stable-diffusion|imagen|veo|sora|babbage|davinci|gpt-3[.]5-turbo-instruct)(?:$|[/_:.-])/i;
 
@@ -130,7 +131,7 @@ const NON_TEXT_MODEL_ID_PATTERN =
 // Hugging Face `pipeline_tag`, oMLX/NVIDIA `model_type`, DeepInfra `metadata.tags` and the
 // Ollama `capabilities` list. Explicit non-chat values (LiteLLM `completion`, `embedding`, ...)
 // decide on their own. Together's `language` is also its completions type but means chat on
-// Vercel, so it is neither here; the listing-level pass in buildOpenAICompatibleLiveModels decides
+// Vercel, so it is neither here; the listing-level pass in buildOpenAICompatibleLiveModels demotes
 // it. Ollama's `completion` capability means chat and is caught by the endpoint check first.
 const CHAT_MODEL_KIND =
   /^(?:chat|text|llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/;
@@ -245,6 +246,9 @@ function readLiveModelContextWindow(
   ]);
 }
 
+/** Chat stays true, so readers that predate `chatEvidence` keep treating the row as chat. */
+const UNLIKELY_CHAT_INFERENCE = { chat: true, chatEvidence: "unlikely" } as const;
+
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
@@ -252,6 +256,7 @@ function buildOpenAICompatibleLiveModel(
     | ((params: { id: string; record: Record<string, unknown> }) => boolean)
     | undefined,
   otherKindInChatListing: boolean,
+  unknownModelChatEvidence: "unlikely" | undefined,
 ): ModelDefinitionConfig | undefined {
   const record = asOptionalRecord(row);
   const id = readOpenAICompatibleLiveModelId(record);
@@ -275,14 +280,18 @@ function buildOpenAICompatibleLiveModel(
   const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
   const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
-  const rowChatCapability = readLiveModelChatCapability(record);
-  const advertisedChatCapability =
-    otherKindInChatListing && rowChatCapability !== true ? false : rowChatCapability;
+  const advertisedChatCapability = readLiveModelChatCapability(record);
   const exact = fallback.models.find((model) => model.id === id);
-  // No evidence means unknown, which downstream treats as chat.
-  const chat =
-    advertisedChatCapability ??
-    (exact ? (exact.inference?.chat ?? true) : !NON_TEXT_MODEL_ID_PATTERN.test(id));
+  // Declared evidence decides: the row's own fields, then the catalog. Without it, weak
+  // evidence makes an unknown row unlikely chat; no evidence at all is unknown, which
+  // downstream treats as chat.
+  const chat = advertisedChatCapability ?? exact?.inference?.chat ?? true;
+  const unlikely =
+    advertisedChatCapability === undefined &&
+    !exact &&
+    (otherKindInChatListing ||
+      NON_TEXT_MODEL_ID_PATTERN.test(id) ||
+      unknownModelChatEvidence === "unlikely");
 
   if (exact) {
     const contextWindow =
@@ -358,7 +367,11 @@ function buildOpenAICompatibleLiveModel(
   return {
     id,
     name: readLiveModelCatalogStringField(record, ["display_name", "displayName", "name"]) ?? id,
-    ...(!chat ? { inference: { chat: false } } : {}),
+    ...(!chat
+      ? { inference: { chat: false } }
+      : unlikely
+        ? { inference: UNLIKELY_CHAT_INFERENCE }
+        : {}),
     ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(template?.api ? { api: template.api } : {}),
     reasoning,
@@ -375,10 +388,12 @@ export function buildOpenAICompatibleLiveModels(
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
+  /** Provider prior for uncatalogued rows without capability evidence. */
+  unknownModelChatEvidence?: "unlikely",
 ): ModelDefinitionConfig[] {
   // The listing is closed-world for kinds: once a row names a chat kind in a field, rows that
-  // carry that field with another value are not chat (Together `language`, LiteLLM
-  // `completion`). Rows without the field stay unknown.
+  // carry that field with another, unfamiliar value are unlikely chat (Together `language`).
+  // Rows without the field stay unknown.
   const listing = rows.map((row) => ({
     row,
     kinds: [...readLiveModelKinds(asOptionalRecord(row))].map(([field, values]) => ({
@@ -396,6 +411,7 @@ export function buildOpenAICompatibleLiveModels(
         fallback,
         acceptUnknownModel,
         kinds.some((kind) => !kind.chat && chatKindFields.has(kind.field)),
+        unknownModelChatEvidence,
       ),
     )
     .filter((model): model is ModelDefinitionConfig => Boolean(model));
@@ -430,7 +446,9 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (!model || !id || !contextWindow || !maxTokens) {
     return undefined;
   }
-  const chat = readLiveModelChatCapability(model) ?? !NON_TEXT_MODEL_ID_PATTERN.test(id);
+  const advertisedChatCapability = readLiveModelChatCapability(model);
+  const chat = advertisedChatCapability ?? true;
+  const unlikely = advertisedChatCapability === undefined && NON_TEXT_MODEL_ID_PATTERN.test(id);
 
   const modelProvider = asOptionalRecord(model.provider);
   const npm =
@@ -493,7 +511,11 @@ export function projectUpstreamProviderCatalogModel(params: {
   return {
     id,
     name: readLiveModelCatalogStringField(model, "name") ?? id,
-    ...(!chat ? { inference: { chat: false } } : {}),
+    ...(!chat
+      ? { inference: { chat: false } }
+      : unlikely
+        ? { inference: UNLIKELY_CHAT_INFERENCE }
+        : {}),
     ...(parameterCount !== undefined ? { parameterCount } : {}),
     provider: params.providerId,
     api,

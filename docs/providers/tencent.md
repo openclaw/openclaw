@@ -69,6 +69,8 @@ export TOKENPLAN_API_KEY=...
   </Step>
 </Steps>
 
+Tencent's model list names models without saying which ones chat, and it includes speech models. A listed model that OpenClaw's catalog does not describe yet stays out of the default model picker; the commands above and `openclaw models list --all` list it, and a typed or configured reference to it still runs.
+
 Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
 
 ## Non-interactive setup
