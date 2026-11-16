@@ -219,7 +219,13 @@ maintenance heartbeat exits. Valid or absent input remains blocked by the prior
 failure. This diagnostic inspection does not authorize later migrations or writes.
 
 `doctor --fix` includes the failing check, refusal code, and reason in its halt
-message and health warnings, using the same failure facts as `openclaw update repair`.
+message and health warnings. The halt message names the operator's database path
+(home-relative, or `$OPENCLAW_STATE_DIR` outside the home directory) so the
+reason stays actionable; health warnings and the persisted failure facts keep
+the support-report path redaction. A required migration that only `--fix` can
+apply refuses with `refusal.code: "state-migration-pending"` and tells the
+operator to run `openclaw doctor --fix`, instead of the generic
+"refused to continue" summary.
 Its bounded summary lists observed refusals before derivative blocked steps;
 the full receipt list retains the complete chain.
 

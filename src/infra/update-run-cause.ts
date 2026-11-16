@@ -35,6 +35,7 @@ const CODE_CAUSES: Readonly<Record<string, UpdateRunCause>> = {
   "state-migrated-no-rollback": "state-migration-failed",
   "retired-state-format": "state-migration-failed",
   "step-refused": "state-migration-failed",
+  "state-migration-pending": "state-migration-failed",
   "blocked-by-session-repair-failure": "state-migration-failed",
   "unverified-agent-databases": "state-migration-failed",
   OPENCLAW_STATE_LEASE_LOST: "state-migration-failed",
