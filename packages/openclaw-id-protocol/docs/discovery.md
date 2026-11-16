@@ -177,7 +177,7 @@ device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload 
 | `enrollment`             | new device / owner device        | fp / owners | SAS protocol (below)                                                                      |
 | `notice`                 | Gateway                          | owners / fp | none: a hint; the device confirms at the Gateway directly                                 |
 | `member_browser_request` | bound device of a current member | gateway     | current local membership; display-only Inbox metadata, never admission                    |
-| `member_recovery` | signed-in member with kit | gateway | current recovery-only key, same account, add_member_device only |
+| `member_recovery`        | signed-in member with kit        | gateway     | current recovery-only key, same account, add_member_device only                           |
 
 Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is

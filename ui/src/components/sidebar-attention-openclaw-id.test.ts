@@ -47,7 +47,10 @@ afterEach(() => {
 
 function setup(
   read: () => Promise<OpenClawIdStatusResult>,
-  requests: Pick<OpenClawIdPeopleLink, "invites" | "nodeInvites" | "browserRequests" | "recoveryUses"> = {},
+  requests: Pick<
+    OpenClawIdPeopleLink,
+    "invites" | "nodeInvites" | "browserRequests" | "recoveryUses"
+  > = {},
 ) {
   let enabled = true;
   let publication: OpenClawIdPublication = superseded;

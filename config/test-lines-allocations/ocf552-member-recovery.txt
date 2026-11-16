@@ -1,4 +1,4 @@
-# +1254 net test lines after removing 39 lines of duplicated page removal/history proof.
+# +1257 net test lines after removing 39 lines of duplicated page removal/history proof.
 # 379 protocol: artifact/key separation and recovery-only authority, replay, replacement,
 #     removal/reinvite and pending-invite collision negatives at the signed boundary.
 # 216 Gateway: malformed mail, commit failure, reload/replay, owner-only persisted history,
@@ -7,7 +7,8 @@
 #     updates/browser ordering. Confirmed removal/history transitions live in browser E2E.
 # 413 browser: source core + plugin Inbox deep link, owner-key signing, confirmed removal,
 #     retained history, same-key admission toast and required light/dark mobile/desktop proof.
-# 119 core UI: owner-only Inbox/dismissal persistence and current-admission notice provenance.
+# 122 core UI: owner-only Inbox/dismissal persistence and current-admission notice provenance.
+# The 551 stack adds three formatter-required lines to the shared Inbox fixture field union.
 # The browser composition covers native routing/key/mailbox/toast lifetimes that isolated
-# page or protocol tests cannot. 400 default lines + 854 allocation = 1254 total.
-854
+# page or protocol tests cannot. 400 default lines + 857 allocation = 1257 total.
+857
