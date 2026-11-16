@@ -11,7 +11,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { commitVerifiedUpdatePluginCohort } from "./update-command-cohort.js";
-import { convergeUpdatePlugins, isSwitchedGitRelease } from "./update-command-convergence.js";
+import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
@@ -460,7 +460,7 @@ async function finishSettledUpdate(
       const deferPluginConvergence =
         shouldRestart &&
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-        (params.coreAlreadyCurrent === true || isSwitchedGitRelease(params.result)) &&
+        (params.coreAlreadyCurrent === true || params.gitRelease === true) &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       const runsPostActivationInspections =
         shouldRestart &&

@@ -320,8 +320,16 @@ async function updateCommandInternal(
       });
     }
 
+    let releaseLayoutWarning: string | undefined;
+    const gitRelease =
+      updateInstallKind === "git" &&
+      usesGitReleases(switchToGit, (reason) => {
+        releaseLayoutWarning = `Git release layout unavailable (${reason}); updating the checkout in place. The next update tries the release layout again.`;
+        defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
+      });
     const finalizationContext = {
       opts,
+      gitRelease,
       root,
       previousInstallRoot: discoveredRoot,
       requestedChannel,
@@ -430,13 +438,6 @@ async function updateCommandInternal(
     let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
     let mutableUpdatePrepared = false;
     let retainedRuntimeStep: UpdateStepResult | undefined;
-    let releaseLayoutWarning: string | undefined;
-    const gitRelease =
-      updateInstallKind === "git" &&
-      usesGitReleases(switchToGit, (reason) => {
-        releaseLayoutWarning = `Git release layout unavailable (${reason}); updating the checkout in place. The next update tries the release layout again.`;
-        defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
-      });
     const prepareMutableUpdate: Parameters<
       typeof executeMutableUpdate
     >[0]["prepareMutableUpdate"] = async (

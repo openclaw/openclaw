@@ -371,12 +371,15 @@ describe("successful update finalization ordering", () => {
     await fs.mkdir(releaseRoot, { recursive: true });
     await publishGitRelease({ prefix, releaseRoot, trial: false });
 
-    await finishSuccessfulPackageSwitch({
-      packageRoot: gitReleaseSlot(prefix),
-      updateMode: "git",
-      sealed: true,
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch(
+      {
+        packageRoot: gitReleaseSlot(prefix),
+        updateMode: "git",
+        sealed: true,
+        restartEnvironment: process.env,
+      },
+      { gitRelease: true },
+    );
 
     // A failed trial switches core back; plugins replaced before that would require the new core.
     expect(mocks.restartService).toHaveBeenCalled();
