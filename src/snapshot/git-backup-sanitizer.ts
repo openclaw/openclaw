@@ -10,7 +10,12 @@ import {
 import type { SnapshotDatabaseIdentity } from "./snapshot-provider.js";
 
 type RedactionIdentity = Pick<SnapshotDatabaseIdentity, "role">;
-const modelCatalogScopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
+// v1 rows written by older builds stay in the database, so keep sanitizing them.
+const modelCatalogScopes = [
+  "plugin-model-catalog-v2",
+  "plugin-model-catalog-v1",
+  "plugin-model-catalog-migration-v1",
+];
 
 function resolveRedactionIdentity(
   identity: RedactionIdentity,

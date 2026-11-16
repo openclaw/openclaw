@@ -106,7 +106,7 @@ function updateCatalog(database: DatabaseSync, contents: string, pluginId = "zai
     .prepare(
       `UPDATE cache_entries SET value_json = ?${at === undefined ? "" : ", updated_at = ?"} WHERE scope = ? AND key = ?`,
     )
-    .run(contents, ...(at === undefined ? [] : [at]), "plugin-model-catalog-v1", pluginId);
+    .run(contents, ...(at === undefined ? [] : [at]), "plugin-model-catalog-v2", pluginId);
 }
 
 async function withPermissions(
@@ -127,7 +127,7 @@ function readCatalogCacheRow(pluginId: string) {
   return withDatabase((database) => {
     const row = database
       .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
-      .get("plugin-model-catalog-v1", pluginId) as
+      .get("plugin-model-catalog-v2", pluginId) as
       | { value_json: string; updated_at: number }
       | undefined;
     if (!row) {
@@ -188,9 +188,9 @@ describe("SQLite-backed plugin model catalogs", () => {
       const insert = database.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
       );
-      insert.run("plugin-model-catalog-v1", "λ🦞", "unicode catalog bytes");
-      insert.run("plugin-model-catalog-v1", "\uFFFD", "replacement catalog bytes");
-      insert.run("plugin-model-catalog-v1", "null", null);
+      insert.run("plugin-model-catalog-v2", "λ🦞", "unicode catalog bytes");
+      insert.run("plugin-model-catalog-v2", "\uFFFD", "replacement catalog bytes");
+      insert.run("plugin-model-catalog-v2", "null", null);
     });
     const selections: { ids: string[]; expected: Record<string, string> }[] = [
       {
@@ -358,7 +358,7 @@ describe("SQLite-backed plugin model catalogs", () => {
         .prepare(
           "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
         )
-        .run(malformedNvidia, "plugin-model-catalog-v1", "nvidia");
+        .run(malformedNvidia, "plugin-model-catalog-v2", "nvidia");
     } finally {
       database.close();
     }

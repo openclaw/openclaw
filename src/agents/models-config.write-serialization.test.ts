@@ -33,7 +33,7 @@ function readRawCatalogCacheRow(agentDir: string, pluginId: string): CacheRow {
   try {
     const row = database
       .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
-      .get("plugin-model-catalog-v1", pluginId) as CacheRow | undefined;
+      .get("plugin-model-catalog-v2", pluginId) as CacheRow | undefined;
     return expectDefined(row, `Missing generated catalog cache row for ${pluginId}`);
   } finally {
     database.close();
@@ -403,7 +403,7 @@ it("plans persisted bytes without repair or fingerprint churn", async ({ agentDi
       .prepare(
         "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
       )
-      .run(malformed, "plugin-model-catalog-v1", "nvidia");
+      .run(malformed, "plugin-model-catalog-v2", "nvidia");
   } finally {
     database.close();
   }

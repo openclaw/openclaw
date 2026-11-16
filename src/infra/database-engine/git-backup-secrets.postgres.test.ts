@@ -161,7 +161,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                 },
               });
               for (const scope of [
-                "plugin-model-catalog-v1",
+                "plugin-model-catalog-v2",
                 "plugin-model-catalog-migration-v1",
               ]) {
                 source
