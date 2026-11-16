@@ -89,27 +89,21 @@ function stripWhatsAppTargetPrefix(value: string): string {
   }
 }
 
-function normalizeDirectWireJidTarget(rawTarget: string): string | null {
-  const match = stripWhatsAppTargetPrefix(rawTarget).match(DIRECT_WIRE_JID_RE);
-  const localPart = match?.[1];
-  const server = match?.[2]?.toLowerCase();
-  if (!localPart || !server) {
-    return null;
-  }
-  if (server === "lid" || server === "hosted.lid") {
-    return `${localPart}@${server}`;
-  }
-  const normalized = normalizeE164(localPart);
-  return normalized.length > 1 ? normalized : null;
-}
-
 function normalizeTargetForFacts(rawTarget: string): {
   normalizedTarget: string;
   preserveJidAsAuthorizedTarget: boolean;
 } | null {
-  const directWireJidTarget = normalizeDirectWireJidTarget(rawTarget);
-  if (directWireJidTarget) {
-    return { normalizedTarget: directWireJidTarget, preserveJidAsAuthorizedTarget: true };
+  const match = stripWhatsAppTargetPrefix(rawTarget).match(DIRECT_WIRE_JID_RE);
+  const localPart = match?.[1];
+  const server = match?.[2]?.toLowerCase();
+  if (localPart && server) {
+    const normalizedTarget =
+      server === "lid" || server === "hosted.lid"
+        ? `${localPart}@${server}`
+        : normalizeE164(localPart);
+    return normalizedTarget.length > 1
+      ? { normalizedTarget, preserveJidAsAuthorizedTarget: server !== "s.whatsapp.net" }
+      : null;
   }
   const normalizedTarget = normalizeWhatsAppTarget(rawTarget);
   if (normalizedTarget) {

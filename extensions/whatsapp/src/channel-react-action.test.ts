@@ -25,8 +25,9 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./channel-react-action.runtime.js", async () => {
+vi.mock("./channel-react-action.runtime.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./channel-react-action.runtime.js")>()),
     handleWhatsAppAction: hoisted.handleWhatsAppAction,
     resolveAuthorizedWhatsAppOutboundTarget: hoisted.resolveAuthorizedWhatsAppOutboundTarget,
     resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,

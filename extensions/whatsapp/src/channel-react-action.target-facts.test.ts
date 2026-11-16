@@ -6,11 +6,8 @@ const delivery = vi.hoisted(() => ({
   send: vi.fn(async () => ({ messageId: "sent-1", toJid: "1555000:2@hosted" })),
 }));
 
-vi.mock("./channel-react-action.runtime.js", async () => ({
-  ...(await import("openclaw/plugin-sdk/channel-actions")),
-  ...(await import("./target-facts.js")),
-  ...(await import("./accounts.js")),
-  ...(await import("./action-runtime-target-auth.js")),
+vi.mock("./channel-react-action.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-react-action.runtime.js")>()),
   handleWhatsAppAction: delivery.react,
   sendMessageWhatsApp: delivery.send,
 }));

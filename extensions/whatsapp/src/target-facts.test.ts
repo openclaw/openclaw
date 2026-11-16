@@ -31,6 +31,20 @@ describe("resolveWhatsAppTargetFacts", () => {
       },
     ],
     [
+      "phone-number JID",
+      "15551230000@s.whatsapp.net",
+      {
+        normalizedTarget: "+15551230000",
+        chatType: "direct",
+        routePeer: { kind: "direct", id: "+15551230000" },
+        wireDelivery: {
+          jid: "15551230000@s.whatsapp.net",
+          shouldSendComposingPresence: true,
+          preserveJidAsAuthorizedTarget: false,
+        },
+      },
+    ],
+    [
       "group",
       "whatsapp:120363401234567890@g.us",
       {
