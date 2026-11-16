@@ -14,6 +14,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
+  type ProbeFrame,
   type ProbeLog,
   type Rect,
   type ScreenLine,
@@ -554,19 +555,20 @@ function screenGates(read: { png: string; lines: number }[], when: string): Resu
 
 type Metrics = Record<string, number | undefined>;
 /**
- * `drawnMotion`: a window (epoch ms) and screen area (points) to measure on the case's recording
+ * `drawnMotion`: windows (epoch ms) and screen areas (points) to measure on the case's recording
  * once it is written; `ignoreX` is a column range holding a control that moves by design.
  */
+type DrawnWindow = {
+  from: number;
+  to: number;
+  area: Rect;
+  screenWidth: number;
+  ignoreX?: [number, number];
+};
 type Result = {
   metrics: Metrics;
   gates: Record<string, boolean>;
-  drawnMotion?: {
-    from: number;
-    to: number;
-    area: Rect;
-    screenWidth: number;
-    ignoreX?: [number, number];
-  };
+  drawnMotion?: DrawnWindow[];
 };
 // `guard`: every gate passes in every sample. `bad`: reproduces an open bug, so its setup gates
 // pass and another gate fails in at least one sample; once the fix lands every gate passes and
@@ -664,11 +666,13 @@ function streamCase(keyboardUp: boolean): Case {
       }
       // The one-shot move to the new turn lands within a second; after that the pin must hold. The
       // gate reads the recording: on the `List` transcript (#192232) the probe also reports cell
-      // layouts of 5–60 pt that never reach the screen, so its drift is reported only. The drawn
-      // window starts once the reply fills the screen: before that, the reply growing moves its
-      // footer row down, which the recording cannot tell from a scroll. The area stops above the
-      // run footer, which appears when the reply ends, and skips the columns of the jump-to-latest
-      // button, which floats over the reply.
+      // layouts of 5–60 pt that never reach the screen, so its drift is reported only. Two drawn
+      // windows cover it. While the reply grows, its footer row moves down, which the recording
+      // cannot tell from a scroll, so the early window's area ends above the footer's first
+      // position (it only moves down from there). It opens once that area holds two strips,
+      // ~150–400 ms after the first second. From when the reply fills the screen, the late window
+      // covers the whole transcript above the run footer, which appears when the reply ends,
+      // minus the columns of the jump-to-latest button, which floats over the reply.
       const pinned = motion(window(log, sentAt + 1000, end).frames, { aliases });
       const userKey = userMount?.k;
       const replyHidden = hiddenBelowComposer(last) ?? 0;
@@ -679,6 +683,11 @@ function streamCase(keyboardUp: boolean): Case {
       const filled = firstFrame(
         view.frames,
         (frame) => (frame.f.live?.[1] ?? 0) > (frame.f.composer?.[0] ?? Infinity),
+      );
+      // Bottom of the reply's footer row: avatar and elapsed time, 44 pt tall.
+      const footerTop = (frame: ProbeFrame) => (frame.f.live?.[1] ?? 0) - 44;
+      const early = view.frames.find(
+        (frame) => frame.t >= sentAt + 1000 && footerTop(frame) - transcript.y >= 80,
       );
       const bottom = Math.min(
         transcript.y + transcript.height,
@@ -694,17 +703,26 @@ function streamCase(keyboardUp: boolean): Case {
         },
         gates: {
           ...setup,
-          "reply grew past the fold (setup)": replyHidden > 100 && filled !== undefined,
+          "reply grew past the fold (setup)":
+            replyHidden > 100 && filled !== undefined && early !== undefined,
           "no teleports": moved.teleports === 0,
           "no remounts": common.remounts === 0,
         },
-        drawnMotion: {
-          from: filled ?? end,
-          to: end,
-          area: { ...transcript, height: bottom - transcript.y },
-          screenWidth: layout.screen.width,
-          ignoreX: jump && [jump.x, jump.x + jump.width],
-        },
+        drawnMotion: [
+          {
+            from: early?.t ?? end,
+            to: filled ?? end,
+            area: { ...transcript, height: early ? footerTop(early) - transcript.y : 0 },
+            screenWidth: layout.screen.width,
+          },
+          {
+            from: filled ?? end,
+            to: end,
+            area: { ...transcript, height: bottom - transcript.y },
+            screenWidth: layout.screen.width,
+            ignoreX: jump && [jump.x, jump.x + jump.width],
+          },
+        ],
       };
     },
   };
@@ -1003,24 +1021,28 @@ try {
         });
       }
       if (result.drawnMotion) {
-        const { from, to, area, screenWidth, ignoreX } = result.drawnMotion;
-        const measured = JSON.parse(
-          run(screenMotionTool, [
-            recording,
-            ...[(from - videoStartedAt) / 1000, (to - videoStartedAt) / 1000].map(String),
-            ...[area.x, area.y, area.width, area.height, screenWidth, ...(ignoreX ?? [])].map(
-              (value) => String(Math.round(value)),
-            ),
-          ]).stdout,
-        ) as { frames: number; strips: number; maxMovePt: number; unexplainedFrames: number };
-        result.metrics.drawnMovePt = measured.maxMovePt;
+        const measured = result.drawnMotion.map(({ from, to, area, screenWidth, ignoreX }) => {
+          const args = [area.x, area.y, area.width, area.height, screenWidth, ...(ignoreX ?? [])];
+          return JSON.parse(
+            run(screenMotionTool, [
+              recording,
+              ...[(from - videoStartedAt) / 1000, (to - videoStartedAt) / 1000].map(String),
+              ...args.map((value) => String(Math.round(value))),
+            ]).stdout,
+          ) as { frames: number; strips: number; maxMovePt: number; unexplainedFrames: number };
+        });
+        result.metrics.drawnMovePt = Math.max(...measured.map((entry) => entry.maxMovePt));
         // Reported, not gated: on `main` the live bubble → final row handoff redraws the reply
         // about 2 pt right and 1 pt down for a few frames, which no vertical shift explains.
-        result.metrics.drawnUnexplainedFrames = measured.unexplainedFrames;
+        result.metrics.drawnUnexplainedFrames = measured.reduce(
+          (sum, entry) => sum + entry.unexplainedFrames,
+          0,
+        );
         // A window outside the recording or a blank area reads as 0 pt without seeing anything.
-        result.gates["recording covers the window with content (setup)"] =
-          measured.frames >= 2 && measured.strips > 0;
-        result.gates["drawn transcript holds still (≤1 pt)"] = measured.maxMovePt <= 1;
+        result.gates["recording covers each window with content (setup)"] = measured.every(
+          (entry) => entry.frames >= 2 && entry.strips >= 2,
+        );
+        result.gates["drawn transcript holds still (≤1 pt)"] = result.metrics.drawnMovePt <= 1;
       }
       results.push(result);
       console.log(`ios:behavior: ${name} #${sample} ${JSON.stringify(result.metrics)}`);
