@@ -6,12 +6,20 @@ export const TEMPLATE_AGENT_OPENING_MESSAGE = [
   "Do not ask the user to choose a role or reconfigure the personality already provided by the Template.",
 ].join("\n\n");
 
-/** One ordinary agent conversation owns bootstrap and the explicitly selected task. */
-export function templateAgentSetupMessage(initialPrompt: string): string {
-  return [
-    "This Template has finished installation. Use your workspace instructions and SOUL personality. Do not repeat work already completed by the shared installer.",
-    "First complete BOOTSTRAP.md, if present. Ask any required setup questions and wait for the user's answers; continue bootstrap across replies as needed. Do not skip setup to carry out the selected task.",
-    "Once bootstrap is complete, address the initial prompt the user selected below. If bootstrap is already complete or absent, address it now. This is the user's deferred task, not a replacement for bootstrap. Normal tool permissions and approvals still apply.",
-    "Selected initial prompt: " + JSON.stringify(initialPrompt),
-  ].join("\n\n");
-}
+/** One thing chat-based Add could not finish; the agent kept everything else. */
+export type TemplateSetupFailure = {
+  kind: "skill" | "plugin" | "mcpServer";
+  name: string;
+  reason: string;
+};
+
+/**
+ * What chat-based Add leaves for the agent's first turn. Successful skills are
+ * omitted: they are already in the workspace. Plugins the Template references
+ * on ClawHub and its automations are never attempted, so they never appear here.
+ */
+export type TemplateSetupReport = {
+  failures: TemplateSetupFailure[];
+  /** Declared MCP servers now present in config, by name. */
+  mcpServers: string[];
+};

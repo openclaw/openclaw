@@ -19,7 +19,6 @@ import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
 import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -43,13 +42,13 @@ import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recov
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export const candidateStartupStep = (cwd: string, valid = true) => ({
-  name: "candidate-gateway-startup",
-  command: "openclaw gateway",
+export const candidateCheckStep = (cwd: string, valid = true) => ({
+  name: "candidate-recovery",
+  command: "--check",
   cwd,
   durationMs: 1,
   exitCode: valid ? 0 : 1,
-  ...(!valid ? { stderrTail: "candidate readiness failed" } : {}),
+  ...(!valid ? { stderrTail: "candidate runtime failed" } : {}),
 });
 
 function selectHostPlatform() {
@@ -77,10 +76,6 @@ type UpdateCliLifecycleFixture = {
   globalNpmConfig: string;
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
-  reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
-    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
-    result: T,
-  ) => Promise<T>;
   setStdoutTty: (value: boolean | undefined) => void;
   setTty: (value: boolean | undefined) => void;
   tempDirs: { make: (prefix: string) => string };
@@ -196,16 +191,14 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       attempts: [],
       finalValidation: { ok: false, score: 0, summary: "No fixture repair route." },
     });
-    mocks.candidateValidation.mockImplementation(async (options) =>
-      fixture.reportCandidateSteps(options, {
-        status: "ok",
-        candidateSchemaVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-        steps: [candidateStartupStep("/candidate")],
-      }),
-    );
+    mocks.candidateCheck.mockResolvedValue({
+      status: "ok",
+      candidateSchemaVersions: {
+        state: OPENCLAW_STATE_SCHEMA_VERSION,
+        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+      steps: [candidateCheckStep("/candidate")],
+    });
     mocks.httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
 
     mocks.stateSchemaVersions.mockImplementation(

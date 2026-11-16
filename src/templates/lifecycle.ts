@@ -421,6 +421,7 @@ export async function buildTemplateAddPlan(params: {
   );
   const bundledSkillNames = new Set<string>();
   const bundledSkillTargets = new Set<string>();
+  const bundledPluginTargets = new Map<string, string>();
   for (const pkg of templateDependencyInventory(params.manifest)) {
     const collection = pkg.kind === "skill" ? "skills" : "plugins";
     const index = params.manifest[collection].findIndex((entry) =>
@@ -444,6 +445,7 @@ export async function buildTemplateAddPlan(params: {
         skillNames: bundledSkillNames,
         skillTargets: bundledSkillTargets,
         referencedSkillTargets,
+        pluginTargets: bundledPluginTargets,
       });
       actions.push(planned.action);
       capabilityChanges.push(planned.capabilityChange);
@@ -481,6 +483,9 @@ export async function buildTemplateAddPlan(params: {
           )
         : undefined;
     if (diagnostic) {
+      if (!preflight.ok && preflight.allowlistPluginId) {
+        diagnostic.allowlistPluginId = preflight.allowlistPluginId;
+      }
       blockers.push(diagnostic);
     }
     if (preflight.ok && preflight.requirements) {

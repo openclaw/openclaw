@@ -60,6 +60,7 @@ import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-u
 import {
   createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithRecovery,
+  createResponsesItemConflictRecovery,
 } from "./openai-responses-replay-internal.js";
 import { createResponsesRequestFetch } from "./openai-responses-request-fetch.js";
 import {
@@ -146,6 +147,7 @@ function createResponsesTransportExecutor(config: {
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       let requestSignal = options?.signal;
       let continuationClaim: ReturnType<typeof claimOpenAIResponsesHttpContinuation>;
+      const itemRecovery = createResponsesItemConflictRecovery(output, model, responsesOptions);
       const requestLifecycle = responsesRequestLifecycle.get(options);
       try {
         if (compactRequest && requestLifecycle) {
@@ -280,8 +282,10 @@ function createResponsesTransportExecutor(config: {
               turnState?.metadata,
               replayMode,
               Boolean(v2Compaction),
+              itemRecovery.applied,
             ),
           );
+        const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);
         let params = await buildRequest("checkpoint");
         const asyncTools =
           !compactRequest &&
@@ -379,6 +383,7 @@ function createResponsesTransportExecutor(config: {
             initialAttemptKind,
             initialRejectedCompaction,
             buildFullHistoryRequest: () => buildRequest("full-history"),
+            buildItemConflictRequest,
             onCompactionRejected: (checkpoint) =>
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,
@@ -502,6 +507,7 @@ function createResponsesTransportExecutor(config: {
               options,
               output,
               buildRequest,
+              buildItemConflictRequest,
               createSseStream,
               closeWebSocketForFallback,
               logWebSocketFallback,
@@ -551,7 +557,6 @@ function createResponsesTransportExecutor(config: {
               onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
               signal: options?.signal,
               reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
-                authProfileId: responsesOptions?.authProfileId,
                 sessionId: options?.sessionId,
               }),
               asyncToolExecution: asyncTools,
@@ -614,6 +619,7 @@ function createResponsesTransportExecutor(config: {
         );
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
+        itemRecovery.reject(error);
         if (error instanceof DegenerateToolCallArgumentsError) {
           firstEventAbort?.abort(error);
         }
@@ -639,6 +645,7 @@ function createResponsesTransportExecutor(config: {
           }),
         });
       } finally {
+        itemRecovery.finish();
         continuationClaim?.release();
         firstEventAbort?.dispose();
       }
@@ -675,12 +682,20 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
       const { createAzureOpenAIClient } = await import("../providers/openai-provider-client.js");
       return createAzureOpenAIClient(...args);
     },
-    buildRequest: (model, context, options, metadata, replayMode) => {
+    buildRequest: (model, context, options, metadata, replayMode, retainUsers, onItemRecovery) => {
       const deploymentName = resolveAzureDeploymentNameFromMap({
         modelId: model.id,
         deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
       });
-      const params = buildOpenAIResponsesParams(model, context, options, metadata, replayMode);
+      const params = buildOpenAIResponsesParams(
+        model,
+        context,
+        options,
+        metadata,
+        replayMode,
+        retainUsers,
+        onItemRecovery,
+      );
       params.model = deploymentName;
       delete params.store;
       return params;

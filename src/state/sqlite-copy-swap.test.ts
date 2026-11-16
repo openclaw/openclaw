@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fileTransfer from "../infra/file-descriptor.js";
+import * as sqliteFilesystem from "../infra/sqlite-wal-filesystem.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
-import { buildSqliteByCopy, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
+import { buildSqliteWithFoldIns, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
 import { applyPlan, copyTree, diffTree } from "./state-upgrade-tree.js";
 
 const corpusDir = fileURLToPath(
@@ -36,6 +38,7 @@ const MOVED_TABLES: Record<string, string> = {
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -126,7 +129,7 @@ describe("generic rebuild data rules", () => {
     db.exec(sourceSql);
     db.close();
     const out = path.join(dir, "next.sqlite");
-    const report = buildSqliteByCopy(
+    const { report } = buildSqliteWithFoldIns(
       {
         label: "test",
         version: 2,
@@ -134,8 +137,10 @@ describe("generic rebuild data rules", () => {
         stamp: () => {},
         map,
       },
+      [],
       source,
       out,
+      dir,
     );
     const built = new DatabaseSync(out, { readOnly: true });
     try {
@@ -192,7 +197,7 @@ describe("generic rebuild data rules", () => {
       INSERT INTO c VALUES ('kept', 'a', '1'), ('gone', 'a', '2'), ('gone', 'b', '3');`);
     db.close();
     const out = path.join(dir, "next.sqlite");
-    const report = buildSqliteByCopy(
+    const { report } = buildSqliteWithFoldIns(
       {
         label: "test",
         version: 2,
@@ -203,8 +208,10 @@ describe("generic rebuild data rules", () => {
         stamp: () => {},
         map: {},
       },
+      [],
       source,
       out,
+      dir,
     );
     const built = new DatabaseSync(out, { readOnly: true });
     try {
@@ -322,7 +329,7 @@ describe("generic rebuild data rules", () => {
 });
 
 describe("copyTree and diffTree", () => {
-  it("clones closed databases and moves only what the upgrade wrote", () => {
+  it("byte-copies closed databases and never replaces uncopied workspace files", async () => {
     const root = tempDir();
     const live = path.join(root, "live");
     fs.mkdirSync(path.join(live, "backups"), { recursive: true });
@@ -341,7 +348,12 @@ describe("copyTree and diffTree", () => {
     fs.symlinkSync(pkg, path.join(live, "plugin", "node_modules", "openclaw"));
     const shadow = path.join(root, "shadow");
     const baseline = new Map<string, string | undefined>();
-    copyTree(live, shadow, () => false, baseline);
+    const workspace = path.join(live, "workspace");
+    fs.mkdirSync(workspace);
+    fs.writeFileSync(path.join(workspace, "AGENTS.md"), "custom instructions");
+    await copyTree(live, shadow, (file) => file === workspace, baseline);
+    fs.mkdirSync(path.join(shadow, "workspace"));
+    fs.writeFileSync(path.join(shadow, "workspace", "AGENTS.md"), "Doctor template");
     // A closed database is cloned byte for byte; VACUUM INTO would rewrite it.
     expect(hash(path.join(shadow, "backups", "old.sqlite"))).toBe(hash(closed));
     expect(
@@ -355,14 +367,88 @@ describe("copyTree and diffTree", () => {
     fs.writeFileSync(path.join(live, "untouched.json"), "live write during the upgrade");
     fs.writeFileSync(path.join(live, "late.log"), "late");
 
-    const ops = diffTree(live, shadow, baseline).map(
+    const warn = vi.fn();
+    const ops = diffTree(live, shadow, baseline, warn).map(
       (op) => `${op.kind}:${path.relative(live, op.live)}`,
     );
+    expect(warn).toHaveBeenCalledWith("Left uncopied live file unchanged: workspace/AGENTS.md");
     expect(ops.toSorted()).toEqual([
       "add:added.json",
       "remove:deleted.json",
       "replace:edited.json",
     ]);
+  });
+});
+
+describe("SQLite byte-copy boundary", () => {
+  it("copies large targets through file handles after NOCOW directory preparation", async () => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const shadow = path.join(root, "shadow");
+    fs.mkdirSync(live);
+    const source = path.join(live, "target.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('original')");
+    db.close();
+    fs.truncateSync(source, 65 * 1024 * 1024);
+    vi.spyOn(sqliteFilesystem, "isSqlitePathOnBtrfs").mockReturnValue(true);
+    const policy = vi
+      .spyOn(sqliteFilesystem, "setSqliteDirectoryNoCow")
+      .mockImplementation((dir) => {
+        expect(dir).toBe(shadow);
+        expect(fs.existsSync(path.join(shadow, "target.sqlite"))).toBe(false);
+      });
+    const transfer = vi.spyOn(fileTransfer, "copyFileHandle");
+    const clone = vi.spyOn(fs, "copyFileSync");
+    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    expect(policy).toHaveBeenCalledOnce();
+    expect(transfer).toHaveBeenCalledOnce();
+    expect(clone).not.toHaveBeenCalled();
+    const target = path.join(shadow, "target.sqlite");
+    expect(hash(target)).toBe(hash(source));
+    expect(fs.statSync(target).ino).not.toBe(fs.statSync(source).ino);
+  });
+
+  it("still copies when the btrfs NOCOW policy cannot be applied", async () => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const shadow = path.join(root, "shadow");
+    fs.mkdirSync(live);
+    const source = path.join(live, "target.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('original')");
+    db.close();
+    vi.spyOn(sqliteFilesystem, "isSqlitePathOnBtrfs").mockReturnValue(true);
+    vi.spyOn(sqliteFilesystem, "setSqliteDirectoryNoCow").mockImplementation(() => {
+      throw new Error("chattr: not found");
+    });
+    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    expect(hash(path.join(shadow, "target.sqlite"))).toBe(hash(source));
+  });
+
+  it("recovers committed WAL frames privately without changing the source family", async () => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    fs.mkdirSync(live);
+    const source = path.join(live, "wal.sqlite");
+    const db = new DatabaseSync(source);
+    try {
+      db.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('committed WAL')",
+      );
+      const before = [hash(source), hash(`${source}-wal`)];
+      const shadow = path.join(root, "shadow");
+      await copyTree(live, shadow, () => false, new Map());
+      const copied = new DatabaseSync(path.join(shadow, "wal.sqlite"), { readOnly: true });
+      try {
+        expect(copied.prepare("SELECT value FROM payload").get()?.value).toBe("committed WAL");
+      } finally {
+        copied.close();
+      }
+      expect([hash(source), hash(`${source}-wal`)]).toEqual(before);
+    } finally {
+      db.close();
+    }
   });
 });
 

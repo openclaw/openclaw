@@ -15,7 +15,7 @@ export function isUpdateAdmissionInvocation(
     !invocation.hasHelpOrVersion &&
     invocation.commandPath.length === 2 &&
     invocation.commandPath[0] === "update" &&
-    ["admit", "preflight", "rehearse"].includes(invocation.commandPath[1] ?? "")
+    ["admit", "preflight"].includes(invocation.commandPath[1] ?? "")
   );
 }
 
@@ -30,10 +30,6 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   const { routeLogsToStderr } = await import("../logging/console.js");
   routeLogsToStderr();
   const preflight = invocation.commandPath[1] === "preflight";
-  // Admission and rehearsal each take one private input file.
-  const rehearse = invocation.commandPath[1] === "rehearse";
-  const inputOption = rehearse ? "--request" : "--context";
-  const inputOwner = rehearse ? "rehearsal" : "admission";
   const reject = (message: string) => {
     console.error(message);
     if (preflight) {
@@ -41,7 +37,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
         `${JSON.stringify({
           protocol: 1,
           mode: "preflight",
-          coverage: "isolated-core-startup",
+          coverage: "candidate-runtime",
           candidateVersion: null,
           status: "unverified",
           reason: "preflight-execution-failed",
@@ -92,15 +88,15 @@ export async function tryRunUpdateAdmissionBeforeStartup(
           return reject("Candidate preflight requires nonempty option values.");
         }
         preflightOptions[arg.startsWith("--source-root=") ? "sourceRoot" : "timeout"] = value;
-      } else if (!preflight && contextPath === undefined && arg === inputOption) {
+      } else if (!preflight && contextPath === undefined && arg === "--context") {
         contextPath = args[++index];
-      } else if (!preflight && contextPath === undefined && arg?.startsWith(`${inputOption}=`)) {
-        contextPath = arg.slice(inputOption.length + 1);
+      } else if (!preflight && contextPath === undefined && arg?.startsWith("--context=")) {
+        contextPath = arg.slice("--context=".length);
       } else {
         return reject(
           preflight
             ? "Candidate preflight accepts only --json, --source-root, --timeout and root options."
-            : `Candidate ${inputOwner} requires only ${inputOption} <absolute-path> and root options.`,
+            : "Candidate admission requires only --context <absolute-path> and root options.",
         );
       }
     }
@@ -109,13 +105,13 @@ export async function tryRunUpdateAdmissionBeforeStartup(
     return reject(
       preflight
         ? "Candidate preflight arguments are invalid."
-        : `Candidate ${inputOwner} requires ${inputOption} <absolute-path>.`,
+        : "Candidate admission requires --context <absolute-path>.",
     );
   }
   const { isUpdateAdmissionAuthorityEnvKey } =
     await import("../infra/update-admission-contract.js");
   if (Object.keys(process.env).some(isUpdateAdmissionAuthorityEnvKey)) {
-    return reject(`Candidate ${inputOwner} requires an authority-free supervisor invocation.`);
+    return reject("Candidate admission requires an authority-free supervisor invocation.");
   }
   if (profile.profile) {
     applyCliProfileEnv({ profile: profile.profile });
@@ -124,11 +120,6 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   if (preflight) {
     const { updatePreflightCommand } = await import("./update-cli/update-command-preflight.js");
     await updatePreflightCommand(preflightOptions);
-    return true;
-  }
-  if (rehearse) {
-    const { updateRehearseCommand } = await import("./update-cli/update-command-rehearse.js");
-    await updateRehearseCommand(contextPath);
     return true;
   }
   const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");

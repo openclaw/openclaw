@@ -72,19 +72,18 @@ for Full Access inference, revocation, and approval delivery.
 
 ## `tools.loopDetection`
 
-Rolling tool-loop detection is **disabled by default**. Set `enabled: true` to activate it. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
-
-Independently, three consecutive identical tool errors always end the turn with
-a recorded failure and recovery guidance, even when `enabled` is `false`.
-Changed arguments or results and successful calls reset that error streak.
-See [Tool-loop detection](/tools/loop-detection) for the separate post-compaction
-guard and rolling detection behavior.
+The tool repeat guard is **on by default**. It compares each tool call with the
+one before it (tool name and arguments, never the result). The third identical
+call gets a redirect note; the twentieth ends the turn with `tool_repeat_limit`.
+Set `enabled: false` to turn it off. Settings can be defined globally in
+`tools.loopDetection` and overridden per-agent at
+`agents.entries.*.tools.loopDetection`. See [Tool-loop detection](/tools/loop-detection).
 
 ```json5
 {
   tools: {
     loopDetection: {
-      enabled: true,
+      enabled: false, // turn the repeat guard off
     },
   },
 }

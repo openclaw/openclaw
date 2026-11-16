@@ -55,7 +55,11 @@ type CompactionReason = "manual" | "threshold" | "overflow";
 // "deterministic" makes no model call: the host commits compactWithoutSummary after a failed summary.
 type SummaryOutputPolicy = "none" | "retry-invalid-once" | "deterministic";
 // onSummaryReady marks the end of summary generation; later waits are persistence, not summary.
-type AutomaticCompactionOptions = CompactionRequestConstraints & { onSummaryReady?: () => void };
+// itemId: a caller that already announced this compaction keeps one identity for events and entry.
+type AutomaticCompactionOptions = CompactionRequestConstraints & {
+  onSummaryReady?: () => void;
+  itemId?: string;
+};
 type CompactionWorkOutcome =
   | { status: "completed"; result: CompactionResult; tokensAfter: number }
   | { status: "aborted" }
@@ -182,7 +186,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     await this.abort();
     const abortController = new AbortController();
     this.compactionAbortController = abortController;
-    const itemId = generateSessionEntryId();
+    const { itemId = generateSessionEntryId(), ...requestConstraints } = constraints ?? {};
     this.emit({ type: "compaction_start", reason: "manual", itemId });
 
     try {
@@ -195,7 +199,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           mode: "manual",
           summaryOutputPolicy,
           requestState,
-          ...constraints,
+          ...requestConstraints,
           settings,
           signal: abortController.signal,
         });

@@ -543,7 +543,6 @@ describe("operation-owned watchdog through controller admission", () => {
     async (terminal) => {
       const { operation, cancel } = running();
       const first = operation.watchdog.attachAttempt({ assertCurrent() {} });
-      first.observeStagnation({ active: true });
       first.beginRequest({ deadlineAtMs: abortMs * 10 });
       vi.setSystemTime(abortMs - 1_000);
       const second = operation.watchdog.attachAttempt({ assertCurrent() {} });

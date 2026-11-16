@@ -184,10 +184,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                           name={props.view.detail?.agentName ?? identity()?.displayName ?? ""}
                           iconUrl={identity()?.iconUrl}
                           prompts={props.view.detail?.recommendedPrompts}
-                          disabled={
-                            !props.view.canAdd ||
-                            Boolean(props.view.consentWarning || props.view.reviewPlan)
-                          }
+                          disabled={!props.view.canAdd || Boolean(props.view.consentWarning)}
                           busy={props.view.applying}
                           onSelect={(prompt) => void props.view.onSelectPrompt(prompt)}
                         />
@@ -342,7 +339,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
               !props.view.canAdd ||
               !props.view.detail ||
               props.view.applying ||
-              Boolean(props.view.consentWarning || props.view.reviewPlan)
+              Boolean(props.view.consentWarning)
             }
             onClick={() => void props.view.onConfirm()}
           >

@@ -122,9 +122,39 @@ function isSafeLiveModelId(value: string): boolean {
   return true;
 }
 
-// "<modality>-text-to-text" kinds (Hugging Face pipeline tags) are chat models with media input.
+// Interim: a listed ID with no capability evidence is chat unless its name is a non-text family.
 const NON_TEXT_MODEL_ID_PATTERN =
   /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|realtime|moderation|guard|(?:audio|image|video)(?!-text-to-text)|dall-e|flux|sdxl|stable-diffusion|imagen|veo|sora|babbage|davinci|gpt-3[.]5-turbo-instruct)(?:$|[/_:.-])/i;
+
+// Provider-declared model kinds: `type` (Together, Venice, Vercel, models.dev), LiteLLM `mode`,
+// Hugging Face `pipeline_tag`, oMLX/NVIDIA `model_type`, DeepInfra `metadata.tags` and the
+// Ollama `capabilities` list. Explicit non-chat values (LiteLLM `completion`, `embedding`, ...)
+// decide on their own. Together's `language` is also its completions type but means chat on
+// Vercel, so it is neither here; the listing-level pass in buildOpenAICompatibleLiveModels decides
+// it. Ollama's `completion` capability means chat and is caught by the endpoint check first.
+const CHAT_MODEL_KIND =
+  /^(?:chat|text|llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/;
+const NON_CHAT_MODEL_KIND =
+  /(?:^|[_-])(?:embed(?:dings?)?|rerank(?:er|ing)?|image|video|audio|speech|tts|stt|asr|transcri(?:be|ption)|music|inpaint|upscale|realtime|moderation|decisions?|evaluation|ocr|search|completion)(?:$|[_-])/;
+
+function readLiveModelKinds(record: Record<string, unknown> | undefined): Map<string, string[]> {
+  const kinds = new Map<string, string[]>();
+  for (const field of ["type", "task", "model_type", "modelType", "pipeline_tag", "mode"]) {
+    const value = readLiveModelCatalogStringField(record, field)?.toLowerCase();
+    if (value) {
+      kinds.set(field, [value]);
+    }
+  }
+  const tags = readLiveModelStringArray([asOptionalRecord(record?.metadata)], ["tags"]);
+  if (tags.length > 0) {
+    kinds.set("metadata.tags", tags);
+  }
+  const capabilities = readLiveModelStringArray([record], ["capabilities"]);
+  if (capabilities.length > 0) {
+    kinds.set("capabilities", capabilities);
+  }
+  return kinds;
+}
 
 export function readLiveModelChatCapability(row: unknown): boolean | undefined {
   const record = asOptionalRecord(row);
@@ -144,14 +174,19 @@ export function readLiveModelChatCapability(row: unknown): boolean | undefined {
   if (outputModalities.length > 0 && !outputModalities.includes("text")) {
     return false;
   }
-  const kind = readLiveModelCatalogStringField(record, [
-    "type",
-    "task",
-    "model_type",
-    "modelType",
-    "pipeline_tag",
-  ]);
-  if (kind && NON_TEXT_MODEL_ID_PATTERN.test(kind)) {
+  const kinds = [...readLiveModelKinds(record).values()].flat();
+  const chatKind = kinds.some((kind) => CHAT_MODEL_KIND.test(kind));
+  const capabilityStrings = readLiveModelStringArray(
+    [record, ...nestedRecords],
+    ["capabilities", "features", "endpoints", "supported_endpoints"],
+  );
+  const chatEndpoint = capabilityStrings.some((value) =>
+    /(?:^|[./:])(?:chat|responses?|generate|completions?)(?:$|[./:])|(?:^|[./:_-])(?:chat[-_]completions?|completions?[-_]chat|text[-_]generation)(?:$|[./:_-])/.test(
+      value,
+    ),
+  );
+  // A declared non-chat kind beats text output: embedding and reranking rows list `text`.
+  if (!chatKind && !chatEndpoint && kinds.some((kind) => NON_CHAT_MODEL_KIND.test(kind))) {
     return false;
   }
   const explicitChatCapability = readLiveModelCatalogBooleanField(nestedRecords[0], [
@@ -164,26 +199,7 @@ export function readLiveModelChatCapability(row: unknown): boolean | undefined {
   if (explicitChatCapability !== undefined) {
     return explicitChatCapability;
   }
-  if (
-    outputModalities.includes("text") ||
-    (kind && /^(?:llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/i.test(kind))
-  ) {
-    return true;
-  }
-  const capabilityStrings = readLiveModelStringArray(
-    [record, ...nestedRecords],
-    ["capabilities", "features", "endpoints", "supported_endpoints"],
-  );
-  if (
-    capabilityStrings.some((value) =>
-      /(?:^|[./:])(?:chat|responses?|generate|completions?)(?:$|[./:])|(?:^|[./:_-])(?:chat[-_]completions?|completions?[-_]chat|text[-_]generation)(?:$|[./:_-])/.test(
-        value,
-      ),
-    )
-  ) {
-    return true;
-  }
-  return undefined;
+  return chatKind || chatEndpoint || outputModalities.includes("text") ? true : undefined;
 }
 
 function findLiveModelTemplate(
@@ -232,7 +248,10 @@ function readLiveModelContextWindow(
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
-  acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
+  acceptUnknownModel:
+    | ((params: { id: string; record: Record<string, unknown> }) => boolean)
+    | undefined,
+  otherKindInChatListing: boolean,
 ): ModelDefinitionConfig | undefined {
   const record = asOptionalRecord(row);
   const id = readOpenAICompatibleLiveModelId(record);
@@ -256,9 +275,14 @@ function buildOpenAICompatibleLiveModel(
   const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
   const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
-  const advertisedChatCapability = readLiveModelChatCapability(record);
+  const rowChatCapability = readLiveModelChatCapability(record);
+  const advertisedChatCapability =
+    otherKindInChatListing && rowChatCapability !== true ? false : rowChatCapability;
   const exact = fallback.models.find((model) => model.id === id);
-  const chat = advertisedChatCapability ?? (exact ? (exact.inference?.chat ?? true) : false);
+  // No evidence means unknown, which downstream treats as chat.
+  const chat =
+    advertisedChatCapability ??
+    (exact ? (exact.inference?.chat ?? true) : !NON_TEXT_MODEL_ID_PATTERN.test(id));
 
   if (exact) {
     const contextWindow =
@@ -352,8 +376,28 @@ export function buildOpenAICompatibleLiveModels(
   fallback: ModelProviderConfig,
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig[] {
-  const models = rows
-    .map((row) => buildOpenAICompatibleLiveModel(row, fallback, acceptUnknownModel))
+  // The listing is closed-world for kinds: once a row names a chat kind in a field, rows that
+  // carry that field with another value are not chat (Together `language`, LiteLLM
+  // `completion`). Rows without the field stay unknown.
+  const listing = rows.map((row) => ({
+    row,
+    kinds: [...readLiveModelKinds(asOptionalRecord(row))].map(([field, values]) => ({
+      field,
+      chat: values.some((value) => CHAT_MODEL_KIND.test(value)),
+    })),
+  }));
+  const chatKindFields = new Set(
+    listing.flatMap(({ kinds }) => kinds.filter((kind) => kind.chat).map((kind) => kind.field)),
+  );
+  const models = listing
+    .map(({ row, kinds }) =>
+      buildOpenAICompatibleLiveModel(
+        row,
+        fallback,
+        acceptUnknownModel,
+        kinds.some((kind) => !kind.chat && chatKindFields.has(kind.field)),
+      ),
+    )
     .filter((model): model is ModelDefinitionConfig => Boolean(model));
   return [...new Map(models.map((model) => [model.id, model])).values()].toSorted((a, b) =>
     a.id.localeCompare(b.id),
@@ -386,7 +430,7 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (!model || !id || !contextWindow || !maxTokens) {
     return undefined;
   }
-  const chat = readLiveModelChatCapability(model) === true;
+  const chat = readLiveModelChatCapability(model) ?? !NON_TEXT_MODEL_ID_PATTERN.test(id);
 
   const modelProvider = asOptionalRecord(model.provider);
   const npm =

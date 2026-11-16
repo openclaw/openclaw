@@ -29,7 +29,7 @@ export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean 
 
 /**
  * Only a known missing result, or an effect-free run whose transcript write was
- * rejected, may mint another public continuation; private retries reconcile.
+ * rejected, or a saved-state repair may continue the transcript; private retries reconcile.
  */
 export function resolveRequesterSettleRetryState(params: {
   state: RequesterSettleWakeBatchState;
@@ -44,6 +44,7 @@ export function resolveRequesterSettleRetryState(params: {
     delivery.disposition !== "retryable" ||
     (!parentOnly &&
       delivery.reason !== "visible_reply_missing" &&
+      delivery.reason !== "requester_state_conflict" &&
       delivery.reason !== "requester_transcript_conflict") ||
     delivery.reason === "requester_abandoned" ||
     attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
@@ -61,10 +62,16 @@ export function resolveRequesterSettleRetryState(params: {
 }
 
 type RequesterSettleWakeBatchCallbacks = {
+  recordRequesterDelivery?: (
+    batch: readonly SubagentRunRecord[],
+    fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>,
+    onPublished: (entries: readonly SubagentRunRecord[]) => void,
+  ) => Promise<void>;
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
     onPublished?: (entries: readonly SubagentRunRecord[]) => void,
+    requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"],
   ) => void | Promise<void>;
   completeBatch: (
     batch: readonly SubagentRunRecord[],

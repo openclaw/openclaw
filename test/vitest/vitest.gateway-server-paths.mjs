@@ -350,6 +350,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
+  "src/gateway/sessions-history-http.membership.test.ts",
   "src/gateway/sessions-history-http.model-policy.test.ts",
   "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
@@ -408,6 +409,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/live-events-settlement.test.ts",
   "src/gateway/worker-environments/live-events.test.ts",
   "src/gateway/worker-environments/local-workspace-conversion.test.ts",
+  "src/gateway/worker-environments/local-workspace-diagnostics.test.ts",
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
   "src/gateway/worker-environments/local-workspace-store.test.ts",
   "src/gateway/worker-environments/local-workspace-template.test.ts",
@@ -622,6 +624,8 @@ export const gatewayClientTestExclude = [
 export const gatewayServerSerialTestFiles = [
   "src/gateway/server.sessions.fixture-lifecycle.test.ts",
   "src/gateway/server.startup-fixture-lifetime.test.ts",
+  "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+  "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
 ];
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
