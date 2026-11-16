@@ -104,10 +104,6 @@
       "group": "extension-database-workers",
       "seconds": 6.61
     },
-    "extensions/workboard/src/dispatcher.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 62.612
-    },
     "extensions/workboard/src/gateway.sessions-board-pagination.test.ts": {
       "group": "extension-database-workers",
       "seconds": 21.983

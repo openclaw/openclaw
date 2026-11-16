@@ -21,7 +21,6 @@ import { selectWeightedShard } from "./vitest.weighted-sharding.ts";
 // ~259s at 11 shards. The tallest shard is bounded by shard count and the
 // ~116s per-shard job floor, not by this map; see docs/ci.md.
 const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
-  ["activity-run-inspector.e2e.test.ts", 23],
   ["agent-file-lifecycle.e2e.test.ts", 35],
   ["appearance-settings-defaults.e2e.test.ts", 19],
   ["board-fixture.e2e.test.ts", 25],
@@ -84,7 +83,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["session-management.archive.e2e.test.ts", 16],
   ["session-management.delete.e2e.test.ts", 16],
   ["session-management.group-defaults.e2e.test.ts", 16],
-  ["session-management.groups.e2e.test.ts", 31],
   ["session-management.sidebar.e2e.test.ts", 26],
   ["session-placement.move.e2e.test.ts", 34],
   ["session-progress-hovercard.e2e.test.ts", 19],

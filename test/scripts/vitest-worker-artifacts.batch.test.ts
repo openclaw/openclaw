@@ -72,7 +72,7 @@ it.for([
     agentsCoreConfig,
     [codeModeWorker],
     false,
-    ["src/agents/code-mode.test.ts"],
+    ["src/agents/code-mode.integrated.test.ts"],
   ],
   ["unrelated agents stay lazy", agentsCoreConfig, ["src/agents/code-mode-runtime.test.ts"], false],
   ["Git Bash basename filter", unitFastConfig, [path.basename(windowsGitBash, ".test.ts")], true],
