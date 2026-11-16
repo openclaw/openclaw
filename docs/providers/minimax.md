@@ -28,7 +28,8 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 | `MiniMax-M2.7-highspeed`     | Chat (reasoning) | Faster M2.7 reasoning tier                 |
 | `MiniMax-VL-01`              | Vision           | Image understanding model                  |
 | `image-01`                   | Image generation | Text-to-image and image-to-image editing   |
-| `MiniMax-H3-Image`           | Image generation | Text-to-image and image-to-image editing   |
+| `MiniMax-H3-Image`           | Image generation | Text-to-image and multi-image editing      |
+| `MiniMax-H3-Image-Highspeed` | Image generation | Faster H3 tier with the same parameters    |
 | `music-2.6`                  | Music generation | Default music model                        |
 | `MiniMax-Hailuo-2.3`         | Video generation | Text-to-video and image-to-video flows     |
 
@@ -215,11 +216,11 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
 
 ### Image generation
 
-The MiniMax plugin registers `image-01` and `MiniMax-H3-Image` for the `image_generate` tool on both `minimax` and `minimax-portal`, reusing the same `MINIMAX_API_KEY` or OAuth auth as the text models.
+The MiniMax plugin registers `image-01`, `MiniMax-H3-Image` and `MiniMax-H3-Image-Highspeed` for the `image_generate` tool on both `minimax` and `minimax-portal`, reusing the same `MINIMAX_API_KEY` or OAuth auth as the text models.
 
-- `image-01`: `/v1/image_generation`, aspect ratio control, up to 9 output images, 1 reference image per edit
-- `MiniMax-H3-Image`: `/v1/images/generations` and `/v1/images/edits`, aspect ratio control, up to 16 reference images, 610s default request timeout
-- Supported aspect ratios for `image-01`: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`
+- `image-01`: `/v1/image_generation`, up to 9 output images, 1 reference image per edit, aspect ratios `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`
+- H3 models: `/v1/images/generations` and `/v1/images/edits`, up to 16 reference images, any aspect ratio from `1:3` to `3:1`, and `resolution` `1K`, `2K` or `4K` (default `4K`, sent as MiniMax `area`)
+- H3 requests without a configured timeout wait up to 610 seconds, because a 4K image can take minutes
 
 ```json5
 {

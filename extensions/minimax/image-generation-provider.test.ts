@@ -112,7 +112,12 @@ describe("minimax image-generation provider", () => {
   });
 
   it.each([
-    ["generate", "/v1/images/generations", { aspectRatio: "16:9" }, { aspect_ratio: "16:9" }],
+    [
+      "generate",
+      "/v1/images/generations",
+      { aspectRatio: "16:9", resolution: "2K" as const },
+      { aspect_ratio: "16:9", area: "2K" },
+    ],
     [
       "edit",
       "/v1/images/edits",
@@ -127,10 +132,14 @@ describe("minimax image-generation provider", () => {
     "routes MiniMax-H3-Image %s requests to the Images API",
     async (_mode, path, overrides, extra) => {
       const postJsonResponse = vi.spyOn(providerHttp, "postJsonResponse");
-      await generateImage(
+      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+      const result = await generateImage(
         { model: "MiniMax-H3-Image", ...overrides },
-        { data: [{ b64_json: Buffer.from("jpeg-data").toString("base64") }] },
+        { data: [{ b64_json: jpeg.toString("base64") }, { error: { code: "1027" } }] },
       );
+      expect(result.images).toEqual([
+        { buffer: jpeg, mimeType: "image/jpeg", fileName: "image-1.jpg" },
+      ]);
       expect(postJsonResponse).toHaveBeenCalledOnce();
       expect(postJsonResponse.mock.calls[0]?.[0]).toMatchObject({
         url: `https://api.minimax.io${path}`,
