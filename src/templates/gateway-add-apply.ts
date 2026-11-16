@@ -112,7 +112,6 @@ export async function applyTemplateAddForGateway(
   let settledResult: GatewayTemplateAddApplyResult | undefined;
   let readySessionKey: string | undefined;
   let admitted: AdmittedTemplateAgent | undefined;
-  let createdByRequest = false;
   let initialized = false;
   const withoutAdmission = (config: OpenClawConfig): OpenClawConfig => {
     if (!admitted) {
@@ -236,8 +235,8 @@ export async function applyTemplateAddForGateway(
                       chat,
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
+                      createdByRequest: true,
                     };
-                    createdByRequest = true;
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },
                 },
@@ -668,8 +667,7 @@ export async function applyTemplateAddForGateway(
       return settledResult;
     }
     if (
-      admitted &&
-      createdByRequest &&
+      admitted?.createdByRequest &&
       input.rollbackNewAgent &&
       error instanceof TemplateGatewayPlanBlockedError &&
       (await discardAdmittedTemplateAgent(

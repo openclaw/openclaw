@@ -55,7 +55,6 @@ type PageOptions = {
   reviewRequiredOnce?: "plugin" | "skill";
   bundledReview?: boolean;
   clawHubTrustWarning?: string;
-  planBlockers?: Array<{ code: string; path: string; message: string }>;
   applyWait?: Promise<void>;
 };
 
@@ -191,7 +190,7 @@ export function createPage(options: PageOptions = {}) {
         target: { agentId, name: "Workflow Operator", targetVersion: "1.2.0" },
         actions: [],
         capabilities: [],
-        blockers: options.planBlockers ?? [],
+        blockers: [],
         riskAcknowledgementRequired: options.riskConsentRequired ?? false,
         ...(options.riskConsentRequired
           ? {
