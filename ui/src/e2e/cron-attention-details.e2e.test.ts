@@ -91,9 +91,12 @@ suite.define(() => {
           const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
           const review = attention.locator("[data-test-id=cron-review-failed-run]");
-          const cause = attention.locator(".cron-failure-details__cause");
+          const cause = attention.locator(".cron-error-details__text");
+          // Outside history the raw cause stays collapsed behind "Error details".
           const clipped = () =>
-            cause.evaluate((element) => element.scrollHeight > element.clientHeight);
+            attention
+              .locator("details.cron-error-details")
+              .evaluate((element) => !(element as HTMLDetailsElement).open);
           const fitsViewport = () =>
             page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
           expect(await cause.textContent()).toContain(failure);

@@ -1,4 +1,6 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
@@ -8,6 +10,10 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -143,4 +149,84 @@ it("propagates worker rejection without a synchronous fallback", async () => {
   onTestFinished(observer.restore);
   await expect(status()).rejects.toBe(failure);
   expect(observer.counts).toEqual(emptySqliteCounts());
+});
+
+it("reads cold storage status without synchronous filesystem work on the host", async () => {
+  await status();
+  const calls = new Map<string, { operation: string; count: number; stack: string }>();
+  const restores: Array<() => void> = [];
+  const wrap = (owner: object, name: string, operation = name) => {
+    const original: unknown = Reflect.get(owner, name);
+    if (typeof original !== "function") {
+      return;
+    }
+    Reflect.set(
+      owner,
+      name,
+      new Proxy(original, {
+        apply(target, receiver, args) {
+          const stack = new Error().stack ?? "";
+          const key = `${operation}\n${stack}`;
+          const row = calls.get(key) ?? { operation, count: 0, stack };
+          row.count += 1;
+          calls.set(key, row);
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    );
+    restores.push(() => {
+      Reflect.set(owner, name, original);
+    });
+  };
+  for (const name of Object.keys(syncFs)) {
+    if (name.endsWith("Sync")) {
+      wrap(syncFs, name);
+    }
+  }
+  wrap(syncFs.realpathSync, "native", "realpathSync.native");
+  syncBuiltinESMExports();
+  try {
+    const result = await status();
+    expect(result).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        storePath: fixture.scope.storePath,
+        hotTranscripts: 1,
+        coldTranscripts: 1,
+        embeddedArchiveBytes: embeddedBytes,
+      }),
+    ]);
+    expect([...calls.values()]).toEqual([]);
+  } finally {
+    for (const restore of restores.toReversed()) {
+      restore();
+    }
+    syncBuiltinESMExports();
+  }
+});
+
+it("keeps the host's configured refusal selection during worker preparation", async () => {
+  const store = state.statePath("refused-selection", "{agentId}.sqlite");
+  const helper = state.statePath("refused-selection", "helper.sqlite");
+  await fs.mkdir(path.dirname(helper), { recursive: true });
+  await fs.writeFile(helper, "unavailable database");
+  recordAgentDatabaseAdmissions(
+    [
+      createAgentDatabaseInspectionRefusal({
+        agentId: "helper",
+        paths: [helper],
+        reason: "fixture inspection failed",
+      }),
+    ],
+    { env: state.env },
+  );
+  try {
+    const config = maintenanceConfig(store);
+    config.agents.entries = { main: {}, helper: {} };
+    await expect(getSessionColdStorageStatus(config)).resolves.toEqual([
+      emptyInventory(state.statePath("refused-selection", "main.sqlite")),
+    ]);
+  } finally {
+    recordAgentDatabaseAdmissions([], { env: state.env });
+  }
 });

@@ -88,8 +88,6 @@ async function recoverRequesterCompletionCustody(params: {
   const pending = [...getSubagentRunsForRequesterSession(sessionKey)].filter(
     (child) =>
       child.requesterAgentId === agentId &&
-      child.completionRequesterSessionId === entry.sessionId &&
-      child.completionRequesterLifecycleRevision === entry.lifecycleRevision &&
       subagentRuns.isCompletionAuthorityRetired(child) &&
       ((isYieldedSubagentRun(child) && owesRequesterCompletion(child)) ||
         child.requesterSettleWake !== undefined ||
@@ -118,6 +116,7 @@ async function recoverRequesterCompletionCustody(params: {
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision ?? null,
       env: params.env,
+      exactTranscript: true,
     });
     const requester = target;
     await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>

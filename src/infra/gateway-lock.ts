@@ -9,6 +9,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
@@ -52,9 +53,9 @@ import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { createGatewayPostgresCustody } from "./gateway-postgres-custody.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
+import { createGatewayStateProjection } from "./gateway-state-owner-lifecycle.js";
 import {
   acquireGatewayStateOwner,
-  createGatewayStateProjection,
   type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
@@ -493,6 +494,8 @@ export async function acquireGatewayLock(
   }
   let databaseFailure: { error: unknown } | undefined;
   let waited = false;
+  // A waiter does not own the state directory where default file logs are written.
+  const onWait = opts.onWait ?? writeConsoleDiagnosticWarning;
   // Lock file that blocked the failing attempt, named in the timeout error.
   let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
@@ -576,7 +579,7 @@ export async function acquireGatewayLock(
               return false;
             }
             if (!waited) {
-              (opts.onWait ?? log.warn)(
+              onWait(
                 `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
               );
             }
@@ -590,7 +593,7 @@ export async function acquireGatewayLock(
             return false;
           }
           if (!waited && deadlineMs > startedAt && role === "gateway") {
-            log.warn(
+            onWait(
               `waiting for Gateway state ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
             );
           }

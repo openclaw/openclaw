@@ -56,6 +56,8 @@ export type TemplatePackagePreflightResult = {
   snapshot?: import("./dependency-directory.js").TemplateDirectorySnapshot;
   code?: string;
   message?: string;
+  /** Runtime plugin id to add to plugins.allow when only the allowlist blocks the plugin. */
+  allowlistPluginId?: string;
   requirements?: TemplateLocalPrerequisite[];
   detectedFormat?: TemplateExtensionFormat;
   mapped?: string[];
@@ -115,7 +117,8 @@ export type TemplateAddPlanAction = {
   action: "create" | "write" | "install" | "reuse" | "configure" | "schedule";
   target: string;
   source?: string;
-  sourceKind?: "templateMarkdownBody";
+  /** Bytes other than a declared workspace source: the CLAW.md body, or the whole manifest file. */
+  sourceKind?: "templateMarkdownBody" | "templateManifest";
   digest?: string;
   details?: Record<string, unknown>;
   automation?: CronJobCreate;

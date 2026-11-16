@@ -40,6 +40,7 @@ import {
 } from "../../scripts/lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { FULL_RELEASE_CHILD_EVIDENCE_JOB } from "../../scripts/lib/full-release-evidence.mjs";
+import { evaluateReleaseChildPolicy } from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   artifactDownloadTimeoutMs,
   createReleaseEvidenceClient,
@@ -669,7 +670,6 @@ describe("original publication admission reader", () => {
             expectedRunAttempt: fault === "wrong-attempt" ? 2 : 1,
             expectedTargetSha: fault === "wrong-target" ? "d".repeat(40) : fixture.targetSha,
             expectedReleaseTag: "v2026.8.28-beta.1",
-            isTrustedMainAncestor: () => true,
             verifierSourceContent: strictOptions.verifierSourceContent,
             verifierSourceSha: strictOptions.verifierSourceSha,
             ...(fault === "wrong-route"
@@ -1750,6 +1750,53 @@ describe("release CI summary child correlation", () => {
     expect((await verify.mock.results[0]!.value).children).toHaveLength(5);
   });
 
+  it("consumes historical source-admitted operations without a registry-admission contract", async () => {
+    const fixture = trustedMainNpmFixture();
+    const sourceAdmission = publicationSourceFixture(fixture, true);
+    Object.assign(fixture.executionPlan, { sourceAdmissionContract: "1", sourceAdmission });
+    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+    const manifest = Object.assign(fixture.manifest, {
+      sourceAdmissionContract: "1",
+      sourceAdmission,
+      trustedWorkflow: fixture.executionPlan.trustedWorkflow,
+      executionPlanSha256: fixture.executionPlan.sha256,
+    });
+    Object.assign(manifest.validationInputs, publicationIntentInputs(sourceAdmission));
+    const manifestJson = JSON.stringify(manifest);
+    const retainedManifest = JSON.parse(manifestJson);
+    const client = {
+      ...createReleaseEvidenceClient("openclaw/openclaw"),
+      ...fixture.client,
+      getJobLog: async (jobId: number) => fixture.client.getJobLog(jobId),
+      getRun: async (runId: string) => fixture.client.getRun(runId),
+      getRunView: async (runId: string) => fixture.client.getRunView(runId),
+      getParentJobs: async (runId: string) => fixture.client.getParentJobs(runId),
+      getRunAttemptJobs: async (runId: string) => fixture.client.getRunAttemptJobs(runId),
+      loadManifest: () => ({ artifact: fixture.artifact, manifest: retainedManifest }),
+      getWorkflowSource: () => 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n',
+    };
+    const options = {
+      run: fixture.parentRun,
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: fixture.runId,
+      expectedRunAttempt: 1,
+      expectedTargetSha: fixture.targetSha,
+      expectedReleaseTag: "v2026.8.28-beta.1",
+      expectedPublicationOperation: expectDefined(
+        sourceAdmission.publicationSelection,
+        "selection",
+      ),
+      verifierSourceSha: fixture.workflowSha,
+      verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+    };
+    const result = await authenticateFullReleaseValidationEvidence(options, client);
+    expect(result.qualification.kind).toBe("historical");
+    expect(result.publicationAdmission).toBeNull();
+    expect(() =>
+      result.forPublication({ ...options, expectedReleaseTag: "v2026.8.28-beta.2" }),
+    ).toThrow("exact publication tag");
+  });
+
   it.each(["deleted-manifest", "deleted-plan", "changed-plan", "deleted-publication"])(
     "verifies source admission against the immutable workflow and plan: %s",
     async (mutation) => {
@@ -2383,6 +2430,55 @@ describe("release CI summary child correlation", () => {
       conclusion: "failure",
       advisoryJobs: [advisory],
     });
+  });
+
+  it("authenticates exact-candidate failed CI and rejects forged or unexplained evidence", async () => {
+    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+    const targetVersion = "2026.11.4";
+    const fixture = trustedMainNpmFixture("stable", { targetSha, targetVersion });
+    const jobs = [
+      "checks-node-agentic-control-plane-runtime-state",
+      "checks-ui-e2e-real-gateway (1/2)",
+      "macos-swift (tests)",
+      "openclaw/ci-gate",
+    ].map((name, index) =>
+      Object.assign({}, fixture.parentJob, {
+        id: 1501 + index,
+        name,
+        conclusion: "failure",
+        steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+      }),
+    );
+    const { child, run } = setChildJobs(fixture, "normalCi", jobs);
+    run.conclusion = "failure";
+    const waivers = evaluateReleaseChildPolicy({
+      child: { key: "normalCi", jobs },
+      targetVersion,
+      targetSha,
+    }).waivers;
+    const recorded = waivers.map((waiver) => ({ ...waiver, runId: child.runId, runAttempt: 1 }));
+    Object.assign(fixture.manifest, { waivers: canonicalizeJsonValue(recorded) });
+    const originalLog = fixture.client.getJobLog.getMockImplementation()!;
+    let log = [
+      "checks-ui-e2e-real-gateway finished with failure (selected=true)",
+      "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+      "macos-swift finished with failure (selected=true)",
+      "Process completed with exit code 1.",
+    ]
+      .map((cause) => "2026-11-15T04:00:00.0000000Z ##[error]" + cause)
+      .join("\n");
+    fixture.client.getJobLog.mockImplementation((id) => (id === 1504 ? log : originalLog(id)));
+    const evidence = await verifyFixture(fixture);
+    expect(evidence.valid).toBe(true);
+    expect(
+      evidence.children.find((entry: { role: string }) => entry.role === "normalCi"),
+    ).toMatchObject({ conclusion: "failure", waivers });
+    expect(fixture.client.getJobLog).toHaveBeenCalledWith(1504);
+    Object.assign(fixture.manifest, { waivers: [] });
+    await expect(verifyFixture(fixture)).rejects.toThrow("waivers differ");
+    Object.assign(fixture.manifest, { waivers: canonicalizeJsonValue(recorded) });
+    log += "\n\u001b[31m##[error]unknown failure\u001b[0m";
+    await expect(verifyFixture(fixture)).rejects.toThrow("unwaived failure");
   });
 
   it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {

@@ -126,6 +126,10 @@ export default definePluginEntry({
               ctx,
               providerId: provider.providerId,
               buildProvider: provider.buildProvider,
+              // Tencent's model list carries IDs and status only and includes TTS models
+              // (#198288), so an uncatalogued ID stays out of default pickers until the
+              // catalog describes it; typed and configured refs still run.
+              modelDiscovery: { unknownModelChatEvidence: "unlikely" },
             }),
         },
         staticCatalog: {

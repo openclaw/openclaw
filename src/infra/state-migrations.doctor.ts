@@ -213,7 +213,7 @@ import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "./state-migrations.workspace-setup.js";
-import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-context.js";
 import {
   isUpdateRehearsalReadOnlyPath,
   resolveUpdateRehearsalRoot,

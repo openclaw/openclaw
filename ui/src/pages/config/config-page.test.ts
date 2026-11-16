@@ -270,7 +270,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   snapshot.loading = false;
   snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
   publishConfigSource(webPush);
-  expect(buttonNamed(container, "Send test").disabled).toBe(false);
+  expect(buttonNamed(container, "Test all browsers").disabled).toBe(false);
   expect(container.textContent).toContain("Subscribed");
   expect(container.textContent).not.toContain("Checking");
   expect(

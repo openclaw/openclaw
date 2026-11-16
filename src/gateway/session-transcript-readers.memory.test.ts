@@ -123,6 +123,67 @@ async function fixture(sessionId = "one", agentId = "main", announce = false) {
   };
 }
 
+it("reconstructs skill loads in the selected incognito actor without a database or worker", async () => {
+  const root = await fixture();
+  const other = await fixture("other-skills");
+  await root.run(async () => {
+    await root.appendMessage("skill-call", "answer", {
+      role: "assistant",
+      runId: "memory-run",
+      content: [
+        {
+          type: "toolCall",
+          id: "memory-load",
+          name: "skills_read",
+          arguments: { name: "private-review" },
+        },
+      ],
+    });
+    await root.appendMessage("skill-result", "skill-call", {
+      role: "toolResult",
+      runId: "memory-run",
+      toolCallId: "memory-load",
+      toolName: "skills_read",
+      isError: false,
+      content: [{ type: "text", text: "Instructions" }],
+    });
+    await root.appendMessage("coordination-input", "skill-result", {
+      role: "user",
+      content: "Internal coordination",
+      idempotencyKey: "coordination:user",
+      provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceRole: "subagent" },
+    });
+    await root.appendMessage("hidden-call", "coordination-input", {
+      role: "assistant",
+      __openclaw: { runId: "coordination" },
+      content: [
+        {
+          type: "toolCall",
+          id: "hidden-load",
+          name: "skills_read",
+          arguments: { name: "internal-only" },
+        },
+      ],
+    });
+    await root.appendMessage("hidden-result", "hidden-call", {
+      role: "toolResult",
+      __openclaw: { runId: "coordination" },
+      toolCallId: "hidden-load",
+      toolName: "skills_read",
+      isError: false,
+      content: [{ type: "text", text: "Instructions" }],
+    });
+    expect(await readSummary(root.scope, { kind: "skills-used" })).toEqual({
+      kind: "skills-used",
+      loads: [{ id: '["memory-run","memory-load"]', name: "private-review" }],
+    });
+    expect(await readSummary(other.scope, { kind: "skills-used" })).toEqual({
+      kind: "skills-used",
+      loads: [],
+    });
+  });
+});
+
 it("reads current conversation bindings from the selected owner's catalog", async () => {
   const root = await fixture();
   const other = await fixture("other", "helper");

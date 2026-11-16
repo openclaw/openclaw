@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { createHash as createVolumeHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -26,7 +27,10 @@ import {
   runShardPlans,
   type ShardGroupPlan,
 } from "../../scripts/ci-run-node-test-shard.mts";
-import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import {
+  encodeNodeTestGroups,
+  nodeTestVolumeEnvironment,
+} from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import nativeBunQualification from "../../scripts/lib/ci-test-native-bun-qualification.json" with { type: "json" };
 import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -69,9 +73,13 @@ vi.mock("../../scripts/lib/ci-test-native-bun-qualification.json", async () => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawn: vi.fn(actual.spawn) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
 }));
@@ -116,6 +124,69 @@ function groupPlans(groups: ShardGroupPlan["plan"][], packed = false) {
   );
 }
 
+it.each([false, true])(
+  "carries volume references through mixed-config plans (packed=%s)",
+  async (packed) => {
+    const configs = ["one.config.ts", "two.config.ts"];
+    const count = { count: 2, digest: "b".repeat(64) };
+    const volume = {
+      version: 1 as const,
+      revision: "a".repeat(40),
+      policy: "node" as const,
+      entries: [
+        {
+          config: configs[0]!,
+          runtime: "node" as const,
+          engine: "vitest" as const,
+          profile: "c".repeat(64),
+          environment: nodeTestVolumeEnvironment({}).semantic,
+          argsDigest: createVolumeHash("sha256")
+            .update(JSON.stringify([configs[0]]))
+            .digest("hex"),
+          full: { ...count, id: "d".repeat(64) },
+          selected: { count: 1, digest: "e".repeat(64) },
+        },
+      ],
+    };
+    const plans = groupPlans([{ configs, volume }], packed);
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    const result = await recordPlans(plans);
+    expect(result.code).toBe(0);
+    expect(result.calls[0]![0]).toEqual(configs);
+    const records = output
+      .filter((line) => line.startsWith("[shard:volume] "))
+      .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ config: configs[0], full: volume.entries[0]!.full });
+    expect(records[1]).toMatchObject({ config: configs[1], full: null, selected: null });
+    output.length = 0;
+    await recordPlans(plans, {
+      env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testTimeout=12345"]' },
+    });
+    const changedArgs = output
+      .filter((line) => line.startsWith("[shard:volume] "))
+      .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
+    expect(changedArgs).toHaveLength(2);
+    expect(changedArgs.every((record) => record.full === null && record.selected === null)).toBe(
+      true,
+    );
+    output.length = 0;
+    volume.entries.push({ ...volume.entries[0]! });
+    await recordPlans(groupPlans([{ configs, volume }], packed));
+    const ambiguous = output.filter((line) => line.startsWith("[shard:volume] "));
+    expect(ambiguous.map((line) => JSON.parse(line.slice("[shard:volume] ".length)))).toMatchObject(
+      [
+        { full: null, selected: null },
+        { full: null, selected: null },
+      ],
+    );
+  },
+);
+
 function machine(cpus: number, gib: number) {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
   vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
@@ -143,11 +214,17 @@ async function recordPlans(
 
 const readList = (file: string): unknown => JSON.parse(readFileSync(file, "utf8"));
 
+function createChild() {
+  return Object.defineProperties(new childProcess.ChildProcess(), {
+    stdin: { value: null },
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+  });
+}
+
 function captureChild() {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
-  const child = new childProcess.ChildProcess();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
+  const child = createChild();
   const started = createDeferred();
   vi.spyOn(childProcess, "spawn").mockImplementation(() => {
     started.resolve();
@@ -1219,6 +1296,55 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
   });
 
+  it.each(["node", "bun"] as const)(
+    "runs and retries only the selected %s job with unchanged coverage",
+    async (runtime) => {
+      const plans = groupPlans([
+        {
+          configs: [bunConfig],
+          shard_name: "eligible",
+          includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
+        },
+      ]);
+      const env = { CI: "true", OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" };
+      const capture = async (selected?: string, outcome = 0) => {
+        const calls: {
+          args: string[];
+          runtime: string | undefined;
+          include: unknown;
+          label: string;
+          timingKey: string | undefined;
+        }[] = [];
+        const code = await runPlans(plans, {
+          concurrency: 1,
+          env: { ...env, OPENCLAW_CI_TEST_RUNTIME: selected },
+          runChild: async (args, childEnv, label, timingKey) => {
+            calls.push({
+              args,
+              runtime: childEnv.OPENCLAW_VITEST_RUNTIME,
+              include: childEnv.OPENCLAW_VITEST_INCLUDE_FILE
+                ? readList(childEnv.OPENCLAW_VITEST_INCLUDE_FILE)
+                : undefined,
+              label,
+              timingKey,
+            });
+            return outcome;
+          },
+        });
+        return { code, calls };
+      };
+      const original = await capture();
+      const expected = original.calls.filter((call) => call.runtime === runtime);
+      expect(expected.length).toBeGreaterThan(0);
+      const failed = await capture(runtime, 1);
+      expect(failed.code).toBe(1);
+      expect(failed.calls).toEqual(expected);
+      const retry = await capture(runtime);
+      expect(retry.code).toBe(0);
+      expect(retry.calls).toEqual(expected);
+    },
+  );
+
   it("finishes every release engine after ordinary test failures", async () => {
     const { code, calls } = await recordPlans(
       groupPlans([
@@ -1864,9 +1990,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     }
     let invocations = 0;
     const spawn = vi.spyOn(processOwner, "spawnOwnedVitestProcess").mockImplementation((spec) => {
-      const child = new childProcess.ChildProcess();
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
+      const child = createChild();
       const scratch = path.dirname(spec.options.env!.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT!);
       if (!scratchDirs.includes(scratch)) {
         scratchDirs.push(scratch);

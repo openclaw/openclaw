@@ -42,6 +42,7 @@ import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -192,6 +193,12 @@ export async function hydrateChatHistory(
     const replayAgentEvent = inFlightEvents?.length
       ? (await loadChatLiveTools()).handleAgentEvent
       : undefined;
+    // Full reads already carry the authoritative inventory. Only nonempty catch-up
+    // needs tool decoding; keep optional skill extraction outside the chat boot path.
+    const { extendConversationSkillHistory: extendSkills } =
+      isHistoryCursor(response) && response.kind === "delta" && response.messages.length
+        ? await import("../../lib/chat/skills-used.ts")
+        : { extendConversationSkillHistory: undefined };
     // First history has no held transcript to reconcile. Load recovery only
     // after other async prerequisites, before capturing the state it may retain.
     const { fillHeldHistoryGap, reconcileHistoryTail } =
@@ -228,14 +235,22 @@ export async function hydrateChatHistory(
     const previousSessionId = state.currentSessionId ?? null;
     const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
     const previousHistoryState = readChatHistoryState(state, readChatHistoryCursor(state));
+    // Append-only deltas retain the complete inventory; reset/full reads replace it.
+    const recordedSkills = !isHistoryCursor(response)
+      ? response.skillsUsed
+      : response.kind === "delta"
+        ? previousHistoryState?.skillsUsed
+        : undefined;
     // Preserve wire metadata before the display and roster owners derive their projections.
-    const historyState =
-      !(isHistoryCursor(response) && response.kind === "reset") && response.stateRevision
+    const historyState: ChatHistoryState | null =
+      !(isHistoryCursor(response) && response.kind === "reset") &&
+      (response.stateRevision || recordedSkills)
         ? {
+            skillsUsed: recordedSkills,
             stateRevision: {
               ...response.stateRevision,
               commands: response.metadata
-                ? response.stateRevision.commands
+                ? response.stateRevision?.commands
                 : previousHistoryState?.stateRevision.commands,
             },
             commands: response.metadata
@@ -254,6 +269,8 @@ export async function hydrateChatHistory(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
+      // Held admitted rows correlate calls/results across batches without older-page reads.
+      const deltaHistoryState = extendSkills?.(historyState, state.chatMessages) ?? historyState;
       const historyProjection = getChatSessionProjection(state);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
@@ -289,7 +306,7 @@ export async function hydrateChatHistory(
         state,
         response.deltaCursor ?? null,
         response.sessionInfo,
-        historyState,
+        deltaHistoryState,
       );
       return {
         messages: state.chatMessages,

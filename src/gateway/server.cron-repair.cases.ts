@@ -126,7 +126,7 @@ export function registerCronRepairCases(
       const jobId = expectCronJobIdFromResponse(await request("cron.add", repairJob));
       const repairSettled = createDeferred();
       stopObserving = observeCronJobCommits(jobId, (state) => {
-        if (state.failureAlertIncident?.repair?.settledAtMs !== undefined) {
+        if (state.lastFailureNotificationDeliveryStatus === "delivered") {
           repairSettled.resolve();
         }
       });
@@ -141,9 +141,9 @@ export function registerCronRepairCases(
       });
       await withinTest(repairSettled.promise, signal);
       const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-      const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-        ?.repair;
-      expect(repair).toMatchObject({ settledAtMs: expect.any(Number) });
+      expect(stored.jobs.find((job) => job.id === jobId)?.state).toMatchObject({
+        lastFailureNotificationDeliveryStatus: "delivered",
+      });
       expect(cliOutput).toHaveBeenCalledTimes(2);
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
     } finally {

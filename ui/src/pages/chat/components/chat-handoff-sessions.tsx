@@ -10,6 +10,7 @@ import type {
   ChatSubagentWait,
   HandoffSessionLinks,
 } from "../chat-subagent-wait.ts";
+import type { ProjectedContinuationSource } from "../chat-turn-boundary.ts";
 
 function needsInputLabel(count: number) {
   return count === 1
@@ -146,7 +147,13 @@ function HandoffWaitLine(props: {
               session={session()}
               links={props.links}
             />{" "}
-            <Show when={session().status === "attention" || session().status === "paused"}>
+            <Show
+              when={
+                session().status === "attention" ||
+                session().status === "paused" ||
+                session().status === "background"
+              }
+            >
               <span aria-hidden="true">·</span>{" "}
               <span
                 class={{ "chat-subagent-wait__attention": session().status === "attention" }}
@@ -199,23 +206,26 @@ export function ChatSubagentWaitLine(props: {
 }
 
 /**
- * Where a resumed handoff picks up again: how long it waited, and the children
- * it waited on, closed until asked for.
+ * Where a resumed handoff picks up again: how long it waited, what woke it, and
+ * the children it waited on, closed until asked for.
  */
 export function ChatHandoffResume(props: {
   handoff: HandoffDisplay & { resumedAt: number };
   sessions: readonly ChatHandoffSession[];
   links?: HandoffSessionLinks;
+  source?: ProjectedContinuationSource;
 }) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
-  const label = () =>
-    t("chat.handoffResumed", {
+  const label = () => {
+    const resumed = t("chat.handoffResumed", {
       duration:
         formatDurationCompact(Math.max(1_000, props.handoff.resumedAt - props.handoff.yieldedAt), {
           includeSeconds: true,
         }) ?? "",
     });
+    return props.source ? `${resumed} · ${t(`chat.continuationSource.${props.source}`)}` : resumed;
+  };
   const count = () =>
     props.sessions.length === 1
       ? t("chat.handoffSessionsOne")

@@ -197,6 +197,12 @@ recovery. Recovery runs after database preparation ends, under the session's
 current authority, before the same session accepts fresh inputs. Another agent becoming
 available does not revoke an already admitted session's authority.
 
+Runtime status and automation-list notifications do not invalidate a resumed
+turn's stored session generation. Compaction and subsequent tool calls retain the
+same admitted owner; session replacement, revocation, and uncertain storage changes
+still refuse stale authority. Model fallback does not retry a refused session
+generation, because selecting another model cannot restore that authority.
+
 The boot owner retains each agent's pending crash intervals in the existing shared
 SQLite machine-state store until its recovery pass completes, including an empty
 successful scan. An intermediate process that never admits that agent cannot erase
@@ -583,9 +589,9 @@ one new input through the normal session-event path:
 
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
-If the session had running ordinary (non-durable) background exec processes, that same input also says:
-
-> Background exec processes were stopped; rerun them if still needed.
+Background commands that were waiting to wake the conversation are reported
+separately, with a notice for each command, after any restart, including a crash. See
+[lost background commands](/gateway/background-process#lost-background-commands).
 
 This is a new input, not a replay of the original user prompt or unfinished tool
 call. Later model requests can contain the text as conversation history. The
@@ -674,6 +680,12 @@ keeps one requester authority, including when a paused child continues in a new
 turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
+
+If shutdown interrupts the requester while it is processing a captured child
+result, that settle input keeps its completion obligation. Startup resumes the
+same input under fresh authority instead of also sending a generic restart
+input. Its original transcript entry and completion receipt prevent duplicate
+handoffs across later restarts. An intentional Stop still ends the obligation.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes

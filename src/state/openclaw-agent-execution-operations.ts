@@ -203,7 +203,10 @@ async function loadAgentMaintenanceFinalizationOperations() {
 
 async function loadAgentMessageCutOperations() {
   const kernel = await import("../config/sessions/session-message-cut.worker.js");
-  return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
+  return {
+    "session.messageCut.commit": kernel.commitSessionMessageCut,
+    "session.messageCut.preflight": kernel.preflightSessionMessageCut,
+  } satisfies Handlers;
 }
 
 async function loadAgentNativeBindingOperations() {
@@ -516,6 +519,7 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.size": loadAgentMaintenanceFinalizationOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
+    "session.messageCut.preflight": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "trajectory.retention.begin": loadAgentTrajectoryOperations,
     "trajectory.retention.delete": loadAgentTrajectoryOperations,

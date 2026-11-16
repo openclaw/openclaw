@@ -636,7 +636,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "none",
         reason: "completion_handoff_pending",
         terminal: true,
-        disposition: "intentional_non_delivery",
       },
       gatewayCalls: 0,
     }),
@@ -880,19 +879,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each([null, "replacement-parent"])(
-    "does not deliver private completion to a missing or replaced parent: %s",
+    "hands a private completion only to a live parent chat, also after a reset: %s",
     async (currentRequesterSessionId) => {
       const { result, callGateway, sendMessage } = await runDelivery("discord", {
-        response: { status: "ok", result: { payloads: [] } },
+        response: { status: "ok", inputProcessingCompleted: true, result: { payloads: [] } },
         completionTarget: "parent",
         currentRequesterSessionId,
         internalEvents: taskCompletionEvents(),
       });
-      expect(result).toMatchObject({
-        delivered: false,
-        reason: "completion_handoff_unavailable",
-        terminal: true,
-      });
+      if (currentRequesterSessionId) {
+        expectGatewayAgentParams(callGateway, { expectedExistingSessionId: "replacement-parent" });
+        return expect(sendMessage).not.toHaveBeenCalled();
+      }
+      expect(result).toMatchObject({ delivered: false, reason: "completion_handoff_unavailable" });
       expectNoExternalDelivery(callGateway, sendMessage);
     },
   );

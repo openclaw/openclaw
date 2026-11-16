@@ -176,23 +176,6 @@ describe("admitScheduledOccurrence", () => {
     expect(generationRelease).toHaveBeenCalledOnce();
   });
 
-  it("holds the observed generation for a revisionless parent link", async () => {
-    readSessionEntryInWorker.mockResolvedValue({
-      sessionId: "parent-session",
-      lifecycleRevision: "rev-1",
-    });
-    const { minted } = await mint(
-      job({
-        ...LINKED_JOB,
-        sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" },
-      }),
-    );
-    expect(minted.result.status).toBe("ready");
-    expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "parent-session", lifecycleRevision: "rev-1" }),
-    );
-  });
-
   it("exposes a child's board, media and memory parent for the run", async () => {
     readSessionEntryInWorker.mockResolvedValue({
       sessionId: "parent-session",
@@ -374,32 +357,31 @@ describe("occurrence pause", () => {
     occurrence.release();
   });
 
-  it("keeps running when the parent was reset", async () => {
-    readSessionEntryInWorker.mockResolvedValue({
-      sessionId: "new-session",
-      lifecycleRevision: "rev-2",
-    });
+  // A message edit rotates the session id and a reset rotates the revision; the key-only link
+  // keeps the child bound to whatever the parent conversation is now.
+  it.each([
+    ["edited", { sessionId: "edited-session", lifecycleRevision: "rev-1" }],
+    ["reset", { sessionId: "parent-session", lifecycleRevision: "rev-2" }],
+  ])("keeps a child bound to its parent after the parent is %s", async (_, row) => {
+    const parentEntry = { ...row, sandbox: "required" as const, spawnedCwd: "/work/project" };
+    readSessionEntryInWorker.mockResolvedValue(parentEntry);
     const occurrence = await admit(linked);
     expect(occurrence.pause).toBeUndefined();
+    expect(occurrence.childParent).toMatchObject({
+      binding: { sessionKey: PARENT_KEY, entry: parentEntry },
+      sandbox: "required",
+    });
+    expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: PARENT_KEY, ...row }),
+    );
     expect(occurrence.mint(RUN).result).toMatchObject({
       status: "ready",
-      facts: { principal: { kind: "unbound-parent", parentSessionKey: PARENT_KEY } },
+      facts: {
+        principal: { kind: "parent", parent: { sessionKey: PARENT_KEY, ...row } },
+        resources: { sandbox: { required: true } },
+      },
     });
-  });
-
-  it("ignores the replacement session's worktree after a reset", async () => {
-    readSessionEntryInWorker.mockResolvedValue({
-      sessionId: "new-session",
-      lifecycleRevision: "rev-2",
-      worktree: true,
-      spawnedCwd: "/nonexistent/openclaw-test-worktree",
-    });
-    const occurrence = await admit(linked);
-    expect(occurrence.pause).toBeUndefined();
-    expect(occurrence.mint(RUN).result).toMatchObject({
-      status: "ready",
-      facts: { principal: { kind: "unbound-parent", parentSessionKey: PARENT_KEY } },
-    });
+    occurrence.release();
   });
 
   it("runs when the parent is current", async () => {
@@ -496,11 +478,6 @@ describe("occurrence pause", () => {
     const occurrence = await admit({ ...linked, sessionTarget: `session:${PARENT_KEY}` });
     expect(occurrence.childParent).toBeUndefined();
     occurrence.release();
-  });
-
-  it("hands no binding to a reset parent's unbound run", async () => {
-    readSessionEntryInWorker.mockResolvedValue({ sessionId: "new-session" });
-    expect((await admit(linked)).childParent).toBeUndefined();
   });
 
   it("never pauses on a failed read", async () => {

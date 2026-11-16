@@ -24,9 +24,10 @@ const fileEffects = vi.hoisted(() => ({
 
 // mock-isolation: Observe real filesystem effects through the worker's named imports.
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
     rmSync: (...args: Parameters<typeof actual.rmSync>) => {
       fileEffects.beforeRemove?.();
       return actual.rmSync(...args);
@@ -36,6 +37,7 @@ vi.mock("node:fs", async (importOriginal) => {
       return actual.rmdirSync(...args);
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 // mock-isolation: Exercise the real SQL owner in-process; broker transport is covered separately.

@@ -25,6 +25,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
   sessionControllerMailboxes,
+  reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -51,7 +52,7 @@ import {
   isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
-import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
 
 // mock-isolation: This unit contract observes the actual built-in context consumer without a provider call.
@@ -72,7 +73,6 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
 // mock-isolation: Queue insertion is observed here; real draining is covered by server.chat-goal.
 vi.mock("./queue/enqueue.js", () => ({
   enqueueFollowupRun: vi.fn(() => true),
-  getFollowupQueueDepth: vi.fn(() => 0),
 }));
 
 const workerPlacement = vi.hoisted(() => ({
@@ -177,7 +177,17 @@ function fixture() {
     operation,
     runFollowup: vi.fn(async () => {}),
   };
-  return { params, controller, operation };
+  const reserveInput = () =>
+    reserveSessionControllerSource(params.queueKey, {
+      policy: params.settings,
+      target: captureSessionTarget({
+        storeScope: params.storePath,
+        sessionKey: params.sessionKey,
+        agentId: params.base.run.agentId,
+        incarnation: params.expectedSession.sessionId,
+      }),
+    });
+  return { params, controller, operation, reserveInput };
 }
 beforeEach(() => {
   vi.useFakeTimers();
@@ -185,7 +195,6 @@ beforeEach(() => {
   workerPlacement.supported = true;
   workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
-  vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
 });
 afterEach(async () => {
@@ -462,7 +471,7 @@ describe("Goal queue custody", () => {
         f.controller.abort();
       }
       if (change === "new input") {
-        vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
+        f.reserveInput();
       }
       if (change === "goal replacement") {
         current.goal!.id = "new-goal";
@@ -862,7 +871,7 @@ describe("Goal return from committed child custody", () => {
       boundary !== "command failure" && boundary !== "unverified command",
     );
     if (boundary === "queued input") {
-      vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
+      f.reserveInput();
     }
     if (boundary === "unsettled sibling") {
       children.mockResolvedValue([{ runId: "sibling" }]);

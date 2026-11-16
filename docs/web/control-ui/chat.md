@@ -190,7 +190,16 @@ same block, with one footer at the end. Below a spoken acknowledgment, a thin
 select it to see the children it waited on and their current status. Until the
 chat's own subagent list has loaded, the rule shows the wait time alone. Tool activity that
 resumes with nothing written in between joins the activity row from before the
-handoff. In dashboard sessions, tool activity recorded after the resumed
+handoff, unless a **Resumed** rule marks the resume.
+
+Work the agent picks up again on its own continues the block it belongs to, with
+or without a handoff: when a background command finishes, when the Gateway
+restarts during a run, or when a subagent of this session finishes. A thin rule
+such as **Resumed · 3m later · Background command finished** marks each place it
+picked up again; the other labels are **Gateway restarted** and **Agent
+finished**. An answer the agent already gave stays in place above the rule. A
+heartbeat, a scheduled automation, or a message from another person or session
+still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
 so the answer stays last; a step that failed there stays where it happened. The
 working indicator
@@ -296,6 +305,9 @@ view and reports an error. Turn the option off and back on to retry.
 Type `/` to open the command menu. `/steer` guides the agent’s current reply;
 `/redirect` restarts the agent’s reply with a new message. `/clear` clears the
 conversation. The `/help` result uses the heading **Available commands**.
+
+While `/steer` or `/redirect` is in progress, the status reads **Steering…** or
+**Redirecting…**. A finished action shows **Steered.** or **Redirected.**
 
 Command failures explain what could not be done and what to try next. For example,
 `/model` shows “Couldn’t load model details. Try again.” when model details cannot
@@ -1049,7 +1061,6 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Each chat pane has a main view and a unified side panel. When Chat and Desktop are both present, the panel’s **Panel position** menu offers a **Swap** action that exchanges them; Dashboard keeps its own view controls. Expanding or restoring a panel preserves live content and drafts. The header’s **Panels** control hides or reopens the side panel without clearing its tabs, and the browser remembers each session’s arrangement.
     - On desktop, the **Panel position** menu in the panel header places it left, right, or below the main area. Use the adjacent expand/restore control to change how much of the pane it occupies. On mobile, **Panels** opens the shared sheet; its expand/restore control changes the sheet height without changing the saved desktop docking arrangement. Drag the grabber or empty header space to resize it: a slow release keeps the height you chose, a flick moves to the next height (docked, expanded, or full), and a downward flick or a pull past half its minimum height closes it.
     - In **Processes**, **Finished** starts collapsed; click its heading to expand or collapse the list.
-    - While the conversation is idle and a background command will continue it on exit ([`tools.exec.notifyOnExit`](/gateway/background-process)), a **Waiting on …** card sits above the composer with the command name and elapsed time. Select it to open that command's output in **Processes**, where **Stop** is available. Several commands collapse to **Waiting on N processes**; expand it to open any one. The card hides during a running turn and disappears once the command exits, when its completion starts the next turn. A successful command with no output also starts that turn. With `tools.exec.notifyOnExitEmptySuccess=false`, the card does not appear, because a silent success would not continue the conversation.
     - **Details → Processes** previews only running commands, with their elapsed time and available **Stop** action. Its count includes every running process; the preview shows up to three on desktop and two on mobile. Select a command to open its output, or **View all processes** to open the full list, including finished commands. The Details section disappears when no processes are running; **Panels → Processes** remains available.
     - A new Browser side panel uses the chat pane's available width and the rendered chat column to reclaim unused chat margins. This default applies on web, macOS, and Tauri; saved widths and manual divider adjustments take precedence.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. A confirmed model selection stays visible if the following session refresh fails; later Gateway updates can still change it. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.

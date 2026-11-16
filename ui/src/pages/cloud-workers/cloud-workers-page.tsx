@@ -7,6 +7,8 @@ import {
   createStore,
   Errored,
   Loading,
+  Match,
+  Switch,
   onSettled,
   Show,
   For,
@@ -18,6 +20,8 @@ import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
   SettingsEmpty,
+  SettingsLoadingSkeleton,
+  RetryAction,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
@@ -648,7 +652,7 @@ export function CloudWorkersPage() {
               </Show>
               <SettingsSection
                 title={t("cloudWorkersPage.environments.machines")}
-                count={profiles().length}
+                count={editableConfig() ? profiles().length : undefined}
                 actions={
                   <Show when={!saving() && canManage()}>
                     <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
@@ -659,7 +663,27 @@ export function CloudWorkersPage() {
               >
                 <For
                   each={profiles()}
-                  fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+                  fallback={
+                    <Switch>
+                      <Match when={editableConfig()}>
+                        <SettingsEmpty message={t("cloudWorkersPage.empty")} />
+                      </Match>
+                      <Match when={configProjection.read().state.configLoading}>
+                        <SettingsLoadingSkeleton rows={1} />
+                      </Match>
+                      <Match when={configProjection.read().state.lastError}>
+                        {(error) => (
+                          <InlineAlert tone="warning" role="alert">
+                            {error()}{" "}
+                            <RetryAction
+                              disabled={!gateway.connected}
+                              onRetry={() => void context.runtimeConfig.refresh()}
+                            />
+                          </InlineAlert>
+                        )}
+                      </Match>
+                    </Switch>
+                  }
                 >
                   {(profile) => renderProfile(profile)}
                 </For>

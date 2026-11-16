@@ -22,6 +22,7 @@ export type ChatDetailsDesktopSectionId =
   | "people"
   | "environment"
   | "context"
+  | "skills"
   | "pull-requests"
   | "automations"
   | "subagents"
@@ -59,7 +60,7 @@ type ChatDetailsDesktopPresentation = {
   /** Localized section labels supplied by the host's copy owner. */
   peopleLabel: string;
   outputsLabel: string;
-  /** Localized Working, without the ellipsis in common.working. */
+  /** Localized Working label. */
   subagentsWorkingLabel: string;
 };
 
@@ -91,6 +92,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "personActivity"
     | "onScrollPortRef"
   > & {
+    toolMessages?: unknown[];
+    skillLoads?: import("../../../../../src/chat/conversation-skills.js").ConversationSkillLoad[];
     cachedDetails?: ChatDetailsSnapshot;
     /** The session observation has accepted current facts; cached rows are display only. */
     sessionFactsReady?: boolean;

@@ -38,11 +38,13 @@ const worker = vi.hoisted(() => ({
   heap: undefined as { used_heap_size: number; heap_size_limit: number } | undefined,
 }));
 vi.mock("node:v8", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:v8")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:v8") & { default: typeof import("node:v8") }
+  >();
+  const overrides = {
     getHeapStatistics: () => ({ ...actual.getHeapStatistics(), ...worker.heap }),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),

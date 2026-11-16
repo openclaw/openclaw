@@ -175,6 +175,12 @@ export const ChatHistoryActivitySchema = closedObject({
 });
 export type ChatHistoryActivity = Static<typeof ChatHistoryActivitySchema>;
 
+/** Compact, session-scoped instruction-load receipts, independent of history pagination. */
+export const ChatSkillLoadsSchema = Type.Array(
+  closedObject({ id: NonEmptyString, name: NonEmptyString }),
+);
+export type ChatSkillLoads = Static<typeof ChatSkillLoadsSchema>;
+
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
  * payloads. There is no continuation loop: more than 200 raw events or the byte

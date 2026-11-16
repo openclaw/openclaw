@@ -10,7 +10,7 @@ import {
 import type { Message } from "@openclaw/llm-core";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
-import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.types.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
 import type { UsageLike } from "../usage.js";
@@ -150,7 +150,6 @@ export async function attemptServerEndpointCompaction(params: {
           replay: {
             model: params.model,
             sessionId: params.requestOptions.sessionId,
-            authProfileId: params.requestOptions.authProfileId,
           },
         }) - estimateRenderedLlmBoundaryTokenPressure({ prompt: "" });
       if (

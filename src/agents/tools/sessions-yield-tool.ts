@@ -105,6 +105,7 @@ export function createSessionsYieldTool(opts?: {
     // A yield waits, so it must pause an async-tool response: the next request then
     // delivers this response's async results ahead of the yield result.
     async: false,
+    repeatable: true,
     description:
       'End this turn to await pending child completions or wake-armed background commands this run started (their exit resumes this run), not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:"message" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Automation turns end here; the scheduler delivers child output under the job delivery policy. Collector runs require explicit collection instead.',
     parameters: SessionsYieldToolSchema,

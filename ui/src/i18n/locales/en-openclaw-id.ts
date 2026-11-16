@@ -128,6 +128,14 @@ const enOpenClawId = {
     needsLinkCodeDetail: "Publish them so your devices can reach this claw.",
     publishNewKeys: "Publish new keys",
     newKeysPublished: "New keys published",
+    memberAskedToJoin: "{name} asked to join",
+    nodeAskedToJoin: "{name} asked to join as a node",
+    joinRequestDetail: "Approve or deny it in Access → People.",
+    joinRequestTimeLeft: "{time} left to decide",
+    joinRequestPrompt: "Join request",
+    joinRequestMore: "{count} more waiting",
+    joinRequestLater: "Later",
+    joinRequestReview: "Review",
   },
 } satisfies TranslationMap;
 

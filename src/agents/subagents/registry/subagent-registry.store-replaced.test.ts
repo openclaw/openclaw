@@ -95,7 +95,7 @@ it.each([
   "replaced-session",
   "replaced-revision",
 ] as const)(
-  "records a required failed completion in its original requester transcript (%s)",
+  "records a required failed completion in its current requester transcript (%s)",
   async (route) => {
     using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const expiry = route.startsWith("expiry-");
@@ -171,6 +171,12 @@ it.each([
       expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.completion?.resultText).toBe(
         "captured child answer",
       );
+      expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.status).toBe(
+        "pending",
+      );
+      expect(warning).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents(target)).toEqual([]);
+      return;
     } else if (route === "direct-legacy-yielded-batch") {
       await suspendReplacedStoreNotifications({ runs: subagentRuns, resumedRuns: new Set() });
     } else if (route !== "batch" && route !== "batch-retry" && !route.endsWith("yielded-batch")) {
@@ -220,8 +226,9 @@ it.each([
       });
     }
     const notices = events.filter((event) => isRecord(event) && event.type === "custom_message");
+    // The notice goes to the requester chat as it is now, also after a reset or replacement.
     expect(notices).toEqual(
-      route.startsWith("replaced-") || expiry
+      expiry
         ? []
         : [
             expect.objectContaining({
