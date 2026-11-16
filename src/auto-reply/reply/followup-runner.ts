@@ -33,7 +33,11 @@ import { readCreatedGoalContinuationId } from "./goal-continuation-return.js";
 import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
+import {
+  isFollowupOperatorAuthorityCurrent,
+  isFollowupRunAborted,
+  type QueuedFollowupReplyBatch,
+} from "./queue/types.js";
 import {
   prepareReplyAgentTurn,
   type AdmittedFollowupTurn,
@@ -403,23 +407,14 @@ export function createFollowupRunner(
         );
       }
     } catch (error) {
-      let operatorAuthorityLost = false;
-      try {
-        queued.operatorAuthority?.assertCurrent();
-      } catch {
-        operatorAuthorityLost = true;
-      }
-      if (operatorAuthorityLost) {
-        // Revoked input is terminal; retrying it would hold the queue indefinitely.
-        disposition = { kind: "consumed" };
-        completion = { kind: "aborted" };
-        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
-      } else if (
-        (queued.run.internalEventExecution &&
+      const authorityLost = !isFollowupOperatorAuthorityCurrent(queued);
+      if (
+        !authorityLost &&
+        ((queued.run.internalEventExecution &&
           (executionEntered ||
             (queued.controllerClaim ?? queued.controllerInput?.claim)?.retryBeforeExecution !==
               true)) ||
-        (operation?.result?.kind === "aborted" && operation.result.code === "aborted_by_user")
+          (operation?.result?.kind === "aborted" && operation.result.code === "aborted_by_user"))
       ) {
         disposition =
           !queued.run.internalEventExecution && hasSurvivingSources()
@@ -429,10 +424,12 @@ export function createFollowupRunner(
         completion = queued.run.internalEventExecution
           ? { kind: "failed", error: formatErrorMessage(error) }
           : resolveFollowupCompletion({ kind: "aborted", reason: "user" });
-      } else if (disposition.kind === "consumed") {
+      } else if (authorityLost || disposition.kind === "consumed") {
+        // Revoked input is terminal and visible; retrying it would hold the queue indefinitely.
+        disposition = { kind: "consumed" };
         completion = { kind: "failed", error: formatErrorMessage(error) };
         defaultRuntime.error?.(
-          `followup queue: terminal handling failed after execution; refusing replay: ${formatErrorMessage(error)}`,
+          `followup queue: input withheld; refusing replay: ${formatErrorMessage(error)}`,
         );
         operation?.fail("run_failed", error);
       } else {

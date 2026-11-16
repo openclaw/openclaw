@@ -526,6 +526,29 @@ describe("createFollowupRunner", () => {
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
   });
 
+  it("reports revoked operator input as a visible failure, not an abort", async () => {
+    const failure = new Error("original operator role changed");
+    turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
+    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        throw failure;
+      },
+    });
+    const deliver = attachSource(turn);
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockRejectedValue(failure);
+
+    await createRunner({ typing, typingMode: "instant" })(turn.queued);
+
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ completion: { kind: "failed", error: failure.message } }),
+    );
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+  });
+
   it("does not replay a settled execution after progress presentation fails", async () => {
     const failure = new Error("progress presentation failed");
     const execution = createSettledExecution();
