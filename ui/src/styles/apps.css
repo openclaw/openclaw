@@ -138,18 +138,13 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
 .apps-card__ctas {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin-top: auto;
-  padding-top: 6px;
+  padding-top: 10px;
 }
 
-.apps-card__cta {
-  padding: 6px 13px;
-  font: inherit;
-  cursor: var(--cursor-action);
-}
-
-.apps-card__cta,
+/* Card actions are the theme's buttons; only the shared community pill keeps
+   its own surface. */
 .apps-pill {
   display: inline-flex;
   align-items: center;
@@ -165,22 +160,10 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
     border-color 140ms ease;
 }
 
-.apps-card__cta--primary {
-  border-color: color-mix(in srgb, var(--border) 30%, var(--text) 70%);
-  background: var(--text-strong);
-  color: var(--bg);
-}
-
-.apps-card__cta:hover,
 .apps-pill:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
-}
-
-.apps-card__cta--primary:hover {
-  background: var(--text);
-  color: var(--bg);
 }
 
 .apps-card__cta:focus-visible,
@@ -229,13 +212,11 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
 
 @media (prefers-reduced-motion: reduce) {
   .apps-card,
-  .apps-card__cta,
   .apps-pill {
     transition: none;
   }
 
   .apps-card:hover,
-  .apps-card__cta:hover,
   .apps-pill:hover {
     transform: none;
   }

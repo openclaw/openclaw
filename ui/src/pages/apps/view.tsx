@@ -232,7 +232,7 @@ function CardCta(props: {
   primary: boolean;
   onNavigate: AppsProps["onNavigate"];
 }) {
-  const className = () => ["apps-card__cta", { "apps-card__cta--primary": props.primary }];
+  const className = () => ["btn btn--sm apps-card__cta", { primary: props.primary }];
   return (
     <Show
       when={props.cta.kind === "internal" ? props.cta : undefined}
@@ -259,6 +259,9 @@ function CardCta(props: {
 function AppCardView(props: { card: AppCard; options: AppsProps }) {
   const macGatewayLaunchUrl = () =>
     props.card.id === "macos" ? props.options.macGatewayLaunchUrl : null;
+  // A card whose only action is its docs link has nothing to lead with.
+  const docsOnly = () =>
+    props.card.ctas.length === 1 && props.card.ctas[0]?.labelKey === "appsPage.ctaDocs";
   return (
     <article class="apps-card">
       <div
@@ -293,7 +296,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
         <div class="apps-card__ctas">
           <Show when={macGatewayLaunchUrl()}>
             {(url) => (
-              <a class="apps-card__cta apps-card__cta--primary" href={url()}>
+              <a class="btn btn--sm primary apps-card__cta" href={url()}>
                 {t("appsPage.ctaOpenMac")}
               </a>
             )}
@@ -302,7 +305,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
             {(cta, index) => (
               <CardCta
                 cta={cta}
-                primary={index() === 0 && !macGatewayLaunchUrl()}
+                primary={index() === 0 && !macGatewayLaunchUrl() && !docsOnly()}
                 onNavigate={props.options.onNavigate}
               />
             )}
