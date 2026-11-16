@@ -7,7 +7,7 @@ import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
-import type { TemplateAddPlan } from "./types.js";
+import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 
 type Initialization = NonNullable<SessionEntry["templateInitialization"]>;
 export type PreparedAgentChat = (() => Promise<void>) & {
@@ -68,20 +68,21 @@ export function templateInitializationCheckpoints(
 }
 
 /**
- * Remove an agent this request admitted when it was refused before any Template write.
- * Returns false, leaving the agent kept, when removing the agent fails. Once the agent is
- * removed the refusal stands; a conversation that could not be removed is only logged.
+ * Refuse Add after removing an agent this request admitted before any Template write.
+ * Return to the caller's kept-agent outcome if this request does not own removal or
+ * removing the agent fails. Once removed, rethrow the original refusal even if chat
+ * cleanup fails, so a removed agent is never reported as kept.
  */
-export async function discardAdmittedTemplateAgent(
-  admitted: AdmittedTemplateAgent,
-  rollbackNewAgent: (
-    agentId: string,
-    expectedAgentConfig: TemplateAddPlan["agent"]["config"],
-    expectedCronJobs: [],
-  ) => Promise<void>,
-  signal: AbortSignal | undefined,
+export async function refuseAdmittedTemplateAgent(
+  admitted: AdmittedTemplateAgent | undefined,
+  input: Pick<ChatTemplateAddInput, "rollbackNewAgent" | "signal">,
   stateContext: OpenClawStateWorkerContext,
-): Promise<boolean> {
+  refusal: Error,
+): Promise<void> {
+  const { rollbackNewAgent, signal } = input;
+  if (!admitted?.createdByRequest || !rollbackNewAgent) {
+    return;
+  }
   const { agentId, config, chat, workspace } = admitted;
   let removed = false;
   try {
@@ -110,12 +111,12 @@ export async function discardAdmittedTemplateAgent(
   } catch (error) {
     if (!removed) {
       defaultRuntime.log(`Refused Template Add kept its new agent: ${coerceErrorMessage(error)}`);
-      return false;
+      return;
     }
     defaultRuntime.log(
       `Refused Template Add removed its new agent but not its conversation: ${coerceErrorMessage(error)}`,
     );
   }
   await rmdir(workspace).catch(() => {});
-  return true;
+  throw refusal;
 }
