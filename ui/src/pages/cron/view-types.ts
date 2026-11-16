@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import type { CronJob } from "../../api/types.ts";
 import type { buildCronViewProps } from "./view-props.ts";
 
@@ -16,18 +15,10 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
   Partial<Pick<CronViewProps, OptionalViewProp>> & {
     gateway: CronViewProps["gateway"] | null;
     canCreate?: boolean;
-    /** The open Automations sidebar lists every automation, so the page need not. */
-    sidebarListsJobs?: boolean;
+    /** No sidebar lists the automations (the native embed), so the page lists them itself. */
+    listsJobs?: boolean;
     canManageJob?: (job: CronJob) => boolean;
-    /** Phone list layout: the toolbar opens with the agent scope and create action. */
-    phoneLayout?: boolean;
-    toolbarScope?: JSX.Element;
     toggleSavingJobId?: string | null;
-    focus?: {
-      readonly target: string | undefined;
-      remember: (id: string, order: string[]) => void;
-      ref: (id: string) => (element: HTMLElement) => void;
-    };
   };
 
 export type CronPanelMode = "overview" | "create" | "job";

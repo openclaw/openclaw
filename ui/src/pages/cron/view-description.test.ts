@@ -1,14 +1,8 @@
-import { getByRole } from "@solidjs/testing-library";
 import { expect, it, vi } from "vitest";
 import { createInitialCronState, startCronEdit } from "../../lib/cron/index.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { attribute, inputValue, text } from "./cron-assertions.test-support.ts";
-import {
-  createCronViewJob,
-  getElement,
-  openCronMenu,
-  renderCronView,
-} from "./view.test-support.ts";
+import { inputValue, text } from "./cron-assertions.test-support.ts";
+import { createCronViewJob, getElement, renderCronView } from "./view.test-support.ts";
 
 it.each([
   { displayName: "Morning health report", expected: "Morning health report", enabled: true },
@@ -16,46 +10,13 @@ it.each([
 ])(
   "uses saved label $expected (enabled=$enabled) without replacing action or editor identity",
   async ({ displayName, expected, enabled }) => {
-    const onSelectJob = vi.fn();
     const onRun = vi.fn();
-    const onToggle = vi.fn();
     const job = createCronViewJob("display-name-job", {
       name: "cron:ops:weekday-health",
       configRevision: "fixture-config-revision",
       enabled,
       ...(displayName === undefined ? {} : { displayName }),
     });
-    const row = await renderCronView({ jobs: [job], onSelectJob, onRun, onToggle });
-    const name = row.querySelector<HTMLSpanElement>(".cron-table__name-text");
-    expect(name?.textContent).toBe(expected);
-    for (const selector of [".cron-row-run", ".cron-job-menu__trigger"]) {
-      expect(attribute(row, selector, "aria-label")).toContain(expected);
-    }
-    expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(0);
-    const toggle = getElement(row, `[data-test-id="cron-row-toggle-${job.id}"]`, HTMLSpanElement);
-    const toggleInput = getElement(toggle, "input.settings-toggle__input", HTMLInputElement);
-    const actionLabel = `${enabled ? "Pause" : "Resume"}: ${expected}`;
-    expect(getByRole(toggle, "switch", { name: actionLabel })).toBe(toggleInput);
-    expect(toggle).toMatchObject({ title: actionLabel });
-    expect(toggleInput.checked).toBe(enabled);
-
-    getElement(row, ".cron-row-run", HTMLButtonElement).click();
-    expect(onRun).toHaveBeenCalledExactlyOnceWith(job);
-    toggleInput.checked = !enabled;
-    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onToggle).toHaveBeenCalledExactlyOnceWith(job, !enabled);
-    await openCronMenu(row, ".cron-job-menu");
-    expect(
-      [...row.querySelectorAll('.cron-job-menu [role="menuitem"]')].map((item) =>
-        item.getAttribute("data-value"),
-      ),
-    ).toEqual(["clone", "remove"]);
-    expect(onRun).toHaveBeenCalledTimes(1);
-    expect(onSelectJob).not.toHaveBeenCalled();
-    name?.click();
-    expect(onSelectJob).toHaveBeenCalledExactlyOnceWith(job);
-    expect(job.enabled).toBe(enabled);
-
     const state = createInitialCronState();
     startCronEdit(state, job);
     expect(state.cronEditingJob).toEqual(job);
@@ -68,31 +29,17 @@ it.each([
     expect(text(detail, ".cron-detail-title")).toBe(expected);
     expect(inputValue(detail, "#cron-name")).toBe("Unsaved stable name");
     getElement(detail, '[data-test-id="cron-run-now"]', HTMLButtonElement).click();
-    expect(onRun).toHaveBeenCalledTimes(2);
-    expect(onRun).toHaveBeenLastCalledWith(job);
+    expect(onRun).toHaveBeenCalledExactlyOnceWith(job);
 
     expect(job.name).toBe("cron:ops:weekday-health");
     expect(job.displayName).toBe(displayName);
   },
 );
 
-it("uses the saved description for row selection and detail instead of unsaved edits", async () => {
-  const onSelectJob = vi.fn();
+it("uses the saved description for the detail instead of unsaved edits", async () => {
   const job = createCronViewJob("described-job", {
     description: "  Summarize overnight deployment activity  ",
   });
-  const container = await renderCronView({ jobs: [job], onSelectJob });
-  const description = getElement(
-    container,
-    `[data-test-id="cron-row-description-${job.id}"]`,
-    HTMLSpanElement,
-  );
-  expect([description.textContent?.trim(), description.title]).toEqual([
-    "Summarize overnight deployment activity",
-    "Description: Summarize overnight deployment activity",
-  ]);
-  description.click();
-  expect(onSelectJob).toHaveBeenCalledWith(job);
   const detail = await renderCronView({
     editingJob: job,
     form: { ...DEFAULT_CRON_FORM, description: "Unsaved description edit" },
@@ -107,11 +54,11 @@ it("uses the saved description for row selection and detail instead of unsaved e
 it("renders saved descriptions as escaped text", async () => {
   const description = '<img src="x" onerror="alert(1)"> & <script>alert(1)</script>';
   const job = createCronViewJob("escaped-description", { description, displayName: description });
-  const container = await renderCronView({ jobs: [job] });
+  const container = await renderCronView({ editingJob: job });
 
-  expect(text(container, ".cron-table__name-text")).toBe(description);
-  expect(text(container, ".cron-table__description")).toContain(description);
+  expect(text(container, ".cron-detail-title")).toBe(description);
+  expect(text(container, '[data-test-id="cron-detail-description"]')).toContain(description);
   expect(
-    container.querySelectorAll(".cron-table__name img, .cron-table__name script"),
+    container.querySelectorAll(".cron-detail-header img, .cron-detail-header script"),
   ).toHaveLength(0);
 });

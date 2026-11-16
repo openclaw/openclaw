@@ -1,32 +1,20 @@
 import { createEffect, createMemo, Loading, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
-import {
-  rememberSectionLocation,
-  sectionLocation,
-  sectionSidebarShown,
-} from "../../lib/section-navigation.ts";
+import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { rememberSectionLocation, sectionLocation } from "../../lib/section-navigation.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
-const PHONE_LAYOUT_QUERY = "(max-width: 560px)";
-
 export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
-  const phoneLayout = createMediaQuery(
-    PHONE_LAYOUT_QUERY,
-    globalThis.matchMedia?.(PHONE_LAYOUT_QUERY).matches ?? false,
-  );
   const revision = () => i18nRevision() + props.page.revision();
   // Search publications must not invalidate the retained rows' permission branches.
   // Sample values because Gateway auth and identity snapshots can be mutated in place.
@@ -73,53 +61,33 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     revision();
     const page = props.page;
     return {
-      filtered: Boolean(page.cron().cronSessionFilter),
       agents: page.inventories.agents.read().agentsList?.agents ?? [],
       selectedAgentId: page.context().agentSelection.state.scopeId,
     };
   };
-  const scopeControl = () => (
-    <AgentScopeControl
-      agents={pageHeader().agents}
-      selection={props.page.context().agentSelection}
-      selectedId={pageHeader().selectedAgentId}
-    />
-  );
-  // The phone list seats the scope beside its create action; detail views keep it here.
-  const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
-  // Beside the open sidebar the page is the automation itself, so it drops the section header.
-  const sidebarLists = () => !pageHeader().filtered && sectionSidebarShown("automations");
+  // The Automations sidebar lists every automation, beside the page, in the collapsed rail's peek
+  // or in the phone drawer; there the page is the automation itself, without the section header.
+  // The native embed shows no sidebar, so the page lists the automations under its header.
+  const listsJobs = isNativeEmbedHost();
   return (
     <>
-      <Show when={!sidebarLists()}>
+      <Show when={listsJobs}>
         <HubPageHeader
           active="cron"
-          subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
           docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
           actions={
-            pageHeader().filtered ? (
-              <a
-                class="btn"
-                href={pathForRoute("cron", props.page.context().basePath)}
-                onClick={(event: MouseEvent) => {
-                  if (shouldHandleNavigationClick(event)) {
-                    event.preventDefault();
-                    props.page.context().navigate("cron", { search: "" });
-                  }
-                }}
-              >
-                {t("cron.list.showAll")}
-              </a>
-            ) : phoneList() ? undefined : (
-              scopeControl()
-            )
+            <AgentScopeControl
+              agents={pageHeader().agents}
+              selection={props.page.context().agentSelection}
+              selectedId={pageHeader().selectedAgentId}
+            />
           }
         />
       </Show>
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
-          sidebarListsJobs={sidebarLists()}
+          listsJobs={listsJobs}
           onClosePanel={() => {
             // Closing the automation leaves Automations on its empty state for this tab.
             viewProps().onClosePanel();
@@ -129,8 +97,6 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           }}
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
-          phoneLayout={phoneList()}
-          toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}
           busy={props.page.saving() || viewProps().busy}
           toggleSavingJobId={props.page.toggleSavingJobId()}
         />
@@ -183,10 +149,6 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
         // The section's own root, as choosing Automations again opens it, and its Activity close
         // the panel.
         page.actions.onClosePanel();
-      }
-      // `?activity` is the sidebar's Activity entry: every automation's runs.
-      if (route.activity) {
-        page.actions.onListTabChange("activity");
       }
     },
   );

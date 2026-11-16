@@ -12,20 +12,14 @@ export function resolveCronRouteData(search: string): {
   create?: true;
   /** `?activity` opens every automation's run history, as the sidebar's Activity does. */
   activity?: true;
-  session?: { sessionKey: string; sessionAgentId: string };
 } {
   const params = new URLSearchParams(search);
   const jobId = params.get("job")?.trim() || null;
-  const sessionKey = params.get("session")?.trim();
-  const agentId = params.get("agent")?.trim();
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
     ...(!jobId && params.has("new") ? { create: true as const } : {}),
     ...(!jobId && params.has("activity") ? { activity: true as const } : {}),
-    ...(!jobId && sessionKey && agentId
-      ? { session: { sessionKey, sessionAgentId: agentId } }
-      : {}),
   };
 }
 
@@ -74,16 +68,7 @@ export function createCronRouteSelection() {
     selection.target = { jobId, runId };
     selection.requested = true;
   }
-  function resolveLoadedSession(state: CronState, apply: (job: CronJob) => void) {
-    if (selection.target?.session && state.cronJobsSnapshotRevision && !state.cronLoading) {
-      selection.target = null;
-      const [job] = state.cronJobs;
-      if (state.cronJobsTotal === 1 && job) {
-        apply(job);
-      }
-    }
-  }
-  return Object.assign(selection, { bind, resolve, resolveLoadedSession, select });
+  return Object.assign(selection, { bind, resolve, select });
 }
 
 /** The run a failure banner reviews: the saved job's last run, when the job recorded one. */
