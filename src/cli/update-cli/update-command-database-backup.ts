@@ -155,7 +155,6 @@ export async function captureUpdateDatabasesOnline(params: {
     failure = formatErrorMessage(error);
     await discardOnlineUpdateDatabaseCapture({ backupRoot, config: source.config });
   }
-  params.assertCurrent();
   const step: UpdateStepResult = {
     name: "database snapshot (Gateway serving)",
     command: "snapshot PostgreSQL stores while the Gateway serves",
@@ -170,7 +169,16 @@ export async function captureUpdateDatabasesOnline(params: {
         }
       : {}),
   };
-  await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
+  try {
+    params.assertCurrent();
+    await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
+  } catch (error) {
+    // Nothing owns the capture until it is returned; a run cancelled here must not leak it.
+    if (online) {
+      await discardOnlineUpdateDatabaseCapture(online);
+    }
+    throw error;
+  }
   return online;
 }
 
