@@ -531,7 +531,6 @@ export async function buildAnthropicRequest(
   }
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
-    authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();

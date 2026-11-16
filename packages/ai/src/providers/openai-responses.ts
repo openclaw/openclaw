@@ -138,7 +138,6 @@ function buildParams(
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     replayMode,
   });
 

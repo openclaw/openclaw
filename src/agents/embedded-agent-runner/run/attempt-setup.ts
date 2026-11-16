@@ -364,7 +364,6 @@ export function installEmbeddedAttemptContextGuards(input: {
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
         onPrecheck: (precheck) => {

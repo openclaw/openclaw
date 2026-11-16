@@ -111,7 +111,6 @@ describe("anthropic transport stream compaction", () => {
     const replayOptions = {
       apiKey: "sk-ant-api",
       anthropicServerCompaction: true,
-      authProfileId: "anthropic:work",
       sessionId: "session-1",
     } as unknown as AnthropicStreamOptions;
     const firstUser = { role: "user" as const, content: "old question", timestamp: 1 };
@@ -252,7 +251,6 @@ describe("anthropic transport stream compaction", () => {
   it("records suppression and notifies the owner when Anthropic rejects a replayed compaction block", async () => {
     const model = makeAnthropicTransportModel();
     const replayIdentity = {
-      authProfileId: "anthropic:work",
       sessionId: "session-1",
     };
     const checkpoint: AssistantMessage = {

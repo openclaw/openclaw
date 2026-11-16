@@ -1702,7 +1702,7 @@ EOF
   );
 
   it("required installer lifecycle: preserves the interactive exec onboarding handoff", () => {
-    expect(script).toMatch(/exec <\/dev\/tty\s+exec "\$claw" onboard/);
+    expect(script).toMatch(/exec <"\$\(controlling_tty_path\)"\s+exec "\$claw" onboard/);
   });
 
   it("keeps the npm owner runnable when a npm-to-git candidate fails", () => {
@@ -3240,7 +3240,7 @@ describe("install.sh duplicate OpenClaw install detection", () => {
   });
 
   it.each([
-    { noPrompt: 0, visible: "1", expected: "/dev/tty" },
+    { noPrompt: 0, visible: "1", expected: "/dev/ttys003" },
     { noPrompt: 0, visible: "0", expected: "/dev/null" },
     { noPrompt: 1, visible: "", expected: "/dev/null" },
   ])(
@@ -3252,12 +3252,29 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       NO_PROMPT=${noPrompt}
       ${noPrompt === 0 ? "needs_stdin_isolation() { return 0; }" : ""}
       has_controlling_tty() { return 0; }
+      controlling_tty_path() { echo /dev/ttys003; }
       resolve_subprocess_stdin_path ${visible}
     `);
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe(expected);
     },
   );
+
+  // A detached Node child aborts on macOS when its inherited stdin is the /dev/tty alias (#200244).
+  it.each([
+    { ps: 'echo " null "', expected: "/dev/null" },
+    { ps: 'echo "??"', expected: "/dev/tty" },
+    { ps: "return 1", expected: "/dev/tty" },
+  ])("resolves the terminal device when ps reports $ps", ({ ps, expected }) => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      ps() { ${ps}; }
+      controlling_tty_path
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
 
   it("captures visible prompt output before resolving subprocess stdin", () => {
     const result = runInstallShell(`

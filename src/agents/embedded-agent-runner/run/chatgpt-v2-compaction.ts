@@ -98,7 +98,6 @@ export function createChatGPTV2CompactionBoundary(params: {
       replay: {
         model,
         sessionId: requestOptions.sessionId,
-        authProfileId: requestOptions.authProfileId,
       },
     };
     // A matching measured predecessor prices the unchanged prefix once, as the
@@ -305,7 +304,6 @@ export function createChatGPTV2CompactionBoundary(params: {
             replay: {
               model,
               sessionId: requestOptions.sessionId,
-              authProfileId: requestOptions.authProfileId,
             },
           });
           if (tokensAfter > outgoing.promptBudgetBeforeReserve) {

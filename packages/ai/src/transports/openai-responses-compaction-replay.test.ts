@@ -30,7 +30,7 @@ const model = {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 
 function createOutput(): AssistantMessage {
   return {
@@ -64,7 +64,6 @@ function compactionState(
     model: metadata.model,
     baseUrlHash: metadata.baseUrlHash,
     sessionHash: metadata.sessionHash,
-    authProfileHash: metadata.authProfileHash,
     ...overrides,
   };
 }
@@ -99,17 +98,13 @@ function replayTypes(output: AssistantMessage): string[] {
 const responseConverters = [
   {
     name: "provider-owned",
-    convert: (
-      context: Context,
-      identity: { sessionId?: string; authProfileId?: string } = replayIdentity,
-    ) => convertProviderResponsesMessages(model, context, new Set(["openai"]), identity),
+    convert: (context: Context, identity: { sessionId?: string } = replayIdentity) =>
+      convertProviderResponsesMessages(model, context, new Set(["openai"]), identity),
   },
 ] as const;
 
-const convertTransport = (
-  context: Context,
-  identity: { sessionId?: string; authProfileId?: string } = replayIdentity,
-) => convertResponsesMessages(model, context, new Set(["openai"]), identity);
+const convertTransport = (context: Context, identity: { sessionId?: string } = replayIdentity) =>
+  convertResponsesMessages(model, context, new Set(["openai"]), identity);
 
 function createAssistant(
   content: AssistantMessage["content"],
@@ -208,7 +203,6 @@ describe("OpenAI Responses compaction replay", () => {
       model: "gpt-5.6-luna",
       baseUrlHash: expect.any(String),
       sessionHash: expect.any(String),
-      authProfileHash: expect.any(String),
     });
     expect(output.content).toEqual([]);
     expect(JSON.stringify(output.content)).not.toContain("opaque-streamed-compaction");
@@ -483,6 +477,22 @@ describe("OpenAI Responses compaction replay", () => {
     },
   );
 
+  it("replays a checkpoint written by another model in the same session", () => {
+    const owner = createAssistant(
+      [{ type: "text", text: "checkpoint from another model" }],
+      compactionState(model, { replayIndex: 0, model: "other-model" }),
+    );
+    const input = convertTransport({
+      messages: [
+        { role: "user", content: "first user", timestamp: 1 },
+        owner,
+        { role: "user", content: "active user", timestamp: 2 },
+      ],
+    });
+
+    expect(input.filter((item) => item.type === "compaction")).toHaveLength(1);
+  });
+
   it("leaves the full transcript unchanged when compaction is incompatible", () => {
     const older = createAssistant(
       [{ type: "text", text: "older assistant" }],
@@ -490,7 +500,7 @@ describe("OpenAI Responses compaction replay", () => {
     );
     const incompatible = createAssistant(
       [{ type: "text", text: "newer incompatible assistant" }],
-      compactionState(model, { model: "other-model", replayIndex: 0 }),
+      compactionState(model, { sessionHash: "different-session", replayIndex: 0 }),
     );
     const input = convertTransport({
       messages: [
@@ -512,11 +522,7 @@ describe("OpenAI Responses compaction replay", () => {
   });
 
   it("does not replay or prune across a different or missing request identity", () => {
-    for (const identity of [
-      { sessionId: "session-b", authProfileId: replayIdentity.authProfileId },
-      { sessionId: replayIdentity.sessionId, authProfileId: "profile-b" },
-      {},
-    ]) {
+    for (const identity of [{ sessionId: "session-b" }, {}]) {
       const assistant = createAssistant(
         [{ type: "text", text: "must remain without compatible replay" }],
         compactionState(model, { replayIndex: 0 }),

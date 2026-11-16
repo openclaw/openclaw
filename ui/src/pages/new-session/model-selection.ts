@@ -1,7 +1,7 @@
 import type { FastMode, GatewayAgentRow } from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
-import type { ModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
+import { selectableRuntimeId, type ModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import {
   reconcileDraftModelSelection,
@@ -50,7 +50,7 @@ export abstract class NewSessionModelSelection {
     if (!choice) {
       return false;
     }
-    this.selectModel(choice.model, choice.runtime.id);
+    this.selectModel(choice.model, selectableRuntimeId(choice.runtime));
     return true;
   }
 

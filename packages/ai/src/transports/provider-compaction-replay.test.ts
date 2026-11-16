@@ -34,7 +34,7 @@ const model = {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 
 function createAssistant(
   content: AssistantMessage["content"],
@@ -61,7 +61,6 @@ function createAssistant(
       model: replayContext.model,
       baseUrlHash: replayContext.baseUrlHash,
       sessionHash: replayContext.sessionHash,
-      authProfileHash: replayContext.authProfileHash,
     } satisfies ProviderReplayState,
   };
 }
@@ -235,7 +234,7 @@ describe("bounded compaction replay projection", () => {
     if (kind === "malformed") {
       barrier.providerReplay = { ...barrier.providerReplay, data: "" };
     } else if (kind === "mismatched") {
-      barrier.providerReplay = { ...barrier.providerReplay, model: "different-model" };
+      barrier.providerReplay = { ...barrier.providerReplay, sessionHash: "different-session" };
     } else {
       suppressOpenAIResponsesCompaction(barrier, model, replayIdentity);
     }
@@ -373,7 +372,7 @@ describe("prepared compaction replay eligibility", () => {
 });
 
 describe("canonical compaction replay pressure", () => {
-  it("counts the returned prefix once after restart and an auth A to B to A round trip", () => {
+  it("counts the returned prefix once after restart, including checkpoints with a legacy auth hash", () => {
     const owner = createAssistant([{ type: "text", text: "covered" }], 1);
     const output = [
       { type: "message", role: "user", content: [{ type: "input_text", text: "canonical" }] },
@@ -395,11 +394,16 @@ describe("canonical compaction replay pressure", () => {
       { role: "user", content: "raw".repeat(100_000), timestamp: 1 },
       owner,
     ];
-    const requestB = convertResponsesMessages(model, { messages: source }, new Set(["openai"]), {
-      ...replayIdentity,
-      authProfileId: "profile-b",
-    });
-    expect(requestB.some((item) => item.type === "compaction")).toBe(false);
+    // Checkpoints saved before the credential path left the fence still replay.
+    expect(owner.providerReplay).toBeDefined();
+    Object.assign(owner.providerReplay ?? {}, { authProfileHash: "legacy-profile-hash" });
+    const requestB = convertResponsesMessages(
+      model,
+      { messages: source },
+      new Set(["openai"]),
+      replayIdentity,
+    );
+    expect(requestB.some((item) => item.type === "compaction")).toBe(true);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
     const resumed: Context["messages"] = JSON.parse(JSON.stringify([...source, later]));
     const requestA = convertResponsesMessages(

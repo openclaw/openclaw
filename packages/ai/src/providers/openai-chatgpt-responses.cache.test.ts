@@ -638,7 +638,7 @@ describe("ChatGPT Responses cached transport", () => {
   const REASONING_CIPHERTEXT = "opaque-reasoning-replay";
   const COMPACTION_CIPHERTEXT = "opaque-compaction-replay";
   const FULL_HISTORY_PREFIX = "native full history before compaction";
-  const REPLAY_IDENTITY = { sessionId: "retry-session", authProfileId: "retry-profile" };
+  const REPLAY_IDENTITY = { sessionId: "retry-session" };
 
   function createReplayContext(kind: "compaction" | "mixed"): Context {
     const content: AssistantMessage["content"] = [];

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -7,6 +8,7 @@ import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
@@ -29,6 +31,31 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 type Progress = MutableUpdateExecutionParams["progress"];
+
+/** Attribute the update's own boot writes only when Doctor's baseline still matches.
+ * Accepted: another writer during the boot window is attributed the same way. */
+export async function adoptUpdateBootDatabaseWrites(
+  backup: UpdateDatabaseBackup,
+  env: NodeJS.ProcessEnv,
+  boot: () => Promise<UpdateRunResult>,
+): Promise<UpdateRunResult> {
+  const paths = [
+    ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
+  ];
+  const read = () => readUpdateDatabaseGenerationsIsolated(paths, { env }).catch(() => undefined);
+  const expected = backup.migration?.to ?? backup.sourceGenerations;
+  const unchanged = isDeepStrictEqual(await read(), expected);
+  const result = await boot();
+  const booted = unchanged ? await read() : undefined;
+  if (booted) {
+    if (backup.migration) {
+      backup.migration.to = booted;
+    } else {
+      backup.sourceGenerations = booted;
+    }
+  }
+  return result;
+}
 
 export async function captureUpdateDatabases(params: {
   transaction: PackageUpdateTransaction;

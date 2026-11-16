@@ -41,6 +41,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("hosted environment selection", () => {
+  it("returns to the implicit host runtime without pinning it", async () => {
+    const implicitHost = {
+      ...model,
+      agentRuntime: { ...model.agentRuntime!, source: "implicit" as const },
+    };
+    const { context } = contextWith([implicitHost]);
+    const control = new NewSessionModelControl(() => {});
+    controls.push(control);
+    control.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
+    control.selectHostedEnvironment("agentsapi");
+    expect(control.selectHostEnvironment()).toBe(true);
+    expect(control.agentRuntime).toBeUndefined();
+    expect(control.resolveAgentRuntime()?.id).toBe("openclaw");
+  });
   it("keeps explicit runtime intent across a late catalog, permission loss, and restored preferences", async () => {
     const { context, request } = contextWith([model]);
     const control = new NewSessionModelControl(() => {});

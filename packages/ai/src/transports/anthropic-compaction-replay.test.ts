@@ -24,13 +24,11 @@ const model = {
 const replayOptions = {
   enabled: true,
   sessionId: "session-1",
-  authProfileId: "anthropic:work",
 };
 
 type ReplayOptions = {
   enabled?: boolean;
   sessionId?: string;
-  authProfileId?: string;
 };
 
 function assistant(texts: string[]): AssistantMessage {
@@ -97,11 +95,6 @@ describe("Anthropic compaction replay", () => {
       name: "session",
       requestModel: model,
       requestOptions: { ...replayOptions, sessionId: "session-2" },
-    },
-    {
-      name: "auth profile",
-      requestModel: model,
-      requestOptions: { ...replayOptions, authProfileId: "anthropic:personal" },
     },
   ])("falls back to full history when the $name differs", ({ requestModel, requestOptions }) => {
     const context = contextWithCheckpoint();

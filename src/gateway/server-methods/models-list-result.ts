@@ -66,6 +66,10 @@ import {
 } from "./models-list-result.owner.js";
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
 
+type StatedRuntimeModelChoice = ModelChoice & {
+  agentRuntime: NonNullable<ModelChoice["agentRuntime"]>;
+};
+
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
   isCurrent: () => boolean;
@@ -341,7 +345,7 @@ async function prepareOwnedModelsListResult({
     });
     const catalogResolver = createThinkingCatalogResolver(catalog);
     // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
-    const prepared = new WeakMap<ModelCatalogEntry, Map<string, ModelChoice>>();
+    const prepared = new WeakMap<ModelCatalogEntry, Map<string, StatedRuntimeModelChoice>>();
     return (
       entry: ModelCatalogEntry,
       evaluation: ModelAuthAvailabilityEvaluation,
@@ -360,21 +364,20 @@ async function prepareOwnedModelsListResult({
         const capabilityProvider = capableProviders?.resolveProvider(entry.provider);
         const selectedRuntime = runtimeChoice
           ? { id: runtimeChoice, source: "model" as const }
-          : resolveCatalogDecisionRuntime({
+          : (resolveCatalogDecisionRuntime({
               cfg,
               agentId,
               entry,
               evaluation,
               pluginRegistry: preparedPluginRegistry,
               resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
-            });
-        const agentRuntime = selectedRuntime
-          ? preparedPluginRegistry
-            ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
-                projectWorkerPlacementAgentRuntime(selectedRuntime),
-              )
-            : projectWorkerPlacementAgentRuntime(selectedRuntime)
-          : undefined;
+            }) ?? { id: "openclaw", source: "implicit" as const });
+        // State implicit placement facts as well; clients must not infer them from omission.
+        const agentRuntime = preparedPluginRegistry
+          ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
+              projectWorkerPlacementAgentRuntime(selectedRuntime),
+            )
+          : projectWorkerPlacementAgentRuntime(selectedRuntime);
         const thinkingProfile =
           typeof publicEntry.reasoning !== "boolean"
             ? undefined
@@ -383,7 +386,7 @@ async function prepareOwnedModelsListResult({
                 agentId,
                 provider: entry.provider,
                 model: entry.id,
-                agentRuntime: selectedRuntime?.id ?? "openclaw",
+                agentRuntime: selectedRuntime.id,
                 modelCatalog: runtimeChoice ? [entry] : catalog,
                 catalogResolver: runtimeChoice
                   ? createThinkingCatalogResolver([entry])
@@ -408,7 +411,7 @@ async function prepareOwnedModelsListResult({
               }
             : {}),
           ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
-          ...(agentRuntime ? { agentRuntime } : {}),
+          agentRuntime,
           ...thinkingProfile,
           ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
           ...(capabilityProvider && apiKeyProviders.has(capabilityProvider)
@@ -418,7 +421,7 @@ async function prepareOwnedModelsListResult({
             : {}),
           ...(view === "provider-config" && entry.input?.length ? { input: entry.input } : {}),
         };
-        const entries = prepared.get(entry) ?? new Map<string, ModelChoice>();
+        const entries = prepared.get(entry) ?? new Map<string, StatedRuntimeModelChoice>();
         entries.set(runtimeKey, preparedEntry);
         prepared.set(entry, entries);
       }
@@ -426,7 +429,7 @@ async function prepareOwnedModelsListResult({
         preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
           ? evaluation.availability
           : (evaluation.availability ?? false);
-      const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+      const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime.id);
       const supportsFastMode = speedPolicy.supportsFastMode;
       const serviceTiers = projectModelServiceTiers({
         config: cfg,

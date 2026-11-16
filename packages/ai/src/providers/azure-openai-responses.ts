@@ -196,7 +196,6 @@ function buildParams(
 ) {
   const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     replayMode,
   });
 
