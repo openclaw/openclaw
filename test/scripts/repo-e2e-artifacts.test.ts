@@ -117,6 +117,8 @@ function fixture() {
   write("dist/index.js", "#!/usr/bin/env node\nconsole.log('artifact');\n");
   fs.chmodSync(path.join(root, "dist/index.js"), 0o755);
   write("dist/private-qa.js", "private QA\n");
+  write("dist/control-ui/index.html", "<!doctype html>production UI");
+  write("dist/build-info.json", JSON.stringify({ buildId: "production-build" }));
   write("dist/.buildstamp", JSON.stringify({ head, inputsClean: true }));
   write("dist/.runtime-postbuildstamp", JSON.stringify({ head, inputsClean: true }));
   write("packages/demo/dist/index.d.ts", "export declare const ready: true;\n");
@@ -148,6 +150,26 @@ describe("repo E2E artifact transfer", () => {
   beforeEach(() => vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1"));
   afterEach(() => vi.unstubAllEnvs());
 
+  it("reuses restored deployment assets without selecting a reduced UI inventory", () => {
+    const workflow = parse(
+      fs.readFileSync(".github/workflows/openclaw-repo-e2e-reusable.yml", "utf8"),
+    );
+    const steps = workflow.jobs.test.steps;
+    const runIndex = steps.findIndex(
+      (step: { name: string }) => step.name === "Run repo E2E suite",
+    );
+    const restoreIndex = steps.findIndex(
+      (step: { name: string }) => step.name === "Restore repo E2E build",
+    );
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(runIndex).toBeGreaterThan(restoreIndex);
+    expect(steps[runIndex].env.OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT).toBe(
+      "${{ github.workspace }}/dist/control-ui",
+    );
+    expect(steps[runIndex].env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT).toBeUndefined();
+    expect(steps[runIndex].env.OPENCLAW_E2E_WORKERS).toBe("2");
+  });
+
   it.each(["full", "ciArtifacts"])(
     "restores a complete %s build through the workflow harness without rebuilding",
     (profile) => {
@@ -172,6 +194,12 @@ describe("repo E2E artifact transfer", () => {
       expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeGreaterThanOrEqual(
         fs.statSync(path.join(root, "package.json")).mtimeMs,
       );
+      expect(fs.readFileSync(path.join(root, "dist/control-ui/index.html"), "utf8")).toBe(
+        "<!doctype html>production UI",
+      );
+      expect(JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"))).toEqual({
+        buildId: "production-build",
+      });
       expect(fs.readlinkSync(path.join(root, "dist-runtime/index.js"))).toBe("../dist/index.js");
       expect(execFileSync(path.join(root, "dist/index.js"), { encoding: "utf8" })).toBe(
         "artifact\n",

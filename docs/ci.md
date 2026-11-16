@@ -435,3 +435,5 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Full-release repo E2E shards reuse their restored production UI for deployment fixtures without narrowing the complete UI inventory or replacing the separately owned mock/native-plugin bundle. Each mutating deployment fixture owns a private copy.

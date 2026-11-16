@@ -92,6 +92,8 @@ type OwnershipProbe = {
     url?: string | null;
     buildInfo?: typeof prebuiltBuildInfo | null;
     bridge: boolean;
+    productionRoot?: string;
+    deploymentRoot?: string;
   }>;
   leases: Array<{ outDir: string; closed: boolean; removed: boolean }>;
   shards: string[][];
@@ -106,6 +108,7 @@ type OwnershipProbe = {
 function probeOwnership(
   options: {
     prebuilt?: boolean;
+    reuseProductionArtifact?: boolean;
     virtualCpus?: number;
     filters?: string[];
     cli?: string[];
@@ -124,6 +127,7 @@ function probeOwnership(
   const admissionsFile = path.join(directory, "admissions.jsonl");
   const canonicalRoot = path.join(directory, "canonical-ui");
   fs.mkdirSync(canonicalRoot);
+  fs.writeFileSync(path.join(directory, "build-info.json"), JSON.stringify(prebuiltBuildInfo));
   fs.writeFileSync(path.join(canonicalRoot, "bundle.html"), "canonical fixture");
   const resourceFile = path.join(directory, "resources.mjs");
   fs.writeFileSync(
@@ -262,6 +266,8 @@ function probeOwnership(
           chromium: project.getProvidedContext().controlUiE2eChromium,
           url: project.getProvidedContext().controlUiE2eServerBaseUrl,
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
+          productionRoot: project.getProvidedContext().controlUiE2ePrebuiltAssets?.root,
+          deploymentRoot: project.getProvidedContext().controlUiE2eDeploymentAssets?.root,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
         lifecycle: fs.existsSync(${JSON.stringify(lifecycleFile)})
@@ -298,6 +304,9 @@ function probeOwnership(
         CI: "1",
         OPENCLAW_VITEST_INCLUDE_FILE: options.include ? includeFile : "",
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
+        OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT: options.reuseProductionArtifact
+          ? canonicalRoot
+          : "",
       },
     },
   );
@@ -405,6 +414,17 @@ describe("Control UI E2E resource ownership", () => {
       .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
       .toSorted();
     expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
+    const reused = probeOwnership({ reuseProductionArtifact: true });
+    expect(reused.setupError).toBeUndefined();
+    expect(reused.files).toEqual(result.files);
+    expect(reused.shards).toEqual(result.shards);
+    expect(reused.contexts.every((context) => context.productionRoot === undefined)).toBe(true);
+    expect(
+      reused.contexts.every((context) => context.deploymentRoot?.endsWith("/canonical-ui")),
+    ).toBe(true);
+    expect(reused.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
+    expect(reused.lifecycle).toEqual(result.lifecycle);
+    expect(reused.canonicalAssetsIntact).toBe(true);
     expect(result.setupError).toBeUndefined();
     expect(result.rootWorkers).toBeGreaterThan(0);
     expect(result.rootWorkers).toBeLessThanOrEqual(2);

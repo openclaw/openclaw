@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, webkit, type Browser, type Page } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -18,6 +18,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
+  startCopiedProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -339,16 +340,21 @@ describe("Control UI service-worker production update E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
-    server = await startProductionControlUiE2eServer(
-      outDir,
-      buildA,
-      createControlUiMockBootstrapConfig({
-        assistantAgentId: "research",
-        defaultAgentId: "research",
-        serverBuildId: buildA,
-        terminalEnabled: true,
-      }),
-    );
+    const bootstrapConfig = createControlUiMockBootstrapConfig({
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+      terminalEnabled: true,
+    });
+    const productionRoot = inject("controlUiE2eDeploymentAssets")?.root;
+    server = productionRoot
+      ? await startCopiedProductionControlUiE2eServer(
+          productionRoot,
+          outDir,
+          buildA,
+          bootstrapConfig,
+        )
+      : await startProductionControlUiE2eServer(outDir, buildA, bootstrapConfig);
     browser = useWebKit
       ? await webkit.launch()
       : await chromium.launch({ executablePath: chromiumExecutablePath });
