@@ -1,4 +1,5 @@
 import { createHash, type Hash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import {
   createRootFileOpenBatchSync,
   type RootFileOpenBatchSync,
@@ -13,6 +14,7 @@ type PluginReceiptFile = {
   sizeBytes: number;
   native: boolean;
   onContent: (fact: PluginSourceContent) => void;
+  onSource?: (source: string) => void;
   content?: PluginSourceContent;
 };
 
@@ -37,12 +39,19 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
     expected = file.content,
     openFile?: RootFileOpenBatchSync["openFile"],
   ) => {
+    const decoder = file.onSource ? new StringDecoder("utf8") : undefined;
+    let source = "";
     const content = hashPluginSourceFile(
       file.target,
       file.boundary,
       receipt,
       file.native ? file.content : undefined,
       openFile,
+      decoder
+        ? (chunk) => {
+            source += decoder.write(chunk);
+          }
+        : undefined,
     );
     if (!file.native && expected && content.contentHash !== expected.contentHash) {
       throw new Error(
@@ -50,6 +59,10 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       );
     }
     publishContent(file, content);
+    if (decoder) {
+      file.onSource!(source + decoder.end());
+      file.onSource = undefined;
+    }
   };
   const inputSignature = () => {
     if (events.some((event) => typeof event !== "string" && !event.content)) {
@@ -106,7 +119,7 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       for (const event of events) {
         if (typeof event === "string") {
           receipt?.update(event);
-        } else if (receipt || !event.content || !event.native) {
+        } else if (receipt || !event.content || !event.native || event.onSource) {
           // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
           // destinations even on a receipt hit; misses also replay native raw bytes.
           readContent(event, receipt, event.content, openFile);

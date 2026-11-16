@@ -94,7 +94,14 @@ function createPluginGenerationArtifact(
     resolveSource: nativeAdmission.resolvePreparedSource,
   });
   const sourceAliases: Record<string, string> = {};
-  const sourceFacts = createPluginSourceFacts(dependencyLookupBoundary, captureForCustody);
+  const executionAliases = new Map(retained?.executionAliases);
+  const executionSources = new Map(retained?.executionSources);
+  const sourceFacts = createPluginSourceFacts(
+    dependencyLookupBoundary,
+    captureForCustody,
+    executionAliases,
+    executionSources,
+  );
   const receipt = createPluginGenerationReceipt(nativeAdmission.prepared);
   const { additions, capture: acquireSources, assertModuleAvailable } = sourceCapture;
   const captureAdmitted = <T>(run: () => T) => {
@@ -196,6 +203,8 @@ function createPluginGenerationArtifact(
       receipt,
       retained,
       sourceFacts: sourceFacts.files,
+      executionAliases,
+      executionSources,
       onPackageMetadata(source, target) {
         metadataCapture.record(target, (manifest) => {
           for (const alias of importTargetNames(manifest.imports)) {
@@ -659,6 +668,13 @@ function createPluginGenerationArtifact(
       sourceRoot,
       rootDir: root,
       sourceAliases,
+      executionAliases,
+      executionSources,
+      sourceText: (filename: string) => executionSources.get(path.relative(directory, filename)),
+      executionAlias: (filename: string) => {
+        const relative = executionAliases.get(path.relative(directory, filename));
+        return relative === undefined ? undefined : path.join(directory, relative);
+      },
       linkHost: (hostRoot: string) => {
         sourceCapture.linkHost(hostRoot);
         nativeAdmission.linkHost(hostRoot);

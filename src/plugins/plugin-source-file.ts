@@ -236,11 +236,12 @@ export function hashPluginSourceFile(
   receipt?: Hash,
   prepared?: { contentHash: string; sizeBytes: number },
   openFile = openRootFileSync,
+  onChunk?: (chunk: Buffer) => void,
 ) {
   return withPluginSourceFile(
     source,
     boundary,
-    (fd) => hashPluginSourceDescriptor(fd, receipt, prepared),
+    (fd) => hashPluginSourceDescriptor(fd, receipt, prepared, onChunk),
     openFile,
   );
 }
@@ -249,6 +250,7 @@ function hashPluginSourceDescriptor(
   fd: number,
   receipt?: Hash,
   prepared?: { contentHash: string; sizeBytes: number },
+  onChunk?: (chunk: Buffer) => void,
 ) {
   const content = prepared ? undefined : createHash("sha256");
   const sizeBytes = prepared?.sizeBytes ?? fs.fstatSync(fd).size;
@@ -269,6 +271,7 @@ function hashPluginSourceDescriptor(
     const chunk = scratch.subarray(0, length);
     content?.update(chunk);
     receipt?.update(chunk);
+    onChunk?.(chunk);
   }
   if (position !== sizeBytes) {
     throw new Error(

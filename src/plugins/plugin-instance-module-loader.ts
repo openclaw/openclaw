@@ -453,7 +453,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     return params.instance.run(() => {
       let build = sourceBuilds.get(root);
       if (!build) {
-        build = buildPluginTypeScriptSource(root);
+        build = buildPluginTypeScriptSource(root, artifact.executionAlias, artifact.sourceText);
         sourceBuilds.set(root, build);
       }
       return build.resolve(filename, mode, nativeFormat);

@@ -8,6 +8,10 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
+  executionAliases: ReadonlyMap<string, string>;
+  executionSources: ReadonlyMap<string, string>;
+  executionAlias: (filename: string) => string | undefined;
+  sourceText: (filename: string) => string | undefined;
   linkHost: (hostRoot: string) => void;
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;
