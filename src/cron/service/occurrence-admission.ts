@@ -27,11 +27,14 @@ export async function admitCronOccurrence(
  */
 export function resolvePausedOccurrence(
   job: CronStoredJob,
-  occurrence: ScheduledOccurrence,
+  occurrence: Pick<ScheduledOccurrence, "pause">,
 ): CronJobExecutionResult | undefined {
-  // Command jobs never pause: they run host commands, use none of the parent's
-  // access, and still consume the occurrence.
-  if (!occurrence.pause || job.payload.kind === "command") {
+  // Admission only names real execution dependencies. A plain command has none;
+  // a command with a parent-scoped grant or trigger must stop after that parent is removed.
+  if (
+    !occurrence.pause ||
+    (job.payload.kind === "command" && occurrence.pause.reason !== "removed")
+  ) {
     return undefined;
   }
   return {

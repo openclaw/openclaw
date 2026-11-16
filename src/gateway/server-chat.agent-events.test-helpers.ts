@@ -202,6 +202,10 @@ export function createDirectChatContext(
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
     dedupe: new Map(),
+    cron: {
+      list: vi.fn(async () => []),
+      getDefaultAgentId: () => "main",
+    } satisfies Pick<GatewayRequestContext["cron"], "list" | "getDefaultAgentId">,
     ...overrides,
   } as unknown as GatewayRequestContext;
 }

@@ -543,7 +543,7 @@ async function main() {
         continue;
       }
       const runSessionKey = runSessionKeyFor(job, agentId);
-      const parentKey = scheduledParentKeyOf(job);
+      const parentKey = scheduledParentKeyOf(job, agentId);
       let parentRow;
       if (parentKey) {
         const node = agentDbs
@@ -565,7 +565,7 @@ async function main() {
       const requester = resolveScheduledRequester(job);
       let owner: boolean | undefined;
       let ownerCheck: ReplayRow["ownerCheck"] = "not-needed";
-      if (parentRow) {
+      if (parentRow || job.sourceConversation) {
         if (requester.kind === "profile") {
           owner =
             profiles.has(requester.profileId) &&

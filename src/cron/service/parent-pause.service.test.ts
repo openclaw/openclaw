@@ -37,9 +37,9 @@ it.each([false, true])("handles a missing parent (command=%s)", async (command) 
       defaultAgentId: "main",
       isAgentAvailable: () => true,
       runIsolatedAgentJob: runner,
-      ...(command
-        ? { runCommandJob: runner }
-        : { onEvent: (event: CronEvent) => events.push(event), enqueueSessionEvent }),
+      runCommandJob: runner,
+      onEvent: (event: CronEvent) => events.push(event),
+      enqueueSessionEvent,
       admitScheduledOccurrence: async () => ({
         ...unadmittedScheduledOccurrence("parent gone"),
         pause: { reason: command ? "removed" : "archived", parentSessionKey: PARENT_KEY },
@@ -49,11 +49,6 @@ it.each([false, true])("handles a missing parent (command=%s)", async (command) 
     await list(state);
     try {
       await run(state, job.id, "force");
-      if (command) {
-        expect(runner).toHaveBeenCalledOnce();
-        expect((await loadCronStore(storePath)).jobs[0]?.enabled).toBe(true);
-        return;
-      }
       let persisted = (await loadCronStore(storePath)).jobs[0];
       expect(runner).not.toHaveBeenCalled();
       expect(persisted?.enabled).toBe(false);

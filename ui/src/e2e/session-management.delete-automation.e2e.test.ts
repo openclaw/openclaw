@@ -13,7 +13,7 @@ const suite = support.createSessionManagementE2eSuite();
 
 suite.define(() => {
   it.each(["sidebar", "list"] as const)(
-    "warns without stopping automations when deleting from the %s",
+    "explains backend automation disablement when deleting from the %s",
     (surface) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const main = sessionRow("agent:main:main", "Main", 1);
@@ -85,7 +85,7 @@ suite.define(() => {
         expect
           .soft(await dialog.textContent())
           .toContain(
-            'Automations linked to "Backup maintenance" may keep running after deletion. Disable or remove them separately.',
+            'Automations that depend on "Backup maintenance" will be disabled. Independent automations keep running, but reports to this conversation will stop.',
           );
         await ui.button(dialog, "Cancel").click();
         await dialog.waitFor({ state: "detached" });

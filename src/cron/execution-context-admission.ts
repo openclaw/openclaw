@@ -19,7 +19,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
-import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bindScheduledExecutionContext } from "./execution-context-registry.js";
@@ -135,20 +134,12 @@ export async function checkRequesterOwner(
   return NOT_OWNER;
 }
 
-/**
- * The stored parent key, with the builder's principal precedence: the operator source,
- * then the creating conversation. Shared with the development replay.
- */
-export function scheduledParentKeyOf(job: CronStoredJob): string | undefined {
-  if (job.operatorSource) {
-    try {
-      const source = decodeGatewayOperatorRecoverySource(job.operatorSource.source);
-      return source.kind === "gateway" ? job.sourceConversation?.sessionKey : source.sessionKey;
-    } catch {
-      return undefined;
-    }
-  }
-  return job.sourceConversation?.sessionKey;
+/** The execution parent selected by the same owner used for occurrence admission. */
+export function scheduledParentKeyOf(job: CronStoredJob, agentId: string): string | undefined {
+  const principal = resolveScheduledPrincipal(job, { trigger: "cron", agentId });
+  return !("error" in principal) && principal.kind === "parent"
+    ? principal.parent.sessionKey
+    : undefined;
 }
 
 async function readParent(parentSessionKey: string, storePath: string) {
@@ -275,7 +266,11 @@ export async function admitScheduledOccurrence(
   let childParent: ScheduledOccurrence["childParent"];
   let parentWatch: ParentResetWatch | undefined;
   try {
-    if (params.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
+    if (
+      params.trigger === "cron" &&
+      !job.operatorSource &&
+      (hasTransferredCronOwner(job) || (!("error" in principal) && principal.kind === "requester"))
+    ) {
       const requester = resolveScheduledRequester(job);
       if (requester.kind !== "operator-source") {
         requesterOwner = await checkRequesterOwner(params.cfg, requester);

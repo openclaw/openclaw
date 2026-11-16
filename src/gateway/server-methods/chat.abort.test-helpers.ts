@@ -151,6 +151,7 @@ export function createChatAbortContext(
   const { sources, chatRunState = createChatRunState(), ...contextOverrides } = overrides;
   rpcSourceTesting.reset(sources);
   const context = {
+    cron: { list: async () => [], getDefaultAgentId: () => "main" },
     chatRunState,
     dedupe: new Map(),
     removeChatRun: vi.fn((run: string) => ({ sessionKey: "main", clientRunId: run })),

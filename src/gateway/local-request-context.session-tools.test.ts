@@ -35,6 +35,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withLocalCronService } from "../cron/local-service.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -593,6 +594,44 @@ describe("built-in session tool role authority", () => {
       });
     },
   );
+
+  it("deletes through the offline automation owner without enabling embedded cron RPCs", () =>
+    withSessionToolsFixture(async (cfg) => {
+      const ids = await withLocalCronService(
+        () => cfg,
+        async (cron) => {
+          const base = {
+            name: "Offline lifecycle",
+            enabled: true,
+            schedule: { kind: "every" as const, everyMs: 60_000 },
+            sessionTarget: "isolated" as const,
+            wakeMode: "now" as const,
+          };
+          const linked = { sourceConversation: { sessionKey: TARGET, sessionId: TARGET_ID } };
+          const dependent = await cron.add(
+            { ...base, payload: { kind: "agentTurn", message: "Use the parent workspace" } },
+            linked,
+          );
+          const independent = await cron.add(
+            { ...base, payload: { kind: "command", argv: ["echo", "report"] } },
+            linked,
+          );
+          return { dependent: dependent.id, independent: independent.id };
+        },
+      );
+      await expect(
+        callInProcessGatewayTool("sessions.delete", { key: TARGET }),
+      ).resolves.toMatchObject({ deleted: true });
+      expect(mainSession(TARGET)).toBeUndefined();
+      await withLocalCronService(
+        () => cfg,
+        async (cron) => {
+          expect((await cron.readJob(ids.dependent))?.enabled).toBe(false);
+          expect((await cron.readJob(ids.independent))?.enabled).toBe(true);
+        },
+      );
+      await expect(localContext().cron.list()).rejects.toThrow("Cron is unavailable");
+    }));
 
   it.each(["unchanged", "active", "replaced", "reset"] as const)(
     "visible-spawn rollback protects the admitted child generation (%s)",

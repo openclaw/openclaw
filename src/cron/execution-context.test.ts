@@ -267,6 +267,25 @@ describe("buildScheduledExecutionContext principals", () => {
   });
 });
 
+it.each([false, true])(
+  "keeps a plain command's requester authority without its creator (owner=%s)",
+  (owner) => {
+    const context = ready(
+      parentLinked({ payload: { kind: "command", argv: ["echo", "report"] } }),
+      facts({ parentRow: { missing: true }, requesterCheck: { owner } }),
+    );
+    expect(context.principal).toEqual({
+      kind: "requester",
+      requester: { kind: "profile", profileId: "profile-1" },
+    });
+    expect(context.authority.owner).toBe(owner);
+    expect(context.placement).toBe("detached");
+    expect(context.resources.memory).toEqual({ source: "run-session" });
+    expect(context.resources.workspace).toEqual({ source: "run-session" });
+    expect(context.toolPolicy.automations).toEqual({ scope: "self", jobId: "job-1" });
+  },
+);
+
 describe("buildScheduledExecutionContext parent lifecycle", () => {
   const live = {
     sessionId: "parent-session",

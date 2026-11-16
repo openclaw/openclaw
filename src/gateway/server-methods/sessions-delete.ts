@@ -24,6 +24,9 @@ import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
+import { withLocalCronService } from "../../cron/local-service.js";
+import type { CronServiceContract } from "../../cron/service-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -40,6 +43,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
 import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
@@ -51,6 +55,12 @@ import {
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  assertCronModelJobAllowed,
+  cronJobMatchesCallerScope,
+  readCronCallerScope,
+} from "./cron-caller-scope.js";
+import { assertHumanCronJobAccess } from "./cron-human-owner.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   prepareSessionLifecycleDrain,
@@ -450,6 +460,61 @@ async function deleteGatewaySessionInScope(
               assertCurrent();
               assertDeletionOwnersCurrent();
             };
+            commitGuard();
+            // Disable before deleting the row: failure must leave a visible conversation
+            // to recover from, rather than silently orphaning a still-enabled job.
+            const callerScope = readCronCallerScope(client);
+            try {
+              const disable = (
+                cron: Pick<
+                  CronServiceContract,
+                  "list" | "updateWithPrecondition" | "getDefaultAgentId"
+                >,
+              ) =>
+                disableCronJobsBoundToSessions({
+                  cron,
+                  cfg,
+                  sessionKeys: [target.canonicalKey],
+                  agentId: target.agentId,
+                  executionOnly: true,
+                  assertCanDisable: (job) => {
+                    commitGuard();
+                    if (
+                      client &&
+                      !operatorScopeSatisfied("operator.cron", client.connect.scopes ?? [])
+                    ) {
+                      throw new Error("Automation management access is required");
+                    }
+                    assertHumanCronJobAccess(client, job);
+                    assertCronModelJobAllowed(client, cfg, job, { enabled: false });
+                    if (
+                      !cronJobMatchesCallerScope({
+                        job,
+                        callerScope,
+                        defaultAgentId: cron.getDefaultAgentId(),
+                      })
+                    ) {
+                      throw new Error("Automation is outside the caller's management scope");
+                    }
+                  },
+                });
+              if (context.localEmbedded) {
+                await withLocalCronService(() => cfg, disable);
+              } else {
+                await disable(context.cron);
+              }
+            } catch (error) {
+              sessionLog.warn(
+                `sessions.delete: failed to disable linked automations: ${formatErrorMessage(error)}`,
+              );
+              throw new SessionDeletionError(
+                errorShape(
+                  ErrorCodes.UNAVAILABLE,
+                  `Session ${key} was not deleted because automations that depend on it could not all be disabled. Some automations may already be disabled. Disable them from Automations, or ask their owner or an administrator, then retry.`,
+                  { retryable: true },
+                ),
+              );
+            }
             commitGuard();
             const mutationCleanupError = await cleanupSessionBeforeMutation({
               cfg,
