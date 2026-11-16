@@ -21,7 +21,10 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { noteCommittedSharedAuthStoreOwnership } from "../../auth-profiles/path-resolve.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "../../auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../../auth-profiles/path-resolve.native.js";
 import { loadPersistedAuthProfileStore } from "../../auth-profiles/persisted.js";
 import {
@@ -29,10 +32,7 @@ import {
   getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../../auth-profiles/runtime-snapshots.js";
-import {
-  SHARED_AUTH_STORE_STATE_KEY,
-  readAuthProfileJsonCellText,
-} from "../../auth-profiles/sqlite-json.js";
+import { readAuthProfileJsonCellText } from "../../auth-profiles/sqlite-json.js";
 import { inspectPersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,

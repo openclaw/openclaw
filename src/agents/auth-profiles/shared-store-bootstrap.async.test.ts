@@ -11,11 +11,12 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
 import * as paths from "./path-resolve.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./path-resolve.js";
 import * as snapshots from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import * as sqlite from "./sqlite.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 
@@ -121,7 +122,7 @@ it.each(["reply", "caller", "source"] as const)(
   async (lost) => {
     await prepareActor();
     if (lost !== "reply") {
-      await paths.resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }));
+      await resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }));
       snapshots.setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, sourceDir);
     }
     let revoked = false;

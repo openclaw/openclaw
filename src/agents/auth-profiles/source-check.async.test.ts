@@ -12,13 +12,15 @@ import {
   withOpenClawTestState,
   type OpenClawTestState as State,
 } from "../../test-utils/openclaw-test-state.js";
-import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "./path-resolve.js";
 import {
   hasAnyAuthProfileStoreSourceAsync as hasSource,
   hasLocalAuthProfileStoreSourceAsync,
 } from "./source-check.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import * as readers from "./sqlite-read.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 

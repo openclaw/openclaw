@@ -13,7 +13,7 @@ import {
 } from "./mutation-lineage.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "./path-resolve.async.js";
 import { loadPersistedAuthProfileStore as loadPersisted } from "./persisted.js";
 import {
   expectOAuthCredentialFields,

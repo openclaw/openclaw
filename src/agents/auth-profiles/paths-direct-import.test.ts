@@ -145,9 +145,11 @@ const persistedStore = createAuthProfileStoreFixture({
 
 describe("shared store ownership", () => {
   let paths: typeof import("./path-resolve.js");
+  let asyncPaths: typeof import("./path-resolve.async.js");
   beforeEach(async () => {
     vi.resetModules();
     paths = await import("./path-resolve.js");
+    asyncPaths = await import("./path-resolve.async.js");
   });
   it("pins legacy ownership until an explicit commit and shares that commit across imports", async () => {
     const env = state.env;
@@ -155,7 +157,7 @@ describe("shared store ownership", () => {
     const expectedPath = path.join(legacyDir, "openclaw-agent.sqlite");
 
     expect(() => paths.resolveSharedAuthStoreOwnership(env)).toThrow("ownership is not prepared");
-    await paths.prepareSharedAuthStoreOwnership(env);
+    await asyncPaths.prepareSharedAuthStoreOwnership(env);
     expect(paths.resolveSharedAuthStorePath(env)).toBe(expectedPath);
 
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
@@ -169,12 +171,16 @@ describe("shared store ownership", () => {
     sqlite.writePersistedAuthProfileStoreRaw(persistedStore, legacyDir);
     expect(resolveAuthStorePathForDisplay(legacyDir)).toBe(expectedPath);
     expect(resolveAuthStatePathForDisplay(legacyDir)).toBe(expectedPath);
-    paths.noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
+    const committedOwner = { location: "state-db" } as const;
+    paths.noteCommittedSharedAuthStoreOwnership(committedOwner, env);
     expect(paths.resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
-    expect(await paths.prepareSharedAuthStoreOwnership(env)).toEqual({ location: "state-db" });
+    expect(await asyncPaths.prepareSharedAuthStoreOwnership(env)).toBe(committedOwner);
+    const nativePaths = await import("./path-resolve.native.js");
+    expect(nativePaths.prepareSharedAuthStoreOwnershipForNative(env)).toBe(committedOwner);
     vi.resetModules();
     const sdkPaths = await import("./path-resolve.js");
     expect(sdkPaths.resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
+    expect(sdkPaths.getPreparedSharedAuthStoreOwnership(env)).toBe(committedOwner);
   });
 
   it("ignores runtime-only external profiles when displaying store ownership", async () => {
@@ -196,7 +202,7 @@ describe("shared store ownership", () => {
 
   it("caches ownership independently for each canonical state root", async () => {
     const env = state.env;
-    await paths.prepareSharedAuthStoreOwnership(env);
+    await asyncPaths.prepareSharedAuthStoreOwnership(env);
     expect(paths.resolveSharedAuthStoreOwnership(env)).toEqual({ location: "legacy-main" });
     await withOpenClawTestState({ layout: "state-only", applyEnv: false }, async (second) => {
       writeConfigMachineState(
@@ -204,7 +210,7 @@ describe("shared store ownership", () => {
         { location: "legacy-main", extra: true },
         { env: second.env },
       );
-      await expect(paths.prepareSharedAuthStoreOwnership(second.env)).rejects.toThrow(
+      await expect(asyncPaths.prepareSharedAuthStoreOwnership(second.env)).rejects.toThrow(
         expect.objectContaining({
           name: "InvalidSharedAuthStoreOwnershipError",
           code: "INVALID_SHARED_AUTH_STORE_OWNERSHIP",

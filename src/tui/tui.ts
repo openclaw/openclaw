@@ -12,7 +12,7 @@ import {
   resolveSessionAgentId,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";

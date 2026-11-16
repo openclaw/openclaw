@@ -8,7 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Client } from "pg";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/path-resolve.js";
 import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { createUpdateCommandRollbackCapture } from "../cli/update-cli/update-command-cohort.js";
 import {

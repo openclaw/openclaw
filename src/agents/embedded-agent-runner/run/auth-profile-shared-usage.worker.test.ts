@@ -22,17 +22,17 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
-import { noteCommittedSharedAuthStoreOwnership } from "../../auth-profiles/path-resolve.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "../../auth-profiles/path-resolve.js";
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
 } from "../../auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../auth-profiles/runtime-snapshots.js";
 import { writeAuthProfileJsonCell } from "../../auth-profiles/sqlite-json-write.js";
-import {
-  readAuthProfileJsonCellText,
-  SHARED_AUTH_STORE_STATE_KEY,
-} from "../../auth-profiles/sqlite-json.js";
+import { readAuthProfileJsonCellText } from "../../auth-profiles/sqlite-json.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store-runtime.js";
 import { AuthProfileStoreUnreadableError } from "../../auth-profiles/store-unreadable-error.js";
 import type {

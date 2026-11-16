@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/sqlite-json.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/path-resolve.js";
 import { writePersistedAuthProfileStoreRaw } from "../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";

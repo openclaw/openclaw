@@ -7,7 +7,7 @@ import {
   createAuthProfileStoreFixture,
   oauthCred,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
-import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.async.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot,

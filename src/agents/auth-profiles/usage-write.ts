@@ -29,10 +29,8 @@ import {
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "./ownership.js";
-import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStoreOwnershipAsync,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveSharedAuthStoreOwnership } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { authProfileRuntimeMode } from "./runtime-scope.js";
 import {

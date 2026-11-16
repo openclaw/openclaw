@@ -10,10 +10,8 @@ import type { SessionEntryCohortReader } from "../../config/sessions/session-ent
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
-import {
-  resolveSharedAuthStoreOwnershipAsync,
-  resolveSharedAuthStorePath,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
 import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";

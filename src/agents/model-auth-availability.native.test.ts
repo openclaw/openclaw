@@ -5,7 +5,7 @@ import {
   createApiKeyCredential as apiKey,
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
-import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,

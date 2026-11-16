@@ -1,5 +1,5 @@
 import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
-import { resolveSharedAuthStoreOwnershipAsync } from "../../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "../../agents/auth-profiles/path-resolve.async.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";

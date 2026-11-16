@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
-import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.async.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createClaudeCliBackends,

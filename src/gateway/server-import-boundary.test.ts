@@ -18,6 +18,7 @@ const graph = createRuntimeImportGraph(
   repoRoot,
   [
     ...completionSelectionEntries,
+    "src/agents/auth-profiles/path-resolve.ts",
     "src/gateway/call.ts",
     "src/gateway/config-get-response.ts",
     "src/gateway/method-scopes.ts",
@@ -60,6 +61,61 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("reads published auth ownership without loading database preparation", () => {
+    const modules = collectStaticValueImports("src/agents/auth-profiles/path-resolve.ts");
+    for (const owner of [
+      "src/agents/auth-profiles/path-resolve.async.ts",
+      "src/agents/auth-profiles/path-resolve.native.ts",
+      "src/agents/auth-profiles/sqlite-json.ts",
+      "src/state/config-machine-state.ts",
+      "src/state/config-machine-state-async.ts",
+      "src/state/openclaw-state-worker-context.ts",
+    ]) {
+      expect(modules).not.toContain(path.normalize(owner));
+    }
+  });
+
+  it("publishes and reads the same auth owner in a cold process without database imports", async () => {
+    await withOpenClawTestState(
+      { label: "auth-owner-cold-import", applyEnv: false },
+      async (state) => {
+        const entry = new URL("../agents/auth-profiles/path-resolve.ts", import.meta.url).href;
+        const result = await runNodeScript(
+          [
+            "--import",
+            fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+            "--input-type=module",
+            "--eval",
+            `
+import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (["/path-resolve.async", "/path-resolve.native", "/sqlite-json",
+       "/config-machine-state", "/config-machine-state-async", "/openclaw-state-worker-context"]
+      .some((owner) => [".ts", ".js"].some((extension) => resolved.url.endsWith(owner + extension)))) {
+    throw new Error("Published auth ownership loaded database preparation");
+  }
+  return resolved;
+}});
+const paths = await import(${JSON.stringify(entry)});
+assert.equal(paths.getPreparedSharedAuthStoreOwnership(process.env), undefined);
+const ownership = { location: "state-db" };
+paths.noteCommittedSharedAuthStoreOwnership(ownership);
+assert.equal(paths.getPreparedSharedAuthStoreOwnership(process.env), ownership);
+assert.equal(paths.resolveSharedAuthStoreOwnership(), ownership);
+console.log("auth-owner-cold-import-ok");
+`,
+          ],
+          { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
+          30_000,
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("auth-owner-cold-import-ok");
+      },
+    );
+  });
+
   it.each(completionSelectionEntries)(
     "selects models in %s without loading completion execution",
     (entry) => {

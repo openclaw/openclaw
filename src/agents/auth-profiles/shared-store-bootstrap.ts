@@ -32,10 +32,10 @@ import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
+  SHARED_AUTH_STORE_STATE_KEY,
 } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
 
 const PRIMARY_ROW_KEY = "primary";

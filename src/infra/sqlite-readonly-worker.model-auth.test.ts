@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { overlayRuntimeExternalOAuthProfiles } from "../agents/auth-profiles/oauth-shared.js";
+import * as authPathResolveAsync from "../agents/auth-profiles/path-resolve.async.js";
 import * as authPathResolve from "../agents/auth-profiles/path-resolve.js";
 import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
 import {
@@ -349,11 +350,11 @@ it.each([
         expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
       }
       const { entered, resume, pause } = createReadBarrier();
-      const sharedOwnership = authPathResolve.resolveSharedAuthStoreOwnershipAsync;
+      const sharedOwnership = authPathResolveAsync.resolveSharedAuthStoreOwnershipAsync;
       const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
       const read = cached
         ? vi
-            .spyOn(authPathResolve, "resolveSharedAuthStoreOwnershipAsync")
+            .spyOn(authPathResolveAsync, "resolveSharedAuthStoreOwnershipAsync")
             .mockImplementation((context) => pause(sharedOwnership(context)))
         : pauseRows(databasePath, pause);
       const loading = resolve();
