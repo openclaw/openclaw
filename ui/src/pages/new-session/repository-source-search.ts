@@ -5,7 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
-import { isControlUiRepositorySearchResult } from "../../lib/protocol-validators.generated/session-input.js";
+import { isControlUiRepositorySearchResult } from "../../lib/protocol-validators.generated/repository-source.js";
 import type { ControlUiRepositorySourceContribution } from "../../plugins/control-ui-metadata.ts";
 
 registerNewSessionSetupEnglish();
