@@ -84,6 +84,7 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 
 function modelRef(model: string) {
   return { provider: "fixture", model };
@@ -388,6 +389,68 @@ describe("scheduled authenticated operator source", () => {
         }
       }),
   );
+
+  it("keeps accepted sibling work after a parent edit without retaining its input authority", () =>
+    withRecovery(async (fixture) => {
+      const authorization = await resolveSessionMutationAuthorizationAsync({
+        client: fixture.client,
+        method: "chat.send",
+        requestParams: { sessionKey: fixture.target.sessionKey },
+        context: fixture.context,
+      });
+      expect(authorization.error).toBeNull();
+      const parent = expectDefined(
+        await captureGatewayOperatorRunAuthority({
+          client: captureAgentTurnPrincipal(fixture.client),
+          context: fixture.context,
+          sourceAuthority: {
+            assertCurrent: expectDefined(authorization.authorization, "parent input authority")
+              .assertCurrent,
+            gatewayAccessGrant: null,
+          },
+        }),
+        "live parent authority",
+      );
+      const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: fixture.client.authenticatedUserProfile,
+        operatorRoleActor: { kind: "operator", profileId: parent.authority.profileId },
+        operatorRunAuthority: parent.authority,
+        scopes: ["operator.write"],
+      });
+      const capture = () =>
+        withPluginRuntimeGatewayRequestScope(
+          { client, context: fixture.context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { operatorRunAuthority: parent.authority, scopes: ["operator.write"] },
+              async () => await captureOperatorToolGatewayContinuationContext(),
+            ),
+        );
+      const first = expectDefined(await capture(), "first child");
+      const second = expectDefined(await capture(), "second child");
+      try {
+        // The same committed lifecycle revision change used by transcript edits
+        // invalidates the original chat.send input, not the person's policy.
+        await replaceSessionEntry(fixture.target, {
+          ...fixture.entry,
+          lifecycleRevision: "edited-parent-input",
+        });
+        expect(parent.authority.assertCurrent).toThrow("session changed before chat.send");
+        expect(first.operatorAuthority?.source).toBe(parent.authority.source);
+        expect(second.operatorAuthority?.source).toBe(parent.authority.source);
+        expect(first.operatorAuthority?.scopes).toEqual(["operator.write"]);
+        expect(first.assertCurrent).not.toThrow();
+        expect(second.assertCurrent).not.toThrow();
+        invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+        expect(first.assertCurrent).toThrow();
+        expect(second.assertCurrent).toThrow();
+      } finally {
+        first.release();
+        second.release();
+        parent.release();
+        authorization.authorization?.release?.();
+      }
+    }));
 
   it.each(["current", "owner closed", "device revoked"] as const)(
     "checks independently owned continuation custody after preparation: %s",

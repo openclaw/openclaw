@@ -15,7 +15,6 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   intersectOperatorScopes,
   resolveMissingOperatorScope,
@@ -69,19 +68,6 @@ type OperatorSourceBucket = {
   entries: Set<OperatorSource>;
 };
 const operatorSources = new WeakMap<object, OperatorSourceBucket>();
-const continuationAuthorities = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
-  () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
-);
-
-/** Accepted continuations retain policy custody independently of a recovered work claim. */
-export function bindGatewayOperatorContinuationAuthority(
-  work: AdmittedRunOperatorAuthority,
-  source: AdmittedRunOperatorAuthority,
-): void {
-  continuationAuthorities.set(work, source);
-}
-
 function getOperatorSources(owner: object): OperatorSourceBucket {
   let sources = operatorSources.get(owner);
   if (!sources) {
@@ -281,8 +267,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
-  /** Only an accepting work owner may outlive the original scheduling claim. */
-  independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -299,25 +283,20 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertAdmittedRunOperatorAuthority(inherited);
     inherited.assertCurrent();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
-    const continuation = continuationAuthorities.get(inherited);
-    const source = params.independentContinuation ? (continuation ?? inherited) : inherited;
     const authority = roleScopesAllow({
       role: "operator",
-      requestedScopes: source.scopes,
+      requestedScopes: inherited.scopes,
       allowedScopes: scopes,
     })
-      ? source
+      ? inherited
       : createAdmittedRunOperatorAuthority({
-          ...source,
+          ...inherited,
           scopes,
           get modelPolicy() {
-            return source.modelPolicy;
+            return inherited.modelPolicy;
           },
         });
-    if (continuation && !params.independentContinuation && authority !== inherited) {
-      continuationAuthorities.set(authority, continuation);
-    }
-    return { authority, release: source.retain?.() ?? (() => {}) };
+    return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;

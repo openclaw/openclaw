@@ -246,6 +246,7 @@ describe("operator access cancellation", () => {
           scopes: ["operator.write"],
         });
         const target = await f.register("sent-turn");
+        f.context.resolveGatewayContext = () => occurrence.context;
         const retained = await target.retain(client);
         retained.armCancellation();
         occurrence.retire();

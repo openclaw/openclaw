@@ -81,6 +81,8 @@ export async function createOperatorRecoveryFixture(params: {
   let config = params.config;
   const context = params.context;
   context.getRuntimeConfig = () => config;
+  // Production contexts resolve their owning Gateway; detached work restores against it.
+  context.resolveGatewayContext ??= () => context;
   const client = createOperatorClient({
     profileId: params.profileId,
     scopes: params.scopes ?? ["operator.admin"],

@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #200176: real chat.send input-authority invalidation after a committed parent edit, sibling continuation survival, scope ceiling, and live device revocation; existing recovery/cancellation controls retained.
+66

@@ -30,6 +30,7 @@ import {
 } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   ADMIN_SCOPE,
   READ_SCOPE,
@@ -184,11 +185,10 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         }
       : { syntheticScopeMode: "exact" as const }),
   });
-  return captureGatewayOperatorRunAuthority({
+  return captureGatewayOperatorContinuation({
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
-    independentContinuation: true,
   }).then((captured) => {
     try {
       captured?.authority.assertCurrent();
