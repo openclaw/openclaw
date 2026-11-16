@@ -30,7 +30,7 @@ of support for every draft Events feature. Polling, push streams, and the draft'
 ## Configure the callback
 
 Connect the server through the existing [MCP settings](/tools/mcp), then enable
-the plugin with a public HTTPS callback origin:
+the plugin with a public HTTPS callback base URL:
 
 ```json5
 {
@@ -47,7 +47,7 @@ the plugin with a public HTTPS callback origin:
       "mcp-events": {
         enabled: true,
         config: {
-          callbackOrigin: "https://events.example.com",
+          callbackBaseUrl: "https://events.example.com",
         },
       },
     },
@@ -55,12 +55,20 @@ the plugin with a public HTTPS callback origin:
 }
 ```
 
-The origin must have no credentials, path, query, or fragment. Route only
-`/plugins/mcp-events/callback/` to the Gateway through your HTTPS reverse proxy.
-Do not expose the Control UI, Gateway WebSocket, or other administrative paths.
-OpenClaw does not open a tunnel or change your network configuration.
+`callbackBaseUrl` must be an HTTPS URL with no credentials, query, or fragment.
+It can include a path prefix, such as `https://proxy.example.com/openclaw`, for a
+reverse proxy or webhook relay that addresses receivers by path. A trailing slash
+is ignored. OpenClaw gives the MCP server callback URLs of the form
+`<callbackBaseUrl>/plugins/mcp-events/callback/<binding>`.
 
-The remote server must be able to reach this origin and verify its TLS
+Route only that callback path to the Gateway through your HTTPS reverse proxy.
+Configure the proxy to remove any path prefix and forward the request to the
+Gateway as `/plugins/mcp-events/callback/<binding>`. Do not expose the Control UI, Gateway
+WebSocket, or other administrative paths. OpenClaw does not open a tunnel or
+change your network configuration. Changing `callbackBaseUrl` retires existing
+subscriptions and subscribes again with the new callback URL.
+
+The remote server must be able to reach this URL and verify its TLS
 certificate. Public DNS validation is a prerequisite, not proof of reachability;
 subscription callback verification supplies that proof. Infrastructure that
 requires an additional interactive sign-in or bearer header cannot accept these
@@ -69,6 +77,27 @@ per-subscription HMAC authentication.
 
 Use the existing MCP credential configuration or sign-in flow. Do not place MCP
 bearer tokens or webhook signing secrets in the automation's instructions.
+
+### Migrate from callbackOrigin
+
+Earlier releases configured the callback with `callbackOrigin`, which accepted
+only a bare origin. `callbackBaseUrl` replaces it, and config validation reports a
+remaining `callbackOrigin` with the next step: run `openclaw doctor --fix`.
+
+Doctor, which also runs during `openclaw update`, moves `callbackOrigin` to
+`callbackBaseUrl`, or removes it when `callbackBaseUrl` is already set. The value
+and the callback URL do not change, so existing subscriptions are kept. A
+`callbackOrigin` that isn't a valid HTTPS origin never worked; Doctor removes it,
+keeps the old value in the config backup, and asks you to set `callbackBaseUrl`.
+
+To migrate by hand, rename the key and keep the value:
+
+```json5 validate=false
+// Before
+config: { callbackOrigin: "https://events.example.com" }
+// After
+config: { callbackBaseUrl: "https://events.example.com" }
+```
 
 ## Create an event automation
 

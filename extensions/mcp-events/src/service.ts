@@ -3,7 +3,7 @@ import { CHANNEL_INGRESS_RETENTION_DEFAULTS } from "openclaw/plugin-sdk/channel-
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { preflightCallbackOrigin, resolveMcpEventSourceOptions } from "./config.js";
+import { preflightCallbackBaseUrl, resolveMcpEventSourceOptions } from "./config.js";
 import {
   CALLBACK_PREFIX,
   createSigningSecret,
@@ -117,7 +117,7 @@ export class McpEventsService {
   }
 
   async start(): Promise<void> {
-    await preflightCallbackOrigin(this.deps.config.callbackOrigin, this.signal);
+    await preflightCallbackBaseUrl(this.deps.config.callbackBaseUrl, this.signal);
     this.assertService();
     for (const { value: facts } of await this.state.bindings.entries()) {
       if (facts.status === "revoked" && !facts.cleanupPending) {
@@ -200,7 +200,7 @@ export class McpEventsService {
       if (
         !source ||
         source.sourceIdentity !== binding.facts.sourceIdentity ||
-        !binding.facts.callbackUrl.startsWith(this.deps.config.callbackOrigin + CALLBACK_PREFIX)
+        !binding.facts.callbackUrl.startsWith(this.deps.config.callbackBaseUrl + CALLBACK_PREFIX)
       ) {
         await this.revoke(binding);
       }
@@ -347,7 +347,7 @@ export class McpEventsService {
         principalId: source.principalId,
         arguments: options.arguments,
         definition,
-        callbackUrl: this.deps.config.callbackOrigin + CALLBACK_PREFIX + bindingId,
+        callbackUrl: this.deps.config.callbackBaseUrl + CALLBACK_PREFIX + bindingId,
         secret: createSigningSecret(),
         status: "pending",
         cursor: null,
