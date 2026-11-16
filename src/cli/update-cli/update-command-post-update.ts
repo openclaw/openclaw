@@ -454,9 +454,8 @@ async function finishSettledUpdate(
           activationVerified,
         });
       // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval. A switched
-      // Git release converges only after it verified, so a failed trial never strands
-      // plugins that require the release it left.
+      // A replaced core keeps convergence in its original stopped interval; a switched
+      // Git release converges after it verified, never stranding plugins on a failed trial.
       const deferPluginConvergence =
         shouldRestart &&
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
