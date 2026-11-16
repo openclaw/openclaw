@@ -48,20 +48,7 @@ extension OnboardingController {
                     CLIInstaller.completeBundledSetup(after: activation)
                     let outcome = OnboardingView.localGatewayActivationOutcome(activation, afterFreshInstall: true)
                     guard outcome.ready else { throw GatewayHostingError(message: outcome.status) }
-                },
-                supportsAutomaticSetup: {
-                    let connection = GatewayConnection.shared
-                    let lease = try await connection.acquireServerLease()
-                    guard state.connectionMode == .local else { throw CancellationError() }
-                    return await connection.supportsServerMethod(
-                        "openclaw.setup.auto", ifCurrentServerLease: lease) == true
-                },
-                openDashboard: {
-                    guard state.connectionMode == .local else { throw CancellationError() }
-                    try await AppNavigationActions.openDashboardOnboardingAndWait()
-                    guard state.connectionMode == .local else { throw CancellationError() }
-                },
-                markComplete: { Self.markComplete() })
+                })
         }
         self.automaticSetupTask = task
         let fallback = await task.value

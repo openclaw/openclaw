@@ -381,6 +381,13 @@ extension OnboardingAISetupModel {
             advertisedOptions: self.detectedPrepareOptions)
     }
 
+    /// Explicit setup remains available even when passive discovery found a usable model.
+    var managedLocalSetupOption: PrepareOption? {
+        guard prepareAvailable else { return nil }
+        return Self.prepareOptions(candidates: [], advertisedOptions: detectedPrepareOptions)
+            .first { $0.id == "llama-cpp" }
+    }
+
     var isPreparingModel: Bool {
         self.providerWizardKind == .prepare
     }

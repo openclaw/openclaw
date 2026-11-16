@@ -16,7 +16,7 @@ extension OnboardingView {
                 if self.aiSetup.configuredGatewayAuthIssue != nil {
                     Text("Authenticate with your Gateway")
                 } else {
-                    Text("Connect your AI")
+                    Text("Get OpenClaw thinking.")
                 }
             }
             .font(.largeTitle.weight(.semibold))
@@ -44,9 +44,7 @@ extension OnboardingView {
         if state.connectionMode == .remote {
             return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
         }
-        return "OpenClaw needs an AI account to think. " +
-            "It reuses what you already have — nothing new to sign up for if " +
-            "Claude Code, Codex, or an API key is on this Mac."
+        return "Connect an AI account or use a local model."
     }
 
     func maybeStartAISetup(for pageIndex: Int) {

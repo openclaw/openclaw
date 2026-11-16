@@ -5,7 +5,6 @@ extension OnboardingFirstRun.Step {
         switch self {
         case .preparingRuntime: String(localized: "Preparing runtime…")
         case .startingGateway: String(localized: "Starting Gateway…")
-        case .openingDashboard: String(localized: "Opening dashboard…")
         }
     }
 }

@@ -18,81 +18,44 @@ struct OnboardingFirstRunTests {
         }
     }
 
-    @Test func `first run presents each step before work and completes only after the dashboard loads`() async {
+    @Test func `first run prepares the host then waits for an explicit AI choice`() async {
         var effects: [String] = []
         let fallback = await OnboardingFirstRun.run(
             reportProgress: { effects.append("show \($0)") },
             selectLocal: { effects.append("local") },
             prepareRuntime: { effects.append("runtime") },
-            startGateway: { effects.append("start") },
-            supportsAutomaticSetup: { effects.append("capability")
-                return true
-            },
-            openDashboard: {
-                #expect(!effects.contains("complete"))
-                effects.append("dashboard loaded")
-            },
-            markComplete: { effects.append("complete") })
-        #expect(fallback == nil)
-        #expect(effects == [
-            "show preparingRuntime", "local", "runtime", "show startingGateway", "start", "capability",
-            "show openingDashboard", "dashboard loaded", "complete",
-        ])
+            startGateway: { effects.append("start") })
+        #expect(fallback == .init(page: .aiSetup, message: nil))
+        #expect(effects == ["show preparingRuntime", "local", "runtime", "show startingGateway", "start"])
     }
 
-    @Test(arguments: 0..<5)
-    func `failures preserve unfinished onboarding and return to the relevant manual page`(failureStep: Int) async {
+    @Test(arguments: 0..<3)
+    func `failures preserve unfinished onboarding and return to the relevant page`(failureStep: Int) async {
         struct Failure: LocalizedError {
-            var errorDescription: String? {
-                "Fixture setup failure"
-            }
+            var errorDescription: String? { "Fixture setup failure" }
         }
-        var completed = false
-        var dashboardOpened = false
         let check: (Int) throws -> Void = { step in
             if step == failureStep { throw Failure() }
         }
         let fallback = await OnboardingFirstRun.run(
             selectLocal: { try check(0) },
             prepareRuntime: { try check(1) },
-            startGateway: { try check(2) },
-            supportsAutomaticSetup: { try check(3)
-                return true
-            },
-            openDashboard: { try check(4)
-                dashboardOpened = true
-            },
-            markComplete: { completed = true })
-        #expect(!completed)
-        #expect(!dashboardOpened)
-        let expectedPages: [OnboardingFirstRun.Page] = [.connection, .runtime, .runtime, .connection, .aiSetup]
+            startGateway: { try check(2) })
+        let expectedPages: [OnboardingFirstRun.Page] = [.connection, .runtime, .runtime]
         #expect(fallback == .init(page: expectedPages[failureStep], message: "Fixture setup failure"))
     }
 
-    @Test func `opening manual setup cancels the automatic handoff before completion`() async {
+    @Test func `cancelling runtime setup does not advance to AI selection`() async {
         let task = Task {
-            var completed = false
+            var gatewayStarted = false
             let fallback = await OnboardingFirstRun.run(
-                selectLocal: {}, prepareRuntime: {}, startGateway: {},
-                supportsAutomaticSetup: { true },
-                openDashboard: { withUnsafeCurrentTask { $0?.cancel() } },
-                markComplete: { completed = true })
-            #expect(!completed)
-            #expect(fallback?.page == .aiSetup)
+                selectLocal: {},
+                prepareRuntime: { withUnsafeCurrentTask { $0?.cancel() } },
+                startGateway: { gatewayStarted = true })
+            #expect(!gatewayStarted)
+            #expect(fallback?.page == .runtime)
+            #expect(fallback?.message != nil)
         }
         await task.value
-    }
-
-    @Test func `older Gateways retain manual AI setup without a dashboard handoff`() async {
-        var handoff = false
-        var completed = false
-        let fallback = await OnboardingFirstRun.run(
-            selectLocal: {}, prepareRuntime: {}, startGateway: {},
-            supportsAutomaticSetup: { false },
-            openDashboard: { handoff = true },
-            markComplete: { completed = true })
-        #expect(fallback == .init(page: .aiSetup, message: nil))
-        #expect(!handoff)
-        #expect(!completed)
     }
 }

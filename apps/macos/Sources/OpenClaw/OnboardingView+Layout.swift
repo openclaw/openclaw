@@ -399,7 +399,7 @@ extension OnboardingView {
         case self.connectionPageIndex: "Where should your assistant live?"
         case self.cliPageIndex: "Getting things ready"
         case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
-            ? "Connect your AI" : "Authenticate with your Gateway"
+            ? "Get OpenClaw thinking." : "Authenticate with your Gateway"
         case self.readyPageIndex: "You’re all set!"
         default: "Welcome to OpenClaw"
         }

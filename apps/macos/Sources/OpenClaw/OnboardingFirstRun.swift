@@ -1,6 +1,6 @@
 import Foundation
 
-/// The native first run only prepares the local host; the dashboard owns AI setup.
+/// Native first run prepares the host, then waits for an explicit AI connection choice.
 @MainActor
 enum OnboardingFirstRun {
     enum Page: Int {
@@ -8,7 +8,7 @@ enum OnboardingFirstRun {
     }
 
     enum Step {
-        case preparingRuntime, startingGateway, openingDashboard
+        case preparingRuntime, startingGateway
     }
 
     struct Fallback: Equatable {
@@ -31,10 +31,7 @@ enum OnboardingFirstRun {
         reportProgress: (Step) -> Void = { _ in },
         selectLocal: () throws -> Void,
         prepareRuntime: () async throws -> Void,
-        startGateway: () async throws -> Void,
-        supportsAutomaticSetup: () async throws -> Bool,
-        openDashboard: () async throws -> Void,
-        markComplete: () -> Void) async -> Fallback?
+        startGateway: () async throws -> Void) async -> Fallback?
     {
         var page = Page.connection
         do {
@@ -47,17 +44,9 @@ enum OnboardingFirstRun {
             reportProgress(.startingGateway)
             try await startGateway()
             try Task.checkCancellation()
-            page = .connection
-            guard try await supportsAutomaticSetup() else {
-                return Fallback(page: .aiSetup, message: nil)
-            }
-            try Task.checkCancellation()
-            page = .aiSetup
-            reportProgress(.openingDashboard)
-            try await openDashboard()
-            try Task.checkCancellation()
-            markComplete()
-            return nil
+            // Detection is passive. The AI page owns the user's choice and the
+            // verified handoff; opening a dashboard must not choose AI for them.
+            return Fallback(page: .aiSetup, message: nil)
         } catch {
             return Fallback(page: page, message: error.localizedDescription)
         }

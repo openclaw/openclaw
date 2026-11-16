@@ -9,7 +9,8 @@ sidebarTitle: "Onboarding: macOS App"
 ---
 
 The macOS app's first-run flow: pick where the Gateway runs, install any
-missing local runtime, and automatically connect a verified AI backend. The app then opens
+missing local runtime, and choose an AI account or a local model. After a verified
+connection, the app opens
 guided onboarding in the dashboard for optional setup and the handoff to your
 agent.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
@@ -86,9 +87,20 @@ and proceeds to AI checks without taking over its CLI or service installation.
 See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
 </Step>
 <Step title="Connect your AI">
-If the connected Gateway already has a configured agent model, automatic setup
-keeps it without writing new settings. Otherwise the Gateway automatically
-tries usable AI access in this deterministic order:
+
+**Get OpenClaw thinking** starts with two choices:
+
+- **Connect an AI account:** reuse detected access, sign in, or reveal the API-key form.
+- **Use a local model:** reuse a model service or choose **Find a model** for
+  hardware-aware managed setup. Existing services may run on another computer;
+  managed setup installs on the Gateway host. Review the recommendation and
+  download size before confirming the model download. Advanced service connections
+  remain available. See [Local models](/gateway/local-models).
+
+If the connected Gateway already has a configured agent model, setup
+keeps it without writing new settings. The native picker only discovers connections
+and waits for your choice. If you use automatic setup in the dashboard instead,
+the Gateway tries usable AI access in this deterministic order:
 
 1. Saved OpenClaw auth profiles.
 2. Codex credentials from `~/.codex` or `CODEX_HOME` on the Gateway host.
