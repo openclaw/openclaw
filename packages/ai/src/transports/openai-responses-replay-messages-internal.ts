@@ -44,7 +44,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
-import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
+import {
+  normalizeOpenAIResponsesReasoningReplayItem,
+  replayOpenAIResponsesToolArguments,
+} from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -226,6 +229,7 @@ export type ConvertResponsesMessagesOptions = {
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
   mutableInput?: boolean;
+  onItemRecovery?: () => void;
 };
 
 // Weak source keys release projections with history. Keep a bounded set of route/position
@@ -312,6 +316,9 @@ function convertResponsesMessagesWithStyle(
     authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
+  if (replayPlan.itemRecovery) {
+    options?.onItemRecovery?.();
+  }
   const transformMessages = (source: Context["messages"]) =>
     providerStyle
       ? transformProviderMessages(source, model, normalizeToolCallId)
@@ -553,11 +560,11 @@ function convertResponsesMessagesWithStyle(
             call_id: replayCallId(callId),
             name: block.name,
             ...(block.async ? { async: true } : {}),
-            arguments: providerStyle
-              ? JSON.stringify(block.arguments)
-              : typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
+            arguments: replayOpenAIResponsesToolArguments(
+              block,
+              providerStyle,
+              msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
+            ),
           });
           previousReplayItemWasReasoning = false;
         }

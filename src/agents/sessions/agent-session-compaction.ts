@@ -53,8 +53,10 @@ import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
 // onSummaryReady marks the end of summary generation; later waits are persistence, not summary.
+// itemId: a caller that already announced this compaction keeps one identity for events and entry.
 type AutomaticCompactionOptions = CompactionRequestConstraints & {
   onSummaryReady?: () => void;
+  itemId?: string;
   [preparedSessionCompactionWork]?: PreparedSessionCompactionWork;
 };
 type CompactionWorkOutcome =
@@ -183,7 +185,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     await this.abort();
     const abortController = new AbortController();
     this.compactionAbortController = abortController;
-    const itemId = generateSessionEntryId();
+    const { itemId = generateSessionEntryId(), ...requestConstraints } = constraints ?? {};
     this.emit({ type: "compaction_start", reason: "manual", itemId });
 
     try {
@@ -196,7 +198,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           mode: "manual",
           summaryOutputPolicy,
           requestState,
-          ...constraints,
+          ...requestConstraints,
           settings,
           signal: abortController.signal,
         });

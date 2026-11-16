@@ -267,6 +267,9 @@ A package may declare `agent.heartbeat` in `CLAW.md` or include
 and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
+Because it becomes job scratch, `HEARTBEAT.md` must be valid UTF-8 and at most
+256 KiB; `validate`, `inspect`, `build` and Add report a larger or non-UTF-8
+file as a Template diagnostic.
 The Add review shows each converted job with its interval and owner delivery;
 existing cron schedules keep their meaning.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
@@ -356,26 +359,92 @@ approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
-or configure the agent afterward. The Control UI opens the new agent's pending
-chat immediately. Sending becomes available when its instruction files, canonical
-conversation, and active runtime are ready, while remaining setup continues. The
-first assistant response is a normal personality/SOUL greeting, not a saved canned
-greeting or a message sent on your behalf. Later setup failure retains the exposed
-agent and conversation; completion does not replace an existing draft.
+or configure the agent afterward. The first assistant response is a normal
+personality/SOUL greeting, not a saved canned greeting or a message sent on your
+behalf. Later setup failure retains the exposed agent and conversation;
+completion does not replace an existing draft.
 
-The installer shows a card for each newly installed plugin and an automation-created
-notice as each routine is added. Disabled routines remain disabled while their setup
-prerequisites are missing. Actual installation failures appear in the plugin card or
-a concise automation-failed notice; continue setup in the same agent. Successful
-skill and MCP setup, absent optional files, and empty categories stay silent. There
-is no final setup receipt or second model recap. Declared package bootstrap still
-follows shared setup; MCP configuration alone does not prove a working connection.
+During a CLI Add, the installer shows a card for each newly installed plugin and
+an automation-created notice as each routine is added. Disabled routines remain
+disabled while their setup prerequisites are missing. Actual installation failures
+appear in the plugin card or a concise automation-failed notice; continue setup in
+the same agent. Successful skill and MCP setup, absent optional files, and empty
+categories stay silent. There is no final setup receipt or second model recap.
+Declared package bootstrap still follows shared setup; MCP configuration alone does
+not prove a working connection.
 When offline Add keeps an agent after a later step fails, the agent gets the default
 `AGENTS.md`, `IDENTITY.md` and `USER.md`, and the package `BOOTSTRAP.md` is held
 back because its setup did not finish.
 
+### Add from the Control UI
+
+**Add** in the Control UI has no review step and no preview. It opens the new
+agent's pending chat immediately, and the Gateway creates the agent:
+
+1. It creates the agent and its chat. If the Template's agent ID is taken, the
+   new agent gets the next unused ID; an existing agent is never changed.
+2. It fetches the exact Template release shown in the catalog.
+3. It writes the Template's workspace files and its `BOOTSTRAP.md`.
+4. It copies the Template's `CLAW.md` unchanged to the workspace root, as an
+   ordinary file the agent can read. The workspace root `CLAW.md` is reserved
+   for that original manifest; a conflicting workspace-file declaration fails
+   creation before any Template files are written and removes the new agent.
+5. It installs the declared skills, from ClawHub or bundled in the package.
+6. It installs plugins bundled in the package.
+7. It adds the declared MCP servers.
+8. It grants `read`, `automations`, `plugins`, and `message` additively for setup.
+   Explicit Template denies and operator policy ceilings still apply.
+
+After creation, the Gateway starts one hidden setup turn in that chat, with the
+agent's ordinary tools. The agent reads declarations from the persisted `CLAW.md`
+and responds in this order:
+
+1. A brief greeting in its own voice.
+2. Declared automations, created **paused**, bound to this conversation. Existing
+   matching automations are left unchanged, including ones you already enabled.
+3. Added MCP servers and any sign-in needed in **Settings → MCP**.
+4. Plugin state and exact-package ClawHub cards for missing plugins. Official
+   cards offer **Install**; community cards offer **View details** for normal
+   plugin review. Unknown packages produce a not-found result, not a card.
+5. Creation failures, by name and reason. Successful skills are not listed.
+6. The author's opening from `BOOTSTRAP.md`, last in the same turn.
+
+Neither creation nor this turn installs or enables a plugin referenced on
+ClawHub, or enables an automation. A missing or disabled referenced plugin never
+stops agent creation. You choose installation or enabling afterwards.
+This path creates declared `automations` (`cronJobs` in older manifests); it
+does not convert legacy `agent.heartbeat` settings into a heartbeat automation.
+
+Intermediate text and card sends are non-final; the final reply closes setup.
+Sending becomes available when setup finishes; a message typed earlier stays in
+the composer.
+
+If that first turn fails or is interrupted, **Retry setup** runs only that turn
+with a fresh run ID in the existing chat. It does not re-create the agent,
+rewrite its files, fetch the Template again, or reinstall dependencies. The
+ordinary session retains the creation report until the turn completes; a retry
+cannot start a second setup while the first still owns the agent's setup lease.
+Retry explicitly targets the admitted agent. If setup completed while the client
+was disconnected, Retry reconciles that existing chat without adding another copy.
+The CLI Add flow and its no-tools opening are unchanged.
+
+If the Gateway cannot fetch the Template or write its workspace files, it removes
+the new agent and chat, and the catalog shows the error on that Template's card.
+Add it again after fixing the cause. A skill, bundled plugin, or MCP server that
+cannot be set up does not stop Add: the agent is kept without it. A skill or
+bundled plugin that carries a trust warning is not installed. An MCP server whose
+name is already configured with different settings is left unchanged. Missing
+dependencies are reported as incomplete setup, with their reasons in the opening
+conversation. Continue in that chat instead of adding another copy; no installer
+is continuing those steps in the background. Configured MCP servers may still
+need sign-in or connection checks.
+
+A Template release that ClawHub flagged for review still needs your confirmation.
+The catalog shows the ClawHub warning with **Add anyway** before any agent is kept.
+
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` selects an unused ID. `--workspace` selects a new path for local
+`--agent-id` selects an unused ID, or names an agent that a failed Gateway Add
+kept so Add continues its setup. `--workspace` selects a new path for local
 preview or offline Add. Ordinary Add binds its review internally and does not
 require a separate plan token. Trust warnings and plugin capabilities still
 require their separate explicit acknowledgements.
@@ -389,7 +458,8 @@ is `owner` for converted heartbeat jobs and `none` for declared automations.
 
 CLI Add from a local source requires exclusive offline state ownership; it refuses
 to run while a Gateway owns that state. For published ClawHub Templates, both the
-CLI and Control UI can Add through a running Gateway. Offline Add uses the same
+CLI and Control UI can Add through a running Gateway; the Control UI uses the
+[plan-free Add](#add-from-the-control-ui) above. Offline Add uses the same
 session, local agent runtime, and scheduler
 owners without starting scheduled execution. `--json` suppresses conversational
 terminal output but keeps the ordinary conversation and per-result install notices.
@@ -399,7 +469,10 @@ assigns the declared automations. An existing agent or workspace is never
 overwritten. If Add fails before exposing the agent, newly created resources are
 cleaned up where safe; preexisting resources remain untouched. If the result says
 the agent was retained, continue in that agent and inspect the specific error
-instead of adding another copy.
+instead of adding another copy. When Gateway Add kept the agent before its setup
+finished, rerun `openclaw templates add <source> --agent-id <id>` once the error
+is resolved. The rerun continues in the same agent and conversation, and only
+for the Template version the first Add resolved.
 
 ## Remove the agent
 
@@ -440,6 +513,7 @@ and project paths. `--json` retains the original field values for machine proces
 
 ## See also
 
+- [Agents and Templates](/concepts/agents-and-templates)
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)

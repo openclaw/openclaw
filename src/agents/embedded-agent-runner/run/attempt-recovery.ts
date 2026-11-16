@@ -70,7 +70,6 @@ export async function recoverEmbeddedRunAttempt(input: {
     typeof recoverEmbeddedRunTimeout
   >[0]["resolveContextEnginePluginId"];
   buildRuntimeSettings: Parameters<typeof recoverEmbeddedRunTimeout>[0]["buildRuntimeSettings"];
-  armPostCompactionGuard: () => void;
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   runtimeAuthRetry: boolean;
@@ -404,7 +403,6 @@ export async function recoverEmbeddedRunAttempt(input: {
       target: sessionPromptState.sessionTarget,
     }),
     prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
-    armPostCompactionGuard: input.armPostCompactionGuard,
     usageAccumulator: input.usageAccumulator,
   };
   if (

@@ -13,6 +13,10 @@ import {
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
+// Private preparation retains decoded/replay graphs inside the fixed 512 MiB reader.
+// Larger windows stay on the complete streamed host path, never a clipped context.
+const MAX_COMPACTION_PREPARATION_BYTES = 16 * 1024 * 1024;
+
 /** Read each hydrated view under the same worker-owned quarantine and snapshot admission. */
 export async function readSessionTranscriptHydrationRequest(
   request: SessionTranscriptHydrationWorkerRequest,
@@ -91,6 +95,7 @@ export async function readCompactionTranscriptForPreparation(
     // selection owner instead of parsing its metadata pass and a byte stream.
     const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
       compaction: true,
+      maxMaterializedBytes: MAX_COMPACTION_PREPARATION_BYTES,
       readOnly: true,
       resolvedScope: request.resolvedScope,
       onRead: (projection, rows) => {
@@ -215,6 +220,7 @@ export async function readCompactionRowsForRendering(
       );
       return { sequences: selectedSequences };
     },
+    MAX_COMPACTION_PREPARATION_BYTES,
   );
   let sourceSequences: readonly number[] | undefined;
   const prepared = decoder.finish(value, (_events, rows) => {

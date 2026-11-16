@@ -89,9 +89,9 @@ const loadSubagentRegistryRuntime = createLazyPromise(
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceFlowOutcome = NonNullable<
-  SubagentAnnounceDeliveryResult["disposition"]
->;
+export type SubagentAnnounceFlowOutcome =
+  | NonNullable<SubagentAnnounceDeliveryResult["disposition"]>
+  | "requester_waiting";
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -168,7 +168,10 @@ async function runSubagentAnnounceFlowBound(
     deliveryResultReported = true;
     // A receipt observer may fail after handoff. Keep the transport outcome
     // authoritative so cleanup does not replay work the requester already consumed.
-    announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+    announceOutcome =
+      delivery.reason === "completion_handoff_pending" && delivery.terminal
+        ? "requester_waiting"
+        : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
     await params.onDeliveryResult?.(delivery);
   };
   const expectsCompletionMessage = params.expectsCompletionMessage === true;

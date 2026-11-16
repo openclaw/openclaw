@@ -190,14 +190,16 @@ export function createPluginGenerationFileCapture({
 }) {
   const { additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (
+  function* copy(
     source: string,
     target: string,
     copyFile: RootFileCopyBatchSync["copyFile"],
     openFile: RootFileOpenBatchSync["openFile"],
     realParent?: string,
     sourceEntry?: fs.BigIntStats,
-  ) => {
+  ): Generator<void, void, void> {
+    // One step per visited entry bounds directory traversal as well as file copying.
+    yield;
     const metrics = getPluginGenerationMetrics();
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks?.has(target)) {
@@ -261,7 +263,9 @@ export function createPluginGenerationFileCapture({
           !childEntry ||
           !sourceLinks.defer(childInput, inputBoundary, childSource, childEntry, !prepared)
         ) {
-          copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
+          yield* copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
+        } else {
+          yield;
         }
       }
       ancestors.delete(real);
@@ -340,11 +344,49 @@ export function createPluginGenerationFileCapture({
         !prepared,
       );
     }
-  };
-  return (source: string, target: string) => {
+  }
+  const capture = (source: string, target: string): void => {
     using batch = createRootFileCopyBatchSync();
-    // Retained roots never outlive this synchronous capture or reach tree retirement.
     using opened = createRootFileOpenBatchSync();
-    return copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
+    // Synchronous consumers retain one batch for the complete recursive copy.
+    const steps = copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
+    while (!steps.next().done) {
+      // Drain the same acquisition steps without yielding to the host.
+    }
   };
+  return Object.assign(capture, {
+    *steps(source: string, target: string): Generator<void, void, void> {
+      let copyFile: RootFileCopyBatchSync["copyFile"];
+      let openFile: RootFileOpenBatchSync["openFile"];
+      const entries = copy(
+        source,
+        target,
+        (...args) => copyFile(...args),
+        (...args) => openFile(...args),
+      );
+      try {
+        let done = false;
+        while (!done) {
+          {
+            using batch = createRootFileCopyBatchSync();
+            using opened = createRootFileOpenBatchSync();
+            copyFile = batch.copyFile.bind(batch);
+            openFile = opened.openFile.bind(opened);
+            for (let count = 0; count < 32; count++) {
+              if (entries.next().done) {
+                done = true;
+                break;
+              }
+            }
+          }
+          // No pinned fs-safe root survives an actual asynchronous host yield.
+          if (!done) {
+            yield;
+          }
+        }
+      } finally {
+        entries.return();
+      }
+    },
+  });
 }

@@ -1,10 +1,7 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
 import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../../../packages/agent-core/src/internal-hooks.js";
+import { setInternalToolRepeatPolicy } from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
@@ -35,7 +32,8 @@ export interface CreateAgentSessionOptions extends Omit<
   AgentSessionConfig,
   "agent" | "cwd" | "extensionRunnerRef" | "allowedToolNames"
 > {
-  beforeToolBatch?: InternalBeforeToolBatchHook;
+  /** Host repeat-guard policy from `tools.loopDetection`; omitted means enabled. */
+  toolRepeatPolicy?: Parameters<typeof setInternalToolRepeatPolicy>[1];
   /** Execution directory; defaults to the prepared session's directory. */
   cwd?: string;
 
@@ -199,7 +197,9 @@ export async function createAgentSession(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
-  setInternalBeforeToolBatch(agent, options.beforeToolBatch);
+  if (options.toolRepeatPolicy) {
+    setInternalToolRepeatPolicy(agent, options.toolRepeatPolicy);
+  }
 
   let metadataCommit: SessionMetadataCommit | undefined;
   const initializeMetadata = () => {

@@ -7,35 +7,34 @@ read_when:
   - Selecting the Code SHA, Release SHA, and Tooling SHA
 ---
 
-`Full Release Validation` is the release product-validation umbrella. Most work
-happens in child workflows so a failed box can be rerun without restarting the
-whole release. Run release preparation before freezing the Code SHA; it
-refreshes Control UI locale output when the background bot has not landed it
-yet, then enforces the same strict zero-fallback check used by release CI.
+For [Full Release Validation](/reference/full-release-validation), freeze the
+product-complete **Code SHA/ref** after release preparation:
+refresh Control UI locales, enforce release CI's zero-fallback check, and prepare
+the complete history manifest and substantive version-matched notes. Package
+preflight requires a matching section, not a placeholder. Final notes let the
+same commit serve as **Release SHA**.
 
-Generated-locale drift is a warning before dispatch, not a reason to refuse
-validation. Source PRs and the serialized locale-refresh workflows land
-separately, so generated output can temporarily lag. Record any preflight drift
-against the frozen target SHA and continue dispatch. The normal-CI child still
-runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visible
-in the run summary and fail validation. PR-side locale checks, release preparation,
-and publication requirements are unchanged.
+Record preflight locale drift against frozen SHA; continue despite the warning.
+Normal-CI `control-ui-i18n`/`native-i18n` failures still fail validation.
+PR checks, preparation, and publication requirements are unchanged.
 
-Linux (`ubuntu`), Windows, and macOS Gateway cross-OS fresh-install and upgrade
-lanes gate publication in the beta, stable, and full profiles. A failure blocks
-Release Decision, npm publish, and `pnpm release:candidate`. Retain each lane's
-actual conclusion in the manifest and summary; selected lanes need terminal
-evidence.
-Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
-performance and soak requirements keep their existing gates.
+Linux (`ubuntu`), Windows, and macOS Gateway fresh-install/upgrade failures block
+beta/stable/full Release Decision, npm publish, and `pnpm release:candidate`.
+Retain selected lanes’ terminal evidence/actual conclusions in manifest/summary.
+Normal CI, npm qualification, Docker, Package Acceptance, and profile
+performance/soak gates remain.
 
-Prepare the complete history manifest and substantive version-matched release
-notes before freezing the product-complete commit and its target context as the
-**Code SHA/ref**. Package source preflight requires a matching release section;
-an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. The candidate C owns test qualification Q=C;
-select independently trusted P for admission, aggregate validation, and
-publication, then run:
+Record all identities with the request:
+
+| Identity | Ownership / selection                                                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C        | Source, package bytes, version, baselines.                                                                                                                                      |
+| Q        | Complete qualification workflow closure; defaults to C. On `--trusted-workflow-ref candidate`, `--workflow-sha <Q>` selects an exact reviewed main ancestor, never moving main. |
+| P        | Independently trusted admission, aggregate policy, verification, publication. Authenticates C/Q, normalized inputs, and immutable Q transport before dispatch.                  |
+
+Invoking attests review of exact C/Q/coverage. `--trusted-workflow-ref main` and
+protected-tooling routes supply diagnostic/main-qualification/postpublish-confidence
+evidence only, never fresh publication evidence.
 
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
@@ -50,227 +49,244 @@ pnpm ci:full-release \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
-For `main`, `--admission-workflow-sha` is the reviewed ancestry anchor; the helper
-may advance it to a verified descendant before dispatch as `main` moves. Add
-`--pin-admission-workflow` only when the exact main SHA must remain unchanged.
-Protected `release-publish/*` admission refs are always pinned.
+- On `main`, `--admission-workflow-sha` is a reviewed ancestry anchor that may
+  advance to a verified descendant. `--pin-admission-workflow` keeps it exact;
+  protected `release-publish/*` admission refs are always pinned.
+- The example selects normal final publication. Use `npmDistTag=beta` for beta,
+  or `route=prepared` for the prepared release button. Core requires
+  `all-publishable`; plugin-only normal publication may use
+  `publishOpenclawNpm=false`, `pluginPublishScope=selected`, and explicit official
+  package names in `plugins`.
+- Every fresh run requires explicit `validation_purpose`. `publish` verifies
+  complete committed source metadata before projecting selection or releasing
+  producers. Source admission proves neither registry eligibility, test success,
+  nor publication authority. `diagnostic`, `main-qualification`, and
+  `postpublish-confidence` omit `publication_selection_json`, mark source admission
+  not applicable, and collect no registry observations. Coverage is independent.
+- Fresh publish tooling must support registry admission: after source verification,
+  collect/upload bounded public npm/ClawHub observations and bind immutable artifact
+  and admission time before producers start. Required read errors and unsupported
+  bootstrap states block; latest-dependency drift is advisory. First-package/trust-repair
+  routes leave downstream owner authority unresolved, not granted.
 
-This example selects normal final-release publication. Select `npmDistTag=beta`
-for a beta, or `route=prepared` when the intended consumer is the prepared release
-button. Core publication requires `all-publishable` plugins. Plugin-only normal
-publication can set `publishOpenclawNpm=false`, `pluginPublishScope=selected`,
-and explicit official package names in `plugins`.
-
-Every fresh run requires an explicit `validation_purpose`. `publish` verifies
-complete committed source metadata before projecting the requested publication
-selection and before resolution can release any selected producer. Its retained
-source-admission fact is **source-only**, not registry eligibility, product-test
-success, or publication authority. `diagnostic`, `main-qualification`, and
-`postpublish-confidence` omit `publication_selection_json` and record publication
-source admission as not applicable. Coverage is selected independently.
-
-Fresh publish requests also require tooling with registry admission. After
-source verification, resolution collects bounded public npm and ClawHub
-observations for the selected packages, uploads them, then binds the immutable
-artifact and admission time before producers can start. Required read errors and
-unsupported bootstrap states block admission; latest-dependency drift is advisory.
-Supported first-package or trust-repair routes retain unresolved downstream owner
-authority, not permission to publish. The source fact remains source-only.
-Nonpublish requests do not collect registry observations.
-
-The SHA-pinned helper packs its semantic `-f validation_purpose` and
-`-f publication_selection_json` arguments into the existing
-`trusted_workflow_json` input. Raw workflow dispatch uses this closed envelope:
+The helper packs `-f validation_purpose` and `-f publication_selection_json`
+into `trusted_workflow_json`. Raw dispatch uses this closed envelope:
 `{"trustedWorkflow":{"ref":"main","fullRef":"refs/heads/main","sha":"<tooling-sha>"},"validationPurpose":"diagnostic","publicationSelection":null}`.
-For the existing direct branch route, `trustedWorkflow:null` lets the identity
-owner infer the executing identity; purpose is always explicit. Child workflows
-still receive only the resolved identity tuple. Existing request artifacts reopen
-without converting their inputs or witness digests.
+The direct branch route uses `trustedWorkflow:null` to infer executing identity;
+purpose stays explicit. Children receive only the resolved identity tuple.
+Existing artifacts reopen without converting inputs or witness digests.
 
-`pnpm release:candidate` defaults to the normal publication route. Choose
-`--publication-route prepared` before its first dispatch for the prepared button;
-merely supplying a protected tooling ref does not select that route. Saved state
-binds the choice and rejects contradictory resumes. Historical state without a
-route retains normal recovery semantics and gains no source-admission claim.
-For registry-admitted parents, the checklist reads authenticated retained planning
-summaries instead of repeating the two local registry sweeps. Preparation and
-publication compare that evidence with their actual selected operands; a normal
-parent cannot authorize the prepared route by changing the command afterward.
+`pnpm release:candidate` defaults to normal. Select `--publication-route prepared`
+before first dispatch; a protected tooling ref alone does not select it. Saved
+state rejects contradictory resumes; historical routeless state retains normal
+recovery without source admission. Registry-admitted parents supply authenticated
+planning summaries instead of two local registry sweeps. Preparation/publication
+compare actual operands: changing the command cannot turn normal admission into prepared.
 
-Record C, Q, and P with the request. Q defaults to C; an explicit qualification
-SHA must equal C for a new publish request. P may advance independently, but
-never replaces Q or selects its tests. A product or qualification repair creates
-a new C/Q. Explicit trusted-main or protected-tooling routes remain available
-for diagnostics, main qualification, and postpublish confidence, not fresh
-candidate-owned publication evidence.
+## Recover qualification tooling without changing the candidate
 
-When Q differs from C, the helper warns before dispatch and when reconciling the
-request. These runs cannot produce candidate-sealed child receipts, so release
-verification may fail even when the workloads succeed. Use Q=C for candidate
-qualification.
+Only for diagnosed qualification/orchestration defects—not product failures or
+unexplained red jobs. Local controller updates cannot retrofit frozen workflows.
+
+1. Preserve old request, C/Q/P, parent run/attempt, failed logs, and successful
+   receipts. Reconcile uncertain writes and settle owned active trees before
+   replacement. Never relabel the failed parent or edit sealed plan/request/inputs/admission.
+2. Land/deploy reviewed repair and independent-Q support to assessed full P/Q
+   SHAs. Review Q's complete workflow/reusable-workflow/action/script/planner/coverage
+   closure; verify main ancestry. P must independently admit exact C/Q.
+   P and Q may match; neither comes from moving main.
+3. Keep C, version, source, release context, and intended baselines unchanged.
+   Review/record all effective inputs, including baseline values, coverage,
+   publication selection, and soak. Use a new private request path/admission.
+4. Within explicit operator dispatch authorization, run from repaired trusted
+   tooling. Replace placeholders with assessed values; preserve original
+   selection/inputs, not unrelated defaults:
+
+```bash
+CANDIDATE_SHA="<unchanged-full-candidate-sha>"
+QUALIFICATION_SHA="<reviewed-full-main-ancestor-q-sha>"
+PUBLISHER_SHA="<reviewed-full-main-p-sha>"
+PUBLICATION_SELECTION='<original-reviewed-publication-selection-json>'
+pnpm ci:full-release \
+  --sha "$CANDIDATE_SHA" \
+  --target-ref <original-canonical-release-context> \
+  --trusted-workflow-ref candidate \
+  --workflow-sha "$QUALIFICATION_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
+  --pin-admission-workflow \
+  --request-file <new-private-request-file> \
+  -f validation_purpose=publish \
+  -f publication_selection_json="$PUBLICATION_SELECTION" \
+  -f rerun_group=all \
+  -f fail_fast=false
+```
+
+The helper obtains P admission through `openclaw-release-prepare.yml`, then
+creates immutable `release-ci/*` at Q. Never create it or assemble admission
+manually. `--dry-run` previews the tuple, not hosted admission or success.
+
+5. Record new admission and parent run/attempt; require fresh parent success and
+   strict verification before publication. Whole-parent reuse keeps exact Q/P.
+   Cross-Q child reuse requires authenticated identical workload closure and exact
+   C, role, effective inputs, candidate descriptor, receipt, artifact, and live-attempt
+   checks; retain producer Q. Plan-cache-only repairs may qualify; filenames,
+   green jobs, or fix SHAs alone prove neither closure nor eligibility. Missing
+   evidence/changed closure requires fresh work, never relabeling.
+
+### November 2026 plan-cache restoration incident
+
+| Recorded fact                 | Value                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| Release / frozen C            | `2026.11.4` / `e283dccf68ba35ef1af5b3fa31571db7f4b6bc74`                                |
+| P                             | `292a425338aca4f447ff8f9983fc93a8fbb369d6`                                              |
+| Failed plan-cache restoration | FRV `43743742888`, attempt `2`                                                          |
+| Hosted-controls fix           | `d7ee885db8f7b831761ef8be7676fc9d0b6e6ad6`                                              |
+| Source admission              | `npm-stable-v1`; stable/all-group with soak                                             |
+| Primary baseline              | `openclaw@2026.11.3`                                                                    |
+| Survivors                     | `2026.11.2`, `2026.11.3`, `2026.6.34`, `2026.9.37`; `all-scenarios` / `reported-issues` |
+
+The fix proves neither deployable P/Q nor child eligibility. Keep C frozen;
+assess/deploy repaired P/Q and follow new admission. The failed FRV stays failed;
+this runbook authorizes no dispatch/publication. Compare resolved inputs with
+these selections; never hand-edit the helper-owned reserved baseline envelope.
+Stop for review on differences.
+
+The November 15 production-verifier investigation authenticated these receipts
+at original Q=C and exact recorded inputs:
+
+| Role                          | Run/attempt     | Receipt artifact ID |
+| ----------------------------- | --------------- | ------------------- |
+| Normal CI                     | `43719715726/1` | `14165507867`       |
+| Independent plugin prerelease | `43719725775/1` | `14164184379`       |
+| Candidate plugin prerelease   | `43747457564/1` | `14176495148`       |
+| Candidate release checks      | `43747437691/1` | `14178081554`       |
+| Independent release checks    | `43744253043/2` | `14177235935`       |
+
+All five must rerun: independent-Q changes shared qualification scripts under
+current conservative closure policy. Original receipts remain historical, not
+cross-Q evidence; later parent-only changes may preserve eligible children after
+strict verification. Existing npm/Docker bytes/receipts are not a qualified new-Q
+bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
+soak, platforms, and exact policy-grant scope. Rerun missing/failed required work.
+New P admission, successful FRV, immutable plan, and final verification are mandatory.
+
+Admitted independent Q yields candidate-sealed C/Q evidence; the separate
+cross-revision diagnostic route cannot substitute. After success, consume with
+`pnpm release:candidate -- --full-release-validation-run-id <run> --skip-dispatch`
+and original candidate/tag, publication scope, and pinned P options. Fresh
+checklist qualification defaults Q=C; its `--workflow-sha` selects P, not Q.
 
 ## Exact frozen-target test omissions
 
-Candidate-owned Q=C qualification rejects test omissions. The following inputs
-apply only to explicit cross-revision diagnostics and retained historical
-contracts; they do not authorize a narrower new publish request.
+Candidate qualification (including independent Q) rejects omissions. Only explicit
+cross-revision diagnostics/retained historical contracts accept these JSON arrays
+of exact repository-relative paths—not new publish requests:
 
-Declare narrowly justified omissions before dispatch with JSON arrays of exact
-repository-relative test paths. `plugin_prerelease_node_exclude_patterns_json`
-applies to the Plugin Prerelease Node lane, for example
-`["src/plugins/manifest-registry.test.ts"]`.
-`extension_test_exclude_patterns_json` applies to the Plugin Prerelease extension
-shards, for example
-`["extensions/codex/src/app-server/run-attempt.test.ts"]`. Both default to `[]`;
-there is no implicit Codex test omission. Normal CI keeps its own core lanes;
-Plugin Prerelease owns the full extension sweep.
+| Input                                          | Lane / exact-path example                                                                     |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `plugin_prerelease_node_exclude_patterns_json` | Plugin Prerelease Node: `["src/plugins/manifest-registry.test.ts"]`                           |
+| `extension_test_exclude_patterns_json`         | Plugin Prerelease extension shards: `["extensions/codex/src/app-server/run-attempt.test.ts"]` |
 
-Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
-The helper packs the extension input into the existing trusted dispatch envelope
-to stay within GitHub's 25-input limit, and refuses tooling without the matching
-lane-input capability before creating the workflow ref or dispatching.
+Both default to `[]`; no implicit Codex omission. Normal CI owns core lanes;
+Plugin Prerelease owns the full extension sweep. Declare narrow justification
+before dispatch with `-f name='["exact/path.test.ts"]'`. The helper packs the
+extension input into the trusted envelope for GitHub's 25-input limit; unsupported
+lane-input tooling fails before ref creation/dispatch.
 
-Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
-the selected target's actual Vitest discovery. Globs and basenames are not
-accepted. Pinned tooling applies each exact omission to the executing config's
-inline projects, preserves the candidate's normal test runner and setup, and
-restores the original config bytes after the command. It does not depend on a
-new exclusion environment variable being supported by the frozen candidate.
-
-The immutable request, coverage identity, evidence reuse comparison, and final
-manifest retain both input values. Changing them requires a new validation
-request; continuation cannot widen an existing omission. Record the reason and
-owning fix for each omitted test in release evidence. An omission is untested
-coverage, not passing evidence.
+Preflight uses target Vitest discovery; malformed, duplicate, nonexistent,
+out-of-lane paths, globs, and basenames fail. Pinned tooling applies exact omissions
+to inline projects, preserves candidate runner/setup, and restores config bytes—no
+new candidate exclusion environment variable required. Both values remain in
+request, coverage identity, reuse comparison, and manifest. Changes require a
+new request; continuation cannot widen omissions. Record each reason/owning fix:
+omitted means untested, not passed.
 
 ## Retain and reconcile the root request
 
-For new dispatches, including `--dry-run`, the helper first proves GitHub serves
-the exact Validation SHA by bare-SHA fetch in a fresh temporary repository. A failed
-fetch stops before any request artifact or remote mutation. The helper pushes one
-immutable `release-ci/*` workflow ref at Q=C only after independently trusted P
-admits the frozen request, then dispatches C as `ref` and `expected_sha`.
+Even `--dry-run` first bare-SHA-fetches exact Validation SHA in a fresh temporary
+repository; failure precedes artifacts/mutations. After P admits the frozen
+request, the helper pushes one immutable `release-ci/*` ref at Q and dispatches
+C as `ref` and `expected_sha`.
 
-Before creating that workflow ref, the helper writes a private operator artifact at
-`.artifacts/full-release-validation/<request-id>.json` and prints its path.
-Use `--request-file <path>` to choose the artifact location. It retains the
-repository, workflow, frozen target/tooling identities, workflow transport ref, complete
-typed/defaulted inputs, effective soak, and the first observed run and attempt.
-The helper records attempted intent before its single workflow dispatch POST.
+Before ref creation, private `.artifacts/full-release-validation/<request-id>.json`
+(override: `--request-file <path>`) records repository/workflow, target/tooling,
+transport ref, complete typed/defaulted inputs, effective soak, and first observed
+run/attempt. The helper prints its path and records intent before its single POST.
 
-After a lost response or interruption, reuse that exact artifact:
+After interruption or lost response, reuse that artifact:
 
 ```bash
 node scripts/full-release-validation-at-sha.mjs \
   --reconcile-request .artifacts/full-release-validation/<request-id>.json
 ```
 
-An existing `--request-file` also enters read-only reconciliation; conflicting
-target, tooling, or input arguments are rejected. An explicitly selected
-`--resume-request <file>` may continue an admitted candidate request only before
-its first qualification workflow POST. If ref creation succeeded but its readback
-failed, explicit resume verifies the existing ref still points to Q=C and that
-its exact workflow inventory is empty, then reuses it without another ref POST.
-After recovery inventory reads, it revalidates the authenticated admission
-and current signer authority, then reads the ref again immediately before
-recording attempted intent and dispatching. A missing or moved ref, an uncertain inventory, or any
-existing run refuses continuation. An attempted workflow POST remains
-observation-only and is never repeated. Read-only reconciliation verifies an
-uncertain prepared ref before suggesting resume and never rewrites the request.
-The candidate checklist and stable wrapper relay the canonical helper’s recovery
-advice; raw prepared/uncertain state alone never proves resume is safe. Run the
-helper’s explicit resume command when offered, then rerun the wrapper.
-Reconciliation performs no ref creation/deletion, dispatch, rerun, cancellation,
-Git fetch, or request rewrite.
-`dispatch=observed` reports the exact run URL and attempt, not successful
-validation. A newer attempt cannot replace the retained attempt.
+| Recovery mode                      | Contract                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Existing `--request-file`          | Read-only reconciliation; conflicting target/tooling/inputs rejected. No ref creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.                                                                                                                                                                                                             |
+| Explicit `--resume-request <file>` | Admitted candidate only, before first qualification POST. After uncertain ref readback, verify admitted Q and empty exact workflow inventory; reuse without another ref POST. Revalidate admission/current signer authority after inventory reads, then reread ref immediately before intent/dispatch. Missing/moved ref, uncertain inventory, or any run refuses resume. |
+| Attempted POST                     | Observation-only; never repeat. Reconciliation verifies uncertain prepared refs before suggesting resume. Wrappers relay helper advice: run offered explicit resume, then rerun wrapper; raw prepared/uncertain state is insufficient.                                                                                                                                    |
+| `dispatch=observed`                | Exact URL and retained attempt, not success; newer attempts cannot replace it.                                                                                                                                                                                                                                                                                            |
+| `dispatch=unknown`                 | Missing/ambiguous runs, incomplete pagination, unavailable/mismatched witnesses, or exhausted discovery. No redispatch.                                                                                                                                                                                                                                                   |
+| `dispatch=rejected`                | Complete HTTP rejection. No redispatch.                                                                                                                                                                                                                                                                                                                                   |
 
-Requests written before the helper stopped creating `validation/target-*` refs
-still record `targetRef` and `refs.target`, and the current helper rejects them
-as invalid. Reconcile such a file with the helper from the parent of the merge
-commit that removed the target ref, for example from
-`git worktree add --detach <path> <merge-commit>^`. Neither version creates or
-deletes refs during reconciliation. Keep any remaining `release-ci/*` or
-`validation/target-*` ref while GitHub reruns or evidence diagnosis may still
-need it, then delete it deliberately.
+Retain artifact/ref for investigation. Local artifacts have no automatic expiry
+or cleanup; deliberate deletion never proves non-execution. Independent requests
+and cross-host copies are not globally deduplicated.
 
-Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
-witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
-rejection is retained as `dispatch=rejected`; neither state permits redispatch.
-Keep the artifact and printed workflow ref for investigation. There is no automatic
-retention expiry or cleanup for the local artifact; remove it only through
-deliberate operator cleanup. Losing or deleting it never proves non-execution.
-Independent requests and copies on other hosts are not globally deduplicated.
+Legacy files containing `targetRef`/`refs.target` from `validation/target-*` are
+rejected by current tooling. Reconcile with the helper before its removal merge,
+for example `git worktree add --detach <path> <merge-commit>^`. Neither helper
+mutates refs during reconciliation. Keep `release-ci/*`/`validation/target-*`
+while reruns/diagnosis need them; delete deliberately afterward.
 
-New candidate-owned requests require `FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT=1`,
+Candidate Q requires `FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT=1`,
 `FULL_RELEASE_SOURCE_ADMISSION_CONTRACT=1`, and
-`FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in Q. Older frozen tooling fails before remote creation instead of starting
-work whose inputs cannot be proven. The helper never upgrades the Tooling SHA.
-Use `frv status` for already-running frozen validations; choosing different
-tooling for a new validation requires the release owner's explicit decision.
-The workflow's separate input witness is attempt-bound and retained for seven
-days. It reads the event file directly, without interpolating inputs into step
-environment variables or logs. Only safe GitHub context and a SHA-256 digest are
-uploaded: input keys sorted lexicographically, primitive values normalized to
-wire strings, then JSON serialization. The immutable workflow SHA binds the
-input types; the complete typed and wire maps remain in the private local
-artifact. Runner or artifact-service failure can leave the witness unavailable;
-it is never a release receipt or publication authority.
+`FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1`; older tooling fails before remote
+creation, never auto-upgrades. Use `frv status` for running frozen validations;
+new tooling requires the release owner's explicit decision.
+
+The separate attempt-bound input witness lasts seven days. It reads the event
+file directly, without input interpolation into step environment/logs; uploads
+only safe GitHub context and SHA-256 of lexicographically sorted keys,
+primitive wire-string normalization, and JSON serialization. Workflow SHA binds
+types; complete typed/wire maps stay private locally. Runner/artifact failure may
+make the witness unavailable; it is neither receipt nor publication authority.
 
 ## Select coverage
 
-`provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. Regular `release/*` targets accept the branch's final
-package version or a matching beta prerelease. For a correction, use
-`--target-ref release/YYYY.M.PATCH-N` to preserve the intended final tag before
-tagging. Its base package version is also accepted when `vYYYY.M.PATCH` resolves
-to the exact Code SHA; preparation retains the package version and seals both
-npm and Docker artifacts for `vYYYY.M.PATCH-N`. The helper maps beta releases
-to the `beta` profile and final versions to `stable`. Pass
-alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
-only for the broad provider sweep.
-`fail_fast` defaults to `false`, so dispatched child workflows finish and expose
-independent failures together. In that mode, the parent makes no child
-cancellation calls. Pass `-f fail_fast=true` only when the shorter
-first-failure path is preferable; Release Decision then cancels only the exact
-still-active child that owns the blocking failure.
-Same-parent continuation requires the original root to have been dispatched
-with `fail_fast=false`. The controller verifies that exact logged input before
-any rerun mutation.
-Current runs dispatch standalone `Full Release Artifacts` producers for npm,
-Docker, and the validation candidate. Each producer owns its immutable dispatch
-record and output receipt. Parent retries recover those exact producer IDs and
-attempts, recheck their source and Tooling SHAs, and reuse the successful builds.
-Historical parents that produced their own candidate or publication artifacts
-cannot continue: keep both SHAs frozen and start a fresh all-group validation.
+- `provider` also accepts `anthropic`/`minimax` for cross-OS onboarding and the
+  end-to-end turn. Regular `release/*` accepts final package version or matching
+  beta. Corrections use `--target-ref release/YYYY.M.PATCH-N` to retain the final
+  tag; base version is accepted if `vYYYY.M.PATCH` resolves to exact C.
+  Preparation keeps package version and seals npm/Docker for `vYYYY.M.PATCH-N`.
+- Beta maps to `beta`, final to `stable`. Override inputs with `-f key=value`;
+  `-f release_profile=full` is only for the broad provider sweep.
+- `fail_fast=false` (default) lets children finish without parent cancellation.
+  `-f fail_fast=true` selects first-failure handling: Release Decision cancels
+  only the exact active child owning the blocker. Same-parent continuation
+  requires logged original `fail_fast=false`, checked before rerun mutation.
+- Standalone `Full Release Artifacts` producers own npm/Docker/candidate immutable
+  dispatch records/receipts. Parent retries recover exact IDs/attempts, verify
+  source/tooling SHAs, and reuse successful builds. Historical parent-owned
+  artifacts cannot continue: freeze both SHAs and start fresh all-group validation.
+- Automatic retries are disabled. Remove rejected `known_flaky_jobs_json`,
+  diagnose failure, then use [operator continuation](/reference/full-release-validation/continuation).
 
-Automatic test retries are disabled. Dispatch rejects `known_flaky_jobs_json`;
-remove that retired input and investigate the original job failure. Explicit
-operator recovery remains available after diagnosis through
-[continuation commands](/reference/full-release-validation/continuation).
+The immutable `full-release-execution-plan-<run-id>` artifact and identical
+run-ID Actions cache record coverage/requirements, gates, reuse identity,
+original parent attempt, fresh candidate request and preparation's producer/publisher
+evidence, plus exact child IDs/attempts/titles/refs/tooling SHAs. Decision, Drain,
+manifest generation, evidence verification, and final verifier consume the
+current-attempt artifact. After guarded upload, the sealer logs its digest.
 
-After dispatch, the parent writes one immutable
-`full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
-an exact run-ID Actions cache. It records selected and
-required coverage, gate results, reuse identity, the original parent attempt,
-the fresh candidate request plus producer and publisher evidence when preparation ran, and
-every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
-Decision, Drain, manifest generation, evidence verification, and the final
-verifier consume the artifact for their current attempt. After the original
-guarded upload succeeds, the sealer records the plan digest in its job log.
-Collector retries restore the exact run-ID cache before publication admission,
-authenticate its bytes against that original upload and digest, and re-upload
-the unchanged plan and admission for the current attempt. GitHub removes prior
-parent artifacts on a full rerun, so retain the cache and original job logs.
-If the cache is unavailable, an accessible plan artifact can supply the same
-authenticated bytes. Missing or invalid evidence blocks release approval; retries never
-rebuild the plan, recollect registry observations, or redispatch tests.
-Release Decision also repeats the shared reuse-chain validation before a reused
-run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
-selected run, root run, source manifest, trusted tooling identity, and child
-tuple must all still match.
+Collector retries restore/authenticate original bytes from cache (or accessible
+plan artifact) before publication admission, then upload unchanged plan/admission
+for the current attempt. Retain cache/original logs: full reruns remove prior
+artifacts. Missing/invalid evidence blocks approval; retries never rebuild plans,
+refresh registry observations, or redispatch tests. Release Decision rechecks the
+reuse chain: target/evidence SHAs, policy, changed paths, selected/root runs,
+source manifest, trusted tooling, and child tuple must match.
 
-On a parent retry, final verification selects the newest available Release
-Decision and Diagnostic Drain artifacts independently. Both must bind the same
-immutable plan and exact child tuple; their source attempts remain recorded in
-the artifacts and may differ when only one collector needed a retry.
+Final verification independently chooses newest available Decision/Drain artifacts;
+both bind the same plan/child tuple, retaining possibly different source attempts.

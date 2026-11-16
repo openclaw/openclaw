@@ -54,6 +54,13 @@ import type { ConfigProps } from "./view-types.ts";
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
 export function Config(props: ConfigProps) {
+  const loading = () => (
+    <ConfigReadLoading
+      message={t("common.loading")}
+      embedded={props.embeddedEditor}
+      title={props.sectionTitle}
+    />
+  );
   const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
   function resetContentScroll() {
@@ -613,7 +620,7 @@ export function Config(props: ConfigProps) {
         }
         aria-label={state().showSectionTabs ? undefined : t("common.settingsSections")}
       >
-        <ConfigReadBoundary config={props} displayReady={state().displayReady}>
+        <ConfigReadBoundary config={props} displayReady={state().displayReady} fallback={loading()}>
           {props.activeSection === "__appearance__" ? (
             state().includeVirtualSections ? (
               <AppearanceSection {...props} />
@@ -650,10 +657,7 @@ export function Config(props: ConfigProps) {
                   />
                 )}
               >
-                <Loading
-                  on={hasSchema() ? undefined : schemaRead()}
-                  fallback={<ConfigReadLoading message={t("common.loading")} />}
-                >
+                <Loading on={hasSchema() ? undefined : schemaRead()} fallback={loading()}>
                   <Show when={readSchemaReady()}>
                     {(message) => (
                       <ConfigReadError

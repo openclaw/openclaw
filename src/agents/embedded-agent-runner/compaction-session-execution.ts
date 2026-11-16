@@ -529,6 +529,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   requestState,
                   manualSummary ? "none" : summaryOutputPolicy,
                   {
+                    // Recovery progress announces diagId; the persisted entry must match it.
+                    itemId: diagId,
                     requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
                     requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,

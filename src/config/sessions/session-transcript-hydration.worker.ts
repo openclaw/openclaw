@@ -13,6 +13,7 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
+import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
@@ -84,6 +85,7 @@ export async function streamSessionTranscriptHydration(
   ) =>
     | Omit<SessionTranscriptStreamedBoundedResult, "kind" | "eventCount">
     | { sequences: number[] },
+  maxMaterializedBytes?: number,
 ): Promise<Exclude<SessionTranscriptHydrationWorkerResult, { kind: "bounded" }>> {
   return await control.runNativeSection(async () => {
     const opened = openOpenClawAgentDatabaseReadOnly(toDatabaseOptions(request.resolvedScope));
@@ -119,6 +121,20 @@ export async function streamSessionTranscriptHydration(
           "in",
           /* kysely-allow-raw: selected numeric sequences are bound as JSON on both engines. */
           sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(database.db, sql.val(JSON.stringify(selected.sequences)))})`,
+        );
+      }
+      if (maxMaterializedBytes !== undefined) {
+        if (coldArchive) {
+          throw new SqliteJsonlReadBudgetExceededError(
+            "Cold transcript preparation requires streamed host hydration",
+          );
+        }
+        // Some consumers accumulate decoded rows: admit their exact cohort in this snapshot.
+        assertSqliteJsonlReadBudget(
+          database.db,
+          source.select(["event_json", "event_utf8_bytes"]).as("events"),
+          maxMaterializedBytes,
+          "Compaction materialized preparation byte limit",
         );
       }
       const eventSlice = (offset: number | Expression<number>, length = SLICE_BYTES) =>

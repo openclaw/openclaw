@@ -243,7 +243,16 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
     if (replay?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
       // A successful encrypted-content fallback records this provider-owned
       // tombstone so later turns never retry an already rejected compaction.
-      if (providerReplayContextMatches(replay, context)) {
+      // Item repair belongs to the copied history, including internal-session forks.
+      // Encrypted checkpoints and ordinary suppression remain session-bound.
+      if (
+        providerReplayContextMatches(
+          replay,
+          typeof replay.itemRecovery === "string"
+            ? { ...context, sessionHash: replay.sessionHash }
+            : context,
+        )
+      ) {
         return typeof replay.itemRecovery === "string"
           ? { owner: message, mode: "item-recovery", anchor: replay.itemRecovery }
           : undefined;

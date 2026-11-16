@@ -66,22 +66,13 @@ export function createSessionControllerWatchdog(params: {
   let transportAt = params.startedAtMs;
   let reason: string | undefined;
   let semanticSequence = 0;
-  let stagnation:
-    | { startedAtMs: number; observedAtMs: number; semanticSequence: number }
-    | undefined;
-  const stagnationCurrent = (at: number) =>
-    stagnation &&
-    !(semanticSequence > stagnation.semanticSequence && at - stagnation.observedAtMs >= 60_000);
   // While an opted-in runtime-owned wait is live, the native runtime owns liveness, so
   // that interval is never semantically stale. Its release (a native turn that just
   // completed) starts the semantic horizon; it must not make the masked interval
   // retroactively expire and stop a run that is finalizing. Other waits keep their
   // retroactive horizon and publish progress themselves when they end.
   let runtimeOwnedThroughAt: number | undefined;
-  const progressOrigin = (at: number) =>
-    stagnationCurrent(at)
-      ? stagnation!.startedAtMs
-      : Math.max(semanticAt, runtimeOwnedThroughAt ?? semanticAt);
+  const progressOrigin = () => Math.max(semanticAt, runtimeOwnedThroughAt ?? semanticAt);
   let retryAllowanceAt: number | undefined;
   let requestRecoveryAt: number | undefined;
   let cleanupAt: number | undefined;
@@ -102,9 +93,9 @@ export function createSessionControllerWatchdog(params: {
   const executions = new Set<OwnedExecution>();
   const finalizationWork = new Set<{ deadlineAtMs: number }>();
   const current = () => !closed && live(params.isCurrent);
-  const semanticDeadline = (at = now()) =>
+  const semanticDeadline = () =>
     Math.max(
-      progressOrigin(at) + abortMs,
+      progressOrigin() + abortMs,
       requestRecoveryAt ?? 0,
       ...[...requests].map((request) => request.deadlineAtMs ?? 0),
     );
@@ -160,9 +151,7 @@ export function createSessionControllerWatchdog(params: {
       semanticAt = transportAt;
       semanticSequence += 1;
       assessment.clear();
-      if (!stagnationCurrent(transportAt)) {
-        retryAllowanceAt = undefined;
-      }
+      retryAllowanceAt = undefined;
       reason = nextReason;
     } else if (kind === "finalization" && cleanupAt !== undefined) {
       cleanupAt = transportAt + SESSION_WATCHDOG_CLEANUP_MS;
@@ -188,7 +177,7 @@ export function createSessionControllerWatchdog(params: {
       // Mechanical traffic/retry rearming never moves the logical semantic horizon.
       deadlineAtMs:
         wait.kind === "backend"
-          ? Math.min(wait.deadlineAtMs!, semanticDeadline(at))
+          ? Math.min(wait.deadlineAtMs!, semanticDeadline())
           : wait.kind === "retry"
             ? Math.min(wait.deadlineAtMs!, retryAllowanceAt!)
             : wait.deadlineAtMs,
@@ -201,9 +190,9 @@ export function createSessionControllerWatchdog(params: {
       current: isCurrent && current(),
       phase: closed ? "settled" : params.readPhase(),
       hasActiveAttempt: attempt?.isCurrent() === true,
-      semanticProgressAtMs: progressOrigin(at),
-      lastProgressReason: stagnationCurrent(at) ? "tool_loop:argument_churn" : reason,
-      semanticDeadlineAtMs: semanticDeadline(at),
+      semanticProgressAtMs: progressOrigin(),
+      lastProgressReason: reason,
+      semanticDeadlineAtMs: semanticDeadline(),
       executionDeadlineAtMs: [executionAt, ...[...executions].map(executionDeadline)]
         .filter((deadline): deadline is number => deadline !== undefined)
         .reduce<number | undefined>(
@@ -572,18 +561,6 @@ export function createSessionControllerWatchdog(params: {
             }
           }
           return false;
-        },
-        observeStagnation(observation) {
-          if (!valid() || (observation.existingOnly && !stagnation)) {
-            return;
-          }
-          if (!observation.active) {
-            stagnation = undefined;
-            return;
-          }
-          const at = now();
-          const startedAtMs = stagnationCurrent(at) ? stagnation!.startedAtMs : at;
-          stagnation = { startedAtMs, observedAtMs: at, semanticSequence };
         },
         beginWait(input) {
           const wait = beginWait(input, valid);

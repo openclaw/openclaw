@@ -6611,8 +6611,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       expect(step.run).toContain("^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$");
       expect(step.run).toContain('trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"');
       expect(step.run).toContain('git rev-parse "${trusted_publisher_ref}^{commit}")" != "${');
-      expect(step.run).toContain('"+refs/heads/main:${trusted_main_ref}"');
-      expect(step.run).toContain('TRUSTED_MAIN_REF="${trusted_main_ref}"');
+      // Ancestry is authenticated by the shared evidence reader, not local Git plumbing.
+      expect(step.run).not.toContain("TRUSTED_MAIN_REF");
       if (workflowPath === RELEASE_PUBLISH_WORKFLOW) {
         expect(step.env?.VALIDATOR_FILE).toBe(
           "${{ github.workspace }}/.release-validation-tooling/scripts/validate-full-release-validation-evidence.mjs",
@@ -10765,7 +10765,7 @@ describe("package artifact reuse", () => {
       ),
     ).toMatchObject({
       command:
-        "OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+        "OPENCLAW_LIVE_RETAINED_CHILD=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
       profiles: "stable full",
     });
     expect(workflow).toContain("suite_id: native-live-src-agents-zai-coding");
@@ -15030,7 +15030,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
-      EXPECTED_WORKFLOW_BRANCH: "${{ github.ref_name }}",
       PUBLICATION_CONSUMER:
         "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
       PUBLISH_DOCKER_ONLY: "${{ inputs.publish_docker_only }}",
@@ -16416,7 +16415,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Only the helper creates the immutable",
       "Never raw-dispatch, manually create its ref, or mint",
       "A new explicit main/protected route is diagnostic",
-      "cannot replace this admitted Q=C publish proof",
+      "cannot replace this admitted C/Q/P publish proof",
     ]);
     expectTextToIncludeAll(releaseCi, [
       "Current all-group FRV also owns read-only core and selected-plugin npm",

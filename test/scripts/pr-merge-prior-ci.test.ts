@@ -384,6 +384,26 @@ describePosix("explicit prior-CI admin landing", () => {
     }
   });
 
+  it.each([
+    { role: "maintain", membership: "", allowed: false },
+    { role: "admin", membership: "", allowed: true },
+    { role: "write", membership: "active", allowed: true },
+    { role: "write", membership: "pending", allowed: false },
+  ])(
+    "revalidates dependency authority for $role / $membership",
+    ({ role, membership, allowed }) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      Object.assign(state.priorCi.security, { dependencyApproval: true, role, membership });
+      f.save(state);
+      expectResult(
+        f,
+        f.verifyPriorCi(f.path),
+        allowed ? undefined : "openclaw/dependency-review approval is no longer current",
+      );
+    },
+  );
+
   it.each(["current", "older", "foreign"] as const)(
     "checks the %s publisher against main after the bound workflow changes",
     (publisher) => {

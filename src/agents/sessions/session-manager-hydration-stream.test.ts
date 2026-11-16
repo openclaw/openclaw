@@ -222,6 +222,99 @@ it("prepares and rerenders captured rows without hydrating summarized history on
     }
   }));
 
+it("streams oversized compaction history without first materializing it in the reader", () =>
+  withOpenClawTestState({ label: "prepared-compaction-working-set" }, async (state) => {
+    const target = makeTarget(state, "oversized-preparation");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const text = "x".repeat(1024 * 1024);
+    const messages = Array.from({ length: 18 }, (_, index) => ({
+      type: "message",
+      id: "large-" + index,
+      parentId: index ? "large-" + (index - 1) : null,
+      timestamp: new Date(index).toISOString(),
+      message: makeUserMessage(text, index),
+    }));
+    expect(
+      replaceTranscriptEventsSync(target, [source.getPersistedEntries()[0]!, ...messages]),
+    ).toBe(true);
+    await waitForSessionTranscriptProjection(target);
+    const before = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
+    if (before.kind !== "bounded" || !before.residentRows) {
+      throw new Error("Expected indexed compaction fixture");
+    }
+    const sequences = before.residentRows.slice(1).map((row) => row.rawSeq);
+    const last = sequences.at(-1)!;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
+    const writePayload = database.db.prepare(
+      "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
+    );
+    // Keep admitted byte/navigation facts, but make payload acquisition observably fail.
+    // A budget refusal must precede decoding, not arrive after allocating the full graph.
+    writePayload.run("{malformed", target.sessionId, last);
+    const model = makeProviderModelFixture({
+      id: "fixture",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+    });
+    try {
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "plan",
+          options: {
+            work: {
+              itemId: "oversized-plan",
+              mode: "manual",
+              summaryOutputPolicy: "none",
+              settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+            },
+            qualityGuardEnabled: true,
+          },
+          replay: {
+            model,
+            policy: resolveTranscriptPolicy({
+              model,
+              modelApi: model.api,
+              provider: model.provider,
+              modelId: model.id,
+            }),
+            imageLimits: resolveImageSanitizationLimits(),
+            allowedToolNames: [],
+            signedThinkingProvider: false,
+            allowProviderOwnedThinkingReplay: false,
+            isOpenAIResponsesApi: true,
+            sessionId: target.sessionId,
+            replayEnabled: true,
+          },
+        }),
+      ).rejects.toThrow("materialized preparation byte limit");
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences,
+          version: before.snapshot.version,
+          maxChars: 4000,
+        }),
+      ).rejects.toThrow("materialized preparation byte limit");
+    } finally {
+      writePayload.run(JSON.stringify(messages.at(-1)), target.sessionId, last);
+    }
+    // Declining optimization must leave the complete existing streamed host path usable.
+    const hydrated = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
+    const events = hydrated.snapshot.events.slice(1);
+    expect(events).toHaveLength(messages.length);
+    expect(
+      events.every(
+        (event, index) =>
+          isRecord(event) &&
+          event.id === "large-" + index &&
+          isRecord(event.message) &&
+          event.message.content === text,
+      ),
+    ).toBe(true);
+  }));
+
 function makeTarget(state: OpenClawTestState, sessionId: string) {
   return sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId);
 }

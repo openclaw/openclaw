@@ -60,6 +60,9 @@ async function recordRequiredCompletionFailure(
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
 ): Promise<void> {
+  if (subagentRuns.get(entry.runId)?.delivery?.status === "delivered") {
+    return;
+  }
   subagentRegistryLog.warn("Subagent completion delivery failed", {
     runId: entry.runId,
     requesterSessionKey: entry.requesterSessionKey,

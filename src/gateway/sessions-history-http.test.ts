@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { recordRequesterReplacementNotice } from "../agents/subagents/announce/subagent-announce.requester-settle-receipt.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { commitMemory } from "../config/sessions/session-actor-memory-publication.test-support.js";
@@ -454,6 +455,26 @@ describe("session history HTTP endpoints", () => {
       await stream.expectTexts(["first message", "during startup"]);
       await appendText(storePath, "after startup");
       await stream.expectTexts(["during startup", "after startup"]);
+    });
+  });
+
+  test("pushes a replacement recovery notice to an already-open idle history stream", async () => {
+    const sessionId = "replacement-session";
+    const { storePath } = await seedSession({ sessionId, text: "New conversation" });
+    await withGatewayHistoryStream(async (stream) => {
+      await stream.expectTexts(["New conversation"]);
+      expect(
+        await recordRequesterReplacementNotice({
+          requester: { canonicalKey: SESSION_KEY, agentId: AGENT_ID, storePath },
+          identity: { sessionId },
+          batchRunIds: ["finished-first", "finished-second", "late-sibling"],
+          assertCommitAllowed() {},
+        }),
+      ).toBe(true);
+      const updated = await stream.next();
+      expect(JSON.stringify(updated)).toContain(
+        "Subagent results from the previous session were not delivered",
+      );
     });
   });
 
