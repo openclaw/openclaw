@@ -350,9 +350,13 @@ it("admits only the authorized 2026.11.5 Kova failure without skipping qualifica
 
 it("admits only the authorized 2026.11.5 Telegram package failure", async () => {
   const name = "Run package acceptance / Telegram package acceptance / Run package Telegram E2E";
-  const telegram = { ...child, key: "releaseChecksCandidate", jobs: [{ ...failedJob, name }] };
+  const telegram = {
+    ...child,
+    key: "releaseChecksCandidate",
+    jobs: [{ ...failedJob, id: 133430641645, name }],
+  };
   expect(terminalPolicyPass(telegram, "2026.11.5")).toBe(true);
-  expect(telegram.jobs[0].conclusion).toBe("failure");
+  expect(telegram.jobs).toMatchObject([{ conclusion: "failure" }]);
   expect(terminalPolicyPass(telegram, "2026.11.6")).toBe(false);
   expect(terminalPolicyPass({ ...telegram, key: "normalCi" }, "2026.11.5")).toBe(false);
   expect(releaseQualificationExemptions("2026.11.5", "stable")).toEqual([]);
@@ -399,7 +403,7 @@ it("admits only the authorized 2026.11.5 Telegram package failure", async () => 
       policy,
       jobs: allJobs,
       getJobLog: (id) =>
-        id === aggregates[0].id
+        id === 11
           ? "##[error]package_telegram ended with failure"
           : "##[error]package_acceptance_release_checks ended with failure",
     }),
