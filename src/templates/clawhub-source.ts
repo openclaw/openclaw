@@ -382,6 +382,7 @@ export async function readClawHubTemplateDetail(
     return {
       ...projectCatalogEntry({ ...pkg, icon: release.version.icon }, params.baseUrl),
       version,
+      agentId: summary.id,
       ...(summary.name ? { agentName: summary.name } : {}),
       ...(summary.description ? { agentDescription: summary.description } : {}),
       workspaceFiles: contents.instructions.length,
