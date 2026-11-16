@@ -201,7 +201,7 @@ const healthProbes = (socket: MockWebSocket) =>
   socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.method === "health");
 
 it.each(["visibility", "focus"])(
-  "probes a recently active open socket on %s and retires it promptly if silent",
+  "probes a recently active open socket on %s and retires it within 10 s if silent",
   async (trigger) => {
     const { socket, visibility } = await connectRecovery();
     if (trigger === "visibility") {
@@ -218,7 +218,11 @@ it.each(["visibility", "focus"])(
     const probes = healthProbes(socket);
     expect(probes).toHaveLength(1);
     expect(probes[0].params).toEqual({ probe: false });
-    await vi.advanceTimersByTimeAsync(2_999);
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Switching back again keeps the running probe and its deadline.
+    window.dispatchEvent(new FocusEvent("focus"));
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(healthProbes(socket)).toHaveLength(1);
     expect(socket.lastClose).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     expect(socket.lastClose).toEqual({ code: 4000, reason: "inbound silence probe timeout" });
@@ -241,7 +245,7 @@ it("keeps a healthy socket when its wake probe answers", async () => {
   const [probe] = healthProbes(socket);
   expect(probe).toBeDefined();
   socket.emitMessage({ type: "res", id: probe.id, ok: true, payload: {} });
-  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.advanceTimersByTimeAsync(15_000);
   expect(socket.lastClose).toBeNull();
   expect(connect).not.toHaveBeenCalled();
   expect(wsInstances).toHaveLength(1);

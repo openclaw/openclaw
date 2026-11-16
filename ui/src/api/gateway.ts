@@ -62,7 +62,6 @@ const INBOUND_SILENCE_CHECK_INTERVAL_MS = 1_000;
 // Unanswered sends need a quicker liveness check even after their requests time out.
 const UNANSWERED_REQUEST_SILENCE_MS = 5_000;
 const INBOUND_SILENCE_PROBE_TIMEOUT_MS = 10_000;
-const WAKE_LIVENESS_PROBE_TIMEOUT_MS = 3_000;
 const STALE_OPENING_MS = 8_000;
 
 export class GatewayBrowserClient {
@@ -509,14 +508,18 @@ export class GatewayBrowserClient {
     );
   }
 
-  /** Asks an admitted socket to answer soon; any inbound frame keeps it. */
+  /** Asks an admitted socket to answer now; any inbound frame keeps it. */
   probeOnWake(): void {
-    // A suspended page may return with an expired probe; start a fresh deadline.
+    // Repeated returns keep a running probe's deadline. A page suspended mid-probe
+    // returns with an expired one and gets a fresh deadline.
+    if (this.inboundSilenceProbe && Date.now() < this.inboundSilenceProbe.deadlineMs) {
+      return;
+    }
     this.clearInboundSilenceProbe();
-    this.checkInboundSilence(WAKE_LIVENESS_PROBE_TIMEOUT_MS);
+    this.checkInboundSilence(true);
   }
 
-  private checkInboundSilence(probeTimeoutMs?: number): void {
+  private checkInboundSilence(force = false): void {
     const lastActivityAtMs = this.lastInboundActivityAtMs;
     if (!this.connected || lastActivityAtMs === null || this.maxInboundSilenceMs === null) {
       return;
@@ -537,7 +540,7 @@ export class GatewayBrowserClient {
     }
     this.clearInboundSilenceProbe();
     if (
-      probeTimeoutMs === undefined &&
+      !force &&
       now - lastActivityAtMs < this.maxInboundSilenceMs &&
       (this.firstUnansweredRequestAtMs === null ||
         now - this.firstUnansweredRequestAtMs < UNANSWERED_REQUEST_SILENCE_MS)
@@ -545,16 +548,19 @@ export class GatewayBrowserClient {
       return;
     }
     const abort = new AbortController();
-    const timeoutMs = probeTimeoutMs ?? INBOUND_SILENCE_PROBE_TIMEOUT_MS;
     this.inboundSilenceProbe = {
       activityAtMs: lastActivityAtMs,
-      deadlineMs: now + timeoutMs,
+      deadlineMs: now + INBOUND_SILENCE_PROBE_TIMEOUT_MS,
       abort,
     };
     // Health is scope-independent; avoid active integration probes. Any inbound
     // frame, including an error response, proves liveness.
     void this.client
-      .request("health", { probe: false }, { timeoutMs, signal: abort.signal })
+      .request(
+        "health",
+        { probe: false },
+        { timeoutMs: INBOUND_SILENCE_PROBE_TIMEOUT_MS, signal: abort.signal },
+      )
       .catch(() => undefined);
   }
 
