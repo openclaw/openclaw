@@ -113,9 +113,12 @@ function buildAgentStepEvents(step: number, steps: number, toolBody: Record<stri
     phase: "commentary" as const,
     text: `Step ${step + 1} of ${steps}: checking the ${WORDS[step % WORDS.length]} before the next ${WORDS[(step + 5) % WORDS.length]}.`,
   };
+  // The last step always updates the card with every step done: the runtime asks the model to
+  // reconcile a plan left unfinished, which would add a turn after the reply.
+  const last = step === steps - 1;
   const plan = Array.from({ length: steps }, (_, index) => ({
     step: `Check ${WORDS[index % WORDS.length]} ${index + 1}`,
-    status: index < step ? "completed" : index === step ? "in_progress" : "pending",
+    status: last || index < step ? "completed" : index === step ? "in_progress" : "pending",
   }));
   const marker = `ux-agent-step-${step + 1}`;
   // Code mode's `exec` runs a script, not a shell command.
@@ -127,7 +130,7 @@ function buildAgentStepEvents(step: number, steps: number, toolBody: Record<stri
         ? { code: `return ${JSON.stringify(marker)};` }
         : { command: `echo ${marker}` };
   const toolEvents =
-    step % 2 === 1
+    step % 2 === 1 && !last
       ? buildScenarioToolCallEvents(toolBody, "exec", execArgs)
       : buildScenarioToolCallEvents(toolBody, "progress_card", { plan });
   // The routed call, after the step's commentary in the same response.
