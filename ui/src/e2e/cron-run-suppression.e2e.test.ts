@@ -5,7 +5,11 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture, createCronRunsResult } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { collapseNav } from "./cron-fixtures.test-support.ts";
+import {
+  cronSidebarFeatureMethods,
+  openAutomation,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron recorded delivery suppression",
@@ -57,7 +61,9 @@ suite.define(() => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
         const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
           methodResponses: {
+            "cron.get": job,
             "cron.list": cronListResponseFixture({
               jobs: [job],
               snapshotRevision: "delivery-history-proof",
@@ -72,16 +78,12 @@ suite.define(() => {
           },
         });
         const response = await page.goto(`${suite.server.baseUrl}cron`);
-        await collapseNav(page);
         expect(response?.status()).toBe(200);
-        await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+        await openAutomationActivity(page);
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
-            await page.locator('[data-test-id="cron-tab-all"]').click();
-            await page
-              .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
-              .click();
+            await openAutomation(page, job.id);
             await page.locator('[data-test-id="cron-detail-tab-history"]').click();
           }
           await expect

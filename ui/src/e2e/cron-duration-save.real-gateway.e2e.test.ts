@@ -23,7 +23,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { collapseNav } from "./cron-fixtures.test-support.ts";
+import { automationRow, openAutomation } from "./cron-fixtures.test-support.ts";
 
 async function startGateway(owner: OpenClawTestInstance, prepare?: () => Promise<unknown>) {
   try {
@@ -462,10 +462,6 @@ async function withCronJobPage(
     }
     await waitForControlUiGatewayReady(page);
     expect(new URL(page.url()).hash.length).toBe(0);
-    // These cases return to the Automations list; a reload in an earlier case expands the nav.
-    if ((await page.locator(".shell--nav-collapsed").count()) === 0) {
-      await collapseNav(page);
-    }
     await run(evidence);
   } catch (error) {
     await captureControlUiE2eFailureDiagnostics(page, {
@@ -492,8 +488,8 @@ async function submitCronForm(
   expect(reply).toMatchObject({ ok: true });
   const id = cronJobId(requireRecord(method === "cron.add" ? reply.payload : request.params));
   if (method === "cron.add") {
-    await page.locator('.cron-page[data-panel-mode="overview"]').waitFor();
-    await page.locator(`[data-test-id="cron-row-${id}"]`).waitFor();
+    await page.locator('.cron-page[data-panel-mode="create"]').waitFor({ state: "detached" });
+    await automationRow(page, id);
   } else {
     await expect.poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(false);
   }
@@ -599,9 +595,6 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page } = evidence;
-        const row = page.locator('[data-test-id="cron-row-' + jobId + '"] .cron-table__name');
-        await page.locator('[data-test-id="cron-back"]').click();
-        await row.click();
         const input = page.locator("#cron-payload-text");
         await input.waitFor();
         expect(await input.inputValue()).toBe(prompt);
@@ -616,11 +609,9 @@ suite.define(() => {
         await input.fill(edited);
         const saved = await submitCronForm(evidence, "cron.update");
         expect(saved.stored.payload).toMatchObject({ kind: "agentTurn", message: edited });
-        // Back left /cron, and the reload expands the sidebar again.
+        // The reload reopens the automation from its ?job= link.
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        await collapseNav(page);
-        await row.click();
         await input.waitFor();
         expect(await input.inputValue()).toBe(edited);
       });
@@ -724,7 +715,7 @@ suite.define(() => {
         await page.locator("#cron-name").fill("Cloned partial failure policy");
         const cloned = await submitCronForm(evidence, "cron.add");
         const cloneId = cronJobId(cloned.stored);
-        await page.locator(`[data-test-id="cron-row-${cloneId}"]`).click();
+        await openAutomation(page, cloneId);
         await openAdvanced(page, cloned.stored.name);
         const clonedFields = await readAlertFields(page);
         await page.locator("#cron-failure-alert-cooldown-seconds").scrollIntoViewIfNeeded();
@@ -842,7 +833,7 @@ suite.define(() => {
             cliJson(["automations", "get", id, "--json"]),
           );
           const cloneId = cronJobId(cloned.stored);
-          await page.locator(`[data-test-id="cron-row-${cloneId}"]`).click();
+          await openAutomation(page, cloneId);
           await expect.poll(() => page.locator(".cron-detail-title").textContent()).toBe(cloneName);
           const originalAfter = await readStoredJob(sourceId);
 

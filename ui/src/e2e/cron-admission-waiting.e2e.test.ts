@@ -7,7 +7,13 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { collapseNav, cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomation,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Cron admission waiting",
@@ -36,34 +42,30 @@ suite.define(() => {
           },
         });
         const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
           methodResponses: {
             "cron.list": cronList([job], "waiting"),
+            "cron.get": job,
             "cron.runs": cronRuns([]),
             "cron.status": { enabled: true, jobs: 1, triggersEnabled: true },
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
-        await collapseNav(page);
-        const row = page.locator('[data-test-id="cron-row-waiting-proof"]');
-        await row.waitFor({ state: "visible" });
-        const frame = await takeControlUiScreenshotFrame(page, row, [row], {
+        await openAutomation(page, job.id);
+        const header = page.locator(".cron-detail-header");
+        const frame = await takeControlUiScreenshotFrame(page, header, [header], {
           animations: "disabled",
         });
         writeFileSync(artifacts + "/waiting.png", frame.png);
-        expect(await row.textContent()).toContain(
+        const subtitle = header.locator(".cron-detail-meta > .cron-detail-sub");
+        expect(await subtitle.textContent()).toContain(
           "Waiting: Agent is busy since 11/4/2026, 12:00 PM",
-        );
-        expect(await row.locator(".cron-table__state").getAttribute("aria-label")).toContain(
-          "Warning",
-        );
-        expect(await row.locator(".cron-table__last-run").getAttribute("aria-label")).toBe(
-          "Completed",
         );
         job.state = { nextRunAtMs: now + 60_000, lastRunAtMs: now, lastRunStatus: "ok" };
         await gateway.setMethodResponse("cron.list", cronList([job], "recovered"));
-        await page.locator(".cron-refresh").click();
-        await expect.poll(() => row.textContent()).not.toContain("Waiting");
-        expect(await row.locator(".cron-table__state").getAttribute("aria-label")).toBe("Active");
+        await gateway.setMethodResponse("cron.get", job);
+        await gateway.emitGatewayEvent("cron", { jobId: job.id, action: "updated" });
+        await expect.poll(() => subtitle.textContent()).not.toContain("Waiting");
       },
     );
   });
