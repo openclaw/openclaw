@@ -230,8 +230,11 @@ describe("persisted subagent requester wakes", () => {
     "records exhausted retryable delivery as a visible terminal failure across reopen (%s)",
     async (kind) => {
       const input = armRequesterWake(records());
-      if (kind === "parent") input.subagent.completionTarget = "parent";
-      else input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      if (kind === "parent") {
+        input.subagent.completionTarget = "parent";
+      } else {
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      }
       input.subagent.delivery = { status: "failed", disposition: "retryable" };
       input.subagent.completionRequesterSessionId = "requester-session";
       input.subagent.requesterStorePath = path.join(

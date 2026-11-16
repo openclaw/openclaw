@@ -686,7 +686,7 @@ describe("requester settle dispatch deadline", () => {
         expect(startTurn).not.toHaveBeenCalled();
         expect(completeBatch).not.toHaveBeenCalled();
         expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
-        using clock = vi
+        using _clock = vi
           .spyOn(Date, "now")
           .mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
         context.createAgentTurnFacade = createFacade;
