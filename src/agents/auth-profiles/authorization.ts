@@ -13,7 +13,10 @@ import { enrollOwnedAuthProfileAuthorization } from "./authorization-enrollment-
 import { readAuthProfileAuthorizationLifetime } from "./authorization-lifetime.js";
 import { retainAuthProfileAuthorizationObservation } from "./authorization-observation.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
-import { assertAuthProfileMigrationCandidates } from "./legacy-source-diagnostic.js";
+import {
+  assertAuthProfileMigrationStateAtDatabasePath,
+  prepareAuthProfileMigrationCandidates,
+} from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
@@ -166,22 +169,27 @@ export async function captureAuthProfileAuthorization(params: {
         }),
       );
       assertOwners();
-      const stores = rows.map((row, index) => {
+      const stores = [];
+      for (const [index, row] of rows.entries()) {
         const target = targets[index]!;
         const store = loadPersistedAuthProfileStoreFromRows(row, target.databasePath) ?? {
           version: AUTH_STORE_VERSION,
           profiles: {},
         };
-        assertAuthProfileMigrationCandidates({
+        await prepareAuthProfileMigrationCandidates({
           databasePath: target.databasePath,
           candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir: target.agentDir, env }),
-          hasCredentials: () => Object.keys(store.profiles).length > 0,
-          provider: store.profiles[profileId]?.provider,
-          config: cfg,
+          hasCredentials: Object.keys(store.profiles).length > 0,
+          assertCurrent: assertOwners,
         });
+        assertAuthProfileMigrationStateAtDatabasePath(
+          target.databasePath,
+          store.profiles[profileId]?.provider,
+          cfg,
+        );
         publishers[index]!(row.store.status === "readable" ? row.store.raw : undefined);
-        return store;
-      });
+        stores.push(store);
+      }
       const local = stores[0]!;
       const shared = stores[paths.indexOf(sharedPath)]!;
       const effective = mergeLocalAuthProfileStoreWithInheritedStore(
