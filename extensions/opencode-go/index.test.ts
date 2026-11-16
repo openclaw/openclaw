@@ -265,11 +265,10 @@ describe("opencode-go provider plugin", () => {
     });
     expect(result.models.filter((model) => model.inference?.chat !== false)).toMatchObject([
       { id: "known", name: "Enriched" },
+      { id: "unknown", api: "openai-completions", baseUrl: OPENAI_URL },
     ]);
-    expect(result.models.find((model) => model.id === "unknown")).toMatchObject({
-      inference: { chat: false },
-      api: "openai-completions",
-      baseUrl: OPENAI_URL,
+    expect(result.models.find((model) => model.id === "future-embedding")?.inference).toEqual({
+      chat: false,
     });
     const listingRequest = fetchGuard.mock.calls.find(
       ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
