@@ -12,8 +12,6 @@ import {
   type SecretInput,
 } from "../../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
-import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
@@ -28,6 +26,16 @@ import { bindSessionRowProjection } from "../../session-row-projection-access.js
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
+import {
+  callTalkHandler,
+  invokeTalkHandler,
+  markTalkOwnerCold,
+  mocks as providerMocks,
+  readClient,
+  realtimeConfig,
+  voiceCallConfig,
+  voiceModelConfig,
+} from "./catalog.test-support.js";
 import { createBrowserProvider, createBrowserSessionMock } from "./client-fixtures.test-support.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
 import { createBrowserConsultOwnerFixture } from "./client-owner.test-support.js";
@@ -38,7 +46,6 @@ import {
   talkRealtimeConfigProjectionCases,
   type TalkConfigProjectionResponse,
 } from "./config-realtime.test-support.js";
-import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
 import { talkHandlers } from "./index.js";
 import {
   expectRecordFields,
@@ -52,42 +59,6 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  getCanonicalUserPreferences: vi.fn<
-    () => Promise<{ profileId: string; entries: Record<string, unknown> } | undefined>
-  >(async () => undefined),
-  projectConfigOntoRuntimeSourceSnapshot: vi.fn<(config: OpenClawConfig) => OpenClawConfig>(),
-  canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => providerId),
-  getSpeechProvider: vi.fn(),
-  listSpeechProviders: vi.fn(() => []),
-  synthesizeSpeech: vi.fn(),
-  canonicalizeRealtimeVoiceProviderId: vi.fn((providerId: string | undefined) =>
-    providerId === "gemini-live" ? "google" : providerId?.trim().toLowerCase(),
-  ),
-  listRealtimeVoiceProviders: vi.fn<() => RealtimeVoiceProviderPlugin[]>(() => []),
-  canonicalizeRealtimeTranscriptionProviderId: vi.fn((providerId: string | undefined) =>
-    providerId === "openai-realtime" ? "openai" : providerId?.trim().toLowerCase(),
-  ),
-  getRealtimeTranscriptionProvider: vi.fn(),
-  listRealtimeTranscriptionProviders: vi.fn(() => []),
-  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
-  isRealtimeVoiceProviderConfiguredAsync: vi.fn(
-    async ({
-      provider,
-      cfg,
-      providerConfig,
-    }: {
-      provider: {
-        isConfigured: (ctx: { cfg?: unknown; providerConfig: unknown }) => boolean;
-      };
-      cfg?: unknown;
-      providerConfig: unknown;
-    }) => provider.isConfigured({ cfg, providerConfig }),
-  ),
-  resolveRealtimeVoiceProviderCapabilitiesAsync: vi.fn(
-    ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
-  ),
-  resolveInternalRealtimeVoiceGatewayRelayLaunchError: vi.fn(),
-  cancelInternalRealtimeVoiceBrowserSession: vi.fn(async () => undefined),
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
   acknowledgeTalkRealtimeRelayMark: vi.fn(),
@@ -126,7 +97,6 @@ const mocks = vi.hoisted(() => ({
   chatSend: vi.fn(),
   controlRealtimeVoiceAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
-  resolveSessionKeyFromResolveParams: vi.fn(),
   resolveRealtimeVoiceAgentContextInstructions: vi.fn(async (): Promise<string> => ""),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-agent-workspace"),
   readSessionPreviewItemsFromTranscriptAsync: vi.fn(() => [
@@ -160,66 +130,6 @@ const mocks = vi.hoisted(() => ({
   createTalkClientGatewayControlOwner: vi.fn(),
   agentRuntime: { session: { prepareSessionEntryPatch: vi.fn() } },
 }));
-
-vi.mock("../../../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../config/config.js")>()),
-  projectConfigOntoRuntimeSourceSnapshot: mocks.projectConfigOntoRuntimeSourceSnapshot,
-}));
-
-vi.mock("../../../state/user-preferences.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../state/user-preferences.js")>()),
-  getCanonicalUserPreferences: mocks.getCanonicalUserPreferences,
-}));
-
-vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
-  canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
-  getSpeechProvider: mocks.getSpeechProvider,
-  listSpeechProviders: mocks.listSpeechProviders,
-}));
-
-// mock-isolation: Keep synthesis stubbed while using real settings/readiness without barrel initialization.
-vi.mock("../../../tts/tts.js", async () => ({
-  isTtsProviderConfiguredAsync: (await import("../../../tts/tts-provider-resolution.js"))
-    .isTtsProviderConfiguredAsync,
-  resolveTtsConfig: (await import("../../../tts/tts-settings.js")).resolveTtsConfig,
-  synthesizeSpeech: mocks.synthesizeSpeech,
-}));
-
-vi.mock("../../../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: mocks.synthesizeSpeech }));
-
-vi.mock("../../../talk/provider-registry.js", () => ({
-  canonicalizeRealtimeVoiceProviderId: mocks.canonicalizeRealtimeVoiceProviderId,
-  getRealtimeVoiceProvider: (providerId: string | undefined) =>
-    mocks
-      .listRealtimeVoiceProviders()
-      .find((provider: { id: string }) => provider.id === providerId),
-  listRealtimeVoiceProviders: mocks.listRealtimeVoiceProviders,
-}));
-
-vi.mock("../../../realtime-transcription/provider-registry.js", () => ({
-  canonicalizeRealtimeTranscriptionProviderId: mocks.canonicalizeRealtimeTranscriptionProviderId,
-  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
-}));
-
-// mock-isolation: Keep provider registration and credential state outside handler tests.
-vi.mock("../../../talk/provider-resolver.js", () => ({
-  isRealtimeVoiceProviderConfiguredAsync: mocks.isRealtimeVoiceProviderConfiguredAsync,
-  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
-  resolveRealtimeVoiceProviderCapabilitiesAsync:
-    mocks.resolveRealtimeVoiceProviderCapabilitiesAsync,
-}));
-
-vi.mock("../../../talk/provider-internal.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../talk/provider-internal.js")>();
-  return {
-    ...actual,
-    cancelInternalRealtimeVoiceBrowserSession: mocks.cancelInternalRealtimeVoiceBrowserSession,
-    resolveInternalRealtimeVoiceGatewayRelayLaunchError:
-      mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError,
-  };
-});
 
 vi.mock("../../../talk/agent-run-control.js", () => ({
   controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
@@ -308,13 +218,6 @@ vi.mock("../../server-methods/chat-send-handler.js", async () => {
   };
 });
 
-vi.mock("../../sessions-resolve.js", () => ({
-  withPreparedSessionResolve: async (
-    { isCurrent: _isCurrent, ...params }: Record<string, unknown>,
-    consume: (result: unknown) => unknown,
-  ) => consume(mocks.resolveSessionKeyFromResolveParams(params)),
-}));
-
 vi.mock("../relay/session-create.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../relay/session-create.js")>()),
   createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
@@ -353,32 +256,7 @@ vi.mock("../transcription-relay.js", async (importOriginal) => {
 });
 
 function setSourceConfig(config: OpenClawConfig) {
-  mocks.projectConfigOntoRuntimeSourceSnapshot.mockReturnValue(config);
-}
-
-const callTalkHandler = createTalkHandlerCaller(talkHandlers);
-
-async function invokeTalkHandler(
-  method: string,
-  options: Omit<Parameters<typeof callTalkHandler>[1], "respond" | "params"> & {
-    params?: Record<string, unknown>;
-  } = {},
-) {
-  const respond = vi.fn();
-  await callTalkHandler(method, { params: {}, ...options, respond });
-  return respond;
-}
-
-function realtimeConfig(realtime: NonNullable<OpenClawConfig["talk"]>["realtime"]): OpenClawConfig {
-  return { talk: { realtime } };
-}
-
-function voiceCallConfig(config: Record<string, unknown>): OpenClawConfig {
-  return { plugins: { entries: { "voice-call": { config } } } };
-}
-
-function voiceModelConfig(primary: string): OpenClawConfig {
-  return { agents: { defaults: { voiceModel: { primary } } } };
+  providerMocks.projectConfigOntoRuntimeSourceSnapshot.mockReturnValue(config);
 }
 
 function realtimeProvider() {
@@ -394,10 +272,12 @@ function resolveRealtimeProvider(
   provider: ReturnType<typeof realtimeProvider>,
   providerConfig: Record<string, unknown>,
 ) {
-  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({ provider, providerConfig });
+  providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+    provider,
+    providerConfig,
+  });
 }
 
-const readClient = () => ({ connect: { scopes: ["operator.read"] } });
 const redactedSecretRef = {
   source: "__OPENCLAW_REDACTED__",
   provider: "__OPENCLAW_REDACTED__",
@@ -445,34 +325,7 @@ beforeEach(() => {
       control: mocks.gatewayControl,
     }),
   );
-  rpcSourceTesting.clear();
-  setActiveDegradedSecretOwners([]);
-  mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) => {
-    const normalized = providerId?.trim().toLowerCase();
-    const providers = mocks.listRealtimeTranscriptionProviders() as Array<{
-      id: string;
-      aliases?: string[];
-    }>;
-    return providers.find(
-      (provider) =>
-        provider.id.toLowerCase() === normalized ||
-        provider.aliases?.some((alias) => alias.toLowerCase() === normalized),
-    );
-  });
 });
-
-function markTalkOwnerCold(ownerId: string): void {
-  setActiveDegradedSecretOwners([
-    {
-      ownerKind: "capability",
-      ownerId,
-      state: "unavailable",
-      paths: [],
-      refKeys: [],
-      reason: "secret reference was not found",
-    },
-  ]);
-}
 
 describe("talk.speak handler", () => {
   beforeEach(() => {
@@ -513,7 +366,7 @@ describe("talk.speak handler", () => {
 
       mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
       setSourceConfig(diskConfig);
-      mocks.getSpeechProvider.mockReturnValue({
+      providerMocks.getSpeechProvider.mockReturnValue({
         id: "acme",
         label: "Acme Speech",
         resolveTalkConfig: ({
@@ -541,7 +394,7 @@ describe("talk.speak handler", () => {
           return talkProviderConfig;
         },
       });
-      mocks.synthesizeSpeech.mockImplementation(
+      providerMocks.synthesizeSpeech.mockImplementation(
         async ({ cfg }: { cfg: OpenClawConfig; text: string; disableFallback: boolean }) => {
           expect(cfg.tts?.provider).toBe("acme");
           expect(cfg.tts?.providers?.acme?.apiKey).toBe("env-acme-key");
@@ -567,8 +420,8 @@ describe("talk.speak handler", () => {
         return;
       }
       expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-      expect(mocks.projectConfigOntoRuntimeSourceSnapshot).not.toHaveBeenCalled();
-      expectRecordFields(mockCallArg(mocks.synthesizeSpeech), {
+      expect(providerMocks.projectConfigOntoRuntimeSourceSnapshot).not.toHaveBeenCalled();
+      expectRecordFields(mockCallArg(providerMocks.synthesizeSpeech), {
         text: "Hello from talk mode.",
         disableFallback: true,
       });
@@ -602,10 +455,10 @@ describe("talk.config handler", () => {
       },
       source,
     );
-    mocks.projectConfigOntoRuntimeSourceSnapshot.mockImplementationOnce(
+    providerMocks.projectConfigOntoRuntimeSourceSnapshot.mockImplementationOnce(
       projectConfigOntoRuntimeSourceSnapshot,
     );
-    mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+    providerMocks.getSpeechProvider.mockReturnValue({ id: "acme" });
 
     const respond = await invokeTalkHandler("talk.config", { config: runtime });
     expect(expectRespondOk(respond)).toMatchObject({
@@ -637,7 +490,7 @@ describe("talk.config handler", () => {
           ? "healthy-talk-key"
           : { source: "env", provider: "default", id: "MISSING" },
       );
-      mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+      providerMocks.getSpeechProvider.mockReturnValue({ id: "acme" });
       setSourceConfig(runtimeConfig);
 
       const respond = await invokeTalkHandler("talk.config", {
@@ -656,8 +509,8 @@ describe("talk.config handler", () => {
       ...createTalkConfig("healthy-talk-key"),
       ui: { seamColor: "#123456", prefs: { accent: "#52c99a" } },
     };
-    mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
-    mocks.getCanonicalUserPreferences.mockResolvedValue(
+    providerMocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+    providerMocks.getCanonicalUserPreferences.mockResolvedValue(
       profileId ? { profileId, entries: { "ui.accent": profileAccent } } : undefined,
     );
     setSourceConfig(runtimeConfig);
@@ -675,9 +528,11 @@ describe("talk.config handler", () => {
       expectedAccent ? { seamColor: expectedAccent } : undefined,
     );
     if (profileId) {
-      expect(mocks.getCanonicalUserPreferences).toHaveBeenCalledWith(profileId, ["ui.accent"]);
+      expect(providerMocks.getCanonicalUserPreferences).toHaveBeenCalledWith(profileId, [
+        "ui.accent",
+      ]);
     } else {
-      expect(mocks.getCanonicalUserPreferences).not.toHaveBeenCalled();
+      expect(providerMocks.getCanonicalUserPreferences).not.toHaveBeenCalled();
     }
   });
 
@@ -685,7 +540,7 @@ describe("talk.config handler", () => {
     "projects realtime config: $name",
     async ({ runtimeConfig, sourceConfig, expected, providerConfig }) => {
       setSourceConfig(sourceConfig ?? runtimeConfig);
-      mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+      providerMocks.listRealtimeVoiceProviders.mockReturnValue([]);
 
       const respond = await invokeTalkHandler("talk.config", {
         client: readClient(),
@@ -704,7 +559,7 @@ describe("talk.config handler", () => {
 
   defineRealtimeConfigProjectionTests(async (runtimeConfig, includeSecrets) => {
     setSourceConfig(runtimeConfig);
-    mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+    providerMocks.listRealtimeVoiceProviders.mockReturnValue([]);
 
     const respond = await invokeTalkHandler("talk.config", {
       params: includeSecrets ? { includeSecrets: true } : {},
@@ -728,7 +583,7 @@ describe("talk.config handler", () => {
         }),
       }),
     );
-    mocks.listRealtimeVoiceProviders.mockReturnValue([
+    providerMocks.listRealtimeVoiceProviders.mockReturnValue([
       {
         id: "openai",
         label: "OpenAI Realtime",
@@ -784,7 +639,7 @@ describe("talk.config handler", () => {
     });
     expect(JSON.stringify(response)).not.toContain("runtime-azure-secret");
     // Source values supply the wire projection; provider discovery belongs to runtime config.
-    expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalledWith(sourceConfig);
+    expect(providerMocks.listRealtimeVoiceProviders).not.toHaveBeenCalledWith(sourceConfig);
   });
 
   it("passes runtime-resolved tts provider secrets to strict provider resolvers", async () => {
@@ -809,7 +664,7 @@ describe("talk.config handler", () => {
     const runtimeConfig = configWithTts("env-acme-key", 54_321);
 
     setSourceConfig(sourceConfig);
-    mocks.getSpeechProvider.mockReturnValue({
+    providerMocks.getSpeechProvider.mockReturnValue({
       id: "acme",
       label: "Acme Strict Speech",
       resolveTalkConfig: ({
@@ -901,7 +756,7 @@ describe("talk.config handler", () => {
     const runtimeConfig = multiProvider
       ? configWithKeys(true)
       : createTalkConfig("runtime-resolved-talk-key");
-    mocks.getSpeechProvider.mockReturnValue(
+    providerMocks.getSpeechProvider.mockReturnValue(
       kind === "resolver"
         ? {
             id: "acme",
@@ -1007,9 +862,9 @@ describe("talk.session unified handlers", () => {
           clientSecret: "fixture",
         })),
       };
-      mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
-      mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+      providerMocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
+      providerMocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+      providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider,
         providerConfig: { model: "voice-current" },
       } as never);
@@ -1041,7 +896,7 @@ describe("talk.session unified handlers", () => {
           providerConfig: { model: "voice-current" },
         });
       } else {
-        expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
+        expect(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
           expect.objectContaining({
             configuredProviderId: "acme",
             providerConfigOverrides: { model: "voice-current" },
@@ -1053,7 +908,7 @@ describe("talk.session unified handlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveSessionKeyFromResolveParams.mockImplementation(({ p }) => {
+    providerMocks.resolveSessionKeyFromResolveParams.mockImplementation(({ p }) => {
       const key = (p as { key?: unknown }).key;
       return {
         ok: true,
@@ -1073,7 +928,7 @@ describe("talk.session unified handlers", () => {
       isConfigured: () => true,
       createBridge: vi.fn(),
     };
-    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    providerMocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
     resolveRealtimeProvider(provider, { apiKey: "openai-key", model: "gpt-realtime" });
     mocks.createTalkRealtimeRelaySession.mockReturnValue(
       relaySession("relay-unified-1", "gpt-realtime", "alloy"),
@@ -1115,7 +970,7 @@ describe("talk.session unified handlers", () => {
       } as OpenClawConfig,
     });
 
-    expectRecordFields(mockCallArg(mocks.resolveConfiguredRealtimeVoiceProviderAsync), {
+    expectRecordFields(mockCallArg(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync), {
       configuredProviderId: "openai",
       providerConfigs: { openai: { apiKey: "openai-key" } },
       defaultModel: "gpt-realtime-default",
@@ -1373,7 +1228,7 @@ describe("talk.session unified handlers", () => {
       context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
     });
 
-    expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
+    expect(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
     expectSessionEntryEnsure(
@@ -1416,7 +1271,7 @@ describe("talk.session unified handlers", () => {
       isConfigured: () => false,
       createBridge: vi.fn(),
     };
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockImplementationOnce((input) => {
+    providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockImplementationOnce((input) => {
       expect(input).toEqual(
         expect.objectContaining({
           agentId: "voice-agent",
@@ -1485,7 +1340,7 @@ describe("talk.session unified handlers", () => {
   it("rejects forced consult routing when the provider resolves gpt-live", async () => {
     const provider = realtimeProvider();
     resolveRealtimeProvider(provider, { model: "gpt-live-test-canary" });
-    mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError.mockReturnValueOnce(
+    providerMocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError.mockReturnValueOnce(
       "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively",
     );
 
@@ -1504,7 +1359,7 @@ describe("talk.session unified handlers", () => {
       }) as OpenClawConfig,
     });
 
-    expect(mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError).toHaveBeenCalledWith({
+    expect(providerMocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError).toHaveBeenCalledWith({
       provider,
       cfg: expect.any(Object),
       providerConfig: { model: "gpt-live-test-canary" },
@@ -1570,7 +1425,7 @@ describe("talk.session unified handlers", () => {
         isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "stt-key"),
         createSession: vi.fn(),
       };
-      mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
+      providerMocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
       mocks.createTalkTranscriptionRelaySession.mockReturnValue({
         provider: "openai",
         mode: "transcription",
@@ -1645,7 +1500,7 @@ describe("talk.session unified handlers", () => {
       },
       createSession: vi.fn(),
     };
-    mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
+    providerMocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
     mocks.createTalkTranscriptionRelaySession.mockReturnValue({
       transcriptionSessionId: "revoked-transcription",
     });
@@ -1681,11 +1536,12 @@ describe("talk.session unified handlers", () => {
       isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "openai-key"),
       createSession: vi.fn(),
     };
-    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+    providerMocks.listRealtimeTranscriptionProviders.mockReturnValue([
       { id: "xai", label: "xAI Realtime Transcription", isConfigured: () => true },
     ] as never);
-    mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) =>
-      providerId === "openai-realtime" ? (openai as never) : undefined,
+    providerMocks.getRealtimeTranscriptionProvider.mockImplementation(
+      (providerId: string | undefined) =>
+        providerId === "openai-realtime" ? (openai as never) : undefined,
     );
     mocks.createTalkTranscriptionRelaySession.mockReturnValue({
       provider: "openai",
@@ -1761,13 +1617,13 @@ describe("talk.session unified handlers", () => {
         ...(spawnedBy ? { brain: "agent-consult" } : {}),
       });
       if (spawnedBy) {
-        expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
+        expect(providerMocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
           projection,
           client,
           p: { key: sessionKey, agentId, spawnedBy, includeGlobal: true, includeUnknown: true },
         });
       } else {
-        expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+        expect(providerMocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
           expect.objectContaining({
             p: expect.objectContaining({ key: "global", agentId: "ops" }),
           }),
@@ -1804,7 +1660,7 @@ describe("talk.session unified handlers", () => {
         config: brain ? {} : { agents: { entries: { worker: {} } } },
       });
       expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST, message });
-      expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
+      expect(providerMocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
       if (!brain) {
         return;
       }
@@ -2135,7 +1991,7 @@ describe("talk.client.steer handler", () => {
 describe("talk.client.create handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveRealtimeVoiceProviderCapabilitiesAsync.mockImplementation(
+    providerMocks.resolveRealtimeVoiceProviderCapabilitiesAsync.mockImplementation(
       ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
     );
     mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
@@ -2201,7 +2057,7 @@ describe("talk.client.create handler", () => {
         } as OpenClawConfig,
       });
 
-      expectRecordFields(mockCallArg(mocks.resolveConfiguredRealtimeVoiceProviderAsync), {
+      expectRecordFields(mockCallArg(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync), {
         configuredProviderId: "openai",
         providerConfigs: { openai: { apiKey: "openai-key" } },
         defaultModel: "gpt-realtime",
@@ -2319,7 +2175,7 @@ describe("talk.client.create handler", () => {
             }
           : {}),
       };
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+      providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider,
         providerConfig: handoff ? {} : { model: "gpt-live-1" },
         capabilities: {
@@ -2357,7 +2213,7 @@ describe("talk.client.create handler", () => {
         expect(createInput.initialItems).toEqual([]);
         expect(createInput.instructions).not.toContain("openclaw_agent_consult");
       } else {
-        expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
+        expect(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
           expect.objectContaining({
             agentId: "main",
             providerConfigOverrides: { model: "gpt-live-1" },
@@ -2383,7 +2239,7 @@ describe("talk.client.create handler", () => {
 
   it("fails a requested Gateway-owned session without provider/auth support", async () => {
     const createBrowserSession = vi.fn();
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+    providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: createBrowserProvider(createBrowserSession),
       providerConfig: { model: "gpt-realtime-2.1" },
       capabilities: {
@@ -2456,7 +2312,7 @@ describe("talk.client.create handler", () => {
         return browserSession;
       });
       const provider = createBrowserProvider(createBrowserSession);
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+      providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider,
         providerConfig: failure === "startup" ? { apiKey: "test-api-key" } : {},
       });
@@ -2472,7 +2328,7 @@ describe("talk.client.create handler", () => {
           expect.objectContaining({ initialItems: [] }),
         );
       } else {
-        expect(mocks.cancelInternalRealtimeVoiceBrowserSession).toHaveBeenCalledWith({
+        expect(providerMocks.cancelInternalRealtimeVoiceBrowserSession).toHaveBeenCalledWith({
           provider,
           request: expect.objectContaining({ providerConfig: {} }),
           session: browserSession,
@@ -2496,7 +2352,7 @@ describe("talk.client.create handler", () => {
       ...createBrowserProvider(createBrowserSession),
       capabilities: { supportsVideoFrames: true },
     };
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+    providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider,
       providerConfig: { apiKey: "test-api-key" },
       capabilities: provider.capabilities,
@@ -2511,7 +2367,7 @@ describe("talk.client.create handler", () => {
     });
 
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
-    expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
+    expect(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
         surface: "browser-session",
@@ -2698,8 +2554,8 @@ describe("talk.client.create handler", () => {
             provider,
           ]
         : [provider];
-      mocks.listRealtimeVoiceProviders.mockReturnValue(providers as never);
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+      providerMocks.listRealtimeVoiceProviders.mockReturnValue(providers as never);
+      providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider,
         providerConfig: {
           apiKey: `${providerId}-key`,
@@ -2708,7 +2564,7 @@ describe("talk.client.create handler", () => {
       });
 
       const respond = await invokeTalkHandler("talk.client.create", { config });
-      expectRecordFields(mockCallArg(mocks.resolveConfiguredRealtimeVoiceProviderAsync), {
+      expectRecordFields(mockCallArg(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync), {
         configuredProviderId: expectedProvider,
         providerConfigs: expectedProviders,
         defaultModel: expectedModel,
@@ -2753,7 +2609,7 @@ describe("talk.client.create handler", () => {
           },
         },
       });
-      mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+      providerMocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
       resolveRealtimeProvider(provider, { apiKey: "openai-key", model });
 
       const respond = await invokeTalkHandler("talk.client.create", {
@@ -2805,7 +2661,7 @@ describe("talk.client.create handler", () => {
   ])("rejects unsupported browser launch: $name", async ({ params, config, message }) => {
     const respond = await invokeTalkHandler("talk.client.create", { params, config });
     expectRespondError(respond, { message });
-    expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
+    expect(providerMocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
   });
 
   it("rejects Gateway-owned sessions returned by a browser-session provider", async () => {
@@ -2820,7 +2676,7 @@ describe("talk.client.create handler", () => {
         outputSampleRateHz: 24_000,
       },
     }));
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+    providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: {
         id: "custom",
         label: "Custom",
@@ -2877,7 +2733,7 @@ describe("role-required Talk session creation", () => {
       vi.clearAllMocks();
       const profile = ensureProfileForEmail("talk-required@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+      providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider: {
           id: "openai",
           label: "OpenAI Realtime",
@@ -2891,7 +2747,7 @@ describe("role-required Talk session creation", () => {
         },
         providerConfig: {},
       });
-      mocks.resolveRealtimeVoiceProviderCapabilitiesAsync.mockImplementation(
+      providerMocks.resolveRealtimeVoiceProviderCapabilitiesAsync.mockImplementation(
         ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
       );
       mocks.createOrResumeClientVoiceSession.mockResolvedValue("voice-required");

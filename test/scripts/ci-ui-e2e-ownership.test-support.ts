@@ -55,6 +55,7 @@ export function assertControlUiE2eOwnership(
         const buildInfo = node.arguments[1];
         if (
           callName === "createGatewayHttpServer" ||
+          callName === "createModelGatewayFixture" ||
           (inSuiteServer &&
             [
               "createOpenClawTestInstance",

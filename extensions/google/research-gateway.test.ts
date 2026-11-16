@@ -19,6 +19,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
 const directories: string[] = [];
+const researchAuth = {
+  mode: "api-key" as const,
+  apiKey: "synthetic-google-key",
+  profileId: "google:research",
+  source: "profile",
+};
+
+function mockResearchAuth() {
+  return vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue(researchAuth);
+}
+
 beforeEach(() => {
   vi.spyOn(authRuntime, "withAuthProfileStoreAtEffect").mockImplementation(
     async (_dir, _options, consume) =>
@@ -173,12 +184,7 @@ describe("registered Google managed-research RPC", () => {
 
   it("routes an activated versioned request through the real provider adapter", async () => {
     mockPinnedHostnameResolution();
-    const auth = vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      mode: "api-key",
-      apiKey: "synthetic-google-key",
-      profileId: "google:research",
-      source: "profile",
-    });
+    const auth = mockResearchAuth();
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       jsonResponse({
         id: "research-fixture",
@@ -215,12 +221,7 @@ describe("registered Google managed-research RPC", () => {
 
   it("does not publish a report after authority is revoked during the provider request", async () => {
     mockPinnedHostnameResolution();
-    vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      mode: "api-key",
-      apiKey: "synthetic-google-key",
-      profileId: "google:research",
-      source: "profile",
-    });
+    mockResearchAuth();
     const entry = await fixture({ enabled: true, profileId: "google:research" });
     vi.stubGlobal(
       "fetch",
@@ -247,12 +248,7 @@ describe("registered Google managed-research RPC", () => {
     "keeps a known %s retryable when the provider fence fails at entry",
     async (action) => {
       mockPinnedHostnameResolution();
-      vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-        mode: "api-key",
-        apiKey: "synthetic-google-key",
-        profileId: "google:research",
-        source: "profile",
-      });
+      mockResearchAuth();
       const fetch = vi
         .fn()
         .mockResolvedValue(jsonResponse({ id: "known-interaction", status: "in_progress" }));
@@ -305,13 +301,7 @@ describe("registered Google managed-research RPC", () => {
     "keeps a known %s retryable when membership refreshes during credential preparation",
     async (action) => {
       mockPinnedHostnameResolution();
-      const auth = {
-        mode: "api-key" as const,
-        apiKey: "synthetic-google-key",
-        profileId: "google:research",
-        source: "profile",
-      };
-      const resolve = vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue(auth);
+      const resolve = mockResearchAuth();
       const fetch = vi
         .fn()
         .mockImplementation(async () =>
@@ -333,7 +323,7 @@ describe("registered Google managed-research RPC", () => {
             },
           });
         });
-        return auth;
+        return researchAuth;
       });
       const handle = { interactionId: "prepared-interaction", profileId: "google:research" };
       expect(await entry.request({ version: 1, action, handle })).toMatchObject({
@@ -354,12 +344,7 @@ describe("registered Google managed-research RPC", () => {
     "does not retry a known %s after permanent session revocation during HTTP",
     async (action) => {
       mockPinnedHostnameResolution();
-      vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-        mode: "api-key",
-        apiKey: "synthetic-google-key",
-        profileId: "google:research",
-        source: "profile",
-      });
+      mockResearchAuth();
       const fetch = vi
         .fn()
         .mockImplementation(async () =>
@@ -398,12 +383,7 @@ describe("registered Google managed-research RPC", () => {
     "keeps a known %s retryable after provider retirement during HTTP",
     async (action) => {
       mockPinnedHostnameResolution();
-      vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-        mode: "api-key",
-        apiKey: "synthetic-google-key",
-        profileId: "google:research",
-        source: "profile",
-      });
+      mockResearchAuth();
       const fetch = vi
         .fn()
         .mockImplementation(async () =>
@@ -445,12 +425,7 @@ describe("registered Google managed-research RPC", () => {
     "keeps a known %s retryable after provider retirement at the binding lookup boundary",
     async (action) => {
       mockPinnedHostnameResolution();
-      vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-        mode: "api-key",
-        apiKey: "synthetic-google-key",
-        profileId: "google:research",
-        source: "profile",
-      });
+      mockResearchAuth();
       const fetch = vi
         .fn()
         .mockResolvedValue(jsonResponse({ id: "lookup-retirement", status: "in_progress" }));
@@ -479,12 +454,7 @@ describe("registered Google managed-research RPC", () => {
 
   it("preserves the receipt when session membership is refreshing after acceptance", async () => {
     mockPinnedHostnameResolution();
-    vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      mode: "api-key",
-      apiKey: "synthetic-google-key",
-      profileId: "google:research",
-      source: "profile",
-    });
+    mockResearchAuth();
     const entry = await fixture({ enabled: true, profileId: "google:research" });
     const fetch = vi.fn().mockImplementation(async () => {
       entry.current.mockImplementationOnce(() => {
@@ -523,12 +493,7 @@ describe("registered Google managed-research RPC", () => {
 describe("native interaction ownership at the registered RPC", () => {
   it("rejects foreign sessions and reset/deleted generations before read or cancel, but resumes the same owner after restart", async () => {
     mockPinnedHostnameResolution();
-    vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      mode: "api-key",
-      apiKey: "synthetic-google-key",
-      profileId: "google:research",
-      source: "profile",
-    });
+    mockResearchAuth();
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockImplementation(async () =>
@@ -574,12 +539,7 @@ describe("native interaction ownership at the registered RPC", () => {
 
 it("keeps the selected profile/account fixed and fences late completion after provider reload", async () => {
   mockPinnedHostnameResolution();
-  const auth = vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-    mode: "api-key",
-    apiKey: "synthetic-google-key",
-    profileId: "google:research",
-    source: "profile",
-  });
+  const auth = mockResearchAuth();
   const fetch = vi
     .fn<typeof globalThis.fetch>()
     .mockImplementation(async () => jsonResponse({ id: "account-bound", status: "in_progress" }));
@@ -627,12 +587,7 @@ it("keeps the selected profile/account fixed and fences late completion after pr
 
 it("snapshots the checked native handle before the binding lookup await", async () => {
   mockPinnedHostnameResolution();
-  vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-    mode: "api-key",
-    apiKey: "synthetic-google-key",
-    profileId: "google:research",
-    source: "profile",
-  });
+  mockResearchAuth();
   const handle = { interactionId: "owned-interaction", profileId: "google:research" };
   let mutate = false;
   const entry = await fixture({ enabled: true, profileId: "google:research" }, undefined, () => {

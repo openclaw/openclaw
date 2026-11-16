@@ -22,37 +22,27 @@ beforeEach(() => {
 });
 
 describe("toRelativeWorkspacePath (windows semantics)", () => {
-  it("preserves candidate case when the root itself is spelled with different case", () => {
+  it.each([
+    "c:/users/user/openclaw/Memory/Log.txt",
+    "\\\\?\\C:\\Users\\User\\OpenClaw\\Memory\\Log.txt",
+  ])("preserves relative case for %s", (candidate) => {
     withMockedWindowsPlatform(() => {
       const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "c:/users/user/openclaw/Memory/Log.txt";
       expect(toRelativeWorkspacePath(root, candidate)).toBe("Memory\\Log.txt");
     });
   });
 
-  it("accepts extended-length prefixed windows paths", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "\\\\?\\C:\\Users\\User\\OpenClaw\\Memory\\Log.txt";
-      expect(toRelativeWorkspacePath(root, candidate)).toBe("Memory\\Log.txt");
-    });
-  });
-
-  it("rejects windows paths outside workspace root", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "C:\\Users\\User\\Other\\log.txt";
-      expect(() => toRelativeWorkspacePath(root, candidate)).toThrow("Path escapes workspace root");
-    });
-  });
-
-  it("rejects windows escapes that differ from the root only by case", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "c:\\users\\USER\\openclaw\\..\\Other\\log.txt";
-      expect(() => toRelativeWorkspacePath(root, candidate)).toThrow("Path escapes workspace root");
-    });
-  });
+  it.each(["C:\\Users\\User\\Other\\log.txt", "c:\\users\\USER\\openclaw\\..\\Other\\log.txt"])(
+    "rejects the escaped workspace path %s",
+    (candidate) => {
+      withMockedWindowsPlatform(() => {
+        const root = "C:\\Users\\User\\OpenClaw";
+        expect(() => toRelativeWorkspacePath(root, candidate)).toThrow(
+          "Path escapes workspace root",
+        );
+      });
+    },
+  );
 
   it("treats a differently-cased root as the root itself", () => {
     withMockedWindowsPlatform(() => {

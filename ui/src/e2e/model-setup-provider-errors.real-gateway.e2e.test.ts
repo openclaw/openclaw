@@ -1,105 +1,54 @@
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
-import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.js";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
+import { createModelGatewayFixture } from "./model-gateway.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
 
 // Setup's one-shot check behind a dialog must report a scripted provider's failures promptly.
-let instance: OpenClawTestInstance;
 let inferenceRequests = 0;
 const reasonCaps: unknown[] = [];
 let upstreamMode: "error" | "hang" | "reason" = "error";
-const suite = createControlUiE2eSuite({
+const fixture = createModelGatewayFixture({
   name: "Model setup check against a failing provider",
-  startServerBeforeBrowser: true,
-  async startServer() {
-    const upstream = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () =>
-        createServer((request, response) => {
-          // Catalog discovery must succeed before the inference failure under test.
-          if (request.url === "/v1/models") {
-            request.resume();
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({ data: [{ id: "hy4-preview" }] }));
-            return;
-          }
-          void buffer(request).then((raw) => {
-            const body = JSON.parse(raw.toString() || "{}");
-            const inference = request.url?.endsWith("/chat/completions");
-            inferenceRequests += inference ? 1 : 0;
-            // Thinks past the 256-token cap setup used to send, like measured reasoning models.
-            if (inference && upstreamMode === "reason") {
-              reasonCaps.push(body.max_completion_tokens ?? body.max_tokens);
-              respondAsReasoningModel(request.url ?? "", body, response, 300);
-            } else if (!inference || upstreamMode === "error") {
-              response.writeHead(500, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({ error: { message: "Upstream overloaded", code: 500 } }),
-              );
-            }
-          });
-        }),
-    });
-    instance = await createOpenClawTestInstance({
-      name: "model-setup-provider-errors",
-      reserveIdlePort: false,
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        VITEST: undefined,
-        NODE_ENV: undefined,
-        // Host provider keys would satisfy first-run setup and skip the check under test.
-        ...Object.fromEntries(
-          Object.keys(process.env)
-            .filter((key) => key.endsWith("_API_KEY"))
-            .map((key) => [key, undefined]),
-        ),
-      },
-      config: {
-        gateway: { controlUi: { enabled: true } },
-        agents: { entries: { main: {} } },
-        plugins: { allow: ["tencent"] },
-        models: {
-          providers: {
-            "tencent-tokenhub": {
-              baseUrl: `http://127.0.0.1:${upstream.claim.port}/v1`,
-              api: "openai-completions",
-            },
-          },
+  instanceName: "model-setup-provider-errors",
+  createUpstream: () =>
+    createServer((request, response) => {
+      // Catalog discovery must succeed before the inference failure under test.
+      if (request.url === "/v1/models") {
+        request.resume();
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [{ id: "hy4-preview" }] }));
+        return;
+      }
+      void buffer(request).then((raw) => {
+        const body = JSON.parse(raw.toString() || "{}");
+        const inference = request.url?.endsWith("/chat/completions");
+        inferenceRequests += inference ? 1 : 0;
+        // Thinks past the 256-token cap setup used to send, like measured reasoning models.
+        if (inference && upstreamMode === "reason") {
+          reasonCaps.push(body.max_completion_tokens ?? body.max_tokens);
+          respondAsReasoningModel(request.url ?? "", body, response, 300);
+        } else if (!inference || upstreamMode === "error") {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "Upstream overloaded", code: 500 } }));
+        }
+      });
+    }),
+  config: (base) => ({
+    gateway: { controlUi: { enabled: true } },
+    agents: { entries: { main: {} } },
+    plugins: { allow: ["tencent"] },
+    models: {
+      providers: {
+        "tencent-tokenhub": {
+          baseUrl: `${base}/v1`,
+          api: "openai-completions",
         },
       },
-    });
-    const close = async () => {
-      try {
-        await instance.cleanup();
-      } finally {
-        upstream.listener.closeAllConnections();
-        await upstream.releaseListener();
-        await upstream.claim.release();
-      }
-    };
-    await instance.startGateway().catch(async (error: unknown) => {
-      await close();
-      throw error;
-    });
-    return { baseUrl: `http://127.0.0.1:${instance.port}/`, close };
-  },
+    },
+  }),
 });
-
-// Pairing links are single-use, so each page load gets its own handoff.
-async function open(route: string) {
-  const handoff = await instance.cli(["dashboard", "--json"]);
-  expect(handoff.code, handoff.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
-  const url = new URL(route, browserUrl);
-  url.hash = new URL(browserUrl).hash;
-  return url.href;
-}
+const { suite, open } = fixture;
 
 suite.define(() => {
   it("reports failures promptly and passes a reasoning provider from Test & use", async () => {

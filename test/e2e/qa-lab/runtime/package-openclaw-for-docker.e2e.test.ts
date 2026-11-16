@@ -54,6 +54,11 @@ const skipDocsMapLifecycle = {
   prepareDocsMap: async (): Promise<void> => {},
   restoreDocsMap: async (): Promise<void> => {},
 };
+const skipMetadataLifecycle = {
+  ...skipDocsMapLifecycle,
+  prepareChangelog: async (): Promise<void> => {},
+  restoreChangelog: async (): Promise<void> => {},
+};
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tsxImport = import.meta.resolve("tsx");
 
@@ -380,9 +385,7 @@ describe("package-openclaw-for-docker", () => {
       }
       const originalLink = fs.readlinkSync(codecLink);
       const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-        ...skipDocsMapLifecycle,
-        prepareChangelog: async () => {},
-        restoreChangelog: async () => {},
+        ...skipMetadataLifecycle,
         pnpmPack,
         bundlePlugins: ["demo"],
       });
@@ -408,9 +411,7 @@ describe("package-openclaw-for-docker", () => {
   it("converges an existing same-version npm plugin onto the selected distribution", async () => {
     const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
     const selected = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-      ...skipDocsMapLifecycle,
-      prepareChangelog: async () => {},
-      restoreChangelog: async () => {},
+      ...skipMetadataLifecycle,
       bundlePlugins: ["demo"],
     });
     const extractDir = tempDirs.make("openclaw-selected-plugin-convergence-");
@@ -498,9 +499,7 @@ describe("package-openclaw-for-docker", () => {
       await writePackageDistInventoryForPublish(sourceDir);
       const originalContentInventory = fs.readFileSync(contentInventoryPath);
       const options = {
-        ...skipDocsMapLifecycle,
-        prepareChangelog: async () => {},
-        restoreChangelog: async () => {},
+        ...skipMetadataLifecycle,
       };
       const selected = await packOpenClawPackageForDocker(sourceDir, outputDir, {
         ...options,
@@ -706,9 +705,7 @@ describe("package-openclaw-for-docker", () => {
     });
     await expect(
       packOpenClawPackageForDocker(sourceDir, outputDir, {
-        ...skipDocsMapLifecycle,
-        prepareChangelog: async () => {},
-        restoreChangelog: async () => {},
+        ...skipMetadataLifecycle,
         prepareBundledAiRuntime: skipBundledAiRuntime,
         bundlePlugins: ["demo"],
         runCaptureImpl,
@@ -729,9 +726,7 @@ describe("package-openclaw-for-docker", () => {
     const runCaptureImpl = vi.fn();
     await expect(
       packOpenClawPackageForDocker(sourceDir, outputDir, {
-        ...skipDocsMapLifecycle,
-        prepareChangelog: async () => {},
-        restoreChangelog: async () => {},
+        ...skipMetadataLifecycle,
         bundlePlugins: [id],
         runCaptureImpl,
       }),
@@ -757,9 +752,7 @@ describe("package-openclaw-for-docker", () => {
       }
       await expect(
         packOpenClawPackageForDocker(sourceDir, outputDir, {
-          ...skipDocsMapLifecycle,
-          prepareChangelog: async () => {},
-          restoreChangelog: async () => {},
+          ...skipMetadataLifecycle,
           bundlePlugins: ["demo"],
         }),
       ).rejects.toThrow(error);
@@ -784,9 +777,7 @@ describe("package-openclaw-for-docker", () => {
     });
     await expect(
       packOpenClawPackageForDocker(sourceDir, outputDir, {
-        ...skipDocsMapLifecycle,
-        prepareChangelog: async () => {},
-        restoreChangelog: async () => {},
+        ...skipMetadataLifecycle,
         bundlePlugins: ["demo"],
         runCaptureImpl,
       }),
@@ -1137,9 +1128,7 @@ describe("package-openclaw-for-docker", () => {
 
     // Reuse prepared outputs, as --skip-build does; npm owns the root files policy.
     const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-      ...skipDocsMapLifecycle,
-      prepareChangelog: async () => {},
-      restoreChangelog: async () => {},
+      ...skipMetadataLifecycle,
     });
     const extractDir = tempDirs.make("openclaw-package-qa-exclusions-extract-");
     await tar.x({ file: tarball, cwd: extractDir });
@@ -1189,9 +1178,7 @@ describe("package-openclaw-for-docker", () => {
 
     await buildPackageArtifacts(sourceDir);
     const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-      ...skipDocsMapLifecycle,
-      prepareChangelog: async () => {},
-      restoreChangelog: async () => {},
+      ...skipMetadataLifecycle,
     });
     const entries: string[] = [];
     await tar.t({
@@ -2529,12 +2516,18 @@ describe("package-openclaw-for-docker", () => {
     ).resolves.toBe("");
   });
 
-  it("kills timed-out child process groups", async ({ signal }) => {
+  it.for([
+    { name: "kills timed-out child process groups", survivesTerm: true },
+    {
+      name: "keeps fallback SIGKILL armed for descendants after the direct child exits",
+      survivesTerm: false,
+    },
+  ])("$name", async ({ survivesTerm }, { signal }) => {
     if (process.platform === "win32") {
       return;
     }
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-timeout-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-process-tree-"));
     const childPidPath = path.join(tempDir, "child.pid");
     let childPid = 0;
     try {
@@ -2546,7 +2539,7 @@ describe("package-openclaw-for-docker", () => {
       ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "process.on('SIGTERM', () => {});",
+        ...(survivesTerm ? ["process.on('SIGTERM', () => {});"] : []),
         `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
@@ -2602,50 +2595,6 @@ describe("package-openclaw-for-docker", () => {
         },
       );
       expect(fs.readFileSync(donePath, "utf8")).toBe("done");
-    } finally {
-      if (childPid && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-        await waitForDead(childPid, AbortSignal.timeout(2_000));
-      }
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("keeps fallback SIGKILL armed for descendants after the direct child exits", async ({
-    signal,
-  }) => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-descendant-"));
-    const childPidPath = path.join(tempDir, "child.pid");
-    let childPid = 0;
-    try {
-      const childScript = [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {});",
-        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(process.pid));",
-        "setInterval(() => {}, 1000);",
-      ].join("");
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        "setInterval(() => {}, 1000);",
-      ].join("");
-
-      await expectCommandTimeoutAfterReady(
-        () =>
-          runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
-            env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-            killAfterMs: 25,
-            timeoutMs: 500,
-          }),
-        async () => {
-          childPid = await readPid(childPidPath, 2000);
-        },
-      );
-      await waitForDead(childPid, signal);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
