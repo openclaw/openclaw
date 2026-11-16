@@ -1,0 +1,2 @@
+# Exact net regression-test lines for bounded #200191: omitted-ID send prefixes and current task continuation, with real registry/SQLite adoption and retained live-authority controls.
+92

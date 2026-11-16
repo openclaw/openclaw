@@ -20,13 +20,13 @@ export function assertExpectedLeafActive(
     throw new Error("Chat admission omitted its worker-prepared active path");
   }
   // Branch switches preserve entry ids while rotating session ids. A supplied session id
-  // fences exact and ancestor matches; omission remains legacy exact-only compatibility.
+  // fences exact and ancestor matches; message admission also accepts an unpinned prefix.
   const matchesRequestedSession =
     requestedSessionId === undefined || requestedSessionId === session.entry?.sessionId;
-  // Only message admission treats a pinned empty root as an ancestor.
+  // Only message admission treats an empty view as a prefix after new appends.
   const matchesActivePath =
     activePathRelation === "exact" ||
-    (requestedSessionId !== undefined &&
+    ((requestedSessionId !== undefined || options?.allowEmptyAncestor === true) &&
       (activePathRelation === "ancestor" ||
         (options?.allowEmptyAncestor === true && expectedLeafEntryId === null)));
   if (!matchesRequestedSession || !matchesActivePath) {

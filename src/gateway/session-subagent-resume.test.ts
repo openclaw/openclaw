@@ -19,12 +19,15 @@ import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/sub
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
+import { resumeSessionsSendTask } from "../agents/tools/sessions-send-resume.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { readInProcessSubagentResume } from "./in-process-subagent-resume.js";
 import {
   createContext,
   createOperatorClient,
@@ -115,6 +118,47 @@ async function arrangePausedChild(childSessionKey = childKey, lifecycleRevision?
     });
   return { cfg, caller, entry, resume, prepare, childSessionKey, storePath };
 }
+
+it("retained task resume binds the current paused execution after a follow-up", async () => {
+  const state = await arrangePausedChild(childKey, "original-incarnation");
+  const { caller: _caller, ...expectedTask } = state.resume;
+  const adopt = await state.prepare();
+  await adopt();
+  await updateRun(nextRunId, (draft) => {
+    expect(markSubagentRunPausedAfterYield({ entry: draft })).toBe(true);
+  });
+  const callGateway = vi.fn<AgentToolGatewayRequestCaller>().mockImplementation(async (request) => {
+    const resume = readInProcessSubagentResume(request)!;
+    const commit = await prepareParentSubagentResume({
+      cfg: state.cfg,
+      resume,
+      sessionKey: childKey,
+      getSessionId: () => sessionId,
+      runId: "retained-successor",
+      task: "Retained guidance",
+      assertAdmissionCurrent: () => ({
+        sessionId,
+        lifecycleRevision: "original-incarnation",
+        updatedAt: 1,
+      }),
+    });
+    const taskRunId = await commit();
+    return { runId: "retained-successor", taskRunId, status: "accepted" };
+  });
+  const result = await resumeSessionsSendTask({
+    cfg: state.cfg,
+    caller: state.caller,
+    targetAgentId: "main",
+    sessionKey: childKey,
+    displayKey: childKey,
+    runId: "retained-successor",
+    expectedTask,
+    sendParams: { message: "Retained guidance" },
+    callGateway,
+  });
+  expect(result.result.details).toMatchObject({ status: "accepted", taskRunId: previousRunId });
+  expect(subagentRuns.get("retained-successor")?.task).toBe("Retained guidance");
+});
 
 it.each([childKey])(
   "preserves the task and frozen completion batch for %s",

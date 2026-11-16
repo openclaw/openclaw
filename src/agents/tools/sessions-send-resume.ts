@@ -74,15 +74,23 @@ export async function resumeSessionsSendTask(params: {
     ) {
       throw new Error("Task resume requires the existing, unarchived native child session.");
     }
-    const subagentResume = params.expectedTask
-      ? { ...params.expectedTask, caller: params.caller }
-      : bindParentSubagentResume({
-          cfg: params.cfg,
-          caller: params.caller,
-          childSessionKey: params.sessionKey,
-          childSessionId: entry.sessionId,
-          childLifecycleRevision: entry.lifecycleRevision,
-        });
+    // Retention keeps the task, not its former execution. The existing owner binds
+    // the currently paused run and revalidates caller/control authority at admission.
+    const subagentResume = bindParentSubagentResume({
+      cfg: params.cfg,
+      caller: params.caller,
+      childSessionKey: params.sessionKey,
+      childSessionId: entry.sessionId,
+      childLifecycleRevision: entry.lifecycleRevision,
+    });
+    if (
+      params.expectedTask &&
+      (params.expectedTask.taskRunId !== subagentResume.taskRunId ||
+        params.expectedTask.childSessionKey !== subagentResume.childSessionKey ||
+        params.expectedTask.childLifecycleRevision !== subagentResume.childLifecycleRevision)
+    ) {
+      throw new Error("Retained task or child session changed before resume.");
+    }
     assertParentSubagentResumeCurrent({
       cfg: params.cfg,
       resume: subagentResume,

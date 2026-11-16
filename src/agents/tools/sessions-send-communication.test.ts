@@ -540,6 +540,53 @@ describe("sessions_send communication boundary", () => {
     },
   );
 
+  it("retained sends follow task executions but fence each accepted runtime owner", async () => {
+    const source = endpoint("source");
+    const input = operation(source, childOf(source));
+    const previous = createSubagentRunRecord({
+      runId: "previous",
+      childSessionKey: input.target.sessionKey,
+      requesterSessionKey: source.sessionKey,
+      requesterAgentId: "main",
+    });
+    const advanced = createSubagentRunRecord({
+      ...previous,
+      runId: "advanced",
+      taskRunId: previous.runId,
+      generation: (previous.generation ?? 0) + 1,
+      createdAt: previous.createdAt + 1,
+    });
+    state.task = advanced;
+    using gate = await openGate({ ...input, expectedTask: previous });
+    const current = createSubagentRunRecord({
+      ...advanced,
+      runId: "current",
+      generation: (advanced.generation ?? 0) + 1,
+    });
+    state.task = current;
+    await gate.callGateway(
+      bindInProcessSubagentResume(agentRequest(input, { idempotencyKey: "successor" }), {
+        caller: state.caller,
+        childSessionKey: input.target.sessionKey,
+        childSessionId: "target",
+        previousRunId: current.runId,
+        taskRunId: previous.runId,
+        generation: current.generation,
+        createdAt: current.createdAt,
+      }),
+    );
+    expect(input.callGateway).toHaveBeenCalledOnce();
+    const replacement = { ...current };
+    bindSubagentRunRuntimeKey(replacement, {});
+    state.task = replacement;
+    // The accepted successor must remain fenced at the final host effect, too.
+    expect(input.callGateway.mock.calls[0]![0].sessionMutationCommitGuard).toThrow(
+      "authority changed",
+    );
+    state.task = { ...current, controllerSessionKey: "agent:main:other" };
+    expect(gate.assertCurrent).toThrow("authority changed");
+  });
+
   it("retained completed-task pins do not grant or require live task authority", async () => {
     const source = endpoint("source");
     const target = childOf(source);

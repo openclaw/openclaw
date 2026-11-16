@@ -12,7 +12,6 @@ import {
 } from "../../gateway/in-process-subagent-resume.js";
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
 import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
-import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
 import { resolveSessionChildController } from "../../gateway/session-utils-core.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -234,11 +233,7 @@ export async function prepareSessionsSendCommunication(params: {
       endpoint,
       assertCurrent: assertSource,
     });
-  const task = getLatestLiveSubagentRunByChildSessionKey(
-    params.target.sessionKey,
-    undefined,
-    params.target.agentId,
-  );
+  let task = getLatestLiveSubagentRunByChildSessionKey(targetSessionKey, undefined, targetAgentId);
   const ownedTask = Boolean(
     caller &&
     caller.agentId === params.source.agentId &&
@@ -260,19 +255,14 @@ export async function prepareSessionsSendCommunication(params: {
     (params.expectedTask === null
       ? task !== null
       : !task ||
-        task.runId !== params.expectedTask.runId ||
-        task.taskRunId !== params.expectedTask.taskRunId ||
-        task.generation !== params.expectedTask.generation ||
-        task.createdAt !== params.expectedTask.createdAt)
+        (task.taskRunId ?? task.runId) !==
+          (params.expectedTask.taskRunId ?? params.expectedTask.runId))
   ) {
     unsubscribe();
     throw new Error("Retained send target task changed before admission.");
   }
-  const taskRunId = task?.runId;
-  const taskGeneration = task?.generation;
-  let resumedTask:
-    | { resume: NonNullable<ReturnType<typeof readInProcessSubagentResume>>; runId: string }
-    | undefined;
+  let taskRunId = task?.runId;
+  let taskGeneration = task?.generation;
   const assertTask = () => {
     if (
       params.access?.controllerOnly &&
@@ -286,28 +276,37 @@ export async function prepareSessionsSendCommunication(params: {
       return;
     }
     const currentTask = getLatestLiveSubagentRunByChildSessionKey(
-      params.target.sessionKey,
+      targetSessionKey,
       undefined,
-      params.target.agentId,
+      targetAgentId,
     );
-    // Pause-notice delivery republishes immutable rows without replacing the task owner.
-    // Revalidate the live row, not the captured metadata snapshot.
+    // A task can advance to another execution while this send is prepared. Its
+    // current controller and cancellation state still own admission; a replacement
+    // of the same execution's runtime authority is not a task continuation.
+    const sameTaskSuccessor =
+      task &&
+      currentTask &&
+      currentTask.runId !== task.runId &&
+      (currentTask.taskRunId ?? currentTask.runId) === (task.taskRunId ?? task.runId) &&
+      currentTask.requesterSessionKey === task.requesterSessionKey &&
+      currentTask.requesterAgentId === task.requesterAgentId;
     if (
-      (currentTask !== task && !isSameSubagentRunOwner(currentTask, task)) ||
-      currentTask?.runId !== taskRunId ||
-      currentTask?.generation !== taskGeneration ||
+      (!sameTaskSuccessor &&
+        ((currentTask !== task && !isSameSubagentRunOwner(currentTask, task)) ||
+          currentTask?.runId !== taskRunId ||
+          currentTask?.generation !== taskGeneration)) ||
       (currentTask?.controllerSessionKey &&
         currentTask.controllerSessionKey !== params.source.sessionKey) ||
       currentTask?.killIntent ||
       currentTask?.killReconciliation ||
       (ownedTask && currentTask?.cleanupCompletedAt !== undefined)
     ) {
-      if (resumedTask) {
-        assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);
-        return;
-      }
       throw new Error("Owned task communication authority changed.");
     }
+    // Fence subsequent checks against this accepted execution, not its predecessor.
+    task = currentTask;
+    taskRunId = currentTask?.runId;
+    taskGeneration = currentTask?.generation;
   };
   const close = () => {
     if (!closed) {
@@ -563,18 +562,22 @@ export async function prepareSessionsSendCommunication(params: {
       const runId = request.params.idempotencyKey;
       const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      // A retained pin also fences tasks whose parent-lineage convenience flag is false.
-      // Only the private resume binding can advance that pin to this exact admitted successor.
+      // Resume's private binding must name the current execution, not the one
+      // observed before a retained send waited. Gateway admission revalidates it.
       if ((ownedTask || params.expectedTask !== undefined) && resume && hasRunId) {
+        const currentTask = getLatestLiveSubagentRunByChildSessionKey(
+          targetSessionKey,
+          undefined,
+          targetAgentId,
+        );
         if (
           resume.childSessionKey !== targetSessionKey ||
           resume.childSessionId !== target[0]!.entry?.sessionId ||
-          resume.previousRunId !== taskRunId ||
-          resume.generation !== taskGeneration
+          resume.previousRunId !== currentTask?.runId ||
+          resume.generation !== currentTask?.generation
         ) {
           throw new Error("Task resume differs from the captured communication owner.");
         }
-        resumedTask = { resume, runId };
       }
       const endpoint = target[0]!;
       if (

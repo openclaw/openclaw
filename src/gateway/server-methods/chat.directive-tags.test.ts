@@ -1161,7 +1161,8 @@ afterAll(async () => {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   it.each([
     ["rejects an off-path leaf without a session id", "previous-leaf", undefined, false],
-    ["rejects a stale empty leaf without a session id", null, undefined, false],
+    ["accepts an empty starting leaf without a session id", null, undefined, true],
+    ["accepts an active ancestor without a session id", "rendered-leaf", undefined, true],
     ["accepts an empty starting leaf after a same-session append", null, "current", true],
     ["accepts a same-session active ancestor", "rendered-leaf", "current", true],
     ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", false],
@@ -1224,7 +1225,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
       await captureSessionControllerSettlement({
         scope: mockState.storePath,
-        identities: [requestedSessionId],
+        identities: [mockState.sessionId],
       });
     } else {
       expect(response).toEqual([
