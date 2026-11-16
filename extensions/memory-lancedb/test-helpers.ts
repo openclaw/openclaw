@@ -24,3 +24,11 @@ export function installTmpDirHarness(params: { prefix: string }) {
     getDbPath: () => dbPath,
   };
 }
+
+/**
+ * Runs a tool or hook as the owner's direct chat with the context's agent, the only session
+ * that may recall or forget stored memories by default. A context's own memoryAudience wins.
+ */
+export function withOwnerChat<T extends Record<string, unknown>>(ctx: T) {
+  return { memoryAudience: { kind: "owner-private", agentId: ctx.agentId ?? "main" }, ...ctx };
+}

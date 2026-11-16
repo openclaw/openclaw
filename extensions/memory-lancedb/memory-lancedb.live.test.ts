@@ -1,6 +1,6 @@
 // Memory Lancedb tests cover memory lancedb plugin behavior.
 import { describe, expect, test } from "vitest";
-import { installTmpDirHarness } from "./test-helpers.js";
+import { installTmpDirHarness, withOwnerChat } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
@@ -96,7 +96,7 @@ describeLive("memory plugin live tests", () => {
     const materialize = (name: string) => {
       const toolOrFactory = registeredTools.find((entry) => entry.opts?.name === name)?.tool;
       return typeof toolOrFactory === "function"
-        ? toolOrFactory({ agentId: "main", config: {} })
+        ? toolOrFactory(withOwnerChat({ agentId: "main", config: {} }))
         : toolOrFactory;
     };
     const storeTool = materialize("memory_store");
