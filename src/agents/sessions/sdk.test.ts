@@ -4,6 +4,7 @@ import { afterEach, assert, expect, it, vi } from "vitest";
 import { stripSummaryFloor } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { attachInternalToolExecutionPreparer } from "../../../packages/agent-core/src/internal-hooks.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
@@ -31,6 +32,7 @@ import type {
   ToolDefinition,
   ToolResultEvent,
 } from "./extensions/types.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
@@ -295,6 +297,81 @@ it.each([
       if (telemetryOff) {
         vi.unstubAllEnvs();
       }
+    }
+  },
+);
+// Registry policy is exercised through the SDK owner, without another cold test bootstrap.
+it.each([
+  [undefined, undefined, 30_000, 60_000],
+  [1234, 5678, 1234, 5678],
+] as const)(
+  "preserves registry stream request policy (%s, %s)",
+  async (timeoutMs, maxRetryDelayMs, expectedTimeout, expectedRetryDelay) => {
+    const model = { ...testModel, baseUrl: "https://openrouter.ai/api/v1" };
+    const auth = AuthStorage.inMemory();
+    auth.setRuntimeApiKey(model.provider, "synthetic-registry-key");
+    const registry = ModelRegistry.inMemory(auth);
+    streamMocks.streamSimple.mockReset().mockImplementation(createRecoveredAssistantStream);
+    registry.registerProvider(model.provider, {
+      api: model.api,
+      baseUrl: model.baseUrl,
+      headers: { "X-OpenRouter-Title": "Synthetic registry title", "X-Provider": "synthetic" },
+      streamSimple: streamMocks.streamSimple,
+    });
+    const { session } = await createSdkSession({
+      model,
+      modelRegistry: registry,
+      settingsManager: SettingsManager.inMemory({
+        retry: { provider: { timeoutMs: 30_000, maxRetryDelayMs: 60_000 } },
+      }),
+      thinkingExplicit: true,
+    });
+    const stream = session.agent.streamFn;
+    if (!stream) {
+      throw new Error("Expected the SDK provider stream");
+    }
+    const context = { systemPrompt: "Synthetic prompt", messages: [] };
+    const signal = new AbortController().signal;
+    const onPayload = vi.fn();
+    const onResponse = vi.fn();
+    const headers = { "HTTP-Referer": "https://caller.example.invalid", "X-Caller": "synthetic" };
+    vi.stubEnv("OPENCLAW_TELEMETRY", "0");
+    try {
+      await stream(model, context, {
+        apiKey: "synthetic-caller-key",
+        headers,
+        signal,
+        onPayload,
+        onResponse,
+        timeoutMs,
+        maxRetryDelayMs,
+        temperature: 0.25,
+      });
+      expect(streamMocks.streamSimple).toHaveBeenCalledExactlyOnceWith(model, context, {
+        apiKey: "synthetic-registry-key",
+        headers: {
+          "HTTP-Referer": "https://caller.example.invalid",
+          "X-OpenRouter-Title": "Synthetic registry title",
+          "X-OpenRouter-Categories": "personal-agent,cli-agent",
+          "X-Provider": "synthetic",
+          "X-Caller": "synthetic",
+        },
+        signal,
+        onPayload,
+        onResponse,
+        timeoutMs: expectedTimeout,
+        maxRetryDelayMs: expectedRetryDelay,
+        temperature: 0.25,
+        openclawThinkingExplicit: true,
+      });
+      expect(getStreamLlmRuntime(stream)).toBe(getModelRegistryRuntime(registry).llmRuntime);
+      expect(headers).toEqual({
+        "HTTP-Referer": "https://caller.example.invalid",
+        "X-Caller": "synthetic",
+      });
+    } finally {
+      session.dispose();
+      vi.unstubAllEnvs();
     }
   },
 );
