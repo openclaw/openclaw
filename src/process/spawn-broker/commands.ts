@@ -1,11 +1,18 @@
 import type { SpawnOptions } from "node:child_process";
+import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { BrokerChild } from "./child.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
-import { brokerSpawnOptions } from "./pipe.js";
-import type { BrokerRequest, BrokerSpawnOptions, ProcessOutputFile } from "./protocol.js";
+import { brokerSpawnOptions, holdPipe, restoreStdinPipe } from "./pipe.js";
+import {
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+  type BrokerSpawnOptions,
+  type ProcessOutputFile,
+} from "./protocol.js";
 
 type Command = Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>;
 
@@ -18,6 +25,8 @@ export type BrokerCommandRequest = {
   result?: ReturnType<typeof createDeferredCore<BrokerExecaResult>>;
   output?: ReturnType<typeof createDeferredCore<number>>;
   childClosed: boolean;
+  nativeClosed?: boolean;
+  recovering?: boolean;
   resultSettled: boolean;
 };
 
@@ -113,4 +122,89 @@ export function createBrokerCommands(host: {
       };
     },
   };
+}
+
+/** Translate command receipts; the host retains admission and cleanup decisions. */
+export function receiveBrokerCommandResponse(
+  request: BrokerCommandRequest,
+  message: Exclude<
+    BrokerResponse,
+    {
+      type:
+        | "ready"
+        | "startup-failed"
+        | "prepared"
+        | "owned"
+        | "file-read-chunk"
+        | "file-read-result";
+    }
+  >,
+  handle: unknown,
+  transmit: (message: BrokerRequest) => Promise<void>,
+): Promise<void> | undefined {
+  if (message.type === "pipe") {
+    try {
+      if (message.closed && message.fd === 0) {
+        const stdin = new Socket();
+        request.child.attachPipe(message.fd, stdin);
+        stdin.destroy();
+      } else if (handle instanceof Socket) {
+        if (message.fd === 0) {
+          restoreStdinPipe(handle);
+        } else {
+          holdPipe(handle);
+        }
+        request.child.attachPipe(message.fd, handle);
+      } else {
+        throw new SpawnBrokerError("Spawn broker pipe transfer failed");
+      }
+    } catch (error) {
+      if (handle instanceof Socket) {
+        handle.destroy();
+      }
+      throw error;
+    }
+    // The receipt follows Node's internal handle ACK on this same IPC channel.
+    return transmit({ type: "pipe-received", id: message.id, fd: message.fd });
+  } else if (message.type === "pipe-prefix") {
+    const pipe = request.child.stdio[message.fd];
+    if (pipe instanceof Socket && message.bytes.length > 0) {
+      pipe.unshift(message.bytes);
+    }
+  } else if (message.type === "file-output") {
+    // The worker publishes this only after native completion and writer closure.
+    request.nativeClosed = true;
+    if ("error" in message) {
+      request.output?.reject(Object.assign(new Error(message.error.message), message.error));
+    } else {
+      request.output?.resolve(message.bytes);
+    }
+    request.resultSettled = true;
+    request.child.settleFileOutput();
+  } else if (message.type === "execa-result") {
+    // Started commands publish their owned PID first on this ordered channel.
+    // A failed result without that admission is the worker's no-process outcome.
+    if (request.pid === undefined && message.result.failed) {
+      request.child.markNotStarted();
+    }
+    request.result?.resolve(message.result);
+    request.resultSettled = true;
+  } else {
+    if (message.type === "closed") {
+      request.nativeClosed = true;
+    } else if (message.type === "error" && message.notStarted) {
+      request.child.markNotStarted();
+    }
+    if (message.type === "error" && message.resultUnavailable && request.output) {
+      request.output.reject(Object.assign(new Error(message.error.message), message.error));
+      request.resultSettled = true;
+      request.child.settleFileOutput();
+    }
+    if (message.type === "error" && message.resultUnavailable && request.result) {
+      request.result.reject(Object.assign(new Error(message.error.message), message.error));
+      request.resultSettled = true;
+    }
+    request.child.receive(message);
+  }
+  return undefined;
 }

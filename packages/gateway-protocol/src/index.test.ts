@@ -59,7 +59,11 @@ describe("precompiled protocol validators", () => {
   });
 
   it("accepts bounded session-list attribution without requiring it from other clients", () => {
-    check(p.validateSessionsListParams, [{}, { source: "dashboard", rowMode: "compact" }]);
+    check(p.validateSessionsListParams, [
+      {},
+      { source: "dashboard", rowMode: "compact" },
+      { source: "sessions-search", rowMode: "dashboard", archived: "all", limit: 200 },
+    ]);
     check(p.validateSessionsListParams, [], [{ source: "arbitrary-private-caller" }]);
   });
 

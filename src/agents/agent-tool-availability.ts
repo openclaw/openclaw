@@ -22,7 +22,7 @@ export type AgentToolAvailabilityBinding = {
 const availabilityBindings = new WeakMap<
   object,
   {
-    binding: AgentToolAvailabilityBinding;
+    binding?: AgentToolAvailabilityBinding;
     executionDenied?: true;
   }
 >();
@@ -61,9 +61,7 @@ export function copyAgentToolAvailability<T extends object>(source: object, targ
 /** Record an executor denial so later schema-only catalog projections cannot undo it. */
 export function markAgentToolExecutionUnavailable<T extends object>(tool: T): T {
   const metadata = availabilityBindings.get(tool);
-  if (metadata) {
-    availabilityBindings.set(tool, { ...metadata, executionDenied: true });
-  }
+  availabilityBindings.set(tool, { ...metadata, executionDenied: true });
   return tool;
 }
 
@@ -136,6 +134,6 @@ export function bindAgentToolExecutionSchema<T extends object>(tool: T, schema: 
 }
 
 export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): unknown {
-  const declared = availabilityBindings.get(tool)?.binding.executionSchema?.(schema);
+  const declared = availabilityBindings.get(tool)?.binding?.executionSchema?.(schema);
   return declared !== undefined ? declared : (executionSchemas.get(tool) ?? schema);
 }

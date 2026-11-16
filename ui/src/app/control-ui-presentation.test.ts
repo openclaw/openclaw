@@ -5,7 +5,11 @@ import * as themeColors from "../lib/theme-color.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
-import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import {
+  applyControlUiAccent,
+  applyControlUiOperatorSeamColor,
+  syncControlUiSystemChrome,
+} from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
@@ -19,6 +23,22 @@ afterEach(() => {
 });
 
 describe("Control UI accent presentation", () => {
+  it("leaves initial theme projection to the theme owner when no operator seam is configured", () => {
+    applyControlUiOperatorSeamColor(undefined);
+    const nextDocument = document.implementation.createHTMLDocument();
+    nextDocument.documentElement.style.setProperty("--accent", "#123456");
+    vi.stubGlobal("document", nextDocument);
+    const reads = vi.spyOn(globalThis, "getComputedStyle");
+    try {
+      applyControlUiOperatorSeamColor(undefined);
+      expect(reads).not.toHaveBeenCalled();
+      expect(nextDocument.documentElement.style.getPropertyValue("--accent")).toBe("#123456");
+    } finally {
+      reads.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reuses palette colors across breakpoint changes", () => {
     const root = document.documentElement;
     // Shared jsdom workers can retain a previous file's theme attributes.
@@ -148,6 +168,36 @@ describe("Control UI accent presentation", () => {
       expect(root.style.backgroundColor).toBe("");
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps unchanged operator seams free of style writes and preserves accent priority", () => {
+    const root = document.documentElement;
+    root.style.setProperty("--bg", "#ffffff");
+    root.style.setProperty("--bg-content", "#ffffff");
+    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+    const mutations = new MutationObserver(() => {});
+    mutations.observe(root, { attributes: true, attributeFilter: ["style"] });
+    try {
+      applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+      expect(mutations.takeRecords()).toEqual([]);
+
+      applyControlUiPresentation({ environment: null, seamColor: "#abcdef" });
+      expect(mutations.takeRecords().length).toBeGreaterThan(0);
+      expect(root.style.getPropertyValue("--accent")).toBe("#abcdef");
+
+      applyControlUiAccent("#fbbf24");
+      applyControlUiPresentation({ environment: null, seamColor: "#654321" });
+      expect(root.style.getPropertyValue("--accent")).toBe("#fbbf24");
+      mutations.takeRecords();
+      applyControlUiPresentation({ environment: null, seamColor: "#654321" });
+      expect(mutations.takeRecords()).toEqual([]);
+      expect(root.style.getPropertyValue("--accent")).toBe("#fbbf24");
+
+      applyControlUiAccent();
+      expect(root.style.getPropertyValue("--accent")).toBe("#654321");
+    } finally {
+      mutations.disconnect();
     }
   });
 

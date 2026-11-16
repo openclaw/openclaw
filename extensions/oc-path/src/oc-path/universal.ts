@@ -139,7 +139,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
       if (p.section === undefined) {
         return { kind: "insertion-point", container: "md-file", line: 1 };
       }
-      if (p.section === "[frontmatter]") {
+      if (p.section === "[frontmatter]" && p.item === undefined && p.field === undefined) {
         return { kind: "insertion-point", container: "md-frontmatter", line: 1 };
       }
       if (p.item === undefined && p.field === undefined) {
@@ -424,7 +424,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     }));
   }
 
-  if (p.section === "[frontmatter]") {
+  if (p.section === "[frontmatter]" && p.item === undefined && p.field === undefined) {
     if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
       throw new OcPathEditError("not-writable", "md frontmatter insertion requires +key");
     }
@@ -493,6 +493,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
                   text: value,
                   slug: slugify(kv?.key ?? value),
                   line,
+                  textLine: line,
                   ...(kv === undefined ? {} : { kv }),
                 },
               ],

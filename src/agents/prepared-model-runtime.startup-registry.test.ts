@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -34,6 +33,7 @@ import {
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
 import {
   createPreparedInboundRegistryLoader,
@@ -138,7 +138,7 @@ it("releases the acquiring caller context while a prepared registry remains reta
     try {
       await resources[Symbol.asyncDispose]();
       await setImmediate();
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(() => claim!.assertOpen()).not.toThrow();
       expect(context.getStore()).toBeUndefined();
       expect(reference.deref()).toBeUndefined();

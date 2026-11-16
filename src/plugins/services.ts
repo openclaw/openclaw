@@ -21,7 +21,7 @@ import { withPluginRetentionOwner } from "./plugin-retention-diagnostics.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
-import type { PluginRegistry, PluginServiceRegistration } from "./registry-types.js";
+import type { PluginServiceRegistration } from "./registry-types.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
@@ -29,6 +29,7 @@ import { createPluginServiceAutomationCapabilities } from "./service-automation-
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
+import { preparePluginServicesOwner } from "./service-lifecycle-owner.js";
 import type {
   OwnedPluginService,
   PluginServicesHandle,
@@ -41,7 +42,7 @@ import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { OpenClawPluginServiceContextV2 } from "./types.js";
+import type { OpenClawPluginServiceContextV3 } from "./types.js";
 
 export type { PluginServicesHandle } from "./service-lifecycle.types.js";
 
@@ -82,46 +83,6 @@ export function getPluginServiceCleanupSettlement(
 
 const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
 
-function preparePluginServicesOwner(
-  registry: PluginRegistry,
-  previousHandle: PluginServicesHandle | null | undefined,
-): PluginServicesOwner {
-  // Failed starts still own their cleanup and remain selectable for a later retry.
-  const previous = previousHandle && serviceOwners.get(previousHandle);
-  const owner: PluginServicesOwner = {
-    services: [],
-    attempts: previous?.attempts ?? new WeakMap(),
-    registrations: new Set(registry.services),
-    stopped: new Set(),
-    closed: false,
-  };
-  if (previous) {
-    for (const registration of owner.registrations) {
-      previous.registrations.delete(registration);
-      const entry = owner.attempts.get(registration);
-      if (!entry) {
-        continue;
-      }
-      // Rollback can reclaim an earlier attempt that the rejected candidate did not select.
-      const source = entry.owner;
-      source.registrations.delete(registration);
-      source.services.splice(source.services.indexOf(entry), 1);
-      // Explicitly stopped, fully cleaned registrations can start again in a new
-      // generation. Failed attempts stay in the inventory until an explicit reload.
-      if (source.stopped.has(registration) && entry.cleaned && !entry.startup) {
-        owner.attempts.delete(registration);
-        continue;
-      }
-      if (source.stopped.has(registration)) {
-        owner.stopped.add(registration);
-      }
-      entry.owner = owner;
-      owner.services.push(entry);
-    }
-  }
-  return owner;
-}
-
 // Long-lived callbacks must not capture the startup-only predecessor and publication callback.
 export function startPluginServices({
   previous,
@@ -130,7 +91,10 @@ export function startPluginServices({
 }: StartPluginServicesParams): Promise<PluginServicesHandle> {
   return startPreparedPluginServices({
     ...params,
-    owner: preparePluginServicesOwner(params.registry, previous),
+    owner: preparePluginServicesOwner(
+      params.registry,
+      previous ? serviceOwners.get(previous) : undefined,
+    ),
     publication: { callback: onHandle },
   });
 }
@@ -525,8 +489,11 @@ async function startPreparedPluginServices({
     const runServiceStart = runInServiceContext(() =>
       createScheduledGatewayRunner(resolveGatewayContext),
     );
-    const { getCron, mcpEvents } = createPluginServiceAutomationCapabilities({
+    const { getCron, mcpEvents, sessionWork } = createPluginServiceAutomationCapabilities({
       pluginId: entry.pluginId,
+      serviceId: entry.id,
+      registry,
+      signal: scheduling.scheduler.signal,
       lease,
       getCronService,
       resolveGatewayContext,
@@ -552,7 +519,8 @@ async function startPreparedPluginServices({
 
     const scopeTraceName = (name: string) =>
       `${traceName}.${name.split(".").map(encodeStartupTraceSegment).join(".")}`;
-    const serviceContext: OpenClawPluginServiceContextV2 = {
+    const serviceContext: OpenClawPluginServiceContextV3 = {
+      sessionWork,
       scheduler: scheduling.scheduler,
       config,
       workspaceDir,

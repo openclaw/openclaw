@@ -11,6 +11,11 @@ import {
   type ReleaseRun,
   type RowObservation,
 } from "../../scripts/lib/catalog-compare-released-diff.mts";
+import {
+  catalogRowCount,
+  releasedReaderVerdict,
+  releasedSchemaVersions,
+} from "../../scripts/lib/catalog-compare-released-gate.mts";
 
 function kimiRow(highEffort: string): RowObservation {
   const request = (effort: string) => ({
@@ -162,5 +167,101 @@ describe("catalog compare released install cache", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("catalog compare released publish gate", () => {
+  const updated = (models: number) => ({ status: "updated", models });
+  const verdict = (candidate: [number, object], baseline?: [number, object], allowRowLoss = 0) =>
+    releasedReaderVerdict({
+      feed: "v2",
+      release: "2026.11.5-beta.1",
+      candidate: { emitted: candidate[0], refresh: candidate[1] },
+      ...(baseline ? { baseline: { emitted: baseline[0], refresh: baseline[1] } } : {}),
+      allowRowLoss,
+    }).failure;
+
+  it.each([
+    // Audit: beta salvaged rows of v2-20-enum-pricing-status and reported updated.
+    [
+      "a dropped published row",
+      verdict([1244, updated(1243)], [1244, updated(1244)]),
+      "release dropped 1 of 1244 published rows (allowed 0)",
+    ],
+    [
+      "a loss the last published file already had",
+      verdict([1262, updated(1261)], [1261, updated(1260)]),
+      undefined,
+    ],
+    ["an allowed new loss", verdict([1262, updated(1260)], [1261, updated(1260)], 1), undefined],
+    [
+      "a loss next to a rejected baseline",
+      verdict([1262, updated(1261)], [1261, { status: "error" }]),
+      "release dropped 1 of 1262",
+    ],
+    ["a rejection", verdict([1244, { status: "error", error: "bad\n  key" }]), "error: bad key"],
+  ])("judges %s", (_name, failure, expected) => {
+    if (expected === undefined) {
+      expect(failure).toBeUndefined();
+    } else {
+      expect(failure).toContain(expected);
+    }
+  });
+
+  it("counts rows and finds wire readers by the source names main declares", () => {
+    expect(catalogRowCount({ providers: { a: { models: [{}, {}] }, b: { models: [{}] } } })).toBe(
+      3,
+    );
+    expect(catalogRowCount({ schemaVersion: 3, models: [{}, {}] })).toBe(2);
+    const source = fs.readFileSync(
+      "packages/model-catalog-core/src/remote-catalog-bundle.ts",
+      "utf8",
+    );
+    expect(releasedSchemaVersions([source])).toEqual(new Set([1, 2, 3]));
+  });
+});
+
+describe("catalog compare released --check", () => {
+  // Fake releases that list no provider plugins and ship only v1/v2 readers.
+  function runCheck(schemaVersion: number, args: string[]) {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "catalog-check-test-")));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(root, "tmp"));
+    fs.writeFileSync(
+      path.join(bin, "npm"),
+      `#!/bin/sh
+[ "$1" = install ] && mkdir -p node_modules/openclaw/dist && echo '"official-external-provider-catalog.json" function validateAndSanitizeRemoteModelCatalogBundleV2(' > node_modules/openclaw/dist/listing.mjs
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    const bundle = path.join(root, "bundle.json");
+    fs.writeFileSync(bundle, JSON.stringify({ schemaVersion, providers: {}, models: [{}] }));
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/catalog-compare-released.mts", "--check", "--candidate", bundle, ...args],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          HOME: root,
+          OPENCLAW_HOME: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          TMPDIR: path.join(root, "tmp"),
+        },
+      },
+    );
+    fs.rmSync(root, { recursive: true, force: true });
+    return result;
+  }
+
+  it("skips releases without a reader for the candidate's wire version, by name", () => {
+    const result = runCheck(3, ["--releases", "2099.1.1"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "v3 on openclaw@2099.1.1: no v3 reader, skipped",
+      "v3: no checked release reads v3 yet",
+    ]);
   });
 });

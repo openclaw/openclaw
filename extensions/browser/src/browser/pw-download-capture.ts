@@ -161,8 +161,7 @@ export function createDownloadCaptureForPage(
         rejectCapture(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
       },
       Math.max(1, timeoutMs),
-    );
-    timer.unref?.();
+    ).unref();
     abort = () => {
       const reason = opts.signal?.reason;
       rejectCapture(reason instanceof Error ? reason : new Error("Download wait was cancelled"));

@@ -164,7 +164,7 @@ export async function commitRequesterTransfer(
           postimages.set(draft.runId, draft);
         }
       }
-      return { value: drafts, postimages };
+      return { value: drafts, postimages, removalReason: "requester_transfer" };
     },
     {
       runs: options.runs,
@@ -574,6 +574,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             attemptCount: 0,
             batchRunIds,
             requesterYieldBatch: true,
+            requesterRunId: requesterTurnRunId,
             // Written only by builds that let a yielded requester answer; released
             // markerless private batches keep their admitted private policy.
             yieldedFinalDeliverable: true,

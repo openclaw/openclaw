@@ -362,24 +362,24 @@ it.each([
   {
     name: "webhook route, no earlier alert",
     failureAlert: { after: 20, mode: "webhook", to: "https://alerts.example.com/hook" },
-    repairPending: false,
+    earlierNotice: false,
   },
-  { name: "announce route, no earlier alert", failureAlert: { after: 20 }, repairPending: false },
-  { name: "announce route, pending repair", failureAlert: { after: 2 }, repairPending: true },
+  { name: "announce route, no earlier alert", failureAlert: { after: 20 }, earlierNotice: false },
+  { name: "announce route, earlier owner notice", failureAlert: { after: 2 }, earlierNotice: true },
 ] as const)(
   "sends an owned job's auto-disable notice through its route, not a repair turn ($name)",
-  ({ failureAlert, repairPending }) => {
+  ({ failureAlert, earlierNotice }) => {
     const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
       owner: { agentId: "main", sessionKey: "agent:main:main" },
       failureAlert: { ...failureAlert },
       state: {
         consecutiveErrors: 9,
-        failureAlertIncident: repairPending
+        ...(earlierNotice
           ? {
-              scope: "run",
-              repair: { atMs: startedAt - 60_000, deadlineAtMs: startedAt + 60_000 },
+              lastFailureAlertAtMs: startedAt - 60_000,
+              failureAlertIncident: { scope: "run", signature: "earlier" },
             }
-          : undefined,
+          : {}),
       },
     } as Partial<CronJob>);
 
@@ -391,9 +391,6 @@ it.each([
     expect(notification?.kind === "failure-alert" && notification.payload.text).toContain(
       "was auto-disabled after 10 consecutive run failures",
     );
-    if (repairPending) {
-      expect(job.state.failureAlertIncident?.repair?.alerted).toBe(true);
-    }
   },
 );
 
@@ -585,21 +582,29 @@ it("sends one notice when an alert route also reports skipped runs", () => {
   expect(deferredNotifications).toEqual([pauseNotice]);
 });
 
-it("sends the pause notice to the agent that owns the gone conversation", () => {
-  const parentSessionKey = "agent:ops:dashboard:parent";
-  const { apply, deferredNotifications } = outcomeFixture(startedAt, {
-    agentId: undefined,
-    sessionKey: parentSessionKey,
-  });
-  apply(parentPause("archived", parentSessionKey));
-  expect(deferredNotifications).toEqual([
-    expect.objectContaining({
-      kind: "auto-disabled",
-      job: expect.objectContaining({ agentId: "ops" }),
-    }),
-  ]);
-  expect(deferredNotifications[0]?.job).not.toHaveProperty("sessionKey");
-});
+it.each(["legacy", "owner"] as const)(
+  "sends a %s pause notice to the agent, not its gone conversation",
+  async (origin) => {
+    const parentSessionKey = "agent:ops:dashboard:parent";
+    const enqueueSessionEvent = vi.fn();
+    const { state, apply, deferredNotifications } = outcomeFixture(
+      startedAt,
+      {
+        agentId: undefined,
+        ...(origin === "owner"
+          ? { owner: { sessionKey: parentSessionKey } }
+          : { sessionKey: parentSessionKey }),
+      },
+      { enqueueSessionEvent },
+    );
+    apply(parentPause("archived", parentSessionKey));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      "paused: parent archived",
+      expect.objectContaining({ agentId: "ops", sessionKey: undefined, createIfMissing: true }),
+    );
+  },
+);
 
 it("sends the pause notice for a one-shot job too", () => {
   const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {

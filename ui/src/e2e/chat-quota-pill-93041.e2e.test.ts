@@ -547,10 +547,10 @@ suite.define(() => {
         sessionKey: "agent:work:main",
         agentId: "work",
       });
-      await expect.poll(async () => popover.textContent()).toContain("Work Team");
+      await expect.poll(async () => popover.textContent()).toContain("24%");
       const settledText = (await popover.textContent()) ?? "";
       expect(settledText).toContain("work@example.test");
-      expect(settledText).toContain("24%");
+      expect(settledText).toContain("Work Team");
       expectTextExcludes(settledText, "Main Pro", "main@example.test");
     });
   });

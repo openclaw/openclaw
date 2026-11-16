@@ -109,7 +109,7 @@ function responses(installed = true) {
   };
   return {
     ...pluginMethodResponses(),
-    "plugins.list": inventory(installed ? [calendarPlugin] : []),
+    "plugins.list": inventory(installed ? [{ ...calendarPlugin, catalogId }] : []),
     "plugins.catalog.get": detail,
     "plugins.inspect": {
       ...calendarInspection,

@@ -1,8 +1,7 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -14,6 +13,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
 } from "../plugin-sdk/agent-harness-runtime.js";
+import { expectCollected } from "../test-utils/retention.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   attachCronStreamExecPolicy,
@@ -21,6 +21,7 @@ import {
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
   getCronManagementCallerOrigin,
+  hasCronCreatorGrantProvenance,
   mintCronCreatorAuthorityGrant as mint,
   resolveCronCreatorAuthorityGrantProvenance as provenance,
   revokeCronCreatorAuthorityRunScope as revokeScope,
@@ -45,14 +46,17 @@ async function expectDenied(operation: (run: () => Promise<unknown>) => Promise<
   expect(run).not.toHaveBeenCalled();
 }
 
-function createManagementFixture(controlUiAdmin = true) {
+function createManagementFixture(
+  controlUiAdmin = true,
+  callerOrigin: CronScheduledToolCallerOrigin = { kind: "local" },
+) {
   let continuationCurrent = true;
   const runId = "run-admin-management";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const scope = createScope(
     runId,
-    { kind: "local" },
+    callerOrigin,
     controlUiAdmin ? { source: "control-ui-admin" } : undefined,
     () => continuationCurrent,
   );
@@ -101,9 +105,11 @@ describe("cron creator authority grants", () => {
         return scope.signal;
       }
     }
-    const signal = new RevokingCaller().revoke();
-    await nextTurn();
-    expect(queryObjects(RevokingCaller)).toBe(0);
+    const { signal, caller: callerRef } = (() => {
+      const caller = new RevokingCaller();
+      return { signal: caller.revoke(), caller: new WeakRef(caller) };
+    })();
+    await expectCollected(callerRef);
     expect(signal.reason).toBeInstanceOf(TypeError);
     expect(signal.reason).toMatchObject({ name: "CronCreatorAuthorityExpiredError", status: 403 });
     expect(() => signal.throwIfAborted()).toThrow(signal.reason);
@@ -130,6 +136,10 @@ describe("cron creator authority grants", () => {
     expect(() => mint(external, undefined, undefined, undefined, "requester")).toThrow(
       "requires authenticated creator facts",
     );
+    const runtimeGrant = mint(external);
+    expect(
+      hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: runtimeGrant }, external.runId),
+    ).toBe(false);
   });
 
   it("rejects run substitution and transports private runtime authority only once", () => {
@@ -195,27 +205,36 @@ describe("cron creator authority grants", () => {
 });
 
 describe("cron management authority grants", () => {
-  it("retains a redeemed queued operation until its exact run closes, without permitting replay", async () => {
-    const fixture = createManagementFixture();
-    const grant = fixture.mint();
-    let retained: (() => void) | undefined;
-    await fixture.run(grant, async () => {
-      retained = getCronManagementAuthority(fixture.identity);
-      expect(retained).toBeTypeOf("function");
-      expect(getCronManagementCallerOrigin(fixture.identity)).toEqual({ kind: "local" });
-      expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
-      expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
-      retained!();
-      await Promise.resolve();
-      retained!();
-    });
-    expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
-    expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
-    expect(retained).not.toThrow();
-    revokeScope(fixture.scope);
-    expect(retained).toThrow(denied);
-    await fixture.deny(grant);
-  });
+  it.each([
+    { kind: "local" },
+    { kind: "external", channel: "telegram" },
+    { kind: "unknown" },
+  ] satisfies CronScheduledToolCallerOrigin[])(
+    "retains a redeemed $kind operation without permitting replay",
+    async (origin) => {
+      const fixture = createManagementFixture(true, origin);
+      const grant = fixture.mint();
+      let retained: (() => void) | undefined;
+      await fixture.run(grant, async () => {
+        retained = getCronManagementAuthority(fixture.identity);
+        expect(retained).toBeTypeOf("function");
+        expect(getCronManagementCallerOrigin(fixture.identity)).toEqual(
+          origin.kind === "unknown" ? undefined : origin,
+        );
+        expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
+        expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
+        retained!();
+        await Promise.resolve();
+        retained!();
+      });
+      expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
+      expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
+      expect(retained).not.toThrow();
+      revokeScope(fixture.scope);
+      expect(retained).toThrow(denied);
+      await fixture.deny(grant);
+    },
+  );
 
   it("rejects missing grants and callers without an admitted admin capability", async () => {
     const fixture = createManagementFixture(false);

@@ -55,16 +55,14 @@ export function authenticateExtensionWebSocket(params: {
   };
   const closePreAuthSocket = (code: number, reason: string) => {
     ws.close(code, reason);
-    const terminateTimer = setTimeout(() => ws.terminate(), 100);
-    terminateTimer.unref?.();
+    setTimeout(() => ws.terminate(), 100).unref();
   };
   const timer = setTimeout(() => {
     stage = "failed";
     ws.off("message", onMessage);
     ws.close(4008, "browser relay auth timeout");
     ws.terminate();
-  }, BROWSER_RELAY_CHALLENGE_TTL_MS);
-  timer.unref?.();
+  }, BROWSER_RELAY_CHALLENGE_TTL_MS).unref();
   const release = () => {
     clearTimeout(timer);
     removePreAuthGuard();

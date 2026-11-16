@@ -24,7 +24,7 @@ import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
   formatProviderRefusalText,
 } from "../shared/assistant-error-format.js";
-import { readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { readRunFailureCause, readRunFailureNotice } from "../shared/run-failure-notice.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -487,7 +487,25 @@ function projectRunFailureNotices(
       const summary =
         readRunFailureNotice(message)?.summary ??
         (typeof message.content === "string" ? message.content.trim() : undefined);
-      return runId && summary ? [{ ...message, openclawRunError: { runId, summary } }] : [message];
+      const cause =
+        readRunFailureNotice(message)?.cause ??
+        readRunFailureCause(asOptionalRecord(message.details)?.cause);
+      const desktopNotice = asOptionalRecord(message.details)?.desktopNotice;
+      const desktopSummary =
+        typeof desktopNotice === "string" && desktopNotice.trim() ? desktopNotice : undefined;
+      return runId && summary
+        ? [
+            {
+              ...message,
+              openclawRunError: {
+                runId,
+                summary,
+                ...(desktopSummary ? { desktopSummary } : {}),
+                ...(cause ? { cause } : {}),
+              },
+            },
+          ]
+        : [message];
     }
     if (readSessionTranscriptRunId(message) && isPendingAssistantError(message)) {
       // Legacy receipt-less attempts stay in the raw transcript. Inactivity or

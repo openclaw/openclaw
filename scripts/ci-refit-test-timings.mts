@@ -178,7 +178,9 @@ async function main() {
           afterCutoff ||= Date.parse(job.completed_at) > Date.parse(upper);
           const compactJob = /^checks-node-(?:changed-(?:config-)?)?compact-/u.test(job.name);
           const extensionJob =
-            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)$/u.test(job.name);
+            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)(?: \(node\)| \(bun\))?$/u.test(
+              job.name,
+            );
           const kind =
             source === "packed-release"
               ? job.name.startsWith("checks-node-release-packed-")
@@ -275,7 +277,8 @@ async function main() {
         : source === "pull-request"
           ? "pull_request"
           : "workflow_dispatch";
-    const completedRuns = source === "main" || source === "packed-release";
+    const completedRuns =
+      source === "main" || source === "packed-release" || source === "pull-request";
     const pageSchema = z.object({
       total_count: z.number().int().nonnegative(),
       workflow_runs: z.array(
@@ -289,8 +292,8 @@ async function main() {
         }),
       ),
     });
-    // Coalesced cancelled main tips must not exhaust pagination before usable runs.
-    const pageSize = source === "main" ? 100 : Math.min(count, 100);
+    // Cancelled main and PR runs must not exhaust pagination before usable runs.
+    const pageSize = source === "main" || source === "pull-request" ? 100 : Math.min(count, 100);
     const query = new URLSearchParams({
       ...(source === "main" ? { branch: "main" } : {}),
       event,
@@ -326,7 +329,7 @@ async function main() {
           continue;
         }
         seenRuns.set(run.id, identity);
-        // Completed failed main runs still contain successful independent jobs.
+        // Completed failed workflows still contain successful independent jobs.
         // Cancellation and other conclusions do not supply a timing cohort.
         if (run.conclusion !== "success" && run.conclusion !== "failure") {
           continue;

@@ -16,6 +16,7 @@ import { plainToolCallPreviewTextFilter } from "../shared/text/assistant-visible
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import { withAssistantReplySource } from "./embedded-agent-reply-source.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
@@ -486,14 +487,15 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         assistantTranscriptSource: readAgentAssistantSource(state.lastAssistant),
       });
     }
+    const sourcePayload = withAssistantReplySource(blockPayload, state.assistantReplyToId);
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
-        ? setReplyPayloadMetadata(blockPayload, {
+        ? setReplyPayloadMetadata(sourcePayload, {
             assistantMessageIndex: options.assistantMessageIndex,
             assistantMessageStartIndex: state.assistantMessageStartIndex,
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
-        : blockPayload;
+        : sourcePayload;
     if (blockPayload.text && options?.blockSourceText !== undefined) {
       setReplyPayloadMetadata(taggedPayload, {
         blockSourceText: options.blockSourceText,

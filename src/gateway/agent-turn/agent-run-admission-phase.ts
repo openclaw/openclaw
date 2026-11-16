@@ -106,14 +106,6 @@ export async function prepareAgentRunDispatch(
     });
     return undefined;
   }
-  if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "cron run continuation could not be restored"),
-    ]);
-    return undefined;
-  }
 
   const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
   const { lifecycleStorePath } = modelSelection;
@@ -488,6 +480,7 @@ export async function prepareAgentRunDispatch(
         activeRunAbort.controller.signal.throwIfAborted();
       },
       assertCompletionCurrent: () => assertInputOwnerCurrent(true),
+      onTranscriptCommitted: activeRunAbort.entry?.input.onTranscriptCommitted,
       abortSignal: activeRunAbort.controller.signal,
       getAbortStopReason: () => activeRunAbort.entry?.adapter.abortStopReason ?? "rpc",
       admittedSessionId: params.getAdmittedSessionId(),
@@ -550,8 +543,6 @@ export async function prepareAgentRunDispatch(
       params.client.internal.operatorRoleActor?.kind === "system" &&
       !params.client.internal.operatorRunAuthority &&
       !params.client.authenticatedUserProfile &&
-      !params.client.internal.cronRunContinuation &&
-      !params.restoredCronContinuation &&
       params.resolvedSessionKey &&
       !isCronSessionKey(params.resolvedSessionKey) &&
       userTurn.inputProvenance?.kind === "internal_system" &&
@@ -568,13 +559,12 @@ export async function prepareAgentRunDispatch(
             },
           }
         : undefined;
-    // Accepted work retains this caller; the shared owner derives continuation from child lineage.
+    // Accepted work retains this caller's continuation for the turn's whole lifetime.
     capturedOperator = await retainAgentTurnOperatorRun({
       ...params,
       lifecycleStorePath,
       assertInputCurrent: assertInputOwnerCurrent,
       systemTurn,
-      spawnedBy: params.sessionEntry?.spawnedBy,
       entry: activeRunAbort.entry,
       abortSession: params.resolvedSessionKey
         ? {
@@ -648,7 +638,6 @@ export async function prepareAgentRunDispatch(
         spawnedBy: params.sessionEntry?.spawnedBy,
         isCurrent: params.hasCurrentClientAuthority,
         inputProvenance: userTurn.inputProvenance,
-        hasRestoredCronContinuation: params.restoredCronContinuation !== undefined,
       },
       activeRunAbort.controller.signal,
     );
@@ -695,7 +684,6 @@ export async function prepareAgentRunDispatch(
       ...modelSelection,
       imageUnderstandingModel: params.needsImageUnderstanding ? resolvedRuntime : undefined,
       trustedInternalHandoff,
-      restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
       resolvedThreadId,
       reactivateSubagent,
       followupCompletion,

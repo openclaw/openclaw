@@ -183,6 +183,8 @@ describe("structured Goal admission", () => {
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
+        chatGoalDraftMode:
+          objective === "/stop" ? { action: "start" } : { action: "start", fromCommand: true },
         chatAttachments: [createStagedAttachment("goal-document")],
         chatReplyTarget: {
           messageId: "message-a",
@@ -551,7 +553,7 @@ describe("handleSendChat immediate local commands", () => {
       expect(exportCurrentChat).not.toHaveBeenCalled();
       expect(host.request).not.toHaveBeenCalled();
       expect(host.chatError).toBe(
-        "Control UI exports Markdown through your browser. Run /export without a file path.",
+        "The web app exports Markdown through your browser. Run /export without a file path.",
       );
       expect(host.chatMessage).toBe(draft);
       expect(host.chatAttachments).toEqual([attachment]);

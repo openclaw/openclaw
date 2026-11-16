@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -12,7 +13,7 @@ import {
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
 import { worktreePathExists } from "./git.js";
-import { prepareWorktreeRegistryGuard } from "./registry-read.js";
+import { prepareWorktreeRegistryGuard, readRegistryWorktreeForMutation } from "./registry-read.js";
 import {
   deferFailedWorktreeRemoval,
   deferWorktreeCleanup,
@@ -34,11 +35,13 @@ import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
+  ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
+  WorktreeMutationGuard,
   WorktreeWorkerAuthority,
 } from "./types.js";
 
@@ -51,7 +54,7 @@ export type WorktreeCleanupMutation = <T>(
 
 export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
-  beforeRemoval?: () => Promise<void>;
+  beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
   ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
@@ -65,6 +68,12 @@ export type WorktreeCleanupOwnerPolicy = {
     signal?: AbortSignal,
   ) => Promise<T>;
 };
+
+export type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
+  WorktreeMutationGuard & {
+    beforeTemplateRemoval?: () => Promise<void>;
+    checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
+  };
 
 export async function removeWorktreeIfLossless(
   params: Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
@@ -289,6 +298,26 @@ export function createWorktreeGcRemoval(context: {
     if (hasWorktreeUnknownOutcome(initialError)) {
       throw initialError;
     }
+    const { RejectedLocalWorkspaceResultError } =
+      await import("../../gateway/worker-environments/local-workspace-checkpoint.js");
+    const rejected = collectNestedErrorCandidates(initialError).find(
+      (error) => error instanceof RejectedLocalWorkspaceResultError,
+    );
+    if (rejected) {
+      const reason =
+        `Workspace result too large to apply automatically; reserved result ${rejected.resultRef}; ` +
+        `files preserved at ${rejected.projectionPath}. Reduce the change and checkpoint it, or recover manually, then run openclaw worktrees gc --retry-deferred. ${rejected.message}`;
+      await withOwnerMutation(async () => {
+        const commitGuard = await prepareOwnerCurrent(record, retiredOwner);
+        // Archive preparation may have saved a new snapshot before rejecting its overlay.
+        const current = await readRegistryWorktreeForMutation({ env, id: record.id, commitGuard });
+        if (current) {
+          await deferWorktreeGcRecord(env, current, reason, commitGuard);
+        }
+      });
+      progress.protect("idle", record.id, reason);
+      return;
+    }
     if (retiredOwner && !(initialError instanceof WorktreeRemovalContentionError)) {
       try {
         await withOwnerMutation(async () => {
@@ -496,7 +525,7 @@ export function createWorktreeGcRemoval(context: {
             progress.result.eligibleCount += 1;
             // Wait outside owner/checkout custody; removal still acquires and
             // validates live authority after admission.
-            await policy.beforeRemoval?.();
+            await policy.beforeRemoval?.(record);
             await withOwnerCleanup(record, async (withOwnerMutation) => {
               const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
               return context.remove({

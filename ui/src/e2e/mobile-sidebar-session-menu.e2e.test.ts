@@ -20,6 +20,7 @@ import {
   waitForMobileSidebarDrawerOpen,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { runActiveSessionRevealScenario } from "./sidebar-active-session-reveal.test-support.ts";
 import { seedSidebarSettings } from "./sidebar-contract.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -264,6 +265,12 @@ hybridSuite.define(() => {
 });
 
 suite.define(() => {
+  it("reveals the full active path after Waiting on, direct navigation, and browser history", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, ({ page }) =>
+      runActiveSessionRevealScenario(page, suite.server.baseUrl),
+    );
+  });
+
   it.each([
     { pointer: "fine", theme: "light" },
     { pointer: "fine", theme: "dark" },

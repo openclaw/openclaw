@@ -1,0 +1,3 @@
+# Exact net test-line growth for the warm CLI transport host-callback context fix:
+# src/agents/cli-runner/execute-plugin.warm-context.test.ts (new regression test).
+43

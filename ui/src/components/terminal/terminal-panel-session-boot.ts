@@ -14,12 +14,10 @@ import type {
   TerminalGatewayClient,
   TerminalOpenResult,
 } from "./terminal-connection.ts";
-import {
-  disposeTerminalController,
-  replaceTerminalController,
-} from "./terminal-controller-lifecycle.ts";
+import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
+import { replaceTerminalController } from "./terminal-panel-session-rendering.ts";
 import {
   TERMINAL_OUTPUT_ENCODER,
   resolveTerminalPanelOwnerSessionKey,

@@ -14,7 +14,10 @@ import type {
   SessionActorLifetime,
   SessionActorOutcome,
 } from "./session-actor-contract.js";
+import { shareSessionActorEntryFields } from "./session-actor-entry-fields.js";
 import {
+  chargeSessionActorReplicaEntryFields,
+  estimateSessionActorReplicaBytes,
   indexSessionActorReplicaCell,
   retainSessionActorReplicaCell,
   sessionActorReplicaTargetKey,
@@ -43,11 +46,9 @@ import {
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import { internSessionSkillSnapshot } from "./session-skill-snapshot-intern.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
-import type { SessionEntry } from "./types.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -56,43 +57,15 @@ const MAX_BYTES = 8 * 1024 * 1024;
 // (rows or exact-context events), not their immutable payload descendants.
 const transcriptSizes = new WeakMap<object, number>();
 
-// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
-// acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(
-  value: unknown,
-  sizes?: WeakMap<object, number>,
-  memoizeDescendants = true,
-): number {
-  if (typeof value === "string") {
-    return 16 + value.length * 2;
-  }
-  if (!value || typeof value !== "object") {
-    return 8;
-  }
-  const known = sizes?.get(value);
-  if (known !== undefined) {
-    return known;
-  }
-  const childSizes = memoizeDescendants ? sizes : undefined;
-  let bytes = 32;
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index++) {
-      if (index in value) {
-        bytes += 16 + estimateReplicaBytes(value[index], childSizes, false);
-      }
-    }
-  } else {
-    for (const key in value) {
-      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
-    }
-  }
-  sizes?.set(value, bytes);
-  return bytes;
-}
-
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
-  () => ({ cells: new Map(), cellsBySessionKey: new Map(), snapshots: 0, bytes: 0 }),
+  () => ({
+    cells: new Map(),
+    cellsBySessionKey: new Map(),
+    sharedFields: new Map(),
+    snapshots: 0,
+    bytes: 0,
+  }),
   (owner) => {
     owner.unsubscribe?.();
     owner.unsubscribe = undefined;
@@ -290,6 +263,15 @@ function discard(cell: ReplicaCell): void {
   if (cell.snapshot || cell.entry || cell.transcript) {
     pool.snapshots -= 1;
   }
+  // Shared charges live until the last resident cell releases the immutable field.
+  for (const field of cell.sharedFields ?? []) {
+    const retained = pool.sharedFields.get(field)!;
+    if (--retained.references === 0) {
+      pool.bytes -= retained.bytes;
+      pool.sharedFields.delete(field);
+    }
+  }
+  cell.sharedFields = undefined;
   pool.bytes -= cell.bytes;
   cell.transcript = undefined;
   cell.transcriptBytes = 0;
@@ -298,27 +280,11 @@ function discard(cell: ReplicaCell): void {
   cell.bytes = 0;
 }
 
-function shareEntrySkills(entry: SessionEntry | undefined): SessionEntry | undefined {
-  if (!entry?.skillsSnapshot) {
-    return entry;
-  }
-  const snapshot = entry.skillsSnapshot;
-  const shared = internSessionSkillSnapshot(snapshot);
-  if (shared !== snapshot) {
-    // Prepared publications can be frozen; worker-decoded entries remain owned here.
-    if (Object.isFrozen(entry)) {
-      return { ...entry, skillsSnapshot: shared };
-    }
-    entry.skillsSnapshot = shared;
-  }
-  return entry;
-}
-
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
-  entry.entry = shareEntrySkills(entry.entry);
+  entry.entry = shareSessionActorEntryFields(entry.entry);
   cell.entry = freezeTrustedJsonSnapshot(entry);
-  cell.bytes = estimateReplicaBytes(entry);
+  cell.bytes = chargeSessionActorReplicaEntryFields(pool, cell, entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   touch(cell);
@@ -337,7 +303,7 @@ function retainSnapshot(
   // Worker-decoded facts are plain data. Protect borrowed reads without inspecting
   // their shape again; unchanged frozen subtrees retain their identity.
   freezeTrustedJsonSnapshot(state.target);
-  state.entry = shareEntrySkills(state.entry);
+  state.entry = shareSessionActorEntryFields(state.entry);
   freezeTrustedJsonSnapshot(state.entry);
   freezeTrustedJsonSnapshot(state.members);
   freezeTrustedJsonSnapshot(state.participants);
@@ -345,7 +311,7 @@ function retainSnapshot(
   Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
-  cell.bytes = estimateReplicaBytes(state);
+  cell.bytes = chargeSessionActorReplicaEntryFields(pool, cell, state);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (
@@ -363,7 +329,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
     pool.snapshots += 1;
   }
   const previousBytes = cell.transcriptBytes;
-  const bytes = estimateReplicaBytes(transcript, transcriptSizes);
+  const bytes = estimateSessionActorReplicaBytes(transcript, transcriptSizes);
   cell.transcript = transcript;
   cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
@@ -416,6 +382,20 @@ function touch(cell: ReplicaCell): void {
     // Live handles retain empty cells; only resident payloads consume the cache budget.
     if (pool.snapshots <= MAX_SNAPSHOTS && (pool.bytes <= MAX_BYTES || pool.snapshots === 1)) {
       break;
+    }
+    if (
+      pool.snapshots <= MAX_SNAPSHOTS &&
+      candidate.transcript &&
+      (candidate.snapshot || candidate.entry)
+    ) {
+      // Drop reloadable history before the entry reference that keeps append receipts compact.
+      pool.bytes -= candidate.transcriptBytes;
+      candidate.bytes -= candidate.transcriptBytes;
+      candidate.transcript = undefined;
+      candidate.transcriptBytes = 0;
+      if (pool.bytes <= MAX_BYTES) {
+        break;
+      }
     }
     discard(candidate);
     forgetUnused(candidate);
@@ -716,11 +696,12 @@ export function createSessionActorReplica(params: {
     beginCommand() {
       const previous = owned.snapshot;
       const previousTranscript = owned.transcript;
+      const reference = previous ?? (owned.entry?.snapshots === "full" ? owned.entry : undefined);
       const previousGeneration = owned.generation;
       const expectedGeneration = begin();
       return {
         // Compression only: the worker must confirm this exact revision before using it.
-        preimage: previousGeneration === expectedGeneration ? previous : undefined,
+        preimage: previousGeneration === expectedGeneration ? reference : undefined,
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           if (outcome.kind === "rolled-back") {
             const restored = previous !== undefined && install(previous, previousGeneration);

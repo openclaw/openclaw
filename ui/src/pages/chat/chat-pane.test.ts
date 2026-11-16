@@ -151,11 +151,11 @@ describe("chat pane retained presentation", () => {
 });
 
 describe("chat pane header state", () => {
-  const workspaceSession = {
-    key: "agent:main:current",
-    kind: "direct",
-    updatedAt: 0,
-  } satisfies GatewaySessionRow;
+  const sessionRow = (
+    key = "agent:main:current",
+    extra: Partial<GatewaySessionRow> = {},
+  ): GatewaySessionRow => ({ key, kind: "direct", updatedAt: 0, ...extra });
+  const workspaceSession = sessionRow();
 
   it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
@@ -166,11 +166,7 @@ describe("chat pane header state", () => {
         refreshReplacement: vi.fn(async () => null),
       });
       const { pane } = createTestChatPane({ sessions });
-      const session = {
-        ...workspaceSession,
-        key: "agent:main:current",
-        label: "Current session",
-      } satisfies GatewaySessionRow;
+      const session = sessionRow("agent:main:current", { label: "Current session" });
 
       const pending = runPaneHeaderAction(pane, { kind: "delete" }, session);
       await waitForConfirmDialogActions();
@@ -291,13 +287,10 @@ describe("chat pane header state", () => {
     const request = vi.fn();
     const { pane } = createPaneWithRequest(request);
     await pane.loadHeaderMenuData(
-      {
-        key: "agent:main:remote",
-        kind: "direct",
-        updatedAt: 0,
+      sessionRow("agent:main:remote", {
         execNode: "build-mac",
         execCwd: "/remote/repo",
-      },
+      }),
       "/local/default",
       true,
     );
@@ -312,11 +305,9 @@ describe("chat pane header state", () => {
         worktrees: [{ id: "wt-1", path: "/src/worktree" }],
       });
     const { pane } = createPaneWithRequest(request);
-    const session = {
-      ...workspaceSession,
-      key: "agent:main:worktree",
+    const session = sessionRow("agent:main:worktree", {
       worktree: { id: "wt-1", branch: "feature", repoRoot: "/src/openclaw" },
-    } satisfies GatewaySessionRow;
+    });
     await pane.loadHeaderMenuData(session, "/src/default", true);
     await pane.loadHeaderMenuData(session, "/src/default", true);
     expect(request).toHaveBeenCalledTimes(2);
@@ -328,10 +319,7 @@ describe("chat pane header state", () => {
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce({ headBranch: "feature/header" });
     const { pane } = createPaneWithRequest(request);
-    const session = {
-      ...workspaceSession,
-      key: "agent:main:plain",
-    } satisfies GatewaySessionRow;
+    const session = sessionRow("agent:main:plain");
     await pane.loadHeaderMenuData(session, "/src/openclaw", true);
     await pane.loadHeaderMenuData(session, "/src/openclaw", true);
     expect(request).toHaveBeenCalledTimes(2);
@@ -340,11 +328,7 @@ describe("chat pane header state", () => {
   it("probes session-specific roots for a branch even when the agent workspace is not Git", async () => {
     const request = vi.fn().mockResolvedValue({ headBranch: "spawned/topic" });
     const { pane } = createPaneWithRequest(request);
-    const session = {
-      ...workspaceSession,
-      key: "agent:main:spawned",
-      spawnedWorkspaceDir: "/src/spawned-repo",
-    } satisfies GatewaySessionRow;
+    const session = sessionRow("agent:main:spawned", { spawnedWorkspaceDir: "/src/spawned-repo" });
     await pane.loadHeaderMenuData(session, "/plain/agent-workspace", false);
     expect(request).toHaveBeenCalledWith(
       "worktrees.branches",
@@ -354,10 +338,7 @@ describe("chat pane header state", () => {
 
     // The agent-workspace root keeps honoring the agent's workspaceGit flag.
     request.mockClear();
-    const plain = {
-      ...workspaceSession,
-      key: "agent:main:plain2",
-    } satisfies GatewaySessionRow;
+    const plain = sessionRow("agent:main:plain2");
     await pane.loadHeaderMenuData(plain, "/plain/agent-workspace", false);
     expect(request).not.toHaveBeenCalled();
   });
@@ -370,19 +351,14 @@ describe("chat pane header state", () => {
       return { headBranch: "main" };
     });
     const { pane } = createPaneWithRequest(request);
-    const worktreeRow = {
-      ...workspaceSession,
-      key: "agent:main:reused",
+    const worktreeRow = sessionRow("agent:main:reused", {
       worktree: { id: "wt-1", branch: "feature", repoRoot: "/src/openclaw" },
-    } satisfies GatewaySessionRow;
+    });
     await pane.loadHeaderMenuData(worktreeRow, "/src/agent-workspace", true);
 
     // New Chat resets the same key in place and detaches the worktree; the
     // branch probe must target the agent workspace, not the stale checkout.
-    const resetRow = {
-      ...workspaceSession,
-      key: "agent:main:reused",
-    } satisfies GatewaySessionRow;
+    const resetRow = sessionRow("agent:main:reused");
     await pane.loadHeaderMenuData(resetRow, "/src/agent-workspace", true);
     expect(request).toHaveBeenLastCalledWith(
       "worktrees.branches",
@@ -394,11 +370,9 @@ describe("chat pane header state", () => {
   it("skips branch lookups while the session runs remotely", async () => {
     const request = vi.fn().mockResolvedValue({ headBranch: "main" });
     const { pane } = createPaneWithRequest(request);
-    const dispatched = {
-      ...workspaceSession,
-      key: "agent:main:moves",
+    const dispatched = sessionRow("agent:main:moves", {
       placement: { state: "active" } as GatewaySessionRow["placement"],
-    } satisfies GatewaySessionRow;
+    });
     await pane.loadHeaderMenuData(dispatched, "/src/openclaw", true);
     expect(request).not.toHaveBeenCalled();
   });
@@ -409,10 +383,7 @@ describe("chat pane header state", () => {
       .mockResolvedValueOnce({ headBranch: "main" })
       .mockResolvedValueOnce({ headBranch: "feature/next" });
     const { pane } = createPaneWithRequest(request);
-    const session = {
-      ...workspaceSession,
-      key: "agent:main:plain",
-    } satisfies GatewaySessionRow;
+    const session = sessionRow("agent:main:plain");
     await pane.loadHeaderMenuData(session, "/src/openclaw", true);
     await pane.loadHeaderMenuData(session, "/src/openclaw", true);
     expect(request).toHaveBeenCalledTimes(2);

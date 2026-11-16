@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
+import { forceFullGc } from "../test-utils/retention.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -39,7 +39,7 @@ it("releases completed caller data while the diagnostic quota remains live", asy
     const control = new WeakRef({});
     // WeakRef targets stay alive until their creation job ends.
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     expect(reference.deref()).toBeUndefined();
     completeOperation();

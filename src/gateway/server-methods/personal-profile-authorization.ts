@@ -1,5 +1,6 @@
 import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
+import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
   resolveOperatorRolePolicy,
@@ -13,11 +14,16 @@ import {
 } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
+type PersonalProfileScope =
+  | "operator.read"
+  | "operator.write"
+  | "operator.sessions.read"
+  | "operator.admin";
 
 /** Intersect the live role ceiling with the socket grant, preserving scope implications. */
 export function currentPersonalProfileClient(
   options: Request,
-  scope: "operator.read" | "operator.write" | "operator.sessions.read",
+  scope: PersonalProfileScope,
   owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
 ) {
   const { client, context } = options;
@@ -44,17 +50,21 @@ export function currentPersonalProfileClient(
   }
   const cfg = context.getRuntimeConfig();
   const profileId = typeof owner === "string" ? owner : owner?.profileId;
+  // An owner device attributed to its linked profile keeps owner authority (OCF-510) while
+  // its owner certificate is current; a stale one falls back to the person's role.
   const policy =
-    typeof owner === "object"
-      ? resolveOperatorRolePolicyForAssignment(
-          owner.profileId,
-          owner.role,
-          cfg,
-          owner.githubLogin ?? null,
-        )
-      : profileId
-        ? resolveOperatorRolePolicyForProfile(profileId, cfg)
-        : resolveOperatorRolePolicy(client, cfg);
+    currentOwnerDevicePrincipal(client) !== undefined
+      ? undefined
+      : typeof owner === "object"
+        ? resolveOperatorRolePolicyForAssignment(
+            owner.profileId,
+            owner.role,
+            cfg,
+            owner.githubLogin ?? null,
+          )
+        : profileId
+          ? resolveOperatorRolePolicyForProfile(profileId, cfg)
+          : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
   const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (
@@ -79,7 +89,7 @@ export function currentPersonalProfileClient(
 /** Prepare canonical role facts off-thread; live checks consume the profile owner's revisions. */
 export async function preparePersonalProfileAction(
   options: Request,
-  scope: "operator.read" | "operator.write" | "operator.sessions.read" = "operator.read",
+  scope: PersonalProfileScope = "operator.read",
   callerSignal?: AbortSignal,
 ): Promise<{ owner: string; signal: AbortSignal; assertCurrent: () => void }> {
   const { client, context } = options;

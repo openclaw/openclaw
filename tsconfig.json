@@ -244,6 +244,9 @@
       "@openclaw/normalization-core/string-normalization": [
         "./packages/normalization-core/src/string-normalization.ts"
       ],
+      "@openclaw/normalization-core/stringified-error": [
+        "./packages/normalization-core/src/stringified-error.ts"
+      ],
       "@openclaw/normalization-core/utf16-slice": [
         "./packages/normalization-core/src/utf16-slice.ts"
       ],

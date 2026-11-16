@@ -715,10 +715,20 @@
           "id": "perplexity",
           "label": "Perplexity"
         },
+        "providers": [
+          {
+            "id": "perplexity-decisions",
+            "name": "Perplexity Decisions",
+            "docs": "/providers/perplexity-provider",
+            "categories": ["cloud", "llm"],
+            "envVars": ["PERPLEXITY_API_KEY"]
+          }
+        ],
         "contracts": {
           "webSearchProviders": [
             "perplexity"
-          ]
+          ],
+          "decisionProviders": ["perplexity-decisions"]
         },
         "webSearchProviders": [
           {

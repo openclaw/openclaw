@@ -51,11 +51,10 @@ it("closes admission before handing runtime recovery to the supervisor", async (
     });
     try {
       diagnose();
-      await vi.dynamicImportSettled();
+      await expect(exited).resolves.toBe(0);
       expect(f.requestGatewayRestartWithSignalAdmission).toHaveBeenCalledExactlyOnceWith(
         "gateway.runtime-unavailable",
       );
-      await expect(exited).resolves.toBe(0);
       expect(close).toHaveBeenCalledOnce();
       expect(f.restartGatewayProcessWithFreshPid).toHaveBeenCalledOnce();
       expect(close.mock.invocationCallOrder[0]).toBeLessThan(

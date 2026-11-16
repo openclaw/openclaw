@@ -126,6 +126,25 @@ async function openPanel(element: ParentNode, trigger: HTMLButtonElement) {
 }
 
 describe("model auth attention", () => {
+  it.each([undefined, "expired"] as const)(
+    "does not require sign-in for routine OAuth expiry (%s)",
+    (reasonCode) => {
+      const items = authItems("main", {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expired",
+            profiles: [
+              { profileId: "openai:account", type: "oauth", status: "expired", reasonCode },
+            ],
+          },
+        ],
+      });
+      expect(items).toEqual([]);
+    },
+  );
   it.each([
     ["oauth", "Sign-in required", "Sign in"],
     ["api_key", "API key needs attention", "Update API key"],
@@ -146,25 +165,35 @@ describe("model auth attention", () => {
     expect(item?.detail).toContain(status);
   });
   it.each([
-    ["setup_inactive", "Sign in"],
-    [undefined, "Review account"],
-  ] as const)("handles mixed account inventory with reason %s", (reasonCode, action) => {
-    const snapshot = authStatus(1);
-    snapshot.providers = [
-      {
-        provider: "openai",
-        displayName: "OpenAI",
-        status: "expired",
-        profiles: [
-          { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
-          { profileId: "openai:z-login", type: "oauth", status: "expired" },
-        ],
-      },
-    ];
-    const item = authItems("main", snapshot)[0];
-    expect(item?.inlineAction?.label).toBe(action);
-    expect(item?.meta?.context).toBe(reasonCode ? "openai:z-login" : "main");
-  });
+    ["setup_inactive", "refresh_failed", "Sign in", "openai:z-login"],
+    [undefined, "refresh_failed", "Review account", "main"],
+    ["missing_credential", "expired", "Review account", "main"],
+    ["setup_inactive", "expired", undefined, undefined],
+  ] as const)(
+    "handles mixed account inventory with reason %s and OAuth %s",
+    (reasonCode, oauthReason, action, context) => {
+      const snapshot = authStatus(1);
+      snapshot.providers = [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "expired",
+          profiles: [
+            { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
+            {
+              profileId: "openai:z-login",
+              type: "oauth",
+              status: "expired",
+              reasonCode: oauthReason,
+            },
+          ],
+        },
+      ];
+      const item = authItems("main", snapshot)[0];
+      expect(item?.inlineAction?.label).toBe(action);
+      expect(item?.meta?.context).toBe(context);
+    },
+  );
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");
@@ -224,6 +253,7 @@ describe("sidebar attention refresh ownership", () => {
     overrides: Partial<Pick<ApplicationContext, "agentSelection" | "gateway" | "overlays">> = {},
   ) {
     const sources = {
+      config: { current: { openclawIdEnabled: false }, subscribe: () => () => undefined },
       gateway: {
         snapshot: { phase: "connected", client: null, hello: null },
         connection: { gatewayUrl: "" },

@@ -2,6 +2,7 @@ import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-ca
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ManifestModelIdNormalizationProvider } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import type { MediaUnderstandingProviderMetadata } from "../../packages/media-understanding-common/src/types.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
@@ -403,6 +404,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Limit a regenerable exclusion to local restart checkpoints. */
+  profile?: "local-companion";
   /** Shared-state databases retained under this state-scoped resource. */
   databaseFamily?: "state";
 };
@@ -567,10 +570,7 @@ export type PluginManifest = {
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    PluginManifestMediaUnderstandingProviderMetadata
-  >;
+  mediaUnderstandingProviderMetadata?: Record<string, MediaUnderstandingProviderMetadata>;
   /** Cheap image-generation provider auth metadata without importing plugin runtime. */
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap video-generation provider auth metadata without importing plugin runtime. */
@@ -587,24 +587,6 @@ export type PluginManifest = {
 export type PluginManifestContracts = Partial<
   Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
 >;
-
-export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
-
-export type PluginManifestMediaUnderstandingProviderMetadata = {
-  capabilities?: PluginManifestMediaUnderstandingCapability[];
-  defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
-  autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
-  nativeDocumentInputs?: Array<"pdf">;
-  documentModels?: Partial<
-    Record<
-      "pdf",
-      {
-        textExtraction?: string;
-        image?: string | false;
-      }
-    >
-  >;
-};
 
 export type PluginManifestProviderBaseUrlGuard = {
   provider: string;

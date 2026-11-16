@@ -51,6 +51,9 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
   if (isCronJobRunning(job)) {
     return t("cron.runs.runStatusRunning");
   }
+  if (job.state?.autoDisabled) {
+    return t("cron.attention.noNextRun");
+  }
   if (!job.enabled) {
     return t("cron.list.paused");
   }

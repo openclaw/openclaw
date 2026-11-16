@@ -2,7 +2,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
 import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
 import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -107,26 +106,24 @@ export function AppsPage(props: { appSearch?: string }) {
         )
       : null;
   return (
-    <openclaw-apps-page>
-      <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
+    <openclaw-apps-page class={{ "mcp-app-workspace": Boolean(appRoute()) }}>
       <Show
         when={appRoute()}
         fallback={
-          <SettingsWorkspace>
-            <McpAppCatalog surface="global" />
-            <Apps
-              onNavigate={(route) => context.navigate(route)}
-              macGatewayLaunchUrl={macGatewayLaunchUrl()}
-              onPairDevice={
-                canPairDevice() ? () => void context.overlays.openDevicePairSetup() : undefined
-              }
-            />
-          </SettingsWorkspace>
+          <>
+            <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
+            <SettingsWorkspace>
+              <Apps
+                onNavigate={(route) => context.navigate(route)}
+                macGatewayLaunchUrl={macGatewayLaunchUrl()}
+                onPairDevice={
+                  canPairDevice() ? () => void context.overlays.openDevicePairSetup() : undefined
+                }
+              />
+            </SettingsWorkspace>
+          </>
         }
       >
-        <button class="btn" onClick={() => context.navigate("apps")}>
-          {t("mcpApp.close")}
-        </button>
         <Errored
           fallback={(error, reset) => (
             <>

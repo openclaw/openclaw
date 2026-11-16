@@ -136,6 +136,8 @@ it(
           },
           { expectFinal: true, timeoutMs: 120_000 },
         );
+        // The requester reads published facts; explicit inventory demand starts acquisition.
+        await client.request("models.list", { agentId: "main", sessionKey: SESSION_KEY });
         const readCatalog = async () => {
           const runId = randomUUID();
           await client.request("chat.send", {

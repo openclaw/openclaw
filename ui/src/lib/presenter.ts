@@ -4,6 +4,7 @@ import { t } from "../i18n/index.ts";
 import { registerCronScheduleEnglish } from "../i18n/locales/en-cron-schedule.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import {
+  formatCompactMs,
   formatDateMs,
   formatRelativeTimestamp,
   formatUnit,
@@ -47,8 +48,8 @@ export function formatEventPayload(payload: unknown): string {
 
 export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
-  const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
-  const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
+  const next = state.nextRunAtMs ? formatCompactMs(state.nextRunAtMs) : t("common.na");
+  const last = state.lastRunAtMs ? formatCompactMs(state.lastRunAtMs) : t("common.na");
   const status = resolveCronJobLastRunStatus(job);
   return t("cron.job.state", { status, next, last });
 }
@@ -57,7 +58,9 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return t("cron.scheduleLabel.at", { time: Number.isFinite(atMs) ? formatMs(atMs) : s.at });
+    return t("cron.scheduleLabel.at", {
+      time: Number.isFinite(atMs) ? formatCompactMs(atMs) : s.at,
+    });
   }
   if (s.kind === "every") {
     const duration = resolveExactDurationParts(s.everyMs)?.map(formatUnit).join(" ");

@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { isRegistrySourceInstallSpec } from "./install-spec.js";
@@ -21,7 +23,6 @@ import {
 import {
   checkGlobalPackageUpdateAdmission,
   classifyPackageUpdatePermissionFailure,
-  resolveCanonicalPath,
   runPnpmPreflightProbe,
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
@@ -39,6 +40,7 @@ import {
   createPackageVerificationFailureStep,
   type PackagePostInstallVerifier,
 } from "./package-update-verification-step.js";
+import { realpathOrResolve } from "./path-existence.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import { readBuiltGatewayBuildId, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
@@ -311,7 +313,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         const reportedPath = probe.result && readPackageManagerProbeValue(probe.result.stdout);
         if (
           !reportedPath ||
-          (await resolveCanonicalPath(reportedPath)) !== (await resolveCanonicalPath(expectedPath))
+          (await realpathOrResolve(reportedPath)) !== (await realpathOrResolve(expectedPath))
         ) {
           const failedStep = probe.failedStep ?? {
             name: "pnpm-staging-preflight",
@@ -716,6 +718,12 @@ export async function runGlobalPackageUpdateSteps(params: {
       throw error.cause;
     }
     if (error instanceof SystemPackageOwnershipError) {
+      throw error;
+    }
+    // An operator's signal is not a package failure; the caller reports the interruption.
+    if (
+      collectNestedErrorCandidates(error).some((cause) => extractErrorCode(cause) === "interrupted")
+    ) {
       throw error;
     }
     const failedStep = await classifyPackageUpdatePermissionFailure(

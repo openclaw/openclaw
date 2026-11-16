@@ -230,6 +230,7 @@ export async function prepareModelChoice(params: {
             entry,
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
           })?.id;
           // Same ownership rule as the turn path: a harness-listed model has no host transport.
           const nativeModel = resolveNativeOwnedRuntimeModel({
@@ -384,6 +385,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
+  // A sign-in after Gateway start must reach selection without a model-list read first.
+  await published.recheckNativeLogin?.();
   let nativeCatalog: ModelCatalogSnapshot | undefined;
   if (params.prepareNativeCatalog) {
     const configuredEntry = findModelInCatalog(
@@ -473,6 +476,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         entry: row,
         evaluation,
         pluginRegistry: owner.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       })?.id;
     const claudeCli = resolveModelRuntimeRoute(params.provider, routeRuntimeId) === "claudeCli";
     switch (reason) {

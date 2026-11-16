@@ -370,7 +370,10 @@ function census() {
   );
   return {
     snapshot,
-    tasks: worker.reduce((total, entry) => total + entry.tasksCompleted, 0),
+    tasks: worker.reduce((total, entry) => {
+      assert(entry.tasksCompleted !== undefined, "State-reader task census is unavailable");
+      return total + entry.tasksCompleted;
+    }, 0),
     reclaimedBytes: worker.reduce(
       (total, entry) => total + entry.gc.reduce((sum, gc) => sum + gc.reclaimedBytes, 0),
       0,

@@ -3,6 +3,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Combines per-call cancellation with run-level aborts while preserving
@@ -55,6 +56,10 @@ export function raceWithAbortSignal<T>(
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
+      // A steer keeps the run alive, so tool cleanup must settle before it can resume.
+      if (signal.reason instanceof ToolInterruptedByUser) {
+        return;
+      }
       const reason = yieldRunSignal?.reason as
         | { code?: unknown; turnHandoff?: unknown }
         | undefined;

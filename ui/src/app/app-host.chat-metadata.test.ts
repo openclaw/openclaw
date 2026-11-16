@@ -141,47 +141,59 @@ it("retains metadata through UI config changes and refreshes on catalog changes 
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
 });
 
-it("reuses unrelated agent catalogs across a minute of scoped publications", async () => {
+it("reuses unrelated agent catalogs and auth across a minute of scoped publications", async () => {
   vi.useFakeTimers();
   const { gateway, current, client, emit } = connectedGateway();
   let revision = 0;
-  const request = current().request.mockImplementation(async () => ({
-    models: [{ id: `model-${revision}`, name: "Catalog model", provider: "fixture" }],
-  }));
+  const request = current().request.mockImplementation(async (method) =>
+    method === "models.authStatus"
+      ? { ts: revision, providers: [] }
+      : { models: [{ id: `model-${revision}`, name: "Catalog model", provider: "fixture" }] },
+  );
   listenShell(gateway);
   const scopes = ["writer", "reader"].flatMap((agentId) => [
     { agentId },
     { agentId, sessionKey: `agent:${agentId}:chat` },
   ]);
   const read = () => Promise.all(scopes.map((scope) => loadModelCatalog(client, scope)));
-  await read();
+  const readAuth = () =>
+    Promise.all(
+      ["writer", "reader"].flatMap((agentId) =>
+        [false, true].map((refreshUsage) => loadModelAuthStatus(client, { agentId, refreshUsage })),
+      ),
+    );
+  await Promise.all([read(), readAuth()]);
   request.mockClear();
   for (revision = 1; revision <= 60; revision++) {
     emit("chat.metadata.changed", {
       agentId: "writer",
       modelCatalogChanged: true,
-      authChanged: false,
+      authChanged: true,
       commandsChanged: false,
     });
-    const catalogs = await read();
+    const [catalogs, auth] = await Promise.all([read(), readAuth()]);
     expect(catalogs.map((catalog) => catalog.models[0]?.id)).toEqual([
       `model-${revision}`,
       `model-${revision}`,
       "model-0",
       "model-0",
     ]);
+    expect(auth.map((result) => result.ts)).toEqual([revision, revision, 0, 0]);
     await vi.advanceTimersByTimeAsync(1_000);
   }
   expect(metadataCalls(request, "models.list")).toHaveLength(120);
+  expect(metadataCalls(request, "models.authStatus")).toHaveLength(120);
   emit("chat.metadata.changed", {
     modelCatalogChanged: true,
-    authChanged: false,
+    authChanged: true,
     commandsChanged: false,
   });
   expect((await read()).map((catalog) => catalog.models[0]?.id)).toEqual(
     Array.from({ length: 4 }, () => "model-61"),
   );
   expect(metadataCalls(request, "models.list")).toHaveLength(124);
+  expect((await readAuth()).map((result) => result.ts)).toEqual([61, 61, 61, 61]);
+  expect(metadataCalls(request, "models.authStatus")).toHaveLength(124);
 });
 
 it("settles discovery receipts without refetching unchanged warm catalogs", async () => {

@@ -62,6 +62,7 @@ export async function completeRepositoryWorktreeSetup(
           return provisionIncludedFiles(repository.sourceRoot, worktreePath, {
             signal: current.signal,
             assertCurrent: current.commitGuard,
+            workerAuthority: current.workerAuthority,
           });
         });
   if (runRepositorySetup) {
@@ -151,12 +152,14 @@ export async function materializeRepositoryWorktree(
     params.provisionIgnoredFiles === false
       ? 0
       : (
-          await runGitWorkerOperation(
-            {
-              type: "worktree.provisioning-inspection",
-              input: { sourceRoot: repository.sourceRoot },
-            },
-            { signal: params.signal, assertCurrent: params.commitGuard },
+          await timeWorktreePreparationPhase("provisionEstimate", () =>
+            runGitWorkerOperation(
+              {
+                type: "worktree.provisioning-inspection",
+                input: { sourceRoot: repository.sourceRoot },
+              },
+              { signal: params.signal, assertCurrent: params.commitGuard },
+            ),
           )
         ).estimatedBytes;
   const setupStat =
@@ -268,7 +271,13 @@ export async function prepareWarmWorktree(
   requireSpace: (bytes?: number) => Promise<void>,
 ): Promise<void> {
   const { template, sourceOnly } = request;
-  const current = await readTemplateAsync(env, template.cacheKey, guard.commitGuard);
+  const current = await readTemplateAsync(
+    env,
+    template.cacheKey,
+    guard.commitGuard,
+    undefined,
+    guard.workerAuthority,
+  );
   if (current?.id !== template.id || current.contentKey !== template.contentKey) {
     return;
   }

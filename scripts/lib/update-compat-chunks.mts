@@ -597,6 +597,7 @@ export function writeUpdateCompatibilityChunks(params: {
   distDir: string;
   sourceDir: string;
   inventory: UpdateCompatibilityInventory;
+  dryRun?: boolean;
 }): string[] {
   const distDir = path.resolve(params.distDir);
   using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
@@ -760,6 +761,9 @@ export function writeUpdateCompatibilityChunks(params: {
     outputs.set(chunk.path, contents);
   }
   // Finish all mappings before writing any compatibility output.
+  if (params.dryRun) {
+    return [...outputs.keys()].toSorted();
+  }
   for (const [relative, contents] of outputs) {
     const destination = path.join(distDir, relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true });

@@ -133,7 +133,7 @@ suite.define(() => {
       const message = "Condition script is invalid";
       await gateway.rejectDeferred("cron.add", { code: "INVALID_REQUEST", message });
 
-      const errorBanner = page.locator(".cron-error-banner");
+      const errorBanner = page.locator(".callout.danger");
       await errorBanner.waitFor({ state: "visible" });
       expect(await errorBanner.textContent()).toContain(message);
       expect(await triggerScript.inputValue()).toBe("const x = ;");

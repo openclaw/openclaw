@@ -6,7 +6,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
+import { readPendingInputSnapshotForTest } from "../config/sessions/session-pending-input-snapshot.test-support.js";
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
@@ -292,13 +292,13 @@ it.for(
       } else {
         expect(await fs.readFile(media.path)).toEqual(bytes);
         if (outcome === "unknown" && !chat) {
-          const source = await readPendingInputSource(f.scope, `${f.runId}:user`, true);
-          expect(source?.snapshot).toMatchObject({
+          const source = await readPendingInputSnapshotForTest(f.scope, `${f.runId}:user`);
+          expect(source).toMatchObject({
             current: true,
             pending: { run_id: f.runId, state: "queued" },
           });
-          expect(source?.snapshot.pending?.message_json).toContain(media.id);
-          expect(source?.snapshot.pending?.message_json).toContain(request.message);
+          expect(source.pending?.message_json).toContain(media.id);
+          expect(source.pending?.message_json).toContain(request.message);
         } else if (accepted) {
           expect(response.ok).toBe(true);
           expect(transcript).toHaveLength(f.before.length + 1);

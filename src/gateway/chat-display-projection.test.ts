@@ -622,6 +622,32 @@ const terminal = (runId = "run-a") => ({
   details: { runId },
   __openclaw: { id: "terminal-" + runId, seq: 10, runId },
 });
+it.each([undefined, "", "   ", "Desktop-specific failure details"])(
+  "preserves shared failure text while projecting desktop notice %j",
+  (desktopNotice) => {
+    const receipt = {
+      ...terminal(),
+      details: { runId: "run-a", desktopNotice },
+    };
+    const [projected] = projectChatDisplayMessages([receipt]);
+    if (!projected) {
+      throw new Error("Expected the failure receipt to remain in chat history");
+    }
+    expect(projected).toMatchObject({
+      content: "Recovery exhausted.",
+      openclawRunError: {
+        runId: "run-a",
+        summary: "Recovery exhausted.",
+      },
+    });
+    if (desktopNotice?.trim()) {
+      expect(projected.openclawRunError).toHaveProperty("desktopSummary", desktopNotice);
+    } else {
+      expect(projected.openclawRunError).not.toHaveProperty("desktopSummary");
+    }
+  },
+);
+
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
@@ -821,7 +847,7 @@ it("shows one settled notice while preserving each attempt's partial output", ()
   };
   const raw = [user, partial, empty, receipt];
   const projected = projectStable(raw);
-  expect(projected.map(readRunFailureNotice).filter(Boolean)).toEqual([
+  expect(projected.map((message) => readRunFailureNotice(message)).filter(Boolean)).toEqual([
     { runId: "run-a", summary: "The request failed after retries." },
   ]);
   expect(projected.filter((message) => message.role === "assistant")).toEqual([

@@ -53,6 +53,7 @@ export function listSessionTranscriptInstances(
           database,
           options,
           entryProjection: scope.projection,
+          includeParticipants: scope.includeParticipants,
         });
       }),
     toDatabaseOptions(resolved),
@@ -60,23 +61,12 @@ export function listSessionTranscriptInstances(
   return result.found ? result.value : [];
 }
 
-function prepareTranscriptInstanceEntries(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
-  sessionKeys: readonly string[],
-  projection: SessionEntryProjection = "full",
-): Pick<ReadonlyMap<string, SessionEntry>, "get"> {
-  if (sessionKeys.length === 0) {
-    return new Map();
-  }
-  const readRow = prepareExactSessionEntryRowReads(database, sessionKeys, projection, "canonical");
-  return { get: (sessionKey) => readRow(sessionKey)?.entry };
-}
-
 function listTranscriptInstancesFromDatabase(params: {
   currentEntries?: Pick<ReadonlyMap<string, SessionEntry>, "get">;
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">;
   options: SessionTranscriptInstanceListOptions;
   entryProjection?: SessionEntryProjection;
+  includeParticipants?: boolean;
 }): SessionTranscriptInstance[] {
   if (!params.currentEntries && params.options.sessionIds !== undefined) {
     assertCanonicalSqliteSessionKeysCurrent(params.database);
@@ -116,19 +106,23 @@ function listTranscriptInstancesFromDatabase(params: {
       .orderBy("transcript_updated_at", (order) => order.desc().nullsLast())
       .orderBy("session_id", "asc"),
   ).rows;
-  const currentEntries =
-    params.currentEntries ??
-    (params.options.sessionIds !== undefined
-      ? prepareTranscriptInstanceEntries(
+  const readRow =
+    !params.currentEntries && params.options.sessionIds !== undefined && rows.length > 0
+      ? prepareExactSessionEntryRowReads(
           params.database,
           [...new Set(rows.map((row) => row.session_key))],
           params.entryProjection,
+          "canonical",
+          { projectParticipants: params.includeParticipants === false ? false : undefined },
         )
-      : {
-          get: (sessionKey: string) =>
-            readExactSessionEntryRowValidated(params.database, sessionKey, params.entryProjection)
-              ?.entry,
-        });
+      : undefined;
+  const currentEntries = params.currentEntries ?? {
+    get: (sessionKey: string) =>
+      (readRow
+        ? readRow(sessionKey)
+        : readExactSessionEntryRowValidated(params.database, sessionKey, params.entryProjection)
+      )?.entry,
+  };
   return rows
     .map((row): SessionTranscriptInstance | undefined => {
       if (!params.options.includeAllWindows && isInternalSessionEffectsKey(row.session_key)) {

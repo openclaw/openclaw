@@ -23,6 +23,7 @@ import {
   listSecretStoreEntries,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
 import { QuestionManager, type QuestionObservation } from "../question-manager.js";
@@ -274,7 +275,7 @@ export function createQuestionHandlers(
             expectedRecord?: QuestionRecord,
           ) => {
             const scoped =
-              sessionKey && context.getRuntimeConfig().gateway?.roles
+              sessionKey && isNamedOperatorRoleEnforcementEnabled(context.getRuntimeConfig())
                 ? {
                     sessionKeys: [sessionKey],
                     ...(requestedSession?.ok ? { agentId: requestedSession.agentId } : {}),

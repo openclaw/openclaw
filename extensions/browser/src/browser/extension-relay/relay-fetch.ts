@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { isRetiredFetchInterceptionError } from "../cdp-fetch-interception.js";
 
 type PhysicalSender = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type EventSender = (method: string, params: unknown) => void;
@@ -180,7 +181,12 @@ export class RelayFetch {
         if (lease.pauses.get(pause.nativeId) !== pause) {
           throw new Error("Fetch pause retired before command dispatch");
         }
-        let result = await this.nativeFetch(lease, method, { ...input, requestId: pause.nativeId });
+        let result = await this.nativeFetch(
+          lease,
+          method,
+          { ...input, requestId: pause.nativeId },
+          pause,
+        );
         this.assertLiveLease(lease);
         if (method === "Fetch.takeResponseBodyAsStream") {
           const response = asOptionalRecord(result);
@@ -370,6 +376,7 @@ export class RelayFetch {
     lease: Lease,
     method: string,
     params?: Record<string, unknown>,
+    pause?: Pause,
   ): Promise<unknown> {
     this.assertLiveLease(lease);
     try {
@@ -377,6 +384,13 @@ export class RelayFetch {
       this.assertLiveLease(lease);
       return result;
     } catch (error) {
+      if (pause && isRetiredFetchInterceptionError(error)) {
+        // Chromium already ended this request; retire only its pause.
+        if (lease.pauses.get(pause.nativeId) === pause) {
+          lease.pauses.delete(pause.nativeId);
+        }
+        throw error;
+      }
       // A protocol error can follow a partial native mutation or post-command access check.
       this.fence(lease, error);
       throw error;
@@ -439,12 +453,19 @@ export class RelayFetch {
   }
 
   private sendPauseCleanup(pause: Pause): Promise<unknown> {
-    return pause.kind === "auth"
-      ? this.send("Fetch.continueWithAuth", {
-          requestId: pause.nativeId,
-          authChallengeResponse: { response: "CancelAuth" },
-        })
-      : this.send("Fetch.failRequest", { requestId: pause.nativeId, errorReason: "Aborted" });
+    const cleanup =
+      pause.kind === "auth"
+        ? this.send("Fetch.continueWithAuth", {
+            requestId: pause.nativeId,
+            authChallengeResponse: { response: "CancelAuth" },
+          })
+        : this.send("Fetch.failRequest", { requestId: pause.nativeId, errorReason: "Aborted" });
+    // A request Chromium already ended needs no cancellation.
+    return cleanup.catch((error: unknown) => {
+      if (!isRetiredFetchInterceptionError(error)) {
+        throw error;
+      }
+    });
   }
 
   private closeStream(handle: string, stream: OwnedStream): Promise<unknown> {

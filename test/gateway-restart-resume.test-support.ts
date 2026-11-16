@@ -25,7 +25,7 @@ export function restartResumeConfig(
     ...(store ? { session: { store } } : {}),
     messages: { queue: { mode: "followup" } },
     tools: {
-      allow: ["exec", "process", "sessions_spawn", "sessions_list"],
+      allow: ["exec", "process", "sessions_spawn", "sessions_list", "sessions_yield"],
       codeMode: { enabled: false },
       exec: { host: "gateway", security: "full", ask: "off" },
     },

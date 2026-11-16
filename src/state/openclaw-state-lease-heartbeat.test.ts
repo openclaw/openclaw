@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -6,6 +8,8 @@ import { MessageChannel, Worker, type WorkerOptions } from "node:worker_threads"
 import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
   readSqliteDatabaseWriteRevision,
@@ -42,6 +46,7 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 });
 
 const heartbeatWorkers = vi.hoisted(() => ({
+  startupDelayMs: 0,
   beforeCreate: undefined as (() => void) | undefined,
   onCreate: undefined as ((worker: Worker, options: WorkerOptions) => void) | undefined,
 }));
@@ -60,7 +65,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.beforeCreate?.();
         }
-        super(filename, workerOptions);
+        const delayedFilename =
+          String(filename) === heartbeatUrl.href && heartbeatWorkers.startupDelayMs > 0
+            ? new URL(
+                `data:text/javascript,${encodeURIComponent(`await new Promise(resolve => setTimeout(resolve, ${heartbeatWorkers.startupDelayMs})); await import(${JSON.stringify(String(filename))});`)}`,
+              )
+            : filename;
+        super(delayedFilename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.onCreate?.(this, workerOptions);
         }
@@ -100,6 +111,7 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.startupDelayMs = 0;
   heartbeatWorkers.beforeCreate = undefined;
   heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
@@ -142,6 +154,60 @@ describe("maintenance lease heartbeat", () => {
     },
   );
 
+  it("releases an existing-schema lease refused by maintenance during heartbeat startup", async ({
+    state,
+  }) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const leaseOptions = {
+      ...options(state.env),
+      database: { ...options(state.env).database, schemaPolicy: "existing" as const },
+      leaseMs: 60_000,
+    };
+    const ownerPath = resolveGatewayStateOwnerPath(database.path);
+    const holder = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    await once(holder, "spawn");
+    const stopped = once(holder, "exit");
+    let entered = false;
+    heartbeatWorkers.beforeCreate = () => {
+      fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({ ...defaultPayload(database.path), pid: holder.pid, startTime: undefined }),
+      );
+    };
+    try {
+      await expect(
+        withOpenClawStateLease(leaseOptions, async () => {
+          entered = true;
+        }),
+      ).rejects.toThrow();
+      expect(entered).toBe(false);
+      // Custody still blocks cleanup: no release or protected callback may bypass it.
+      expect(
+        database.db
+          .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .get("core:test-maintenance", "maintenance"),
+      ).toBeDefined();
+      fs.rmSync(ownerPath);
+      heartbeatWorkers.beforeCreate = undefined;
+      // Retry must release the original row, not wait for its minute-long expiry.
+      await expect(
+        withOpenClawStateLease({ ...leaseOptions, waitMs: 2_000 }, async (lease) => {
+          lease.assertOwned();
+          return "reacquired";
+        }),
+      ).resolves.toBe("reacquired");
+      expect(readLease(state.env)).toBeUndefined();
+    } finally {
+      heartbeatWorkers.beforeCreate = undefined;
+      fs.rmSync(ownerPath, { force: true });
+      holder.kill();
+      await stopped;
+    }
+  });
+
   it("preserves native renewal errors through worker and lease rejection", async ({ state }) => {
     const { db } = openOpenClawStateDatabase({ env: state.env });
     // Inject only after schema validation/acquisition, and remove before release.
@@ -171,6 +237,15 @@ describe("maintenance lease heartbeat", () => {
         },
       },
     });
+    expect(readLease(state.env)).toBeUndefined();
+  });
+
+  it("preserves native startup renewals beyond the initial lease expiry", async ({ state }) => {
+    openOpenClawStateDatabase({ env: state.env });
+    heartbeatWorkers.startupDelayMs = 1_500;
+    const entered = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
+    await withOpenClawStateLease(options(state.env), entered);
+    expect(entered).toHaveBeenCalledOnce();
     expect(readLease(state.env)).toBeUndefined();
   });
 
@@ -373,8 +448,8 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     "activation-worker.mts",
     `
       import { parentPort, workerData } from "node:worker_threads";
-      import { registerHooks } from "node:module";
-      registerHooks({
+      import nodeModule from "node:module";
+      nodeModule.registerHooks({
         resolve(specifier, context, nextResolve) {
           if (specifier.includes("openclaw-state-db-engine.")) {
             const gate = new Int32Array(workerData.fixtureLoadGate);
@@ -423,7 +498,6 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     env: {},
   });
   trackSqliteDatabaseAdmissionWorker(worker);
-  worker.once("exit", () => databaseAdmission.finish());
   const prepared = createDeferredCore();
   const processed = createDeferredCore();
   const ready = createDeferredCore();
@@ -520,7 +594,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     } finally {
       Atomics.store(loadGate, 0, 2);
       Atomics.notify(loadGate, 0);
-      registrationAdmission.finish();
+      await registrationAdmission.finish();
       registrationPort.port1.close();
       registrationPort.port2.close();
       registrationLoss.port1.close();
@@ -532,6 +606,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     }
     writer.close();
     await worker.terminate();
+    await databaseAdmission.finish();
     loss.port1.close();
     loss.port2.close();
   }

@@ -9,9 +9,9 @@ import type {
 import * as providerExecution from "../../../media-understanding/provider-execution.js";
 import type {
   AudioTranscriptionConfigContext,
-  AudioTranscriptionRequest,
   MediaUnderstandingProvider,
-} from "../../../media-understanding/types.js";
+} from "../../../media-understanding/provider-types.js";
+import type { AudioTranscriptionRequest } from "../../../media-understanding/types.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../../plugins/capability-provider.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -398,6 +398,39 @@ describe("configured file transcription through Talk RPCs", () => {
         id: "streaming-stt",
         label: "Streaming STT",
         models: ["saved-model"],
+        isConfigured: () => true,
+        createSession,
+      },
+    );
+  });
+
+  it("keeps an automatic streaming provider when the voice-note model has no credentials", async () => {
+    const createSession = vi.fn(() => ({
+      connect: async () => {},
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: () => true,
+    }));
+    await withFileProvider(
+      async (requests) => {
+        const config: OpenClawConfig = {
+          ...cfg,
+          models: { providers: { "local-stt": localProvider } },
+        };
+        const { call } = fileRpc(config, talkHandlers);
+        expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
+          transcription: { ready: true, activeProvider: "streaming-stt" },
+        });
+        expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
+          provider: "streaming-stt",
+        });
+        expect(createSession).toHaveBeenCalledTimes(1);
+        expect(requests).toHaveLength(0);
+      },
+      undefined,
+      {
+        id: "streaming-stt",
+        label: "Streaming STT",
         isConfigured: () => true,
         createSession,
       },

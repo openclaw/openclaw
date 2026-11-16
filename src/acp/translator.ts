@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
-  Agent,
-  AgentSideConnection,
+  AgentContext,
   InitializeRequest,
   InitializeResponse,
   AuthenticateRequest,
@@ -111,7 +110,7 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
-export class AcpGatewayAgent implements Agent {
+export class AcpGatewayAgent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
   private readonly sessionStore: AcpSessionStore;
@@ -124,7 +123,7 @@ export class AcpGatewayAgent implements Agent {
   private readonly log: (msg: string) => void;
 
   constructor(
-    connection: AgentSideConnection,
+    connection: Pick<AgentContext, "notify" | "request">,
     private readonly gateway: GatewayClient,
     private readonly opts: AcpServerOptions & {
       eventLedger: AcpEventLedger;

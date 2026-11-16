@@ -36,6 +36,7 @@ import {
   planShellAuthorization,
   type ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";
+import { resolveExecutableRealPath } from "./exec-command-resolution.js";
 import {
   DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILES,
@@ -73,18 +74,18 @@ function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
 }
 
-function commandStepToPolicySegment(
+async function commandStepToPolicySegment(
   step: CommandStep,
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     platform?: string | null;
   },
-): ExecCommandSegment {
+): Promise<ExecCommandSegment> {
   return {
     raw: step.text,
     argv: step.argv,
-    resolution: resolveCommandResolutionFromArgv(
+    resolution: await resolveCommandResolutionFromArgv(
       step.argv,
       params.cwd,
       params.env,
@@ -102,7 +103,11 @@ async function explainShellPolicySegments(params: {
   try {
     const explanation = await explainShellCommand(params.command);
     const steps = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-    return steps.map((step) => commandStepToPolicySegment(step, params));
+    const segments: ExecCommandSegment[] = [];
+    for (const step of steps) {
+      segments.push(await commandStepToPolicySegment(step, params));
+    }
+    return segments;
   } catch {
     return [];
   }
@@ -117,20 +122,17 @@ export function resolveSafeBins(entries?: readonly string[] | null): Set<string>
   );
 }
 
-function isSafeBinUsage(params: {
+async function isSafeBinUsage(params: {
   argv: string[];
   resolution: ExecutableResolution | null;
   safeBins: Set<string>;
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
-}): boolean {
+}): Promise<boolean> {
   // Windows host exec uses PowerShell, which has different parsing/expansion rules.
   // Keep safeBins conservative there (require explicit allowlist entries).
   if (isWindowsPlatform(params.platform ?? process.platform)) {
-    return false;
-  }
-  if (params.safeBins.size === 0) {
     return false;
   }
   const resolution = params.resolution;
@@ -138,19 +140,18 @@ function isSafeBinUsage(params: {
   if (!execName) {
     return false;
   }
-  const matchesSafeBin = params.safeBins.has(execName);
-  if (!matchesSafeBin) {
+  if (!params.safeBins.has(execName)) {
     return false;
   }
-  const trustPath = resolveExecutableTrustPath(resolution);
+  const trustPath = await resolveExecutableTrustPath(resolution);
   if (!trustPath) {
     return false;
   }
   if (
-    !isTrustedSafeBinPath({
+    !(await isTrustedSafeBinPath({
       resolvedPath: trustPath,
       trustedDirs: params.trustedSafeBinDirs,
-    })
+    }))
   ) {
     return false;
   }
@@ -226,17 +227,17 @@ function buildSkillBinTrustIndex(
   return trustByName;
 }
 
-function isSkillAutoAllowedSegment(params: {
+async function isSkillAutoAllowedSegment(params: {
   segment: ExecCommandSegment;
   allowSkills: boolean;
   skillBinTrust: ReadonlyMap<string, ReadonlySet<string>>;
-}): boolean {
+}): Promise<boolean> {
   if (!params.allowSkills) {
     return false;
   }
   const resolution = params.segment.resolution;
   const execution = resolveExecutionTargetResolution(resolution);
-  const trustPath = resolveExecutionTargetTrustPath(resolution);
+  const trustPath = await resolveExecutionTargetTrustPath(resolution);
   if (!execution?.resolvedPath || !trustPath) {
     return false;
   }
@@ -412,10 +413,10 @@ function resolveSegmentSourceArgv(segment: ExecCommandSegment): string[] {
     : segment.argv;
 }
 
-function resolveSegmentAllowlistMatch(params: {
+async function resolveSegmentAllowlistMatch(params: {
   segment: ExecCommandSegment;
   context: ExecAllowlistContext;
-}): SegmentMatchEvaluation {
+}): Promise<SegmentMatchEvaluation> {
   const effectiveArgv =
     params.segment.resolution?.effectiveArgv && params.segment.resolution.effectiveArgv.length > 0
       ? params.segment.resolution.effectiveArgv
@@ -431,7 +432,7 @@ function resolveSegmentAllowlistMatch(params: {
   const matchResolution =
     matchArgv === effectiveArgv
       ? params.segment.resolution
-      : resolveCommandResolutionFromArgv(
+      : await resolveCommandResolutionFromArgv(
           matchArgv,
           params.context.cwd,
           params.context.env,
@@ -444,7 +445,7 @@ function resolveSegmentAllowlistMatch(params: {
   const executableResolution = resolvePolicyTargetResolution(matchResolution);
   const executionResolution = resolveExecutionTargetResolution(params.segment.resolution);
   const candidatePath = resolvePolicyTargetCandidatePath(matchResolution, params.context.cwd);
-  const trustPath = resolvePolicyTargetTrustPath(matchResolution, params.context.cwd);
+  const trustPath = await resolvePolicyTargetTrustPath(matchResolution, params.context.cwd);
   const candidateResolution =
     candidatePath && executableResolution
       ? { ...executableResolution, resolvedPath: candidatePath, resolvedRealPath: trustPath }
@@ -483,21 +484,26 @@ function resolveSegmentAllowlistMatch(params: {
   }
   const shellPositionalArgvCandidate =
     inlineCommand !== null
-      ? resolveShellWrapperPositionalArgvCandidate({
+      ? await resolveShellWrapperPositionalArgvCandidate({
           segment: allowlistSegment,
           cwd: params.context.cwd,
           env: params.context.env,
           platform: params.context.platform,
         })
       : undefined;
-  const matchShellPath = (allowlist: ExecAllowlistEntry[], candidate: string, argv: string[]) =>
+  const matchShellPath = async (
+    allowlist: ExecAllowlistEntry[],
+    candidate: string,
+    argv: string[],
+    candidateTrustPath?: string,
+  ) =>
     matchAllowlist(
       allowlist,
       {
         kind: "executable",
         rawExecutable: candidate,
         resolvedPath: candidate,
-        resolvedRealPath: resolveCandidateTrustPath(candidate),
+        resolvedRealPath: candidateTrustPath ?? (await resolveExecutableRealPath(candidate)),
         executableName: path.basename(candidate),
       },
       argv,
@@ -505,12 +511,13 @@ function resolveSegmentAllowlistMatch(params: {
       params.context.cwd,
     );
   const shellPositionalArgvMatch = shellPositionalArgvCandidate
-    ? matchShellPath(
+    ? await matchShellPath(
         shellPositionalArgvCandidate.durable
           ? params.context.allowlist
           : params.context.allowlist.filter((entry) => entry.argPattern === undefined),
         shellPositionalArgvCandidate.path,
         shellPositionalArgvCandidate.argv,
+        shellPositionalArgvCandidate.trustPath,
       )
     : null;
   const shellScriptCandidatePath =
@@ -531,7 +538,7 @@ function resolveSegmentAllowlistMatch(params: {
     : null;
   const shellScriptMatch =
     shellScriptCandidatePath && shellScriptArgv
-      ? matchShellPath(params.context.allowlist, shellScriptCandidatePath, shellScriptArgv)
+      ? await matchShellPath(params.context.allowlist, shellScriptCandidatePath, shellScriptArgv)
       : null;
   return {
     effectiveArgv,
@@ -540,18 +547,18 @@ function resolveSegmentAllowlistMatch(params: {
   };
 }
 
-function resolveSegmentSatisfaction(params: {
+async function resolveSegmentSatisfaction(params: {
   match: ExecAllowlistEntry | null;
   segment: ExecCommandSegment;
   effectiveArgv: string[];
   context: ExecAllowlistContext;
   allowSkills: boolean;
   skillBinTrust: ReadonlyMap<string, ReadonlySet<string>>;
-}): ExecSegmentSatisfiedBy {
+}): Promise<ExecSegmentSatisfiedBy> {
   if (params.match) {
     return "allowlist";
   }
-  const safe = isSafeBinUsage({
+  const safe = await isSafeBinUsage({
     argv: params.effectiveArgv,
     resolution: resolveExecutionTargetResolution(params.segment.resolution),
     safeBins: params.context.safeBins,
@@ -568,7 +575,7 @@ function resolveSegmentSatisfaction(params: {
   ) {
     return "safeBuiltins";
   }
-  const skillAllow = isSkillAutoAllowedSegment({
+  const skillAllow = await isSkillAutoAllowedSegment({
     segment: params.segment,
     allowSkills: params.allowSkills,
     skillBinTrust: params.skillBinTrust,
@@ -576,18 +583,18 @@ function resolveSegmentSatisfaction(params: {
   return skillAllow ? "skills" : null;
 }
 
-function evaluateShellWrapperInlineCommand(params: {
+async function evaluateShellWrapperInlineCommand(params: {
   inlineCommand: string;
   context: ExecAllowlistContext;
   inlineDepth: number;
-}): ExecAllowlistEntry[] | null {
+}): Promise<ExecAllowlistEntry[] | null> {
   if (params.inlineDepth >= MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH) {
     return null;
   }
   if (hasShellLineContinuation(params.inlineCommand)) {
     return null;
   }
-  const analysis = analyzeWindowsShellCommand({
+  const analysis = await analyzeWindowsShellCommand({
     command: params.inlineCommand,
     cwd: params.context.cwd,
     env: params.context.env,
@@ -599,7 +606,7 @@ function evaluateShellWrapperInlineCommand(params: {
 
   const matches: ExecAllowlistEntry[] = [];
   for (const group of analysis.chains ?? [analysis.segments]) {
-    const result = evaluateSegments(group, params.context, params.inlineDepth);
+    const result = await evaluateSegments(group, params.context, params.inlineDepth);
     if (!result.allowlistSatisfied) {
       return null;
     }
@@ -617,23 +624,23 @@ function emptyExecAllowlistEvaluation(): ExecAllowlistEvaluation {
   };
 }
 
-function evaluateSegments(
+async function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
   inlineDepth = 0,
-): ExecAllowlistEvaluation {
+): Promise<ExecAllowlistEvaluation> {
   const result = emptyExecAllowlistEvaluation();
   const { allowlistMatches, segmentAllowlistEntries, segmentSatisfiedBy } = result;
   const skillBinTrust = buildSkillBinTrustIndex(params.skillBins);
   const allowSkills = params.autoAllowSkills === true && skillBinTrust.size > 0;
 
-  result.allowlistSatisfied = segments.every((segment) => {
+  for (const segment of segments) {
     if (segment.resolution?.policyBlocked === true) {
       segmentAllowlistEntries.push(null);
       segmentSatisfiedBy.push(null);
-      return false;
+      return result;
     }
-    const { effectiveArgv, inlineCommand, match } = resolveSegmentAllowlistMatch({
+    const { effectiveArgv, inlineCommand, match } = await resolveSegmentAllowlistMatch({
       segment,
       context: params,
     });
@@ -641,7 +648,7 @@ function evaluateSegments(
       allowlistMatches.push(match);
     }
     segmentAllowlistEntries.push(match ?? null);
-    const by = resolveSegmentSatisfaction({
+    const by = await resolveSegmentSatisfaction({
       match,
       segment,
       effectiveArgv,
@@ -651,7 +658,7 @@ function evaluateSegments(
     });
     const inlineResult =
       by === null && inlineCommand && isWindowsPlatform(params.platform)
-        ? evaluateShellWrapperInlineCommand({
+        ? await evaluateShellWrapperInlineCommand({
             inlineCommand,
             context: params,
             inlineDepth: inlineDepth + 1,
@@ -662,19 +669,22 @@ function evaluateSegments(
       // Keep per-segment metadata aligned with segments: one satisfaction marker
       // for this wrapper segment, even when the inline payload has multiple parts.
       segmentSatisfiedBy.push("allowlist");
-      return true;
+      continue;
     }
     segmentSatisfiedBy.push(by);
-    return Boolean(by);
-  });
+    if (!by) {
+      return result;
+    }
+  }
+  result.allowlistSatisfied = true;
 
   return result;
 }
 
-function evaluateAuthorizationPlan(params: {
+async function evaluateAuthorizationPlan(params: {
   plan: Extract<ExecAuthorizationPlan, { ok: true }>;
   context: ExecAllowlistContext;
-}): ExecAllowlistAnalysis {
+}): Promise<ExecAllowlistAnalysis> {
   const result: ExecAllowlistAnalysis = {
     ...emptyExecAllowlistEvaluation(),
     analysisOk: true,
@@ -690,12 +700,12 @@ function evaluateAuthorizationPlan(params: {
       let match: ExecAllowlistEntry | null = null;
       let satisfiedBy: ExecSegmentSatisfiedBy = null;
       if (candidate.trustMode !== "prompt-only") {
-        const evaluation = resolveSegmentAllowlistMatch({
+        const evaluation = await resolveSegmentAllowlistMatch({
           segment: candidate.sourceSegment,
           context: params.context,
         });
         match = evaluation.match;
-        satisfiedBy = resolveSegmentSatisfaction({
+        satisfiedBy = await resolveSegmentSatisfaction({
           match,
           segment: candidate.sourceSegment,
           effectiveArgv: evaluation.effectiveArgv,
@@ -718,11 +728,11 @@ function evaluateAuthorizationPlan(params: {
   return result;
 }
 
-export function evaluateExecAllowlist(
+export async function evaluateExecAllowlist(
   params: {
     analysis: ExecCommandAnalysis;
   } & ExecAllowlistContext,
-): ExecAllowlistEvaluation {
+): Promise<ExecAllowlistEvaluation> {
   if (!params.analysis.ok || params.analysis.segments.length === 0) {
     return emptyExecAllowlistEvaluation();
   }
@@ -731,7 +741,7 @@ export function evaluateExecAllowlist(
   }
   const result = emptyExecAllowlistEvaluation();
   for (const group of params.analysis.chains) {
-    const groupResult = evaluateSegments(group, params);
+    const groupResult = await evaluateSegments(group, params);
     if (!groupResult.allowlistSatisfied) {
       return emptyExecAllowlistEvaluation();
     }
@@ -869,6 +879,7 @@ function resolveShellWrapperScriptCandidatePath(params: {
 
 type ShellWrapperPositionalArgvCandidate = {
   path: string;
+  trustPath: string;
   argv: string[];
   durable: boolean;
 };
@@ -895,12 +906,12 @@ function isDurableShellPositionalCarrierCommand(command: string, tailArgv: strin
   ).test(trimmed);
 }
 
-function resolveShellWrapperPositionalArgvCandidate(params: {
+async function resolveShellWrapperPositionalArgvCandidate(params: {
   segment: ExecCommandSegment;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
-}): ShellWrapperPositionalArgvCandidate | undefined {
+}): Promise<ShellWrapperPositionalArgvCandidate | undefined> {
   if (!isShellWrapperSegment(params.segment)) {
     return undefined;
   }
@@ -944,7 +955,7 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
     return undefined;
   }
 
-  const resolution = resolveCommandResolutionFromArgv(
+  const resolution = await resolveCommandResolutionFromArgv(
     [carriedExecutable],
     params.cwd,
     params.env,
@@ -954,9 +965,11 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
   if (!candidatePath) {
     return undefined;
   }
-  const trustPath = resolveCandidateTrustPath(candidatePath) ?? candidatePath;
+  const trustPath =
+    (await resolveExecutionTargetTrustPath(resolution, params.cwd)) ?? candidatePath;
   return {
     path: candidatePath,
+    trustPath,
     argv: [trustPath, ...carriedTailArgv],
     durable,
   };
@@ -975,19 +988,7 @@ function addAllowAlwaysPattern(
   }
 }
 
-function resolveCandidateTrustPath(candidatePath: string | undefined): string | undefined {
-  if (!candidatePath) {
-    return undefined;
-  }
-  return resolveExecutableTrustPath({
-    kind: "executable",
-    rawExecutable: candidatePath,
-    resolvedPath: candidatePath,
-    executableName: path.basename(candidatePath),
-  });
-}
-
-function collectAllowAlwaysPatterns(
+async function collectAllowAlwaysPatterns(
   inputSegment: ExecCommandSegment,
   params: Omit<Parameters<typeof resolveAllowAlwaysPatternEntries>[0], "segments">,
   depth: number,
@@ -1019,7 +1020,7 @@ function collectAllowAlwaysPatterns(
           raw: trustPlan.argv.join(" "),
           argv: trustPlan.argv,
           sourceArgv: inputSegment.sourceArgv,
-          resolution: resolveCommandResolutionFromArgv(
+          resolution: await resolveCommandResolutionFromArgv(
             trustPlan.argv,
             params.cwd,
             params.env,
@@ -1027,7 +1028,7 @@ function collectAllowAlwaysPatterns(
           ),
         };
 
-  const candidatePath = resolveExecutionTargetTrustPath(segment.resolution, params.cwd);
+  const candidatePath = await resolveExecutionTargetTrustPath(segment.resolution, params.cwd);
   if (!candidatePath) {
     return;
   }
@@ -1056,7 +1057,7 @@ function collectAllowAlwaysPatterns(
   }
   const positionalArgvCandidate =
     inlineCommand !== null
-      ? resolveShellWrapperPositionalArgvCandidate({
+      ? await resolveShellWrapperPositionalArgvCandidate({
           segment,
           cwd: params.cwd,
           env: params.env,
@@ -1067,14 +1068,12 @@ function collectAllowAlwaysPatterns(
     if (!positionalArgvCandidate.durable) {
       return;
     }
-    const positionalTrustPath =
-      resolveCandidateTrustPath(positionalArgvCandidate.path) ?? positionalArgvCandidate.path;
     const argPattern = buildCwdBoundHashedArgPattern(
       positionalArgvCandidate.argv,
       params.cwd ?? process.cwd(),
       params.platform,
     );
-    addAllowAlwaysPattern(out, positionalTrustPath, argPattern);
+    addAllowAlwaysPattern(out, positionalArgvCandidate.trustPath, argPattern);
     return;
   }
   if (!inlineCommand) {
@@ -1085,7 +1084,7 @@ function collectAllowAlwaysPatterns(
         cwd: params.cwd,
       });
     if (scriptPath) {
-      const scriptTrustPath = resolveCandidateTrustPath(scriptPath) ?? scriptPath;
+      const scriptTrustPath = (await resolveExecutableRealPath(scriptPath)) ?? scriptPath;
       const scriptArgv = resolveShellWrapperScriptArgv({
         shellScriptCandidatePath: scriptPath,
         effectiveArgv: powerShellFileScriptArgv ?? segment.argv,
@@ -1107,7 +1106,7 @@ function collectAllowAlwaysPatterns(
   ) {
     return;
   }
-  const nested = analyzeWindowsShellCommand({
+  const nested = await analyzeWindowsShellCommand({
     command: inlineCommand,
     cwd: params.cwd,
     env: params.env,
@@ -1117,21 +1116,21 @@ function collectAllowAlwaysPatterns(
     return;
   }
   for (const nestedSegment of nested.segments) {
-    collectAllowAlwaysPatterns(nestedSegment, params, depth + 1, out);
+    await collectAllowAlwaysPatterns(nestedSegment, params, depth + 1, out);
   }
 }
 
 /** Derive persisted allowlist patterns for an "allow always" decision. */
-export function resolveAllowAlwaysPatternEntries(params: {
+export async function resolveAllowAlwaysPatternEntries(params: {
   segments: ExecCommandSegment[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
   strictInlineEval?: boolean;
-}): AllowAlwaysPattern[] {
+}): Promise<AllowAlwaysPattern[]> {
   const patterns: AllowAlwaysPattern[] = [];
   for (const segment of params.segments) {
-    collectAllowAlwaysPatterns(segment, params, 0, patterns);
+    await collectAllowAlwaysPatterns(segment, params, 0, patterns);
   }
   return patterns;
 }
@@ -1146,13 +1145,13 @@ export async function evaluateShellAllowlistWithAuthorization(
     // Shell line continuations can rewrite token boundaries at runtime.
     const analysis = hasShellLineContinuation(params.command)
       ? undefined
-      : analyzeWindowsShellCommand(params);
+      : await analyzeWindowsShellCommand(params);
     if (!analysis?.ok) {
       return { analysisOk: false, ...emptyExecAllowlistEvaluation(), segments: [] };
     }
     return {
       analysisOk: true,
-      ...evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true }),
+      ...(await evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true })),
       segments: analysis.segments,
     };
   }

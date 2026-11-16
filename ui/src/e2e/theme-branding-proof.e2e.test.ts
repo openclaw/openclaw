@@ -91,7 +91,7 @@ suite.define(() => {
       const tabIcon = page.locator(".settings-tab-icon");
       await tabIcon.waitFor();
       await expect.poll(() => page.locator(".lobsterdex__gallery").count()).toBe(0);
-      expect(await page.getByText("Lobster visits", { exact: true }).count()).toBe(0);
+      await expect.poll(() => page.getByText("Lobster visits", { exact: true }).count()).toBe(0);
       expect(await tabIcon.getByText("Lobsterdex", { exact: true }).count()).toBe(0);
       expect(
         await page.evaluate(
@@ -138,7 +138,7 @@ suite.define(() => {
       await expect.poll(() => indicator.count()).toBe(0);
       await page
         .locator(".chat-working-indicator__status")
-        .getByText("Working…", { exact: true })
+        .getByText("Working", { exact: true })
         .waitFor();
     });
   });

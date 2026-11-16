@@ -9,11 +9,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import * as directoryWatch from "../../infra/directory-watch-host.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   authProfileSourceExists,
   captureAuthProfileFileIdentity,
   readAuthProfileDatabaseIdentity,
+  readAuthProfileDatabaseIdentityAsync,
   noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
   authProfileFileChanges,
@@ -50,29 +52,22 @@ it.skipIf(process.platform === "win32")(
       const { DatabaseSync } = require("node:sqlite");
       const { parentPort, workerData } = require("node:worker_threads");
       let spawned = 0;
-      require("node:child_process").spawn = () => {
-        spawned++;
-        throw new Error("Worker auth observation requested a row child");
-      };
-      fs.watch = () => { throw new Error("synthetic unavailable watcher"); };
-      // macOS admits hosted watchers by opening their directory before spawning.
-      const watchDirectories = new Set();
-      for (let current = workerData.directory; ; current = path.dirname(current)) {
-        watchDirectories.add(current);
-        if (path.dirname(current) === current) break;
-      }
-      const openSync = fs.openSync;
-      fs.openSync = (file, ...args) => {
-        if (process.platform === "darwin" && watchDirectories.has(file)) {
+      let watchArgv;
+      require("node:child_process").spawn = (_command, args) => {
+        if (watchArgv && args.length === watchArgv.length && args.every((arg, index) => arg === watchArgv[index])) {
           throw new Error("synthetic unavailable watcher");
         }
-        return openSync(file, ...args);
+        spawned++;
+        throw new Error("Worker auth observation requested a row child");
       };
       syncBuiltinESMExports();
       (async () => {
         const { register } = await import(workerData.loader);
         const unregister = register();
         const load = (relative) => import(new URL(relative, workerData.base).href);
+        const { resolveRuntimeProcessEntrypointUrl } = await load("../../infra/runtime-process-url.ts");
+        const { resolveRuntimeWorkerArgv } = await load("../../infra/runtime-worker-url.ts");
+        watchArgv = [...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")), String(process.pid)];
         const files = await load("./file-state.ts");
         const snapshots = await load("./runtime-snapshots.ts");
         const { runtimeAuthProfileRowsCache } = await load("./runtime-persisted-rows.ts");
@@ -166,14 +161,16 @@ function fixture(options: { timers?: boolean; fallback?: boolean; existing?: boo
   return { directory, databasePath, legacyPath: path.join(directory, "auth.json") };
 }
 function useObservationTimers() {
+  const access = fs.accessSync;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => access(...args));
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
 }
 function disableWatcher() {
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
+  vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+    Object.assign(new EventEmitter(), { close() {} }),
+  );
 }
 function nextChange(directory: string) {
   return new Promise<void>((resolve) => {
@@ -263,7 +260,13 @@ it("publishes a first owner write to previously admitted directory aliases", () 
   const before = readAuthProfileDatabaseIdentity(aliasPath);
   expect(before?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
-  noteAuthProfileFileWrite(fs.realpathSync(databasePath));
+  const identity = readDatabasePathIdentitySync(databasePath);
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  syncBuiltinESMExports();
+  noteAuthProfileFileWrite(identity.canonicalPath, identity);
+  expect(stat).not.toHaveBeenCalled();
+  expect(realpath).not.toHaveBeenCalled();
   const current = captureAuthProfileFileIdentity(aliasPath);
   expect(current.identity?.key).toMatch(/^file:/);
   expect(current.identity?.canonicalPath).toBe(before?.canonicalPath);
@@ -440,3 +443,49 @@ it("retires legacy source observations when their agent database closes", async 
   fs.writeFileSync(legacyPath, "{}");
   expect(authProfileSourceExists(legacyPath)).toBe(true);
 });
+
+it.each(["publish", "retire"] as const)(
+  "settles cold file admission against an overtaking owner %s",
+  async (action) => {
+    const { databasePath } = fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = fs.promises.stat;
+    vi.spyOn(fs.promises, "stat").mockImplementationOnce(async (...args) => {
+      const result = await original(...args).then(
+        (value) => ({ ok: true, value }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
+      );
+      entered.resolve();
+      await release.promise;
+      if (!result.ok) {
+        throw result.error;
+      }
+      return result.value;
+    });
+    syncBuiltinESMExports();
+    const admitting = readAuthProfileDatabaseIdentityAsync(databasePath);
+    const settled = Promise.allSettled([admitting]);
+    let published;
+    try {
+      await entered.promise;
+      if (action === "publish") {
+        fs.writeFileSync(databasePath, "created synthetic database");
+        published = readDatabasePathIdentitySync(databasePath);
+        noteAuthProfileFileWrite(databasePath, published);
+      } else {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    } finally {
+      release.resolve();
+    }
+    expect(await settled).toEqual([
+      action === "publish"
+        ? { status: "fulfilled", value: published }
+        : {
+            status: "rejected",
+            reason: new Error("Auth profile file owner retired during admission"),
+          },
+    ]);
+  },
+);

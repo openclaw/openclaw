@@ -13,14 +13,13 @@ export function createLayoutMeasurement<T>(
     fonts?: boolean;
     /** Admit a known empty layout before a measurable element exists. */
     measureWithoutTarget?: boolean;
-    /** Keyboard and disclosure commits need geometry before the next animation frame. */
-    changeTiming?: "sync";
+    /** Select input changes that need geometry before the next animation frame. */
+    changeTiming?: "sync" | (() => "sync" | undefined);
   },
 ) {
   const key = {};
   let ready = false;
   let invalidation: T | undefined;
-  let resizeAvailable = false;
   const observed = new Map<Element, () => void>();
   const read = () => {
     const targets = options.targets(invalidation);
@@ -32,11 +31,9 @@ export function createLayoutMeasurement<T>(
       return options.measureWithoutTarget ? measure(invalidation) : undefined;
     }
     const next = new Set(targets);
-    if (resizeAvailable) {
-      for (const target of next) {
-        if (!observed.has(target)) {
-          observed.set(target, observeResize([target], schedule));
-        }
+    for (const target of next) {
+      if (!observed.has(target)) {
+        observed.set(target, observeResize([target], schedule));
       }
     }
     for (const [target, release] of observed) {
@@ -56,7 +53,9 @@ export function createLayoutMeasurement<T>(
     if (!ready) {
       return;
     }
-    if (options.changeTiming === "sync") {
+    const timing =
+      typeof options.changeTiming === "function" ? options.changeTiming() : options.changeTiming;
+    if (timing === "sync") {
       cancelLayout(key);
       read()?.();
     } else {
@@ -73,7 +72,6 @@ export function createLayoutMeasurement<T>(
     ready = true;
     // Font metrics can settle without resizing the measured viewport.
     const stopFonts = options.fonts ? observeFontLoading(document.fonts, schedule) : undefined;
-    resizeAvailable = typeof ResizeObserver === "function";
     const mutationObserver = options.mutations ? new MutationObserver(schedule) : undefined;
     if (mutationObserver && options.mutations) {
       mutationObserver.observe(options.mutations(), {

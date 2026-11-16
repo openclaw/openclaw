@@ -25,6 +25,7 @@ struct RootTabsPresentationTests {
             .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
             .cron: .dashboard("/automations"),
@@ -191,6 +192,22 @@ struct RootTabsPresentationTests {
         #expect(snapshot.sessions.count == 200)
         #expect(snapshot.totalCount == 350)
         #expect(!snapshot.isComplete)
+        #expect(snapshot.incompleteLoadMessage == "Showing 200 sessions; 350 total. Refresh to load the rest.")
+    }
+
+    @Test func `incomplete-load notice stays silent for complete and cached rosters`() {
+        let rows = [Self.sessionEntry(key: "one")]
+        let complete = ChatSessionRosterSnapshot(
+            sessions: rows,
+            isCached: false,
+            totalCount: 1,
+            isComplete: true)
+        let cached = ChatSessionRosterSnapshot(sessions: rows, isCached: true, isComplete: false)
+        let unknownTotal = ChatSessionRosterSnapshot(sessions: rows, isCached: false, isComplete: false)
+
+        #expect(complete.incompleteLoadMessage == nil)
+        #expect(cached.incompleteLoadMessage == nil)
+        #expect(unknownTotal.incompleteLoadMessage == "Some sessions could not be loaded. Refresh to try again.")
     }
 
     @Test func `session roster rejects a nonadvancing gateway cursor without losing rows`() async throws {
@@ -347,6 +364,7 @@ struct RootTabsPresentationTests {
             .cron,
             .sessions,
             .activity,
+            .systems,
             .skillWorkshop,
             .agents,
             .instances,
@@ -360,6 +378,7 @@ struct RootTabsPresentationTests {
             "chat",
             "overview",
             "activity",
+            "systems",
             "agents",
             "workboard",
             "skillWorkshop",
@@ -867,6 +886,7 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `pinned pages storage round trips and preserves pin order`() {
+        #expect(RootTabs.defaultPinnedSidebarPages == [.overview, .usage, .cron])
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")

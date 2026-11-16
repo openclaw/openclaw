@@ -80,25 +80,6 @@ export async function withHeldMediaGenerationResult(
   }
 }
 
-/** Join the exact cron cleanup tail before this fixture restores module mocks. */
-export async function withHeldCronMediaGenerationResult(
-  ...args: Parameters<typeof withHeldMediaGenerationResult>
-) {
-  const cleanup = vi.spyOn(
-    await import("../../cron/run-continuation-cleanup.js"),
-    "removeCronRunContinuationSessionIfIdle",
-  );
-  try {
-    await withHeldMediaGenerationResult(...args);
-  } finally {
-    try {
-      await Promise.all(cleanup.mock.results.map(({ value }) => value));
-    } finally {
-      cleanup.mockRestore();
-    }
-  }
-}
-
 export function defineMediaGenerationCancellationTests(
   params: ToolContract & {
     setup: (phase: "preparation" | "reference" | "accepted") => {
@@ -107,7 +88,6 @@ export function defineMediaGenerationCancellationTests(
     };
     loadMedia: () => MockInstance<typeof loadWebMedia>;
     references: string[];
-    referenceSignal: "caller" | "composed";
   },
 ) {
   const { kind, tasks } = params;
@@ -163,11 +143,7 @@ export function defineMediaGenerationCancellationTests(
     expect(loadMedia).toHaveBeenCalledOnce();
     const loadOptions = loadMedia.mock.calls[0]?.[1];
     const signal = typeof loadOptions === "object" ? loadOptions.requestInit?.signal : undefined;
-    if (params.referenceSignal === "caller") {
-      expect(signal).toBe(f.controller.signal);
-    } else {
-      expect(signal).toMatchObject({ aborted: true, reason: f.abortReason });
-    }
+    expect(signal).toBe(f.controller.signal);
   });
 
   it(`keeps an accepted detached ${kind} task running after its requester aborts`, async () => {
@@ -214,6 +190,9 @@ export function defineMediaGenerationDuplicateTests(
     });
     await withHeldMediaGenerationResult(generate, tasks, async (complete) => {
       await tool.execute("call-model-only-start", testCase.request);
+      const activeRetry = await tool.execute("call-active-retry", testCase.request);
+      expect(activeRetry.details).toMatchObject({ duplicateGuard: true, active: true });
+      expect(tasks.createOperation).toHaveBeenCalledTimes(1);
       await complete();
       const createdTask = tasks.createOperation.mock.calls[0]?.[0];
       params.listTasks.mockReturnValue([

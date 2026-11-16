@@ -34,5 +34,9 @@ export function createGitHubPublicationGitError(
     ).trim(),
     1_024,
   );
-  return new Error(`${failure} ${detail}`);
+  const guidance =
+    stage === "commit fetch" && result.termination === "timeout"
+      ? " Do not repeat the same full-history fetch. Open the PR in its base project's workspace so Git can reuse project history. For a standalone inspection, use a separate depth-limited clone; do not shallow the shared project store."
+      : "";
+  return new Error(`${failure} ${detail}${guidance}`);
 }

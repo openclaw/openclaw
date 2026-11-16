@@ -91,6 +91,30 @@ it.each(["multiple-servers", "mixed-capabilities", "missing-description", "disab
   },
 );
 
+it("omits SDK notices from plugin details while retaining actionable errors and warnings", () => {
+  const plugin = createPlugin({
+    error: "Plugin could not load.",
+    compatibilityNotices: [
+      {
+        code: "deprecated-sdk-api",
+        severity: "info",
+        message: "Uses older OpenClaw APIs.",
+        migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+        apis: [],
+      },
+    ],
+  });
+  const { container } = mount({
+    result: createResult(plugin),
+    error: "Could not refresh plugins.",
+    messages: { "plugin:workboard": { kind: "warning", text: "Plugin action needs attention." } },
+  });
+  expect(container.textContent).not.toContain("Uses older OpenClaw APIs");
+  expect(container.textContent).toContain("Plugin could not load.");
+  expect(container.textContent).toContain("Could not refresh plugins.");
+  expect(container.textContent).toContain("Plugin action needs attention.");
+});
+
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
@@ -211,3 +235,73 @@ it("shows selected capabilities without a catalog", () => {
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
 });
+
+it.each([false, true])(
+  "keeps failed inspection separate from permission loading (cached: %s)",
+  async (cached) => {
+    const failure = new Error("Plugin inspection unavailable");
+    const { container, props } = mount({
+      tab: "configuration",
+      inspection: cached ? createInspectResult() : null,
+      inspectionRead: {
+        receipt: () => null,
+        value: () => {
+          throw failure;
+        },
+      },
+      configSchema: objectSchema({ workspaceLabel: { type: "string", title: "Workspace label" } }),
+      configValue: {
+        plugins: { entries: { workboard: { config: { workspaceLabel: "Planning" } } } },
+      },
+      hostControlsSchema: objectSchema({
+        hooks: objectSchema({ allowPromptModification: { type: "boolean" } }),
+      }),
+    });
+    await waitForSolid(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
+    );
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+    expect(input.value).toBe("Planning");
+    expect(input.disabled).toBe(false);
+    expect(container.querySelectorAll(".plugin-editor .settings-loading-skeleton")).toHaveLength(0);
+    if (cached) {
+      expect(
+        setting(container, "hooks.allowPromptModification").querySelector<HTMLInputElement>(
+          'input[type="checkbox"]',
+        )?.checked,
+      ).toBe(true);
+    } else {
+      expect(container.querySelector('[data-setting="hooks.allowPromptModification"]')).toBeNull();
+    }
+    container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    expect(props.onRetryInspection).toHaveBeenCalledOnce();
+    expect(props.onConfigPatch).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "shows empty settings only after permissions are known (%s)",
+  async (known) => {
+    const { container } = mount({
+      tab: "configuration",
+      configSchema: objectSchema({}),
+      inspection: known ? createInspectResult() : null,
+      inspectionRead: {
+        receipt: () => null,
+        value: () => {
+          if (!known) {
+            throw new Error("Inspection unavailable");
+          }
+          return null;
+        },
+      },
+    });
+    await waitForSolid(() =>
+      expect(container.querySelector("openclaw-plugin-settings-editor")).not.toBeNull(),
+    );
+    expect(container.textContent?.includes("This plugin has no configurable settings.")).toBe(
+      known,
+    );
+    expect(container.querySelector(".plugin-editor .settings-loading-skeleton")).toBeNull();
+  },
+);

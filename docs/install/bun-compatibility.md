@@ -12,7 +12,7 @@ Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, e
 
 ## Requirements
 
-Node fallback and build processes accept Node **24.16.0+ on 24.x, or 26.1.0+**. Node **24.22.1+/26.12.1+** is strongly recommended for the eMudhra compromised-key rejection fix; compatible older Node warns during updates and security audit instead of being refused solely for the missing security patch. Updating Node does not change Bun's independent TLS verifier or its release qualification.
+Node fallback and build processes accept Node **24.16.0+ on 24.x, or 26.1.0+**. Node **24.22.1+/26.12.1+** is strongly recommended for the eMudhra compromised-key rejection fix; compatible older Node warns at startup, during updates, and in Doctor and security audit instead of being refused solely for the missing security patch. Updating Node does not change Bun's independent TLS verifier or its release qualification.
 
 OpenClaw supports only the **latest stable Bun release (currently 1.4.4)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
 

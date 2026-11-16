@@ -458,7 +458,7 @@ describe("Codex app-server main thread cleanup", () => {
           return { imageGeneration: false, webSearch: true };
         }
         if (method === "config/read") {
-          return { config: {}, layers: [] };
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "configRequirements/read") {
           return { requirements: null };
@@ -594,7 +594,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
-        return { config: {}, layers: [] };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/start") {
         return threadStartResult();

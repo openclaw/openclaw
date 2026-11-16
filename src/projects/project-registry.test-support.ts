@@ -15,9 +15,7 @@ export async function registerClonedProjectRegistry(
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext({ path: options.path, env });
   const prepared = await prepareProjectRegistration({ ...input, source: "cloned" });
-  return await withProjectCheckoutLifecycle(
-    prepared.project.repoRoot,
-    { path: context.admission.databasePath, env },
-    (lease) => registerPreparedProjectRegistry(prepared, lease, context),
+  return await withProjectCheckoutLifecycle(prepared.project.repoRoot, { context }, (lease) =>
+    registerPreparedProjectRegistry(prepared, [lease], context),
   );
 }

@@ -16,6 +16,7 @@ import {
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
@@ -33,23 +34,30 @@ import {
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const time = "2026-08-28T12:00:00.000Z";
-const version = "2026.8.28-beta.1";
 const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    qualificationSha?: string;
+    candidateVersion?: string;
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
     protectedTag?: boolean;
+    publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
-  const fixture = trustedMainNpmFixture();
-  const q = options.candidateSha ?? defaultQ;
+  const version = options.candidateVersion ?? "2026.8.28-beta.1";
+  const beta = version.includes("-beta.");
+  const fixture = trustedMainNpmFixture(beta ? "beta" : "stable", { targetVersion: version });
+  const c = options.candidateSha ?? defaultQ;
+  const q = options.qualificationSha ?? c;
   const branch =
     options.transportRef ??
-    (options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch);
+    (options.candidateSha || options.qualificationSha
+      ? "release-ci/" + q.slice(0, 12) + "-123"
+      : defaultBranch);
   const legacyRunId = fixture.runId;
   const runId = options.runId ?? legacyRunId;
   const workflowSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -64,8 +72,8 @@ export function candidatePublicationFixture(
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   const selection: PublicationSelection = {
-    route: "normal",
-    npmDistTag: "beta",
+    route: options.publicationRoute ?? "normal",
+    npmDistTag: beta ? "beta" : "latest",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
     plugins: [],
@@ -75,18 +83,19 @@ export function candidatePublicationFixture(
     publicationSelection: publishing ? selection : null,
   };
   Object.assign(inputs, {
-    ref: q,
-    expected_sha: q,
-    target_context_ref: "release/2026.8.28",
-    release_profile: "beta",
+    ref: c,
+    expected_sha: c,
+    target_context_ref: "release/" + version.split("-")[0],
+    release_profile: beta ? "beta" : "stable",
     rerun_group: "all",
     mode: "both",
-    run_release_soak: "false",
+    run_release_soak: String(!beta),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
-    candidateSha: q,
+    candidateSha: c,
+    qualificationSha: q,
     transportRef: branch,
     candidateVersion: version,
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
@@ -103,7 +112,7 @@ export function candidatePublicationFixture(
     JSON.parse(
       JSON.stringify(value)
         .replaceAll(legacyRunId, runId)
-        .replaceAll(fixture.targetSha, q)
+        .replaceAll(fixture.targetSha, c)
         .replaceAll(fixture.workflowSha, q)
         .replaceAll('"main"', JSON.stringify(branch))
         .replaceAll("refs/heads/main", tooling.fullRef),
@@ -113,9 +122,9 @@ export function candidatePublicationFixture(
       PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
       PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
-      PUBLICATION_TARGET_SHA: q,
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_SKIP_TELEGRAM: "true",
+      PUBLICATION_TARGET_SHA: c,
+      PUBLICATION_COVERAGE_POLICY: beta ? "npm-beta-v1" : "npm-stable-v1",
+      PUBLICATION_SKIP_TELEGRAM: String(beta),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,
@@ -216,8 +225,8 @@ export function candidatePublicationFixture(
     evidenceReuse: undefined,
     ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
-    targetRef: q,
-    targetSha: q,
+    targetRef: c,
+    targetSha: c,
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
   });
@@ -297,6 +306,15 @@ export function candidatePublicationFixture(
   };
   const client = {
     ...fixture.client,
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Fresh candidate fixture does not reuse publication artifacts");
+    },
+    downloadArtifactArchive() {
+      throw new Error("Fresh candidate fixture does not download reused artifacts");
+    },
+    getRunArtifacts() {
+      throw new Error("Fresh candidate fixture does not enumerate reused artifacts");
+    },
     validateChildReuse() {
       throw new Error("Fresh candidate fixture does not contain reused children");
     },
@@ -313,12 +331,15 @@ export function candidatePublicationFixture(
         runGh: admission.runGh,
         downloadArchive: admission.archive,
       }),
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority(repository, producer);
+    },
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
     getWorkflowSource: () => workflowSource,
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
-    getRunView: (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
+    getRunView: async (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),
     getRunAttempt: (id: string, attempt: number) => {
       if (attempt !== 1) {
@@ -334,7 +355,7 @@ export function candidatePublicationFixture(
         : fixture.client
             .getJobLog(id)
             .replaceAll(legacyRunId, runId)
-            .replaceAll(fixture.targetSha, q),
+            .replaceAll(fixture.targetSha, c),
     getRunAttemptJobs: async (id: string) =>
       id === runId ? [...originalJobs, sealer] : jobsFor(id),
     loadExecutionPlan: () => plan,
@@ -363,14 +384,14 @@ export function candidatePublicationFixture(
   };
   const npmManifest = {
     version: 3,
-    releaseSha: q,
+    releaseSha: c,
     releaseTag: `v${version}`,
     tarballName: "openclaw.tgz",
     tarballSha256: hash(npmBytes),
     producer: npmProducer,
     preparedBundle: {
       schema: "openclaw.prepared-npm-bundle/v1",
-      source: { sha: q },
+      source: { sha: c },
       package: { sha256: hash(npmBytes) },
       producer: { repository, workflowSha: q },
     },
@@ -394,7 +415,7 @@ export function candidatePublicationFixture(
   };
   const npmQualified = {
     schema: "openclaw.qualified-npm-preflight/v1",
-    source: { sha: q },
+    source: { sha: c },
     producer: npmProducer,
     manifestSha256: hash(npmManifestBytes),
     artifact: {
@@ -406,7 +427,7 @@ export function candidatePublicationFixture(
     },
   };
   const npmJob = completedJob(780, npmProducer.jobName);
-  const artifactName = dockerReleaseArtifactName(q, "1");
+  const artifactName = dockerReleaseArtifactName(c, "1");
   const payloadBytes = ["immutable amd64 OCI payload", "immutable arm64 OCI payload"];
   const architectures = ["amd64", "arm64"];
   const dockerArtifacts = architectures.map((arch, i) =>
@@ -415,7 +436,7 @@ export function candidatePublicationFixture(
   const docker = {
     schemaVersion: 1,
     repository,
-    sourceSha: q,
+    sourceSha: c,
     toolingSha: q,
     tag: `v${version}`,
     version,
@@ -492,6 +513,7 @@ export function candidatePublicationFixture(
     return JSON.stringify(readApi(endpoint));
   };
   return {
+    c,
     q,
     p,
     branch,

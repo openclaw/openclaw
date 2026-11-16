@@ -1,5 +1,5 @@
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 export class ExecProcessPreflightError extends Error {

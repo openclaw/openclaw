@@ -9,6 +9,7 @@ import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from 
 import { materializeManagedWorktree } from "./checkout-materialize.js";
 import { usesSourceOnlyWorktreeGit } from "./checkout-policy.js";
 import { addManagedWorktree } from "./checkout.js";
+import { WorktreeRecordNotFoundError } from "./errors.js";
 import {
   requireGit,
   worktreePathExists,
@@ -44,6 +45,7 @@ import {
   type ExactStateRetirement,
 } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot, type ExactStateSnapshot } from "./snapshot-exact-state.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import {
   clearExactRestoreReceipt,
   readExactRestoreReceipt,
@@ -56,7 +58,7 @@ export function requireManagedWorktreeRestoreRecord(
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
   if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
-    throw new Error(`worktree ${id} is not restorable`);
+    throw new WorktreeRecordNotFoundError(`worktree ${id} is not restorable`);
   }
   return record;
 }
@@ -466,7 +468,11 @@ async function restoreSnapshot(
   }
   let parent: string;
   try {
-    parent = await requireGit(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions);
+    parent = await requireGit(
+      record.repoRoot,
+      ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, snapshot)],
+      gitOptions,
+    );
   } catch (error) {
     const shallow = await runGit(
       record.repoRoot,

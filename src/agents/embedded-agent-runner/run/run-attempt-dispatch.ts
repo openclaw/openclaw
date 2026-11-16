@@ -11,6 +11,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
@@ -106,6 +107,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
+  // Each candidate, including fallbacks and live switches, applies Access to its own provider.
+  const attemptAccessProgram = resolveTurnCyberAccessProgram({
+    program: params.cyberAccessProgram,
+    provider,
+    model: modelId,
+    noticeScope: `log:${resolvedSessionKey ?? params.sessionId}`,
+    notify: (notice) => log.info(notice),
+  });
   const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
   const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
     agentId: workspaceResolution.agentId,
@@ -388,6 +397,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
+    toolUsageRankingSeed:
+      runInput.sessionAdmission?.entry.sessionId === sessionId
+        ? runInput.sessionAdmission.entry.toolUsageRankingSeed
+        : undefined,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
@@ -401,6 +414,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     bootstrapUserProfileId: params.bootstrapUserProfileId,
+    sessionUserProfileId: params.sessionUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
@@ -464,6 +478,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     // the accepted candidate boundary to that owner.
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage,
+    replayCurrentTranscript: sessionPromptState.activePrompt.replayCurrentTranscript,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
@@ -537,7 +552,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
-    cyberAccessProgram: params.cyberAccessProgram,
+    cyberAccessProgram: attemptAccessProgram,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -665,8 +680,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       placement?.assertCurrent();
       return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
     });
-  } catch (err) {
-    throw input.getPostCompactionAbortError() ?? err;
   } finally {
     attemptControls.close();
     try {
@@ -685,10 +698,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     }
   }
 
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }

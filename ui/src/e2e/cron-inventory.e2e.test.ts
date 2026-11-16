@@ -24,6 +24,7 @@ const held = createCronJob("held", "Held automation", {
   updatedAtMs: 1,
   schedule: { kind: "every", everyMs: 600_000 },
   sessionTarget: `session:${sessionKey}`,
+  state: { nextRunAtMs: now + 3_600_000 },
 });
 const other = createCronJob("other", "Other session automation", {
   agentId: "main",
@@ -94,6 +95,17 @@ function runtime(job: CronJob, action: "started" | "finished", revision: number)
 }
 
 suite.define(() => {
+  it("shows the scheduler's next run when hovering an automation row", async () => {
+    await suite.withPage({ locale: "en-US", timezoneId: "UTC" }, async ({ page }) => {
+      const { row } = await fixture(page);
+      await row(held.name).hover();
+      await page.clock.runFor(1_000);
+      await expect
+        .poll(async () => (await page.getByRole("tooltip").textContent())?.trim())
+        .toBe("Next run today at 7:00 AM");
+    });
+  });
+
   it.each([
     { mode: "advertised", supported: true, tabs: 3, stateOnly: false },
     { mode: "unadvertised", supported: false, tabs: 1, stateOnly: false },

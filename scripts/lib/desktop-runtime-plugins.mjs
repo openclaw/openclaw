@@ -16,7 +16,7 @@ function requireReleaseTagCommit(root, tag, commit, verifiedCommit) {
     try {
       actual = git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
     } catch {
-      git(root, ["fetch", "--depth=1", "--no-tags", "origin", `${ref}:${ref}`]);
+      git(root, ["fetch", "--no-tags", "origin", `${ref}:${ref}`]);
       actual = git(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
     }
   }

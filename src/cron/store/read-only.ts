@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
-import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "../../infra/sqlite-lifecycle-errors.js";
 import {
   removeTempDirectoryAsync,
-  SqliteSnapshotCleanupError,
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";

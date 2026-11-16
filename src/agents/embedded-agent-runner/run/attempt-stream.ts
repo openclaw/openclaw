@@ -20,7 +20,6 @@ import type { StreamFn } from "../../runtime/index.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -331,7 +330,7 @@ export function installEmbeddedAttemptStreamGuards(
   installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
 
   if (

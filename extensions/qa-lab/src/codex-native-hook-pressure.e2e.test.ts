@@ -407,7 +407,6 @@ export default {
           }
           const gateway = await owner.start({
             repoRoot: REPO_ROOT,
-            initializeCurrentRuntimeState: true,
             command: {
               executablePath: process.execPath,
               argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
@@ -441,15 +440,9 @@ export default {
               plugins.load = { paths: [pluginDir] };
               plugins.entries = {
                 ...plugins.entries,
-                // Keep the sandbox; isolate policy work from optional loop detection.
                 codex: {
                   enabled: true,
-                  config: {
-                    appServer: {
-                      sandbox: "workspace-write",
-                      loopDetectionPreToolUseRelay: false,
-                    },
-                  },
+                  config: { appServer: { sandbox: "workspace-write" } },
                 },
                 [PLUGIN_ID]: { enabled: true },
               };

@@ -25,6 +25,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: async () => {},
 }));
+vi.mock("./chrome.diagnostics.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.diagnostics.js")>()),
+  diagnoseChromeCdp: async () => ({ ok: true }),
+}));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -66,19 +70,46 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   fixture.spawn.mockReset();
   fixture.processListingBytes = undefined;
 });
 
 it.each([
-  { platform: "linux", largeProcessListing: false },
-  { platform: "darwin", largeProcessListing: false },
-  { platform: "win32", largeProcessListing: false },
-  { platform: "darwin", largeProcessListing: true },
+  {
+    platform: "linux",
+    largeProcessListing: false,
+    preload: "/opt/libfirst.so:/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 liblast.so",
+    expectedPreload: "/opt/libfirst.so:liblast.so",
+  },
+  {
+    platform: "darwin",
+    largeProcessListing: false,
+    preload: "libjemalloc.so",
+    expectedPreload: undefined,
+  },
+  {
+    platform: "win32",
+    largeProcessListing: false,
+    preload: "/opt/libjemalloc/custom.so",
+    expectedPreload: "/opt/libjemalloc/custom.so",
+  },
+  {
+    platform: "darwin",
+    largeProcessListing: true,
+    preload: "libjemalloc.so.2:libjemalloc.so.2.0.0",
+    expectedPreload: undefined,
+  },
 ] as const)(
   "seeds a fresh headless profile before its only launch on $platform (large listing: $largeProcessListing)",
-  async ({ platform, largeProcessListing }) => {
+  async ({ platform, largeProcessListing, preload, expectedPreload }) => {
+    const allocatorConfig =
+      "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,prof:true";
+    const longTmpDir = `/tmp/${"gateway-".repeat(10)}`;
+    vi.stubEnv("TMPDIR", longTmpDir);
+    vi.stubEnv("MALLOC_CONF", allocatorConfig);
+    vi.stubEnv("LD_PRELOAD", preload);
     if (largeProcessListing) {
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       fixture.processListingBytes = 2 * 1024 * 1024;
@@ -97,8 +128,15 @@ it.each([
       stderr: new EventEmitter(),
       kill: vi.fn(),
     });
-    fixture.spawn.mockImplementation((_command, args: string[]) => {
+    fixture.spawn.mockImplementation((_command, args: string[], options) => {
+      expect(options.env.TMPDIR).toBe(process.platform === "linux" ? "/tmp" : longTmpDir);
+      expect(options.env).not.toHaveProperty("MALLOC_CONF");
+      expect(options.env.LD_PRELOAD).toBe(expectedPreload);
       expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+      expect(args).not.toEqual(expect.arrayContaining(["--use-angle=swiftshader"]));
+      expect(args).not.toContain("--enable-unsafe-swiftshader");
+      expect(args).not.toContain("--in-process-gpu");
       expect(args).not.toContain("--no-sandbox");
       expect(readPrefs()).toMatchObject({
         download: {
@@ -116,6 +154,9 @@ it.each([
       platform,
     });
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
+    expect(process.env.TMPDIR).toBe(longTmpDir);
+    expect(process.env.MALLOC_CONF).toBe(allocatorConfig);
+    expect(process.env.LD_PRELOAD).toBe(preload);
     expect(running).toMatchObject({ headless: true, headlessSource: "default", proc });
     if (process.platform !== "win32") {
       expect(fs.statSync(preferencesPath).mode & 0o777).toBe(0o600);

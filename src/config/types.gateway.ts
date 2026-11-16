@@ -12,6 +12,9 @@ export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
 
 export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
+/** Experimental OpenClaw ID remote access settings (Labs). */
+export type GatewayOpenClawIdConfig = NonNullable<GatewayConfigInput["openclawId"]>;
+
 export type DiscoveryConfig = NonNullable<z.input<typeof OpenClawSchemaShape.discovery>>;
 export type MdnsDiscoveryConfig = NonNullable<DiscoveryConfig["mdns"]>;
 export type MdnsDiscoveryMode = NonNullable<MdnsDiscoveryConfig["mode"]>;
@@ -120,14 +123,8 @@ export type GatewayOperatorRoleDefinition = NonNullable<
   GatewayConfigInput["roles"]
 >["definitions"][string];
 
-/** Optional named operator-role policies for Gateway deployments shared by a team. */
-export type GatewayOperatorRolesConfig = Omit<
-  NonNullable<GatewayConfigInput["roles"]>,
-  "default"
-> & {
-  /** Required default for profiles without a valid explicit or GitHub login assignment. */
-  default?: string;
-};
+/** Role definitions; setting a default enables named-role enforcement for identified people. */
+export type GatewayOperatorRolesConfig = NonNullable<GatewayConfigInput["roles"]>;
 
 export type GatewayConfig = Omit<
   GatewayConfigInput,

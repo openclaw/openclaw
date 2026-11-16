@@ -219,7 +219,7 @@ Moved to [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Automations (`cron`)
 
-Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.failureAlert`.
+Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.delivery`, `cron.agents`, and `cron.creators`, `cron.failureAlert`.
 
 <a id="cronfailurealert"></a>
 

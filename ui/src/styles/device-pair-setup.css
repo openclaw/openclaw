@@ -36,8 +36,8 @@
   opacity: 0.7;
 }
 
-.device-pair-setup__access input {
-  margin-top: 2px;
+.device-pair-setup__access .oc-radio {
+  margin-top: 1px;
 }
 
 .device-pair-setup__access span {
@@ -71,8 +71,6 @@
   width: 18px;
   height: 18px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }

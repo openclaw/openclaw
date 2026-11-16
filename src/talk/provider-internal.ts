@@ -14,11 +14,13 @@ import type {
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
-  RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+} from "./provider-contexts.js";
+import type {
+  RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
 } from "./provider-types.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");

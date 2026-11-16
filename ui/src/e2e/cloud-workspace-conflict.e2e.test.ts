@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -130,7 +130,6 @@ suite.define(() => {
       await page.setViewportSize({ width: 390, height: 844 });
       const composer = page.locator(".agent-chat__composer-shell");
       const title = notice.locator(".chat-composer-neighbor-card__copy strong");
-      const summary = notice.locator(".chat-composer-neighbor-card__copy > span");
       const dismiss = notice.getByRole("button", { name: "Dismiss workspace conflict notice" });
       await expect
         .poll(async () => {
@@ -148,9 +147,22 @@ suite.define(() => {
           ),
         )
         .toEqual(["nowrap", "nowrap"]);
-      for (const item of [title, summary, dismiss]) {
-        const [itemBox, noticeBox] = await Promise.all([item.boundingBox(), notice.boundingBox()]);
-        assert(itemBox && noticeBox, "expected mobile conflict notice layout boxes");
+      // Read the card and its children in one frame while the resized composer settles.
+      const { noticeBox, itemBoxes } = await notice.evaluate((node) => {
+        const bounds = (element: Element) => {
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return { x, y, width, height };
+        };
+        return {
+          noticeBox: bounds(node),
+          itemBoxes: [
+            ".chat-composer-neighbor-card__copy strong",
+            ".chat-composer-neighbor-card__copy > span",
+            ".chat-error__dismiss",
+          ].map((selector) => bounds(node.querySelector(selector)!)),
+        };
+      });
+      for (const itemBox of itemBoxes) {
         expect(itemBox.x).toBeGreaterThanOrEqual(noticeBox.x);
         expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(noticeBox.x + noticeBox.width);
         expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);
@@ -251,7 +263,7 @@ suite.define(() => {
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
           const summary = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-          const diagnostic = alert.locator("pre");
+          const diagnostic = alert.locator(".lazy-view-error__detail");
           const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. Check its device and try again. "}${workerFailureDiagnostic}`;
           expect(await summary.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
@@ -286,21 +298,11 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
-            const compact = width === 320 && failedState !== "request";
-            const firstAction = compact
-              ? alert.getByRole("button", { name: "Refresh", exact: true })
-              : copy;
-            await page.keyboard.press("Tab");
-            expect(await firstAction.evaluate((node) => node === document.activeElement)).toBe(
-              true,
-            );
             await page.keyboard.press("Tab");
             expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
-            if (compact) {
-              await page.keyboard.press("Tab");
-              expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
-              await page.keyboard.press("Shift+Tab");
-            }
+            await page.keyboard.press("Tab");
+            expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+            await page.keyboard.press("Shift+Tab");
             await page.keyboard.press("PageDown");
             await expect
               .poll(() => diagnostic.evaluate((node) => node.scrollTop))
