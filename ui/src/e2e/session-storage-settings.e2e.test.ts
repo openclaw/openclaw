@@ -73,6 +73,31 @@ async function openStorage(page: Page, options: Parameters<typeof installMockGat
 }
 
 suite.define(() => {
+  it("uses default archival settings and preserves an explicit opt-out", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const config = {};
+      const gateway = await openStorage(page, {
+        methodResponses: {
+          "config.get": {
+            ...configSnapshot(config, "default-storage"),
+            appliedConfigHash: "default-storage",
+          },
+        },
+      });
+      await expectRow(page, "Chats", "1200");
+      await expect.poll(() => archiveSwitch(page).isChecked()).toBe(true);
+      expect(await ageInput(page).inputValue()).toBe("30");
+      await expect.poll(() => button(page, "Run now").isEnabled()).toBe(true);
+      await archiveSwitch(page).click();
+      const save = await gateway.waitForRequest("config.set");
+      expect(submittedConfig(save)).toHaveProperty(
+        "session.maintenance.coldStorage.enabled",
+        false,
+      );
+      expect(await archiveSwitch(page).isChecked()).toBe(false);
+    });
+  });
+
   it("shows inventory, saves whole-day policy without restart, and runs only applied settings", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1100 }, colorScheme: "dark" },

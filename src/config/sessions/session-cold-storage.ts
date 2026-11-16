@@ -66,7 +66,10 @@ import {
   SessionTranscriptWriterClaimReboundError,
 } from "./session-transcript-writer-claim-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import {
+  resolveMaintenanceConfigFromInput,
+  resolveSessionColdStorageConfig,
+} from "./store-maintenance.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const operations = new Map<string, StoreWriterQueue>();
@@ -590,14 +593,14 @@ export async function runSessionColdStorageMaintenance(params: {
     archivedTranscripts: 0,
     externalizedTranscripts: 0,
   };
-  const config = params.config.session?.maintenance?.coldStorage;
+  const config = resolveSessionColdStorageConfig(params.config.session?.maintenance);
   const maintenance = resolveMaintenanceConfigFromInput(params.config.session?.maintenance);
   const retentionMs = maintenance.mode === "enforce" ? maintenance.resetArchiveRetentionMs : null;
-  if (!config?.enabled && retentionMs == null) {
+  if (!config.enabled && retentionMs == null) {
     return result;
   }
   const nowMs = Date.now();
-  const beforeMs = nowMs - (config?.afterDays ?? 30) * 24 * 60 * 60 * 1000;
+  const beforeMs = nowMs - config.afterDays * 24 * 60 * 60 * 1000;
   const { stores, assertCurrent } = await prepareSessionColdStorageTargets(
     params.config,
     params.assertCurrent,
@@ -625,7 +628,7 @@ export async function runSessionColdStorageMaintenance(params: {
         assertCurrent,
       });
     }
-    if (!config?.enabled || remainingTranscripts <= 0 || remainingBytes <= 0) {
+    if (!config.enabled || remainingTranscripts <= 0 || remainingBytes <= 0) {
       continue;
     }
     assertCurrent();
