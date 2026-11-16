@@ -11,7 +11,6 @@ import {
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
-import { resolveIdentityPathViaExistingAncestor } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -19,6 +18,7 @@ import {
 } from "./gateway-state-owner.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
+import { resolveIdentityPathViaExistingAncestor } from "./path-existence.js";
 import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import {
   captureSqliteDatabaseAdmissions,

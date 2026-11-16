@@ -14,10 +14,16 @@ const completionSelectionEntries = [
   "src/system-agent/setup-inference-detect.ts",
   "src/agents/simple-completion-selection.ts",
 ];
+const passivePathEntries = [
+  "src/infra/path-existence.ts",
+  "src/agents/auth-profiles/shared-main-dir.ts",
+  "src/state/openclaw-state-db.paths.ts",
+];
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
     ...completionSelectionEntries,
+    ...passivePathEntries,
     "src/gateway/call.ts",
     "src/gateway/config-get-response.ts",
     "src/gateway/method-scopes.ts",
@@ -64,6 +70,23 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(passivePathEntries)(
+    "resolves paths in %s without loading broader filesystem operations",
+    (entry) => {
+      const modules = collectStaticValueImports(entry);
+      for (const deferred of [
+        "src/infra/boundary-path.ts",
+        "src/config/paths.ts",
+        "src/utils.ts",
+      ]) {
+        expect(modules).not.toContain(path.normalize(deferred));
+      }
+      expect(
+        modules.flatMap((file) => graph.dependencies(file).map(({ specifier }) => specifier)),
+      ).not.toContain("@openclaw/fs-safe/advanced");
+    },
+  );
+
   it.each(completionSelectionEntries)(
     "selects models in %s without loading completion execution",
     (entry) => {
