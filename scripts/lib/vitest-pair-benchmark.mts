@@ -243,7 +243,6 @@ export function buildBenchmarkCommandEnv(
           OPENCLAW_VITEST_RUNTIME: "node",
           OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
           OPENCLAW_VITEST_WORKER_CACHE: "0",
-          TSX_DISABLE_CACHE: "1",
           ...(treatment.kind === "disabled" ? { NODE_DISABLE_COMPILE_CACHE: "1" } : {}),
         }
       : {}),
@@ -609,8 +608,12 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
         inputs: context.manifest.inputs,
         seed: context.manifest.seed,
         schedule,
+        tsxCachePolicy:
+          "Ordinary tooling shims disable TSX disk caching; non-tooling Vitest children use fresh owned namespaces with within-invocation reuse and joined cleanup. Namespace paths are randomized and may be relocated; this is not universal TSX enablement.",
+        workerCachePolicy:
+          "Retained compiled-worker reuse is disabled; fresh compiled-worker generations may still be created.",
         limitations:
-          "Workload/dependency completeness and seed preparation require separate external qualification; this controller only checks declared identities. No native cache-acceptance claim.",
+          "Workload/dependency completeness, seed preparation and effective prepared-config policies require separate external qualification; this controller only checks declared identities. launchEnv records initial launcher inputs, including a one-worker request, not enforced descendant settings. No native cache-acceptance claim.",
         timingBoundary:
           "Active preparation, child exit/cache persistence and tree join, oracle and owned cleanup included; final record serialization excluded.",
         resourceScope:
@@ -717,7 +720,7 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
               inclusiveMs: cleaned ? elapsed() : null,
               phases,
               command,
-              env,
+              launchEnv: env,
               execution,
               exitCode: result?.exitCode ?? null,
               userCpuMs: cpu?.userCpuMs ?? null,

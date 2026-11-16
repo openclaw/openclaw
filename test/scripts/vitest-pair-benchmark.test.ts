@@ -421,6 +421,7 @@ describe("Node compile-cache benchmark contract", () => {
           PATH: process.env.PATH,
           NODE_DISABLE_COMPILE_CACHE: "poison",
           OPENCLAW_VITEST_RUNTIME: "bun",
+          TSX_DISABLE_CACHE: "poison",
           NODE_OPTIONS: "--bad-option",
           NODE_DEBUG_NATIVE: "COMPILE_CACHE",
         },
@@ -454,7 +455,7 @@ describe("Node compile-cache benchmark contract", () => {
         OPENCLAW_VITEST_RUNTIME: "node",
         OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
         OPENCLAW_VITEST_WORKER_CACHE: "0",
-        TSX_DISABLE_CACHE: "1",
+        TSX_DISABLE_CACHE: null,
         OPENCLAW_VITEST_MAX_WORKERS: "1",
         NODE_OPTIONS: null,
         NODE_DEBUG_NATIVE: null,
@@ -518,7 +519,8 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     const script = [
       'import { writeFileSync } from "node:fs";',
       'import assert from "node:assert/strict";',
-      'for (const [key, value] of Object.entries({ CI: "1", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0", TSX_DISABLE_CACHE: "1" })) assert.equal(process.env[key], value);',
+      'for (const [key, value] of Object.entries({ CI: "1", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
+      "assert.equal(process.env.TSX_DISABLE_CACHE, undefined);",
       `writeFileSync(process.argv[process.argv.indexOf("--outputFile") + 1], JSON.stringify(${JSON.stringify(report)}));`,
       "console.log(JSON.stringify({ active: process.env.NODE_COMPILE_CACHE, disabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null }));",
     ].join("\n");
@@ -613,7 +615,9 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
         status: "success",
         cleanup: "removed-owned-active",
         processTreeSettled: true,
+        launchEnv: { NODE_COMPILE_CACHE: path.join(scratch, "active/node-compile") },
       });
+      expect(record).not.toHaveProperty("env");
       expect(record.inclusiveMs).toBeGreaterThan(0);
       expect(Object.values(record.phases).every((value) => typeof value === "number")).toBe(true);
       expect(
