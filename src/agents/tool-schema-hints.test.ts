@@ -81,7 +81,8 @@ describe("tool schema hints", () => {
   it("keeps input hints small while allowing larger exact output contracts", () => {
     const schema = fields(16, (i) => `field_${String(i).padStart(2, "0")}_with_long_name`);
 
-    expect(inputHint(schema)).toBe("unknown");
+    // Required names alone overflow the input budget; a partial list would read as complete.
+    expect(inputHint(schema)).toBe("{ ... }");
     expect(outputHint(schema)).toContain("field_15_with_long_name: string");
   });
 
@@ -98,8 +99,39 @@ describe("tool schema hints", () => {
 
     expect(expected.length).toBe(limit + delta);
     expect(render(schema)).toBe(
-      delta <= 0 ? expected : limit === 300 ? "{ a: string; ... }" : undefined,
+      delta <= 0 ? expected : limit === 300 ? '{ a: string; "z😀": string; ... }' : undefined,
     );
+  });
+
+  it("names every required key before eliding an overflowing input hint", () => {
+    const item = closedObject({
+      text: Type.String(),
+      kind: Type.Union(["fact", "preference", "decision"].map((kind) => Type.Literal(kind))),
+      ...Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [`optional_${i}`, Type.Optional(Type.String())]),
+      ),
+    });
+    const schema = closedObject({
+      requestId: Type.String(),
+      attribution: Type.String(),
+      items: Type.Array(item),
+      note: Type.Optional(Type.String()),
+    });
+    const input = inputHint(schema);
+
+    expect(input).toMatch(
+      /^\{ attribution: string; items: Array<\{ kind: "fact" \| "preference" \| "decision"; text: string; optional_0\?: string; .*; \.\.\. \}>; requestId: string; \.\.\. \}$/u,
+    );
+    expect(input).not.toContain("note");
+    expect(input.length).toBeLessThanOrEqual(300);
+
+    const wide = closedObject(
+      Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`group_${i}`, Type.Array(item)])),
+    );
+    expect(inputHint(wide)).toMatch(
+      /^\{ group_0: Array<\{ kind: .*; group_7: Array<\.\.\.>; \.\.\. \}$/u,
+    );
+    expect(inputHint(wide).length).toBeLessThanOrEqual(300);
   });
 
   it("includes null in AJV-style nullable output hints", () => {

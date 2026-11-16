@@ -328,20 +328,59 @@ function compactObjectHint(
     schema.additionalProperties === true ||
     isRecord(schema.additionalProperties);
   let complete = !structurallyIncomplete && schema.additionalProperties === false;
-  let body = "";
-  for (const key of keys) {
-    const name = IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
-    const propertyHint = compactSchemaType(properties[key], depth, limits);
-    complete &&= propertyHint.complete;
-    const part = `${name}${required.has(key) ? "" : "?"}: ${propertyHint.text}`;
-    const next = body ? `${body}; ${part}` : part;
-    // The budget includes both braces and their inner spaces.
-    if (next.length + 4 > limits.maxChars) {
-      omitted = true;
-      complete = false;
-      break;
+  const prefixes = keys.map(
+    (key) =>
+      `${IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)}${required.has(key) ? "" : "?"}: `,
+  );
+  const hints = keys.map((key) => compactSchemaType(properties[key], depth, limits));
+  let body = keys.map((_key, index) => prefixes[index] + hints[index]!.text).join("; ");
+  // The budget includes both braces and their inner spaces.
+  if (body.length + 4 <= limits.maxChars) {
+    complete &&= hints.every((hint) => hint.complete);
+  } else {
+    // Name every required key before eliding anything: each keeps its full type
+    // when it fits, else a type shortened to the remaining budget, else a shallow
+    // type. Optional keys follow only while they fit whole.
+    omitted = true;
+    complete = false;
+    const shallow = (index: number) => {
+      const property = properties[keys[index]!];
+      const type = isRecord(property) ? property.type : undefined;
+      return `${prefixes[index]}${type === "array" ? "Array<...>" : type === "object" ? "{ ... }" : "unknown"}`;
+    };
+    // Braces, their inner spaces and the trailing "; ...".
+    const budget = limits.maxChars - 9;
+    let reserve = 0;
+    for (let index = 0; index < requiredKeys.length; index += 1) {
+      reserve += shallow(index).length + 2;
     }
-    body = next;
+    // A partial required list would read as the whole contract.
+    if (reserve - 2 > budget) {
+      return { text: "{ ... }", complete: false };
+    }
+    body = "";
+    for (const [index, key] of keys.entries()) {
+      const isRequired = index < requiredKeys.length;
+      if (isRequired) {
+        reserve -= shallow(index).length + 2;
+      }
+      const room = budget - (body ? body.length + 2 : 0) - reserve;
+      let part = prefixes[index] + hints[index]!.text;
+      if (part.length > room && isRequired) {
+        // Leave room for an Array<...> wrapper around a shortened object.
+        const typeRoom = room - prefixes[index]!.length - "Array<>".length;
+        const shortened =
+          typeRoom > 0
+            ? prefixes[index] +
+              compactSchemaType(properties[key], depth, { ...limits, maxChars: typeRoom }).text
+            : undefined;
+        part = shortened && shortened.length <= room ? shortened : shallow(index);
+      }
+      if (part.length > room) {
+        break;
+      }
+      body = body ? `${body}; ${part}` : part;
+    }
   }
   if (!body) {
     return keys.length === 0 && !omitted
