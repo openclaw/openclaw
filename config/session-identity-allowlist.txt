@@ -561,7 +561,7 @@ src/agents/tools/sessions-resolution.ts	2
 src/agents/tools/sessions-search-tool.ts	12
 src/agents/tools/sessions-send-communication-endpoint.ts	2
 src/agents/tools/sessions-send-communication.ts	27
-src/agents/tools/sessions-send-executor.ts	9
+src/agents/tools/sessions-send-executor.ts	8
 src/agents/tools/sessions-send-followup.ts	4
 src/agents/tools/sessions-send-reply-flow.ts	2
 src/agents/tools/sessions-send-resume.ts	2
@@ -940,7 +940,6 @@ src/gateway/server-methods/chat-pending-inputs-dismiss-handler.ts	5
 src/gateway/server-methods/chat-pending-inputs.ts	4
 src/gateway/server-methods/chat-prediction-handler.ts	6
 src/gateway/server-methods/chat-reply-media.ts	1
-src/gateway/server-methods/chat-send-active-leaf.ts	2
 src/gateway/server-methods/chat-send-admission-errors.ts	1
 src/gateway/server-methods/chat-send-admission.ts	6
 src/gateway/server-methods/chat-send-agent-dispatch.ts	4
