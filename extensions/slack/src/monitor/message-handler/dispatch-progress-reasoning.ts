@@ -1,20 +1,28 @@
-import {
-  type ChannelProgressDraftLine,
-  resolveChannelProgressDraftMaxLines,
+import type {
+  ChannelProgressDraftCompositorSnapshot,
+  ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createSlackReasoningCardState,
   formatReasoningSummaryTitle,
   planSlackReasoningCards,
-  segmentReasoningText,
+  rolloverSlackReasoningCards,
+  sealSlackReasoningCards,
+  type SlackReasoningCardLine,
 } from "../../progress-reasoning.js";
 
-// Each card is one line in the compositor's rolling window. A burst of
-// reasoning larger than the window would evict a card before the throttled
-// stream sends it, so a turn that streams reasoning widens the window; rows
-// that leave it later are already complete in Slack and stay there.
-const SLACK_REASONING_CARDS_MIN_WINDOW_LINES = 64;
+// Every row is a compositor line, and the paced send reads the compositor's
+// lines only when it fires. Admission is bounded to what the message being
+// built can take, so at most one message's rows are unsent at any time; the
+// compositor must still never evict them, and the default rolling window
+// (eight lines) is smaller than one message's row budget. The detailed native
+// card therefore disables eviction, with or without reasoning: Slack keeps
+// every row it was sent anyway, and the rollover budget, not the window,
+// sizes a message. The quiet card stores no tool rows, so it disables
+// eviction only once the turn streams reasoning and otherwise keeps the
+// configured window exactly as before.
+const SLACK_REASONING_CARDS_WINDOW_LINES = Number.MAX_SAFE_INTEGER;
 
 type ReasoningPayload = { text?: string; isReasoningSnapshot?: boolean };
 
@@ -25,6 +33,7 @@ type ReasoningCompositor = {
     line: ChannelProgressDraftLine,
     options?: { reasoningLine?: boolean },
   ) => Promise<boolean>;
+  getSnapshot: () => Pick<ChannelProgressDraftCompositorSnapshot, "lines">;
 };
 
 /**
@@ -59,16 +68,12 @@ export async function pushSlackReasoningPreview(
   return visible;
 }
 
-// The window widens only once the turn streams reasoning (`widened`): the
-// compositor reads maxLines on every merge, so a turn without reasoning keeps
-// the configured window and renders its tool rows exactly as before.
+// The compositor reads maxLines on every merge, so `unbounded` can switch the
+// window off mid-turn.
 function withSlackReasoningCardsWindow(
   entry: SlackAccountConfig,
-  widened: () => boolean,
+  unbounded: () => boolean,
 ): SlackAccountConfig {
-  if (resolveChannelProgressDraftMaxLines(entry) >= SLACK_REASONING_CARDS_MIN_WINDOW_LINES) {
-    return entry;
-  }
   const progress = entry.streaming?.progress;
   return {
     ...entry,
@@ -77,7 +82,7 @@ function withSlackReasoningCardsWindow(
       progress: {
         ...progress,
         get maxLines() {
-          return widened() ? SLACK_REASONING_CARDS_MIN_WINDOW_LINES : progress?.maxLines;
+          return unbounded() ? SLACK_REASONING_CARDS_WINDOW_LINES : progress?.maxLines;
         },
       },
     },
@@ -90,7 +95,8 @@ function withSlackReasoningCardsWindow(
  * card and below the single summary row on the quiet card, which still shows
  * no tool rows. Cards are ordinary compositor lines, so they share the paced
  * update loop, the start gate and the reconciler with tool rows. A turn that
- * streams no reasoning renders exactly as before.
+ * streams no reasoning renders tool rows only on the detailed card, and the
+ * quiet card exactly as before.
  */
 export function createSlackReasoningCardsRuntime(params: {
   entry: SlackAccountConfig;
@@ -98,23 +104,63 @@ export function createSlackReasoningCardsRuntime(params: {
   /** The detailed card: tool rows show, and the finished card summarizes the think. */
   toolRows: boolean;
   compositor: () => ReasoningCompositor;
+  /**
+   * Whether the stream message being built can still take this row, rows
+   * and size, on top of everything already admitted for it. Cards the
+   * message cannot take wait in the runtime's queue until the chain rolls.
+   */
+  admits: (line: ChannelProgressDraftLine) => boolean;
+  /**
+   * Sends the chain until no card is queued, rolling to new messages as
+   * needed. A tool row must not be admitted ahead of reasoning that came
+   * before it, so a tool call flushes the queue first.
+   */
+  flushQueued: () => Promise<void>;
+  /**
+   * Cards were refused for room. Nothing reached the compositor, so nothing
+   * else would schedule the paced send that rolls to a message with room.
+   */
+  noteQueued: () => void;
   now?: () => number;
 }) {
   const enabled = params.nativeCard;
   const now = params.now ?? Date.now;
   let state = createSlackReasoningCardState();
   // Last pushed status/text per card id, so unchanged cards are not re-admitted.
+  // A planned card with no entry is queued: the message could not take it.
   let pushedKeys = new Map<string, string>();
   let startedAt: number | undefined;
+  const cardKey = (line: SlackReasoningCardLine) => `${line.status ?? ""} ${line.text}`;
+  // Cards the message refused for room in the last render, in order. Only
+  // these are queued for the chain; a card a render has not reached yet is
+  // not (a render can wait behind the send in flight).
+  let queuedLines: SlackReasoningCardLine[] = [];
+  const holdsLine = (id: string) =>
+    params
+      .compositor()
+      .getSnapshot()
+      .lines.some((line) => typeof line === "object" && line.id === id);
 
-  const render = async (): Promise<boolean> => {
-    const plan = planSlackReasoningCards(state);
-    state.cardsEmitted = plan.cardsEmitted;
+  // Admits planned cards in order: updates to admitted cards always (they
+  // replace a row in place), new cards only while the message can take them,
+  // and never a later card ahead of a queued earlier one. Rerun after the
+  // chain rolled to release queued cards into the new message's room.
+  // Undefined when the compositor refused a new card: the final reply started
+  // and it takes no more lines, so the chain places the queue itself.
+  const render = async (): Promise<boolean | undefined> => {
     let visible = false;
-    for (const line of plan.lines) {
-      const key = `${line.status ?? ""} ${line.text}`;
-      if (pushedKeys.get(line.id) === key) {
+    const plan = planSlackReasoningCards(state);
+    queuedLines = [];
+    for (const [index, line] of plan.entries()) {
+      const key = cardKey(line);
+      const pushed = pushedKeys.get(line.id);
+      if (pushed === key) {
         continue;
+      }
+      if (pushed === undefined && !params.admits(line)) {
+        queuedLines = plan.slice(index).filter((later) => !pushedKeys.has(later.id));
+        params.noteQueued();
+        break;
       }
       pushedKeys.set(line.id, key);
       // The card is the reasoning's own row: admitting it must not close the
@@ -123,6 +169,11 @@ export function createSlackReasoningCardsRuntime(params: {
       // delta would merge against display text instead.
       visible =
         (await params.compositor().pushToolProgress(line, { reasoningLine: true })) || visible;
+      if (pushed === undefined && !holdsLine(line.id)) {
+        pushedKeys.delete(line.id);
+        queuedLines = plan.slice(index).filter((later) => !pushedKeys.has(later.id));
+        return undefined;
+      }
     }
     return visible;
   };
@@ -133,20 +184,23 @@ export function createSlackReasoningCardsRuntime(params: {
     if (!enabled || !state.open) {
       return false;
     }
-    state.sealed.push(...segmentReasoningText(state.open));
-    state.open = "";
+    sealSlackReasoningCards(state);
     params.compositor().resetReasoningProgress();
-    return await render();
+    return (await render()) === true;
   };
 
   return {
     enabled,
     compositorEntry: enabled
-      ? withSlackReasoningCardsWindow(params.entry, () => startedAt !== undefined)
+      ? withSlackReasoningCardsWindow(
+          params.entry,
+          () => params.toolRows || startedAt !== undefined,
+        )
       : params.entry,
     reset() {
       state = createSlackReasoningCardState();
       pushedKeys = new Map();
+      queuedLines = [];
       startedAt = undefined;
     },
     async push(payload: ReasoningPayload): Promise<boolean> {
@@ -159,7 +213,7 @@ export function createSlackReasoningCardsRuntime(params: {
       }
       startedAt ??= now();
       state.open = normalized;
-      return await render();
+      return (await render()) === true;
     },
     seal,
     async noteToolCall(): Promise<boolean> {
@@ -167,7 +221,41 @@ export function createSlackReasoningCardsRuntime(params: {
         return false;
       }
       state.toolCalls += 1;
-      return await seal();
+      const visible = await seal();
+      // The tool row follows the reasoning that preceded it. Cards the current
+      // message could not take must reach their messages before the row is
+      // admitted, or the row would sit above them.
+      if (queuedLines.length > 0) {
+        await params.flushQueued();
+      }
+      return visible;
+    },
+    /**
+     * The message carrying cards up to `throughCard` is finished. Later text
+     * of the same phase starts a new card on the next message; the merge
+     * state is untouched so cumulative snapshots keep extending the phase.
+     * Runs inside a stream send, so it must not push compositor lines.
+     */
+    rollover(throughCard: number): void {
+      if (enabled) {
+        rolloverSlackReasoningCards(state, throughCard);
+      }
+    },
+    /** Cards the message being built refused for room. */
+    pendingRows: (): number => queuedLines.length,
+    /** Admits queued cards the message being built can take now. */
+    release: async (): Promise<boolean | undefined> => (enabled ? await render() : false),
+    /** The queued cards, in order, for a chain that must place them itself. */
+    peekPendingLines: (): SlackReasoningCardLine[] => [...queuedLines],
+    /** Cards the chain placed on a message without the compositor. */
+    markPlaced(lineIds: Iterable<string>): void {
+      const placed = new Set(lineIds);
+      for (const line of queuedLines) {
+        if (placed.has(line.id)) {
+          pushedKeys.set(line.id, cardKey(line));
+        }
+      }
+      queuedLines = queuedLines.filter((line) => !placed.has(line.id));
     },
     /**
      * Completion headline for the think, once reasoning has streamed. The
