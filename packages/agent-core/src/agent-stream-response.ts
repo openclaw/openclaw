@@ -27,7 +27,10 @@ import {
 import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
-import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
+import {
+  resolveAgentAssistantTurnId,
+  type AgentToolBatchContext,
+} from "./tool-execution-context.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -44,6 +47,7 @@ import type {
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 export type AsyncToolBatchScheduling = {
+  toolBatch: AgentToolBatchContext;
   waitForPrevious: () => Promise<void>;
   onParallelStarted: () => void;
   onTerminalLoop: () => void;
@@ -169,6 +173,7 @@ export async function streamAgentResponse(
   executedIds: Set<string>;
   batches: ExecutedToolCallBatch[];
   continuationRequired: boolean;
+  toolBatch: AgentToolBatchContext;
 }> {
   const sourceMessages = [...context.messages];
   const convertMessages = async (messages: AgentMessage[], projectionSignal = signal) => {
@@ -245,6 +250,17 @@ export async function streamAgentResponse(
     return projected.slice(llmMessages.length);
   });
   const executedIds = new Set<string>();
+  const toolBatchId = uuidv7();
+  const projectToolBatch = (
+    content: AssistantMessage["content"],
+    membership: AgentToolBatchContext["membership"],
+  ): AgentToolBatchContext => ({
+    id: toolBatchId,
+    membership,
+    calls: content.flatMap((item) =>
+      item.type === "toolCall" ? [{ toolCallId: item.id, toolName: item.name }] : [],
+    ),
+  });
   const batches: ExecutedToolCallBatch[] = [];
   let executions = Promise.resolve();
   let admissions = Promise.resolve();
@@ -270,7 +286,7 @@ export async function streamAgentResponse(
       }
     }
   };
-  const enqueueTools = (message: AssistantMessage) => {
+  const enqueueTools = (message: AssistantMessage, toolBatch: AgentToolBatchContext) => {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       return;
     }
@@ -305,6 +321,7 @@ export async function streamAgentResponse(
           await previousExecutions;
         }
         const batch = await executeAsyncTools(message, calls, batchSignal, emitToolEvent, {
+          toolBatch,
           waitForPrevious: () => previousExecutions,
           onParallelStarted: releaseAdmission,
           onTerminalLoop,
@@ -491,7 +508,10 @@ export async function streamAgentResponse(
                   // may keep sampling, but every executed call has a durable owner.
                   await commitFragment(prefix);
                   committedContentCount = event.contentIndex + 1;
-                  enqueueTools(prefix);
+                  enqueueTools(
+                    prefix,
+                    projectToolBatch(message.content.slice(0, committedContentCount), "streaming"),
+                  );
                 }
               }
               break;
@@ -526,6 +546,8 @@ export async function streamAgentResponse(
             modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
           }
           const result = stopped ? { ...stopped, usage: providerResult.usage } : providerResult;
+          // Keep the original response's members across async fragments and failed-call filtering.
+          const toolBatch = projectToolBatch(result.content, "complete");
           abortFailedResponse(result);
           const outputLimit = isResponsesOutputLimitToolCallError(result);
           if (outputLimit) {
@@ -555,14 +577,14 @@ export async function streamAgentResponse(
           );
           await commitFragment(finalMessage);
           if (executedIds.size > 0) {
-            enqueueTools(finalMessage);
+            enqueueTools(finalMessage, toolBatch);
           }
           await executions;
           if (executionFailure) {
             throw executionFailure.error;
           }
           const continuationRequired = await steering.finish();
-          return { message: finalMessage, executedIds, batches, continuationRequired };
+          return { message: finalMessage, executedIds, batches, continuationRequired, toolBatch };
         }
       },
       runtime,

@@ -4,6 +4,42 @@ import type { PluginJsonValue } from "./host-hook-json.js";
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
+export type PluginHookBeforeToolCallEvent = {
+  toolName: string;
+  params: Record<string, unknown>;
+  /** Host-authoritative discriminator for tools that intentionally share names. */
+  toolKind?: PluginHookToolKind;
+  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
+  toolInputKind?: PluginHookToolInputKind;
+  runId?: string;
+  toolCallId?: string;
+  /**
+   * Original model-response membership, including calls that fail validation or resolution.
+   * Streaming snapshots are incomplete and cannot establish that a call is standalone.
+   * Absent for invocations without host-provided assistant-response context.
+   */
+  toolBatch?: {
+    readonly id: string;
+    readonly membership: "complete" | "streaming";
+    readonly calls: readonly {
+      readonly toolCallId: string;
+      readonly toolName: string;
+    }[];
+  };
+  /**
+   * Optional best-effort destination path hints the host derived from `params`
+   * for well-known tool envelopes (e.g. `apply_patch`).
+   *
+   * This is a convenience hint, not an authoritative parse result: the host's
+   * extractor may be intentionally lenient and can return paths for malformed
+   * or partial envelopes. Plugins may use `derivedPaths` as a fast path, but
+   * should parse and validate `params` themselves when correctness or policy
+   * decisions depend on the exact set of affected paths. Absent for tools the
+   * host does not know how to derive paths for.
+   */
+  derivedPaths?: readonly string[];
+};
+
 /** Host-derived identity for the message requester that initiated a tool call. */
 export type PluginHookToolRequesterContext = {
   /** Channel/plugin id, for example `discord` or `telegram`. */

@@ -47,8 +47,7 @@ import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.t
 import type { PluginHookRunStoppedHandler } from "./hook-run-stopped.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type {
-  PluginHookToolKind,
-  PluginHookToolInputKind,
+  PluginHookBeforeToolCallEvent,
   PluginHookToolContext,
 } from "./hook-tool-context.types.js";
 import type {
@@ -487,34 +486,12 @@ export type PluginHookReplyPayloadSendingResult = {
 };
 
 export type {
+  PluginHookBeforeToolCallEvent,
   PluginHookToolKind,
   PluginHookToolInputKind,
   PluginHookToolRequesterContext,
   PluginHookToolContext,
 } from "./hook-tool-context.types.js";
-
-export type PluginHookBeforeToolCallEvent = {
-  toolName: string;
-  params: Record<string, unknown>;
-  /** Host-authoritative discriminator for tools that intentionally share names. */
-  toolKind?: PluginHookToolKind;
-  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
-  toolInputKind?: PluginHookToolInputKind;
-  runId?: string;
-  toolCallId?: string;
-  /**
-   * Optional best-effort destination path hints the host derived from `params`
-   * for well-known tool envelopes (e.g. `apply_patch`).
-   *
-   * This is a convenience hint, not an authoritative parse result: the host's
-   * extractor may be intentionally lenient and can return paths for malformed
-   * or partial envelopes. Plugins may use `derivedPaths` as a fast path, but
-   * should parse and validate `params` themselves when correctness or policy
-   * decisions depend on the exact set of affected paths. Absent for tools the
-   * host does not know how to derive paths for.
-   */
-  derivedPaths?: readonly string[];
-};
 
 export type PluginHookAfterToolCallEvent = {
   toolName: string;
