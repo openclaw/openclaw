@@ -12,7 +12,7 @@ registerSessionProgressEnglish();
  * Core widget metadata stays independent of the lazy renderers. Preview-safe widgets consume
  * only saved data; they never acquire live subscriptions or invoke Gateway methods.
  * Content-fitting widgets render host DOM that may grow to its natural height on
- * narrow boards; embedded pages keep their saved height.
+ * narrow boards in the phone layout; embedded pages keep their saved height.
  */
 const CORE_BOARD_WIDGET_ELEMENTS = [
   {
