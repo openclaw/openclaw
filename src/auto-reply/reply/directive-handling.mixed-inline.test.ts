@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.async.js";
 import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";

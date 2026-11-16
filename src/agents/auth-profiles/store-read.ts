@@ -10,7 +10,8 @@ import {
   loadInheritedAuthProfileStore,
   readRuntimeAuthProfileStoreFromSnapshots,
 } from "./inherited-store.js";
-import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./path-resolve.async.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveNativeSharedAuthStorePath } from "./path-resolve.native.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { materializePersonalAuthProfile } from "./personal-profiles.js";

@@ -17,10 +17,8 @@ import {
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
-import {
-  resolveSharedAuthStoreOwnershipAsync,
-  resolveSharedAuthStorePath as resolveSharedAuthPath,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveSharedAuthStorePath as resolveSharedAuthPath } from "./path-resolve.js";
 import { readAuthProfileRowsReceipt } from "./persisted-rows-receipt.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
 import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";

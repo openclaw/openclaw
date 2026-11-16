@@ -139,6 +139,30 @@ export function makeFileStat(
   } as unknown as Stats;
 }
 
+function makeRootMetadata(size = 0) {
+  return {
+    containment: "best-effort" as const,
+    realPath: "/workspace/test-agent/AGENTS.md",
+    stat: makeFileStat({ size, mtimeMs: 0 }),
+    exactIdentity: { dev: 1n, ino: 1n },
+  };
+}
+
+export function makeRootRead(content = "") {
+  return { ...makeRootMetadata(Buffer.byteLength(content)), buffer: Buffer.from(content) };
+}
+
+export function makeRootOpen() {
+  const handle = { close: vi.fn(async () => {}) };
+  return {
+    ...makeRootMetadata(),
+    handle,
+    async [Symbol.asyncDispose]() {
+      await handle.close();
+    },
+  };
+}
+
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   return expectDefined(mock.mock.calls[callIndex], `Expected mock call ${callIndex}`)[argIndex];
 }

@@ -1,7 +1,5 @@
-import {
-  getPreparedSharedAuthStoreOwnership,
-  prepareSharedAuthStoreOwnership,
-} from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
+import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";

@@ -32,34 +32,13 @@ import {
   expectPendingDeletion,
   getAgentList,
   makeFileStat,
+  makeRootOpen,
+  makeRootRead,
   expectUncalled,
   mergeAgentConfig,
   mockCallArg,
   type MockAgentEntry,
 } from "./agents-mutate.test-support.js";
-function makeRootMetadata(size = 0) {
-  return {
-    containment: "best-effort" as const,
-    realPath: "/workspace/test-agent/AGENTS.md",
-    stat: makeFileStat({ size, mtimeMs: 0 }),
-    exactIdentity: { dev: 1n, ino: 1n },
-  };
-}
-
-function makeRootRead(content = "") {
-  return { ...makeRootMetadata(Buffer.byteLength(content)), buffer: Buffer.from(content) };
-}
-
-function makeRootOpen() {
-  const handle = { close: vi.fn(async () => {}) };
-  return {
-    ...makeRootMetadata(),
-    handle,
-    async [Symbol.asyncDispose]() {
-      await handle.close();
-    },
-  };
-}
 
 const mocks = vi.hoisted(() => ({
   sharedAuthStoreOwnership: { location: "legacy-main" } as {
@@ -238,8 +217,12 @@ vi.mock("../operator-run-authority.js", async (importOriginal) => ({
 vi.mock("../../agents/auth-profiles/path-resolve.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/path-resolve.js")>()),
   resolveSharedAuthStoreOwnership: () => mocks.sharedAuthStoreOwnership,
-  prepareSharedAuthStoreOwnership: async () => mocks.sharedAuthStoreOwnership,
   resolveSharedAuthStorePath: () => "/resolved/agents/main/agent/openclaw-agent.sqlite",
+}));
+
+vi.mock("../../agents/auth-profiles/path-resolve.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/path-resolve.async.js")>()),
+  prepareSharedAuthStoreOwnership: async () => mocks.sharedAuthStoreOwnership,
 }));
 
 vi.mock("../../config/sessions/legacy-main-session-migration.js", () => ({

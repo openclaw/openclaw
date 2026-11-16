@@ -8,10 +8,8 @@ import {
   resolveAmbientOwnerAgentId,
   tryResolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
-import {
-  getPreparedSharedAuthStoreOwnership,
-  prepareSharedAuthStoreOwnership,
-} from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
+import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";

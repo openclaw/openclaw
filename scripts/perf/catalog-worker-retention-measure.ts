@@ -179,7 +179,7 @@ const { AuthStorage } = await import("../../src/agents/sessions/auth-storage.js"
 const { captureTemplateInstallSchemaVersionFacts } =
   await import("../../src/templates/provenance-runtime-read.js");
 const { prepareSharedAuthStoreOwnership } =
-  await import("../../src/agents/auth-profiles/path-resolve.js");
+  await import("../../src/agents/auth-profiles/path-resolve.async.js");
 await prepareSharedAuthStoreOwnership(env);
 const startupCatalog = periodicRefresh ? createRemoteCatalog(0) : undefined;
 if (startupCatalog) {

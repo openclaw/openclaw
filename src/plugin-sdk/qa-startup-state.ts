@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listAgentIds } from "../agents/agent-roster.js";
-import { inspectSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { inspectSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.native.js";
 import { inspectAuthProfileJsonCellReadOnly } from "../agents/auth-profiles/sqlite.js";
 import {
   assertConfiguredWorkspaceStateReady,

@@ -8,11 +8,8 @@ import { resolveStateDir } from "../../config/paths.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  resolveOAuthRefreshLockPath,
-  resolveSharedAuthStoreOwnershipAsync,
-  resolveSharedAuthStorePath,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveOAuthRefreshLockPath, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "./sqlite-read.js";

@@ -4,9 +4,22 @@ import {
   noteCommittedSharedAuthStoreOwnership,
   parseSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
+  SHARED_AUTH_STORE_STATE_KEY,
 } from "./path-resolve.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
+
+/** Inspect copied state without pinning a runtime owner or changing SQLite artifacts. */
+export function inspectSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  return parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { env },
+      { artifactPreservingReadOnly: true },
+    ),
+  );
+}
 
 /** Doctor, offline CLI and the deprecated synchronous auth SDK prepare their native owner. */
 export function prepareSharedAuthStoreOwnershipForNative(

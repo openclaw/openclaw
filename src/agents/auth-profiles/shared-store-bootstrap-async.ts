@@ -13,11 +13,11 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   noteCommittedSharedAuthStoreOwnership,
   parseSharedAuthStoreOwnership,
-  resolveSharedAuthStoreOwnershipAsync,
 } from "./path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {

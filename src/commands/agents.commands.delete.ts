@@ -26,10 +26,8 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
-import {
-  prepareSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   prepareLegacyWorkspaceStateReset,

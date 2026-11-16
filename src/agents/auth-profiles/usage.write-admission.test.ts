@@ -29,6 +29,7 @@ import { withMockedPlatform, withRestoredMocks } from "../../test-utils/vitest-s
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
+  SHARED_AUTH_STORE_STATE_KEY,
 } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { authProfileRuntimeMode } from "./runtime-scope.js";
@@ -37,7 +38,6 @@ import {
   getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import * as sqliteRead from "./sqlite-read.js";
 import {
   closeAuthProfileReadPool,

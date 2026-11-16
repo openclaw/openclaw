@@ -38,7 +38,6 @@ export const AGENT_AUTH_CELLS = {
 // Shared-state auth payloads live in config_machine_state; the keys are listed
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
 export const SHARED_AUTH_CELL_KEYS = { store: "authProfiles.store", state: "authProfiles.state" };
-export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 
 function authProfileTableName(
   target: "store" | "state",

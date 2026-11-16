@@ -1,4 +1,4 @@
-import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import { prepareModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../secrets/runtime.js";
