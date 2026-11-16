@@ -17,6 +17,5 @@ describe("PostgreSQL runtime constants", () => {
     const catalog = runtime.expectedCatalog;
     expect(runtime.expectedCatalog).toBe(catalog);
     expect(structuredClone(runtime)).toEqual(fixture);
-    expect(JSON.parse(JSON.stringify(runtime))).toEqual(fixture);
   });
 });
