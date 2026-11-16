@@ -270,21 +270,19 @@ export class ShellChromeOwner {
   readonly closeNavDrawer = (options: NavDrawerCloseOptions = {}): void => {
     const host = this.host;
     // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
-    const drawerWasOpen = host.navDrawerOpen;
-    const restoreFocus = drawerWasOpen && options.restoreFocus;
-    if (host.navDrawerOpen) {
+    const { navDrawerOpen: drawerWasOpen, navDrawerTrigger: trigger } = host;
+    if (drawerWasOpen) {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.reset();
     }
     setToastInNavDrawer(host, false);
-    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
     if (drawerWasOpen && options.finishMotion) {
       // A chosen destination takes priority over watching the drawer exit.
       this.finishNavigationMotion();
     }
-    if (restoreFocus) {
+    if (drawerWasOpen && options.restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };
