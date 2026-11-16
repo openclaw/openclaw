@@ -3,8 +3,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
-import { runUpdateSqliteMigrationAsync } from "../infra/update-doctor-migration-context.js";
-import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
+import {
+  hasUpdateDoctorMigrationCapture,
+  runUpdateSqliteMigrationAsync,
+} from "../infra/update-doctor-migration-context.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";

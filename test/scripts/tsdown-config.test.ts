@@ -104,7 +104,10 @@ it("keeps database-opening workers outside update migration attribution", async 
       !Array.isArray(config.entry) &&
       name in config.entry,
   );
-  if (!selected) {
+  const source = selected
+    ? (selected.entry as Record<string, string | undefined>)[name]
+    : undefined;
+  if (!selected || !source) {
     throw new Error("Missing private fs-safe copy worker build config");
   }
   const root = createTempDir("openclaw-db-worker-attribution-build-");
@@ -112,7 +115,7 @@ it("keeps database-opening workers outside update migration attribution", async 
   const { bundles } = await build({
     ...selected,
     config: false,
-    entry: { [name]: (selected.entry as Record<string, string>)[name] },
+    entry: { [name]: source },
     outDir: root,
     dts: false,
     logLevel: "silent",
