@@ -201,15 +201,15 @@ it.each<{
   },
 );
 
-it("cancels an interrupted CLI read at least privilege instead of returning a late reply", async () => {
+it.each(["health", "cron.runs"])("cancels CLI %s reads without late success", async (method) => {
   const work = new AsyncWorkScope();
   fixture.request.mockImplementationOnce(async () => {
     work.beginClose();
     return { ok: true };
   });
-  const read = work.run(() => callGatewayCli({ ...localConnection, method: "health" }));
+  const read = work.run(() => callGatewayCli({ ...localConnection, method }));
   await expect(read).rejects.toMatchObject({ name: "AbortError" });
   expect(fixture.clientOptions?.scopes).toEqual(["operator.read"]);
   expect(fixture.clientOptions?.deviceIdentity).toBeNull();
-  expect(fixture.request).toHaveBeenCalledExactlyOnceWith("health", undefined, expect.any(Object));
+  expect(fixture.request).toHaveBeenCalledExactlyOnceWith(method, undefined, expect.any(Object));
 });

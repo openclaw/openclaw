@@ -278,23 +278,18 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
-it.each(["sleep", "request", "completion"])("cancels cron wait during %s", async (phase) => {
+it.each(["sleep", "completion"])("cancels cron wait during %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
   const scope = new AsyncWorkScope();
   const completed = { entries: [{ status: "ok", completionStatus: "succeeded" }] } as const;
   const read = createDeferredCore<typeof completed>();
-  callGatewayFromCli.mockImplementation(
-    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
-      if (method === "cron.run") {
-        return { ok: true, enqueued: true, runId: "queued-run" };
-      }
-      if (phase === "request") {
-        extra?.signal?.addEventListener("abort", () => read.reject(extra.signal?.reason));
-      }
-      return phase === "sleep" ? { entries: [] } : read.promise;
-    },
-  );
+  callGatewayFromCli.mockImplementation(async (method) => {
+    if (method === "cron.run") {
+      return { ok: true, enqueued: true, runId: "queued-run" };
+    }
+    return phase === "sleep" ? { entries: [] } : read.promise;
+  });
   const running = scope.track(() => parse(RUN_WAIT));
   try {
     await vi.advanceTimersByTimeAsync(0);
@@ -311,7 +306,6 @@ it.each(["sleep", "request", "completion"])("cancels cron wait during %s", async
     );
   } finally {
     read.resolve(completed);
-    await vi.advanceTimersByTimeAsync(2000);
     await scope.drain();
   }
 });
