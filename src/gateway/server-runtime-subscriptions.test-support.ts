@@ -6,8 +6,6 @@ import {
   releaseSessionControllerClaim,
   retireSessionControllerInput,
 } from "../sessions/session-controller.mailbox.js";
-import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
-import { getRpcSourceProjectSessionActive } from "../sessions/session-controller.rpc-sources.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { createSubscriptionTestParams } from "./server-runtime-subscriptions.params.test-support.js";
@@ -57,33 +55,4 @@ export function registerSubscriptionChatRun(
     await Promise.allSettled([entry.input.settlement.promise]);
   });
   return { ...registration, entry };
-}
-
-export function readLifecycleState(entry: RpcSourceRef) {
-  return {
-    projectSessionActive: getRpcSourceProjectSessionActive(entry),
-    projectSessionTerminalPending: entry.adapter.projectSessionTerminalPending,
-    projectSessionTerminalObservedAt: entry.adapter.projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence: entry.adapter.projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted: entry.adapter.projectSessionTerminalPersisted,
-    retirementRequested: entry.input.retirementRequested,
-  };
-}
-
-export function lifecycleState(
-  projectSessionActive: boolean | undefined,
-  projectSessionTerminalPending?: boolean,
-  projectSessionTerminalObservedAt?: number,
-  projectSessionTerminalPersistence?: Promise<void>,
-  projectSessionTerminalPersisted?: boolean,
-  retirementRequested?: boolean,
-): ReturnType<typeof readLifecycleState> {
-  return {
-    projectSessionActive,
-    projectSessionTerminalPending,
-    projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted,
-    retirementRequested,
-  };
 }

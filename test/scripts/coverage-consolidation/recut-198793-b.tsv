@@ -60,4 +60,4 @@ rank	removed_lines	file	keeper_files	reason
 0	474	src/gateway/server.chat-goal-workers.test-support.ts	src/gateway/server-chat.goal-lifecycle.test.ts	Orphan test helper after retiring its only executable suite; no surviving importer. Existing area keeper retained.
 0	182	src/infra/outbound/targets.shared-test.ts	src/infra/outbound/deliver.test.ts	Orphan test helper after retiring its only executable suite; no surviving importer. Existing area keeper retained.
 0	113	ui/src/pages/chat/composer-persistence.test-support.ts	ui/src/pages/chat/chat-send.test.ts	Orphan test helper after retiring its only executable suite; no surviving importer. Existing area keeper retained.
-# orphan_exports	Removed three unused subscription registration functions and unused Goal helpers; retained live fixture utilities and createGoalChatStartRequest for server.pending-input-media-custody.test.ts.
+# orphan_exports	Removed three unused subscription registration functions plus unused readLifecycleState/lifecycleState exports and unused Goal helpers; retained live fixture utilities and createGoalChatStartRequest for server.pending-input-media-custody.test.ts.
