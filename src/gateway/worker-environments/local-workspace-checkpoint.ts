@@ -530,7 +530,9 @@ export function applyLocalWorkspaceCheckpoint(params: {
         ...params.application,
         ...acceptance,
         onPhase: (phase) => {
-          if (phase === "apply") markApplied();
+          if (phase === "apply") {
+            markApplied();
+          }
           params.application.onPhase?.(phase);
         },
       }),
