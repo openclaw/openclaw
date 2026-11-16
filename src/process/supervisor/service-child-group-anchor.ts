@@ -22,9 +22,9 @@ import {
   releaseCommandOutput,
 } from "./service-child-group-anchor-io.js";
 import {
+  describeReleasedProcesses,
   hasLiveOwnedProcessGroupMembers,
   killOwnedProcessGroupMembers,
-  settleSurvivors,
 } from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
@@ -354,10 +354,9 @@ export function runServiceChildGroupAnchor(): void {
     if (!start?.releaseOnRootExit || start.ownedWorker || !command || state !== "active") {
       return;
     }
-    const survivors = await settleSurvivors(command.pid, subreaper, () => state === "active");
+    const survivors = describeReleasedProcesses(command.pid, subreaper?.children());
     if (!survivors) {
       // Unaccounted processes must not escape: without a census, stop the tree instead.
-      // A cancellation that began while survivors settled already owns the tree.
       void requestCleanup("cancel");
       return;
     }

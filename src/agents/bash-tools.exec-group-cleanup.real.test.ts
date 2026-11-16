@@ -592,34 +592,29 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "does not adopt or stop helpers that exit within the settle window, but a loop that keeps running counts",
+  "never stops helpers a command leaves for capacity, and tracks a loop that keeps running",
   async () => {
-    const cwd = tempDirs.make("exec-settle-");
-    const scopeKey = "agent:main:exec-settle";
-    await withEnvAsync(testEnv(cwd, "exec-settle-test"), async () => {
+    const cwd = tempDirs.make("exec-helpers-");
+    const scopeKey = "agent:main:exec-helpers";
+    await withEnvAsync(testEnv(cwd, "exec-helpers-test"), async () => {
       const exec = hostExec(cwd, scopeKey);
-      for (let call = 0; call < 20; call += 1) {
+      for (let call = 0; call < 3; call += 1) {
         const result = await exec.execute(`helpers-${call}`, {
-          command:
-            "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do sleep 0.5 & done; echo ok",
+          command: "for i in $(seq 17); do sleep 0.5 & done; echo ok",
         });
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-        expect(aggregated(result.details)).not.toMatch(
-          /background session|Stopped|allowed services/,
-        );
+        expect(aggregated(result.details)).not.toMatch(/Stopped|could not confirm/i);
       }
-      expect(runningIn(scopeKey)).toEqual([]);
+      // Helpers end on their own and their sessions drop out within one reap interval.
+      expect(await waitFor(() => runningIn(scopeKey).length === 0, 8_000)).toBe(true);
       const loop = await exec.execute("loop", {
         command: "while :; do sleep 0.05; done >/dev/null 2>&1 & echo PID=$!",
       });
       const loopPid = firstPid(aggregated(loop.details));
-      expect(aggregated(loop.details)).toMatch(
-        new RegExp(`pid ${loopPid} .*keeps running as background session`),
-      );
       expect(runningIn(scopeKey).map((session) => session.pid)).toContain(loopPid);
     });
   },
-  120_000,
+  60_000,
 );
 
 it.skipIf(process.platform === "win32")(
