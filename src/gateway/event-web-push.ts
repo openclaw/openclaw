@@ -22,6 +22,7 @@ import {
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseAgentSessionKey, parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
@@ -177,7 +178,17 @@ export function createEventWebPushDelivery(
           if (mention && !sessionPath) {
             return undefined;
           }
-          const path = notification.path ?? sessionPath?.slice(1) ?? "sessions";
+          let path = notification.path ?? sessionPath?.slice(1) ?? "sessions";
+          if (notification.category === "agent-finished") {
+            const { baseSessionKey, runId } = parseCronRunScopeSuffix(sessionKey);
+            const jobId = runId
+              ? parseAgentSessionKey(baseSessionKey)?.rest.slice("cron:".length)
+              : undefined;
+            if (jobId && runId) {
+              // Completed run aliases are removed; the recorded session id still selects its history.
+              path = `automations?${new URLSearchParams({ job: jobId, run: runId })}`;
+            }
+          }
           const url = resolveControlUiWebPushUrl(cfg, path);
           const targets = listCurrentWebPushTargets({
             ...authority,

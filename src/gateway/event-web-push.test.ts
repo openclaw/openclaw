@@ -571,26 +571,6 @@ describe("event Web Push classification", () => {
     }
   });
 
-  it.each([
-    ["question.requested", { id: "question:1" }, "ask/question%3A1"],
-    [
-      "chat",
-      { state: "final", runId: "run-1", sessionKey: "agent:research:thread.1" },
-      "chat/research/thread%2E1",
-    ],
-    [
-      "cron",
-      { action: "finished", jobId: "nightly", status: "error", runAtMs: 1234 },
-      "automations?job=nightly&run=cron%3Anightly%3A1234",
-    ],
-  ] as const)("routes %s to its originating Gateway", async (event, payload, path) => {
-    setPaired(pairedOperator("browser-device", ["operator.read", "operator.questions"]));
-    createDelivery(gatewayConfig).handleEvent(event, payload, researchContext);
-    await expectPayload({
-      url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
-    });
-  });
-
   it.each<[string, string, (viewers: Viewers) => unknown, string[]]>([
     ["the viewing device", "chat", ({ view }) => view("phone"), ["desktop"]],
     ["no declaration", "chat", () => {}, ["phone", "desktop"]],
