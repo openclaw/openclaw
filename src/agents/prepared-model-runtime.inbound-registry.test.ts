@@ -488,12 +488,19 @@ describe("prepared reply dispatch runtime", () => {
             store: { version: 1, profiles: {} },
           })),
         );
-      publishAuth(initialConfig);
       const firstConfig = applyAgentConfig(initialConfig, { agentId: "first" });
       const latestConfig =
         successor === "add"
           ? applyAgentConfig(firstConfig, { agentId: "second" })
           : pruneAgentConfig(firstConfig, "other").config;
+      // Roster publication assumes each agent's native storage is already prepared.
+      for (const id of new Set([
+        ...Object.keys(initialConfig.agents!.entries!),
+        ...Object.keys(latestConfig.agents!.entries!),
+      ])) {
+        await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, id);
+      }
+      publishAuth(initialConfig);
       const reload = createGatewayModelRuntimeReload();
       const prepare = (previous: OpenClawConfig, next: OpenClawConfig) =>
         reload.prepare(buildGatewayReloadPlan(diffConfigPaths(previous, next)), previous, next);

@@ -98,7 +98,8 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
       const opening = createDeferred();
       const releaseOpening = createDeferred();
       const discoveryStarted = createDeferred();
-      const releaseDiscovery = createDeferred();
+      const mainCatalogStarted = createDeferred();
+      const releaseMainCatalog = createDeferred();
       const discoveryCompleted = createDeferred();
       void publication.promise.catch(() => {});
       void normalPublication.promise.catch(() => {});
@@ -119,6 +120,17 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
       const createWorker = catalogWorker.createPreparedModelCatalogWorker;
       vi.spyOn(catalogWorker, "createPreparedModelCatalogWorker").mockImplementation((params) => {
         const worker = createWorker(params);
+        if (params.agentFacts.input.agentId === "main") {
+          return {
+            ...worker,
+            async loadCatalog(...args: Parameters<typeof worker.loadCatalog>) {
+              // Occupy the real catalog limiter; do not replace its scheduling behavior.
+              mainCatalogStarted.resolve();
+              await withinTest(releaseMainCatalog.promise, signal);
+              return worker.loadCatalog(...args);
+            },
+          };
+        }
         if (params.agentFacts.input.agentId !== agentId) {
           return worker;
         }
@@ -127,9 +139,7 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
           async loadCatalog(...args: Parameters<typeof worker.loadCatalog>) {
             catalogLoads += 1;
             discoveryStarted.resolve();
-            // Discovery must not block either read-first or writable startup admission.
             try {
-              await withinTest(releaseDiscovery.promise, signal);
               const catalog = await worker.loadCatalog(...args);
               discoveryCompleted.resolve();
               return catalog;
@@ -328,6 +338,7 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
               code: "agent-database-inspection-pending",
             });
             await expect(fs.access(catalogDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
+            await withinTest(mainCatalogStarted.promise, signal);
             releaseInspection.resolve();
             // Normal startup has published; now the deferred agent must publish read-only facts.
             await withinTest(Promise.all([publication.promise, opening.promise]), signal);
@@ -356,7 +367,7 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
             // Release test-owned holds before joining startup or its failure cleanup.
             releaseInspection.resolve();
             releaseOpening.resolve();
-            releaseDiscovery.resolve();
+            releaseMainCatalog.resolve();
             const [started] = await Promise.allSettled([starting]);
             if (started.status === "fulfilled") {
               gateway = started.value;
@@ -364,8 +375,7 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
             throw error;
           }
         });
-        await withinTest(discoveryStarted.promise, signal);
-        expect(catalogLoads).toBe(1);
+        expect(catalogLoads).toBe(0);
         const sessionKey = `agent:${agentId}:catalog-after-read`;
         witness = await prepareSessionMutationFacts({
           cfg: getRuntimeConfig(),
@@ -374,7 +384,9 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
           allowMissing: true,
         });
         expect(witness.readCurrent(getRuntimeConfig()).target).toBeNull();
-        releaseDiscovery.resolve();
+        releaseMainCatalog.resolve();
+        await withinTest(discoveryStarted.promise, signal);
+        expect(catalogLoads).toBe(1);
         await withinTest(discoveryCompleted.promise, signal);
         const catalogs = await loadPersistedPluginModelCatalogs(state.agentDir(agentId), ["xai"]);
         expect(catalogs.find(({ pluginId }) => pluginId === "xai")?.contents).toContain(model);
@@ -420,7 +432,7 @@ it("publishes custom-store reads before writable catalog birth and preserves lat
       } finally {
         releaseInspection.resolve();
         releaseOpening.resolve();
-        releaseDiscovery.resolve();
+        releaseMainCatalog.resolve();
         witness?.release();
         try {
           if (gateway) {

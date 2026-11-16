@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasPendingGatewayRestart } from "../infra/restart.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
@@ -50,13 +51,15 @@ export function refreshCommittedProviderCatalogs(
       continue;
     }
     owner.catalogRecovery = undefined;
-    void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
-      if (
-        !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
-        !(error instanceof PreparedModelRuntimeClosedError)
-      ) {
-        log.warn(`provider catalog refresh failed: ${formatErrorMessage(error)}`);
-      }
+    readOnlyWorkerScope.exit(() => {
+      void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
+        if (
+          !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
+          !(error instanceof PreparedModelRuntimeClosedError)
+        ) {
+          log.warn(`provider catalog refresh failed: ${formatErrorMessage(error)}`);
+        }
+      });
     });
   }
 }
