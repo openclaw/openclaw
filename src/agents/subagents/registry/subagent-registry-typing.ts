@@ -9,6 +9,7 @@ import { normalizeAccountId } from "../../../routing/account-id.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { resolveSubagentLifecycleTypingOwner } from "./subagent-registry-typing-owner.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-typing");
@@ -19,22 +20,12 @@ export async function startSubagentTyping(
   source: SubagentCompletionCustody["authority"] | undefined,
   currentEntry: () => SubagentRunRecord | undefined,
 ): Promise<void> {
-  const origin = entry.requesterOrigin;
   const resolveGatewayContext = getGatewayContextResolver(entry);
-  const runtime = resolveGatewayContext?.()?.lifecycleRuntime;
-  if (
-    !source ||
-    origin?.channel !== "telegram" ||
-    !origin.to ||
-    entry.expectsCompletionMessage !== true ||
-    entry.collect ||
-    !entry.completionRequesterSessionId ||
-    !entry.requesterAgentId ||
-    !entry.requesterStorePath ||
-    !runtime?.startTyping
-  ) {
+  const owner = resolveSubagentLifecycleTypingOwner(entry);
+  if (!source || !owner) {
     return;
   }
+  const { origin, runtime } = owner;
   let stopped = false;
   let stopTyping: (() => void) | undefined;
   let session: PreparedSessionSourceAuthority | undefined;
@@ -82,9 +73,9 @@ export async function startSubagentTyping(
   try {
     assertHostCurrent();
     const scope = {
-      agentId: entry.requesterAgentId,
+      agentId: owner.requesterAgentId,
       sessionKey: entry.requesterSessionKey,
-      storePath: entry.requesterStorePath,
+      storePath: owner.requesterStorePath,
     };
     const requester = await readSessionEntryReadOnlyInWorker(scope, assertHostCurrent);
     const route = deliveryContextFromSession(requester);
@@ -116,11 +107,9 @@ export async function startSubagentTyping(
     }
     session = prepared;
     assertHostCurrent();
-    stopTyping = runtime.startTyping({
+    stopTyping = owner.startTyping({
       ...origin,
-      channel: "telegram",
-      to: origin.to,
-      agentId: entry.requesterAgentId,
+      agentId: owner.requesterAgentId,
       runId: entry.runId,
       isCurrent,
     });
