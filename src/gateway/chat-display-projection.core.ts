@@ -7,6 +7,7 @@ import {
 } from "../agents/failover/assistant-request-failure-copy.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { projectPreservedCatalogMessageForDisplay } from "../chat/session-catalog-display.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import {
   projectAgentHistoryActivity,
   type AgentHistoryActivity,
@@ -72,7 +73,7 @@ export type ChatDisplayProjectionOptions = {
   activity?: false;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
-  turnBoundaryPending?: boolean;
+  turnBoundaryPending?: PendingTurnBoundary;
   assistantErrorPending?: boolean;
   subagentCoordination?: SubagentCoordinationDisplayResolver;
 };
@@ -133,7 +134,7 @@ function projectCurrentUserProfileAvatars(
 type ChatDisplayProjectionResult = {
   messages: Array<Record<string, unknown>>;
   activity: AgentHistoryActivity[];
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
   assistantErrorPending: boolean;
   assistantErrorRecoveryObserved: boolean;
   commentaryFallbacksObserved?: true;
