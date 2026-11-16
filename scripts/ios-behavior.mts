@@ -427,6 +427,8 @@ type ScreenSample = {
   screen: { width: number; height: number };
   transcript?: Rect;
   exclude: Rect[];
+  /** A progress card was on screen: the agent fixture's tool steps really ran. */
+  progressCard: boolean;
 };
 let screenCount = 0;
 const screensDir = path.join(outDir, "screens");
@@ -449,6 +451,7 @@ function readLayout(roots: AxNode[]): Layout {
   let transcript: Rect | undefined;
   let composerTop = Infinity;
   const exclude: Rect[] = [];
+  let progressCard = false;
   const walk = (node: AxNode) => {
     const id = node.AXUniqueId ?? "";
     const text = node.AXLabel ?? "";
@@ -463,6 +466,7 @@ function readLayout(roots: AxNode[]): Layout {
       if (id.startsWith("chat-progress-card") || /^(Plan, |Done in )/.test(text)) {
         exclude.push(node.frame);
       }
+      progressCard ||= id.startsWith("chat-progress-card");
     }
     node.children?.forEach(walk);
   };
@@ -472,7 +476,7 @@ function readLayout(roots: AxNode[]): Layout {
     const bottom = Math.min(transcript.y + transcript.height, composerTop);
     transcript = { ...transcript, height: Math.max(0, bottom - transcript.y) };
   }
-  return { screen, transcript, exclude };
+  return { screen, transcript, exclude, progressCard };
 }
 
 /**
@@ -511,7 +515,8 @@ async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
     const { layout } = layouts.reduce((best, entry) =>
       Math.abs(entry.t - t) < Math.abs(best.t - t) ? entry : best,
     );
-    return { png, screen: layout.screen, transcript: layout.transcript, exclude: layout.exclude };
+    const { screen, transcript, exclude, progressCard } = layout;
+    return { png, screen, transcript, exclude, progressCard };
   });
 }
 
@@ -979,6 +984,12 @@ function blankMatrix(): Record<string, Case> {
             result.gates[`keyboard ${keyboard} at send (setup)`] =
               keyboardAtSend === (keyboard === "up");
             result.gates["reply finished (setup)"] = replied;
+            if (content === "agent") {
+              // A failed tool step ends the mock's turn early; its card never draws.
+              result.gates["progress card on screen (setup)"] = sent
+                .flat()
+                .some((sample) => sample.progressCard);
+            }
             return result;
           },
         };
