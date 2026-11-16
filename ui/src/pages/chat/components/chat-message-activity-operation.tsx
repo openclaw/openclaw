@@ -138,6 +138,7 @@ export function LifecycleOperations(props: {
         open: (child?.session?.listed && subagents?.onOpenSubagent) || subagents?.onOpenSession,
       };
     });
+  const firstOutcome = () => resolveToolCardOutcome(first().group.card, first().options.runActive);
   const running = () =>
     props.operations.some(
       (operation) =>
@@ -145,7 +146,6 @@ export function LifecycleOperations(props: {
     );
   const verb = () => {
     const card = first().group.card;
-    const outcome = resolveToolCardOutcome(card, first().options.runActive);
     if (running()) {
       return t(
         props.kind === "launch"
@@ -156,15 +156,11 @@ export function LifecycleOperations(props: {
     return props.kind === "launch"
       ? t(
           "chat.toolCards.launch.subagent." +
-            resolveSessionLaunchPresentation(card, outcome)!.phase,
+            resolveSessionLaunchPresentation(card, firstOutcome())!.phase,
         )
       : t(
           "chat.toolCards." +
-            (outcome === "running"
-              ? "stoppingSubagent"
-              : readSubagentCancellation(card)?.stopped
-                ? "stoppedSubagent"
-                : "stopSubagent"),
+            (readSubagentCancellation(card)?.stopped ? "stoppedSubagent" : "stopSubagent"),
         );
   };
   const unnamedLabel = () => {
@@ -180,10 +176,7 @@ export function LifecycleOperations(props: {
     const card = first().group.card;
     const confirmed =
       props.kind === "launch"
-        ? resolveSessionLaunchPresentation(
-            card,
-            resolveToolCardOutcome(card, first().options.runActive),
-          )?.phase === "succeeded"
+        ? resolveSessionLaunchPresentation(card, firstOutcome())?.phase === "succeeded"
         : readSubagentCancellation(card)?.stopped;
     return confirmed
       ? t(
@@ -207,7 +200,7 @@ export function LifecycleOperations(props: {
     (props.operations.length === 1
       ? resolveToolOperationLabel(
           first().group.card,
-          resolveToolCardOutcome(first().group.card, first().options.runActive),
+          firstOutcome(),
           addressedSession(
             first().group.card,
             first().options.subagents?.subagentSessions,
@@ -271,21 +264,14 @@ export function LifecycleOperations(props: {
             </span>
           </Show>
         </span>
-        <Show
-          when={
-            operationRunInterrupted(first()) &&
-            resolveToolCardOutcome(first().group.card, first().options.runActive) === "unrecorded"
-          }
-        >
+        <Show when={operationRunInterrupted(first()) && firstOutcome() === "unrecorded"}>
           <span class="muted">{t("chat.toolCards.interrupted")}</span>
         </Show>
         <Show
           when={
             props.kind === "stop" &&
             props.operations.length === 1 &&
-            ["failed", "skipped"].includes(
-              resolveToolCardOutcome(first().group.card, first().options.runActive),
-            )
+            ["failed", "skipped"].includes(firstOutcome())
           }
         >
           <ToolOutcomeSummary card={first().group.card} />

@@ -22,6 +22,14 @@ type ToolGroupOptions = {
   interruptedCalls?: ReadonlySet<string>;
 };
 
+/** Actions named by their purpose rather than counted in a generic category. */
+const SEMANTIC_TOOL_KINDS = {
+  skillSearches: "skills_search",
+  skillReads: "skills_read",
+  waits: "agents_wait",
+  questions: "ask_user",
+} as const;
+
 export function describeToolGroup(
   items: readonly AgentActivityItem[],
   options: ToolGroupOptions = {},
@@ -43,38 +51,23 @@ export function describeToolGroup(
     (item) => !options.interruptedCalls?.has(item.toolCallId ?? item.itemId),
   );
   const summary = summarizeAgentActivity(all, options);
-  const skillSearches = current.filter(
-    (item) => !item.hideFromChannelProgress && item.name === "skills_search",
-  );
-  const skillReads = current.filter(
-    (item) => !item.hideFromChannelProgress && item.name === "skills_read",
-  );
-  const waits = current.filter(
-    (item) => !item.hideFromChannelProgress && item.name === "agents_wait",
-  );
-  const questions = current.filter(
-    (item) => !item.hideFromChannelProgress && item.name === "ask_user",
+  const semantic = new Map(
+    Object.entries(SEMANTIC_TOOL_KINDS).map(([kind, name]) => [
+      kind,
+      current.filter((item) => !item.hideFromChannelProgress && item.name === name),
+    ]),
   );
   const cancellations = current.filter(
     (item) =>
       !item.hideFromChannelProgress &&
       options.subagentCancellations?.has(item.toolCallId ?? item.itemId),
   );
-  const semanticItems = new Set([
-    ...skillSearches,
-    ...skillReads,
-    ...waits,
-    ...questions,
-    ...cancellations,
-  ]);
+  const semanticItems = new Set([...[...semantic.values()].flat(), ...cancellations]);
   const ordinary = current.filter((item) => !semanticItems.has(item));
   const { other, subagents, ...categories } = summarizeAgentActivity(ordinary, options).counts;
   const counts = {
     ...categories,
-    skillSearches: skillSearches.length,
-    skillReads: skillReads.length,
-    waits: waits.length,
-    questions: questions.length,
+    ...Object.fromEntries([...semantic].map(([kind, actions]) => [kind, actions.length])),
     cancellations: cancellations.length,
     other,
     subagents,
@@ -126,20 +119,8 @@ export function describeToolGroup(
     .filter(([, count]) => count > 0)
     .map(([kind], index) => {
       const continuation = index > 0 ? "Continuation" : "";
-      if (
-        kind === "skillSearches" ||
-        kind === "skillReads" ||
-        kind === "waits" ||
-        kind === "questions"
-      ) {
-        const actions =
-          kind === "skillSearches"
-            ? skillSearches
-            : kind === "skillReads"
-              ? skillReads
-              : kind === "waits"
-                ? waits
-                : questions;
+      const actions = semantic.get(kind);
+      if (actions) {
         const phase = actions.some((item) => item.status === "running")
           ? "Running"
           : actions.some((item) => item.status === "completed")

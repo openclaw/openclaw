@@ -29,6 +29,10 @@ const MUTATION_VERB_KEYS = {
   write: ["writing", "wrote", "write"],
 } as const;
 
+function byOutcome<T>(outcome: ToolCardOutcome, running: T, succeeded: T, other: T): T {
+  return outcome === "running" ? running : outcome === "succeeded" ? succeeded : other;
+}
+
 export function resolveToolRowVerb(
   view: Pick<ToolCallView, "kind" | "fileOperations">,
   outcome: ToolCardOutcome,
@@ -42,14 +46,12 @@ export function resolveToolRowVerb(
   }
   if (mutation) {
     const [running, succeeded, fallback] = MUTATION_VERB_KEYS[mutation];
-    return t(
-      `chat.toolCards.verbs.${outcome === "running" ? running : outcome === "succeeded" ? succeeded : fallback}`,
-    );
+    return t(`chat.toolCards.verbs.${byOutcome(outcome, running, succeeded, fallback)}`);
   }
   if (view.kind === "read" || view.kind === "search" || view.kind === "fetch") {
     const [running, succeeded, failed, fallback] = TOOL_ROW_VERB_KEYS[view.kind];
     return t(
-      `chat.toolCards.verbs.${outcome === "running" ? running : outcome === "succeeded" ? succeeded : outcome === "failed" ? failed : fallback}`,
+      `chat.toolCards.verbs.${byOutcome(outcome, running, succeeded, outcome === "failed" ? failed : fallback)}`,
     );
   }
   return undefined;
@@ -98,7 +100,7 @@ export function resolveToolOperationLabel(
       return args.title.trim();
     }
     return t(
-      `chat.toolCards.${outcome === "running" ? "executingCode" : outcome === "succeeded" ? "executedCode" : "codeExecution"}`,
+      `chat.toolCards.${byOutcome(outcome, "executingCode", "executedCode", "codeExecution")}`,
     );
   }
   const verb = resolveToolRowVerb(input, outcome);
@@ -125,26 +127,16 @@ export function resolveToolOperationLabel(
   const name = call.name.trim().toLowerCase();
   if (PATCH_TOOL_NAMES.has(name)) {
     return t(
-      `chat.toolCards.${outcome === "running" ? "changingFiles" : outcome === "succeeded" ? "changedFiles" : "fileChanges"}`,
+      `chat.toolCards.${byOutcome(outcome, "changingFiles", "changedFiles", "fileChanges")}`,
     );
   }
   if (name === "view_image") {
-    const key =
-      outcome === "running"
-        ? "viewingImage"
-        : outcome === "succeeded"
-          ? "viewedImage"
-          : "viewImage";
+    const key = byOutcome(outcome, "viewingImage", "viewedImage", "viewImage");
     const imageName = typeof args?.path === "string" ? pathDisplayName(args.path) : undefined;
     return [t(`chat.toolCards.${key}`), imageName].filter(Boolean).join(" ");
   }
   if (name === "ask_user") {
-    const key =
-      outcome === "running"
-        ? "askingQuestion"
-        : outcome === "succeeded"
-          ? "askedQuestion"
-          : "questionRequest";
+    const key = byOutcome(outcome, "askingQuestion", "askedQuestion", "questionRequest");
     return t(
       `chat.toolCards.${key}${Array.isArray(args?.questions) && args.questions.length > 1 && key !== "questionRequest" ? "s" : ""}`,
     );
@@ -163,14 +155,8 @@ export function resolveToolOperationLabel(
   if (name === "skills_search" || name === "skills_read") {
     const action =
       name === "skills_search"
-        ? outcome === "running"
-          ? "searchingSkills"
-          : outcome === "succeeded"
-            ? "searchedSkills"
-            : "skillSearch"
-        : outcome === "running"
-          ? "readingSkill"
-          : "readSkill";
+        ? byOutcome(outcome, "searchingSkills", "searchedSkills", "skillSearch")
+        : byOutcome(outcome, "readingSkill", "readSkill", "readSkill");
     const skillTarget = name === "skills_search" ? args?.query : args?.name;
     return [
       t(`chat.toolCards.${action}`),
@@ -181,17 +167,9 @@ export function resolveToolOperationLabel(
   }
   const sessionLabel =
     name === "sessions_history"
-      ? outcome === "running"
-        ? "readingChat"
-        : outcome === "succeeded"
-          ? "readChat"
-          : "chatRead"
+      ? byOutcome(outcome, "readingChat", "readChat", "chatRead")
       : name === "sessions_search"
-        ? outcome === "running"
-          ? "searchingChats"
-          : outcome === "succeeded"
-            ? "searchedChats"
-            : "chatSearch"
+        ? byOutcome(outcome, "searchingChats", "searchedChats", "chatSearch")
         : undefined;
   return [
     sessionLabel ? t(`chat.toolCards.${sessionLabel}`) : display.label,

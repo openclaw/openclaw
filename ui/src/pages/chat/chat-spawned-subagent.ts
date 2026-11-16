@@ -62,15 +62,25 @@ type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText" | "r
  * an ordinary operation and not a subagent's, when it was asked to with
  * `visible` or was answered with a dashboard session.
  */
+// Collector details contain only routing metadata; their complete receipt stays in text.
+function readReceipt(card: LaunchCard) {
+  return { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
+}
+
+function rosterName(row: GatewaySessionRow | undefined) {
+  return row && (text(row.label) || text(row.displayName) || text(row.derivedTitle))
+    ? resolveSessionDisplayName(row.key, row)
+    : undefined;
+}
+
 function readLaunch(card: LaunchCard) {
   const call = unwrapToolCallForDisplay(card);
   if (call.name.trim().toLowerCase() !== "sessions_spawn") {
     return null;
   }
   const args = asRecord(call.args);
-  // Collector details contain only routing metadata; their complete receipt stays in text.
-  const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
-  const childKey = text(result?.childSessionKey);
+  const result = readReceipt(card);
+  const childKey = text(result.childSessionKey);
   return {
     label: text(args?.label),
     childKey,
@@ -91,13 +101,9 @@ export function resolveSessionLaunchPresentation(
     return null;
   }
   const { result } = launch;
-  const kind = launch.childKey
-    ? isDashboardSessionKey(launch.childKey)
-      ? "chat"
-      : "subagent"
-    : launch.ownSession
-      ? "chat"
-      : "subagent";
+  const kind = (launch.childKey ? isDashboardSessionKey(launch.childKey) : launch.ownSession)
+    ? "chat"
+    : "subagent";
   const row = launch.childKey
     ? rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, launch.childKey))
     : undefined;
@@ -105,22 +111,22 @@ export function resolveSessionLaunchPresentation(
     outcome === "running"
       ? "running"
       : outcome === "skipped" ||
-          result?.status === "skipped" ||
-          result?.status === "cancelled" ||
-          result?.status === "interrupted"
+          result.status === "skipped" ||
+          result.status === "cancelled" ||
+          result.status === "interrupted"
         ? "interrupted"
-        : outcome === "failed" || result?.status === "error" || result?.status === "failed"
+        : outcome === "failed" || result.status === "error" || result.status === "failed"
           ? "failed"
           : outcome === "succeeded" &&
               launch.childKey &&
-              (result?.status === "accepted" || result?.status === "created")
+              (result.status === "accepted" || result.status === "created")
             ? "succeeded"
             : "unknown";
   return {
     kind,
-    label: launch.label ?? text(result?.label) ?? text(row?.label) ?? text(row?.displayName),
+    label: launch.label ?? text(result.label) ?? text(row?.label) ?? text(row?.displayName),
     childKey: launch.childKey,
-    runId: text(result?.runId),
+    runId: text(result.runId),
     phase,
   } as const;
 }
@@ -135,7 +141,7 @@ export function readSubagentCancellation(card: LaunchCard & Pick<ToolCard, "isEr
     if (!sessionKey || !isSubagentSessionKey(sessionKey)) {
       return null;
     }
-    const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
+    const result = readReceipt(card);
     const runId = text(args.runId);
     const abortedRunId = text(result.abortedRunId);
     const stopped =
@@ -153,7 +159,7 @@ export function readSubagentCancellation(card: LaunchCard & Pick<ToolCard, "isEr
   if (name !== "subagents" || args?.action !== "cancel") {
     return null;
   }
-  const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
+  const result = readReceipt(card);
   return {
     runId: text(args.runId),
     sessionKey: text(result.sessionKey),
@@ -215,12 +221,7 @@ export function addressedSession(
         ? areUiSessionKeysEquivalent(candidate.key, cancellation.sessionKey)
         : cancellation.runId && candidate.activeRunIds?.includes(cancellation.runId),
     );
-    return {
-      name:
-        row && (text(row.label) || text(row.displayName) || text(row.derivedTitle))
-          ? resolveSessionDisplayName(row.key, row)
-          : recordedStopNames?.get(subagentStopIdentity(card) ?? ""),
-    };
+    return { name: rosterName(row) ?? recordedStopNames?.get(subagentStopIdentity(card) ?? "") };
   }
   if (call.name.trim().toLowerCase() === "agents_wait") {
     const args = asRecord(call.args);
@@ -237,12 +238,7 @@ export function addressedSession(
           (typeof receipt?.sessionKey === "string" &&
             areUiSessionKeysEquivalent(candidate.key, receipt.sessionKey)),
       );
-      return (
-        text(receipt?.label) ??
-        (row && (text(row.label) || text(row.displayName) || text(row.derivedTitle))
-          ? resolveSessionDisplayName(row.key, row)
-          : undefined)
-      );
+      return text(receipt?.label) ?? rosterName(row);
     });
     return { names: names.length && names.every((name) => name !== undefined) ? names : undefined };
   }
