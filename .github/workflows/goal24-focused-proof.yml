@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   proof:
+    # Previously collected permissions evidence must not rerun.
+    if: ${{ false }}
     name: permissions-${{ matrix.variant }}
     strategy:
       fail-fast: false
@@ -102,5 +104,49 @@ jobs:
         with:
           name: goal24-speech-import-${{ github.run_id }}
           path: compiler-output/
+          if-no-files-found: error
+          retention-days: 7
+
+  matrix-causal:
+    name: matrix-causal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout exact Matrix candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bf8ee2c6152a18386a175ad329013bc20a4a8051
+          path: source
+          persist-credentials: false
+      - name: Checkout original modules without executing baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 937f77cb20ded2e041f5ea876200d01b449d0329
+          path: baseline
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Measure candidate suites and original-module differential
+        run: node tooling/scripts/goal24-matrix-proof.mjs
+      - name: Preserve synthetic causal evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-matrix-${{ github.run_id }}
+          path: proof-output/
           if-no-files-found: error
           retention-days: 7
