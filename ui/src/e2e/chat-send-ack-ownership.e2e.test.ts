@@ -74,6 +74,8 @@ suite.define(() => {
         });
         await successorTool.waitFor();
         expect(await successorTool.count()).toBe(1);
+        // The lazy row replaces its matching placeholder; await its actual command first.
+        await successorTool.locator(".chat-tool-row__cmd").waitFor();
         await successorTool.scrollIntoViewIfNeeded();
       }
 
