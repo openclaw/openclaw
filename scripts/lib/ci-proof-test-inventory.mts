@@ -3757,6 +3757,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/release-no-push-workflow.test.ts",
   "test/scripts/release-plan-producer.test.ts",
   "test/scripts/release-preflight.test.ts",
+  "test/scripts/release-publish-parent.test.ts",
   "test/scripts/release-runner-routing.test.ts",
   "test/scripts/release-workflow-matrix-plan.test.ts",
   "test/scripts/release-wrapper-scripts.test.ts",

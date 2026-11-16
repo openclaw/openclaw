@@ -7,7 +7,7 @@
 # rebase_main	b90c5739fa5cbff09f35de8985e1579b4442d5cd
 # fixture	Runtime-budget serial discovery sentinels restored exactly from selected main; generic isolated WebKit sentinel remains the existing tooltip suite.
 # docs	Runtime-budget proof citations restored with their suite; generic isolated WebKit example remains current.
-# retentions	Thirteen suites retained exactly from selected main, including browser budgets, HTTPS renewal and Windows launcher crash recovery.
+# retentions	Fifteen suites retained exactly from selected main, including readiness-only sidebar persistence and accepted release-child bookkeeping.
 rank	removed_lines	file	keeper_files	reason
 1117	837	src/config/sessions/session-accessor.sqlite-active-events.test.ts	src/config/sessions/session-accessor.conformance.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 1143	0	src/config/sessions/session-accessor.sqlite-cleanup-race.test.ts	src/config/sessions/session-accessor.sqlite-cleanup-race.test.ts	Retained exact selected main: byte-limited archive cleanup and generation race assertions.
@@ -43,9 +43,9 @@ rank	removed_lines	file	keeper_files	reason
 1135	833	src/state/openclaw-database-preflight.test.ts	src/state/openclaw-state-db.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 1110	839	src/transcripts/status.producer.test.ts	src/transcripts/status.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 1159	828	test/scripts/oxlint-config.test.ts	test/scripts/run-oxlint.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
-1188	822	test/scripts/release-publish-parent.test.ts	test/scripts/release-no-push-workflow.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1188	0	test/scripts/release-publish-parent.test.ts	test/scripts/release-publish-parent.test.ts	Retained exact selected main after final review: accepted numeric child IDs are persisted before browser metadata, SHA verification and read-exhaustion failure paths.
 1163	827	ui/src/app/session-placement-startup.delivery.test.ts	ui/src/pages/chat/chat-send.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
-1120	837	ui/src/components/sidebar-snapshot.test.ts	ui/src/e2e/session-management.sidebar-reconnect.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1120	0	ui/src/components/sidebar-snapshot.test.ts	ui/src/components/sidebar-snapshot.test.ts	Retained exact selected main after final review: readiness-only settlement must schedule persisted sidebar capture without a second render.
 1152	829	ui/src/components/solid/menu-navigation.browser.test.tsx	ui/src/components/solid/menu-native-contract.browser.test.tsx	Approved file-level area consolidation; named final surviving keepers retained.
 1139	832	ui/src/e2e/chat-rail-columns.e2e.test.ts	ui/src/pages/chat/chat-responsive.browser.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 1112	0	ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts	ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts	Retained exact selected main after review: real browser 240-delta coalescing, heap ceilings and idle CPU budgets require this runtime suite.
@@ -54,3 +54,4 @@ rank	removed_lines	file	keeper_files	reason
 1153	829	ui/src/lib/config/config-draft-model.test.ts	ui/src/lib/config/config-draft-revision.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 1197	820	ui/src/lib/sessions/session-row-observation.test.ts	ui/src/pages/chat/chat-state.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 1121	0	ui/src/e2e/session-progress-live-placement.e2e.test.ts	ui/src/e2e/session-progress-live-placement.e2e.test.ts	Retained: executable QA scenario requires live card placement and compact transcript receipt; the proposed background-work keeper does not cover this scenario.
+# serial_assertion	Restored exact-main ci-ui-e2e-ownership.test-support.ts; explicitly asserts uiE2eRuntimeBudgetTestFile belongs to uiE2eSerialTestFiles.
