@@ -26,6 +26,19 @@ const STABLE_114_D843_CI_FAILURES = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...["ios-screenshots-iphone", "ios-screenshots-ipad-13"].map((jobName) => ({
+    targetVersion: "2026.10.33",
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney authorized an iOS-only exception on 2026-11-16 at 22:14 UTC " +
+      "because this extended-stable release does not publish iOS. The observed " +
+      "screenshot jobs failed packaging evidence due to an Xcode version mismatch. " +
+      "Retain raw failures; this is not a test pass or a not-run exemption. Only " +
+      "these two terminal failed screenshot jobs are granted. All other jobs, " +
+      "versions, incomplete evidence, integrity checks and publication approval " +
+      "remain blocking.",
+  })),
   ...[
     {
       childRole: "normalCi",
@@ -278,6 +291,20 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (
+    waiver.targetVersion === "2026.10.33" &&
+    waiver.childRole === "normalCi" &&
+    ["ios-screenshots-iphone", "ios-screenshots-ipad-13"].includes(waiver.jobName)
+  ) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: ["ios-screenshot-shard finished with failure (selected=true)"],
+        exactCauses: true,
+      },
+    ];
+  }
   const stableCiFailures =
     waiver.targetSha === STABLE_114_TARGET_SHA
       ? STABLE_114_CI_FAILURES
