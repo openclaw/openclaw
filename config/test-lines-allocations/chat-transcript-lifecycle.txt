@@ -7,6 +7,8 @@
 # names after child deletion with exact-run and ordering controls.
 # Duplicate same-branch cases, wording echoes and a reload e2e already proven by
 # the cached-steer unit regression were removed; no room is allocated for growth.
-# Exact excess against integrated baseline 25c9790: 1305 net test lines minus the
+# The subagent roster listing label and the swarm e2e for coalesced launches and
+# completion rows add the last 16 lines.
+# Exact excess against integrated baseline 25c9790: 1321 net test lines minus the
 # normal 400-line allowance.
-905
+921

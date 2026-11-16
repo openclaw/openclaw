@@ -135,6 +135,7 @@ suite.define(() => {
                   text: JSON.stringify({
                     completed: children.map((child, index) => ({
                       runId: child.sessionId,
+                      sessionKey: child.key,
                       status: viewport.failure && index === viewport.count - 1 ? "timeout" : "done",
                       result:
                         viewport.failure && index === viewport.count - 1
@@ -182,24 +183,24 @@ suite.define(() => {
         while (await closedGroups.count()) {
           await closedGroups.first().click();
         }
+        // Launches share one lifecycle row; a fully collected batch adds a completion row.
+        // A successful wait stays hidden as coordination, including a timed-out collection.
         const tools = pane.locator(".chat-tool-msg-summary");
-        await expect.poll(() => tools.count()).toBe(viewport.count + 1);
+        await expect.poll(() => tools.count()).toBe(viewport.failure ? 1 : 2);
         await tools.first().click();
+        if (viewport.count > 1) {
+          // The shared row opens to one row per launch; each keeps its own receipt.
+          await pane
+            .locator(".chat-tool-msg-collapse--lifecycle button.chat-tool-msg-summary")
+            .first()
+            .click();
+        }
         const launchResult = pane.locator(".chat-tool-msg-body").first();
         await expect.poll(() => launchResult.textContent()).toContain("accepted");
         expect(await launchResult.textContent()).toContain(children[0]!.key);
-        await tools.last().click();
-        const collectorResult = pane.locator(".chat-tool-msg-body").last();
-        await expect
-          .poll(() => collectorResult.textContent())
-          .toContain(
-            viewport.failure
-              ? "Review timed out before completion."
-              : "Review completed without findings.",
-          );
-        expect(await collectorResult.textContent()).toContain(
-          viewport.failure ? "timeout" : "done",
-        );
+        if (!viewport.failure) {
+          expect(await tools.last().textContent()).toContain(`${viewport.count} agents finished`);
+        }
         expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
         expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         // The retained tool stays with the completed request, before the next user turn.
