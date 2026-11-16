@@ -286,8 +286,9 @@ export function applyJobResult(
         atMs: result.endedAt,
         consecutiveErrors: job.state.consecutiveErrors ?? 0,
         terminalOneShot: true,
-        // Cooldown and incident suppression remain the alert owner's decision.
-        notify: failureNotification === "unavailable" && !opts.replay,
+        failureNotificationDetail: result.failureNotificationDetail,
+        // Disabling the job is new information even when a prior alert was suppressed.
+        notify: failureNotification !== "queued" && !opts.replay,
         deferredNotifications: opts.deferredNotifications,
       });
     }
@@ -333,6 +334,7 @@ export function applyJobResult(
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;
+      terminalOneShot = isOneShotSchedule && runFailed;
     } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.

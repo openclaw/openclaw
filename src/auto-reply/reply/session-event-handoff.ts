@@ -1,7 +1,12 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  mergeAgentRunTerminalOutcome,
+} from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import { FAILOVER_REASONS } from "../../agents/failover/signal.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
@@ -52,6 +57,7 @@ import {
   intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
+import { resolveSessionEventTerminalOutcome } from "./session-event-terminal.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
 export { combineSessionEventTargetsForHost } from "./session-event-target.js";
@@ -137,6 +143,9 @@ function enqueueSessionEventAttempt(
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
   let failure: Error | string | undefined;
+  let genericFailure: string | undefined;
+  let terminalOutcome: SessionEventOutcome["terminalOutcome"];
+  let errorReason: SessionEventOutcome["errorReason"];
   let nextCheckMs: number | undefined;
   let sourceDeliveryOutcome: SourceDeliveryOutcome | undefined;
   let automationResult: SessionEventOutcome["automationResult"];
@@ -283,7 +292,15 @@ function enqueueSessionEventAttempt(
         configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
       const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
-      const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
+      const terminal = resolveSessionEventTerminalOutcome({
+        operation,
+        signal,
+        failure,
+        genericFailure,
+        terminalOutcome,
+      });
+      ({ failure, terminalOutcome } = terminal);
+      const { status } = terminal;
       if (status === "failed" && !canReadmit) {
         log.error("session event execution failed", {
           source: options.source,
@@ -356,10 +373,9 @@ function enqueueSessionEventAttempt(
       resolve({
         status,
         executionStarted: started,
-        interruptedByRestart:
-          status !== "completed" &&
-          resolveAgentRunErrorLifecycleFields(failure, operation?.abortSignal ?? signal)
-            .stopReason === "restart",
+        terminalOutcome,
+        errorReason: status === "failed" ? errorReason : undefined,
+        interruptedByRestart: terminalOutcome.stopReason === "restart",
         delivered,
         deliveryAttempted,
         deliveryAmbiguous,
@@ -566,13 +582,29 @@ function enqueueSessionEventAttempt(
             onSuppressed: (reason) => {
               deliverySuppressionReason = reason === "silent" ? "silent" : undefined;
               if (reason === "aborted") {
-                failure ??= "Session event execution was aborted";
+                genericFailure ??= "Session event execution was aborted";
               }
             },
             beforeStart: () => prepareStart(),
             ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
             onStarted: start,
+            onTerminalEvent: (event) => {
+              const observation = event.data.errorObservation;
+              errorReason =
+                event.data.phase === "error" && isRecord(observation)
+                  ? FAILOVER_REASONS.find((reason) => reason === observation.failoverReason)
+                  : undefined;
+            },
             onTerminal: async (runId, outcome, deliveryEvidence) => {
+              // Preserve execution facts before settlement can reject after Stop.
+              terminalOutcome = mergeAgentRunTerminalOutcome(
+                terminalOutcome,
+                buildAgentRunTerminalOutcomeFromLifecycleEvent({
+                  phase: outcome === "completed" ? "end" : "error",
+                  data: deliveryEvidence?.meta,
+                  abortSignal: operation?.abortSignal ?? signal,
+                }),
+              );
               const terminal = await settleSessionEventTurn({
                 automation: options.scheduledAutomation,
                 config: { ...cfg, session: { ...cfg.session, store: storePath } },
@@ -601,7 +633,7 @@ function enqueueSessionEventAttempt(
             if (batch.completion.kind === "failed") {
               failure ??= batch.completion.error;
             } else if (batch.completion.kind === "aborted") {
-              failure ??= "Session event execution was aborted";
+              genericFailure ??= "Session event execution was aborted";
             }
             try {
               for (const payload of batch.payloads) {

@@ -19,6 +19,7 @@ import {
   resolveCronDeliveryContext,
 } from "./isolated-agent/run-delivery-trace.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
+import { resolveCronAgentErrorClassification } from "./run-error-reason.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
@@ -288,6 +289,9 @@ export async function runCronSessionTurn(
       admissionDeferred: result.admissionDeferred,
       admissionDeferredReason: result.admissionDeferredReason,
       interruptedByRestart: result.interruptedByRestart,
+      errorClassification: result.terminalOutcome
+        ? resolveCronAgentErrorClassification(result.terminalOutcome, result.errorReason)
+        : undefined,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

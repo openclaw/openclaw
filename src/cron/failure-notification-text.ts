@@ -31,6 +31,11 @@ export function cronFailureDetailLines(
   if (!failureNotificationDetail) {
     return [GENERIC_FAILURE_DETAIL];
   }
+  if (failureNotificationDetail.kind === "invalid-target") {
+    return [
+      "Cause: invalid automation target. Update agentId or sessionTarget before re-enabling.",
+    ];
+  }
   if (failureNotificationDetail.kind === "command-exit") {
     return [`Cause: command exited with code ${failureNotificationDetail.exitCode}`];
   }

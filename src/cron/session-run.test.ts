@@ -17,6 +17,7 @@ import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-plan.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
+import { resolveTransientCronRetryDecision } from "./service/timer-trigger.js";
 import { runCronSessionTurn } from "./session-run.js";
 
 const fixture = vi.hoisted(() => ({
@@ -318,6 +319,36 @@ describe("scheduled session prompts", () => {
 });
 
 describe("scheduled session execution custody", () => {
+  it.each([
+    { reason: "aborted", status: "cancelled", retryable: true },
+    { reason: "cancelled", status: "cancelled", retryable: false },
+    { reason: "timed_out", status: "failed", retryable: true },
+  ] as const)("preserves $reason terminal policy through the session adapter", async (testCase) => {
+    fixture.restore.mockResolvedValue(restoredSource());
+    fixture.enqueue.mockReturnValue(
+      receipt(
+        Promise.resolve({
+          status: testCase.status,
+          executionStarted: true,
+          delivered: false,
+          error: "Session event execution was aborted",
+          terminalOutcome: { reason: testCase.reason, status: "error" },
+        }),
+      ),
+    );
+    const result = await runCronSessionTurn(input());
+    expect(result.errorClassification).toEqual(
+      testCase.retryable ? { kind: "reason", reason: "timeout" } : { kind: "aborted" },
+    );
+    expect(
+      resolveTransientCronRetryDecision({
+        ...result,
+        error: result.error,
+        consecutiveErrors: 1,
+      }).retryable,
+    ).toBe(testCase.retryable);
+  });
+
   it("times out adopted preparation without spending the setup budget in the queue", async () => {
     vi.useFakeTimers();
     const { terminal, enqueued } = captureSession(undefined, (options) => {

@@ -631,7 +631,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       }
     },
     abort: (reason) => abortIfAbortable(() => reason ?? createAgentRunDirectAbortError()),
-    abortByUser: () => abortIfAbortable(createAgentRunDirectAbortError),
+    abortByUser: () => abortIfAbortable(() => createAgentRunDirectAbortError(true)),
     abortForRestart: () => abortIfAbortable(createAgentRunRestartAbortError),
     abortForStall() {
       if (!isReplyOperationAbortable(operation)) {

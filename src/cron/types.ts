@@ -191,11 +191,13 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
+  | { kind: "invalid-target" }
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
   | {
