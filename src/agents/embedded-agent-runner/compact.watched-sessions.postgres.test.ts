@@ -9,7 +9,10 @@ import {
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
 } from "./compact.hooks.harness.js";
-import { getCurrentPluginMetadataSnapshotMock } from "./compact.hooks.metadata.test-support.js";
+import {
+  createCompactHooksPreparedModelRuntimeLease,
+  getCurrentPluginMetadataSnapshotMock,
+} from "./compact.hooks.metadata.test-support.js";
 
 // Load the harness before database owners: its module reset must not split their admission state.
 const { compactEmbeddedAgentSessionDirect } = await loadCompactHooksHarness();
@@ -18,6 +21,15 @@ const { mixedAgentConnection, mixedAgentPairs, useMixedAgentPair } =
 const databaseAdmission = await import("../../infra/database-engine/admission-scope.js");
 const assertEngineStoreExecutionAllowed = databaseAdmission.assertEngineStoreExecutionAllowed;
 const { prepareBundledDiscoveryMode } = await import("../../plugins/bundled-discovery-state.js");
+const { clearCurrentPluginMetadataSnapshot, getGatewayPluginMetadataSnapshot } =
+  await import("../../plugins/current-plugin-metadata-state.js");
+const { getCurrentPluginMetadataSnapshot, setGatewayPluginMetadataSnapshot } =
+  await vi.importActual<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>(
+    "../../plugins/current-plugin-metadata-snapshot.js",
+  );
+const { getPluginCache } = await import("../../plugins/plugin-cache.js");
+const { createEmptyPluginMetadataSnapshot } =
+  await import("../../plugins/plugin-metadata-empty.test-support.js");
 const acquirePreparedRuntime = acquireAgentRunPreparedModelRuntimeMock.getMockImplementation()!;
 const { captureRuntimeConfigAsyncReader } = await import("../../config/io.runtime.js");
 const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
@@ -83,19 +95,27 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
             }
           });
         onTestFinished(() => admissionGuard.mockRestore());
-        // The synthetic lease skips metadata preparation and its current-snapshot scope.
-        // Restore both contracts so auth planning consumes the prepared runtime's facts.
-        acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (...args) => {
-          const activateDiscovery = await prepareBundledDiscoveryMode(args[0].env);
-          activateDiscovery();
-          const lease = await acquirePreparedRuntime(...args);
-          getCurrentPluginMetadataSnapshotMock.mockReturnValue(lease.snapshot.metadataSnapshot);
-          return lease;
-        });
         onTestFinished(() => {
           acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquirePreparedRuntime);
           getCurrentPluginMetadataSnapshotMock.mockReset();
+          clearCurrentPluginMetadataSnapshot();
         });
+        // The harness skips Gateway boot publication. Share one prepared inventory across
+        // the real current reader, marker policy, and synthetic leases, as the Gateway does.
+        const metadataSnapshot = createEmptyPluginMetadataSnapshot(workspaceDir);
+        const activateDiscovery = await prepareBundledDiscoveryMode();
+        activateDiscovery();
+        setGatewayPluginMetadataSnapshot(metadataSnapshot, {
+          config,
+          env: process.env,
+          workspaceDir,
+        });
+        expect(getGatewayPluginMetadataSnapshot()).toBe(metadataSnapshot);
+        expect(getPluginCache().kind).toBe("process");
+        getCurrentPluginMetadataSnapshotMock.mockImplementation(getCurrentPluginMetadataSnapshot);
+        acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (input) =>
+          createCompactHooksPreparedModelRuntimeLease({ ...input, metadataSnapshot }),
+        );
         buildConfiguredAgentSystemPromptMock.mockImplementation(buildConfiguredAgentSystemPrompt);
         createOpenClawCodingToolsMock.mockReturnValue(
           ["sessions_history", "sessions_list", "read"].map((name) => ({
