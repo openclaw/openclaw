@@ -212,6 +212,10 @@ What persists across messages depends on the mechanism:
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
 
+Reduced tool results preserve previously disclosed paths to saved output. Context
+assembly does not check whether those files still exist; if temporary-file cleanup
+has removed one, a later read reports that it is unavailable.
+
 ### Runtime context and provider roles
 
 OpenClaw attaches typed runtime context separately from user-authored text. On

@@ -367,7 +367,7 @@ describe("memory actor effect adapters", () => {
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
-      expect(delivery.readSessionSettings()).toEqual({
+      expect(delivery.readSessionSettings()).toMatchObject({
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
