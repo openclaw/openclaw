@@ -50,7 +50,7 @@ registerDashboardsEnglish();
 function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
   const authors = new Map<string, DashboardAuthorOption>();
   for (const row of data.result?.sessions ?? []) {
-    const author = dashboardAuthor(row, data.fallbackAgentId);
+    const author = dashboardAuthor(row, data.fallbackAgentId, data.agents);
     const known = authors.get(author.id);
     authors.set(author.id, known ? { ...known, count: known.count + 1 } : { ...author, count: 1 });
   }
@@ -61,7 +61,7 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
   const query = filters.query.trim().toLocaleLowerCase().normalize("NFC");
   return (data.result?.sessions ?? [])
     .filter((row) => {
-      const author = dashboardAuthor(row, data.fallbackAgentId);
+      const author = dashboardAuthor(row, data.fallbackAgentId, data.agents);
       if (filters.ownerIds.length > 0 && !filters.ownerIds.includes(author.id)) {
         return false;
       }

@@ -83,6 +83,7 @@ function routeData(...rows: GatewaySessionRow[]): DashboardsRouteData {
     error: null,
     basePath: "",
     fallbackAgentId: "main",
+    agents: [],
     mainKey: "main",
     globalScope: false,
   };

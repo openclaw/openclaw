@@ -135,8 +135,10 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
   const filteredDashboards = createMemo(() => {
     const filter = dashboardsFilter();
     const fallbackAgentId = resolveSessionNavigationAgentId(app);
+    const agents = app.agents.state.agentsList?.agents ?? [];
     const rows = (dashboards()?.result?.sessions ?? []).filter(
-      (row) => !filter.authorId || dashboardAuthor(row, fallbackAgentId).id === filter.authorId,
+      (row) =>
+        !filter.authorId || dashboardAuthor(row, fallbackAgentId, agents).id === filter.authorId,
     );
     return filter.sort === "title"
       ? rows.toSorted((left, right) =>
@@ -158,8 +160,12 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
   // The author the filter offers, read the same way: whoever created the dashboard's session.
   const authors = createMemo(() => {
     const fallbackAgentId = resolveSessionNavigationAgentId(app);
+    const agents = app.agents.state.agentsList?.agents ?? [];
     return new Map(
-      filteredDashboards().map((row) => [row.key, dashboardAuthor(row, fallbackAgentId).label]),
+      filteredDashboards().map((row) => [
+        row.key,
+        dashboardAuthor(row, fallbackAgentId, agents).label,
+      ]),
     );
   });
   const byline = (row: SidebarRecentSession) => {

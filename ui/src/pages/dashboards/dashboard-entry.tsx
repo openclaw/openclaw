@@ -58,7 +58,7 @@ export function dashboardGroups(
   if (group === "author") {
     const groups = new Map<string, DashboardGroup>();
     for (const row of rows) {
-      const author = dashboardAuthor(row, data.fallbackAgentId);
+      const author = dashboardAuthor(row, data.fallbackAgentId, data.agents);
       const known = groups.get(author.id);
       if (known) {
         known.rows.push(row);
@@ -106,7 +106,7 @@ export function DashboardEntry(props: DashboardEntryProps) {
         })
       : null,
   );
-  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId);
+  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId, props.data.agents);
   const authorName = () =>
     author().id === props.gatewaySnapshot?.selfUser?.id ? t("dashboardsPage.you") : author().label;
   const title = createMemo(() => resolveSessionDisplayName(props.row.key, props.row));

@@ -29,9 +29,10 @@ export function renderSidebarDashboardsFilterMenuForMenus(
   const authors = () => {
     const context = host.sessionDataContext;
     const fallbackAgentId = context ? resolveSessionNavigationAgentId(context) : "main";
+    const agents = context?.agents.state.agentsList?.agents ?? [];
     const labels = new Map<string, string>();
     for (const row of host.navigationCatalog.dashboards?.result?.sessions ?? []) {
-      const author = dashboardAuthor(row, fallbackAgentId);
+      const author = dashboardAuthor(row, fallbackAgentId, agents);
       labels.set(author.id, author.label);
     }
     return [...labels]
