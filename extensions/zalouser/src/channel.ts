@@ -27,7 +27,6 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
@@ -37,7 +36,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import {
   checkZcaAuthenticated,
@@ -61,12 +63,13 @@ import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import { createZalouserSetupWizardProxy, zalouserSetupContract } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
-import type { ZcaFriend } from "./types.js";
+import type { ZaloSendOptions, ZcaFriend } from "./types.js";
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
 
 type ZalouserSendMediaContext = ChannelMessageSendTextContext & {
   mediaUrl?: string;
+  mediaAccess?: ZaloSendOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
@@ -101,6 +104,7 @@ async function sendZalouserFromContext({
   mediaUrl,
   accountId,
   cfg,
+  mediaAccess,
   mediaLocalRoots,
   mediaReadFile,
   signal,
@@ -118,6 +122,7 @@ async function sendZalouserFromContext({
     onPlatformSendDispatch,
     isGroup: target.isGroup,
     mediaUrl,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     mediaMaxBytes: account.mediaMaxBytes,
@@ -556,7 +561,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: {
       deliveryMode: "direct" as const,
-      chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown" as const,
       sendPayload: async (ctx: { payload: object } & Parameters<typeof sendZalouserOutbound>[0]) =>
         await sendPayloadWithChunkedTextAndMedia({

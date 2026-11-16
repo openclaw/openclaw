@@ -20,7 +20,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  chunkMarkdownTextWithMode,
+  chunkTextForOutbound,
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
@@ -257,12 +257,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const send = resolveMSTeamsSend({ cfg, accountId: effectiveAccountId, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
-        chunkMarkdownTextWithMode(
+        chunkTextForOutbound(
           text,
           resolveMSTeamsEffectiveTextChunkLimit(
             resolveMSTeamsAccountConfig(cfg, effectiveAccountId).textChunkLimit,
           ),
-          "length",
         ),
       );
       let result: Awaited<ReturnType<MSTeamsSendFn>>;
