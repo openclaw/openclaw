@@ -94,7 +94,7 @@ export class StorageBase {
         .select("manifest")
         .where("agent_key", "=", checkpointKey(this.config.vaultId)),
     );
-    if (!row || canonical(JSON.parse(String(row.manifest))) !== canonical(expected)) {
+    if (!row || canonical(JSON.parse(row.manifest)) !== canonical(expected)) {
       throw new Error("Stale publisher identity");
     }
   }

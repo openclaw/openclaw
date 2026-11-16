@@ -127,10 +127,13 @@ const holds = [];
 const samples = [];
 const observedStatements = { inside: 0, outside: 0 };
 let holding = false;
-if (process.env.PROFILE_SQL)
+if (process.env.PROFILE_SQL) {
   channel("openclaw.database.statement").subscribe(() => {
-    if (tracking) observedStatements[holding ? "inside" : "outside"]++;
+    if (tracking) {
+      observedStatements[holding ? "inside" : "outside"]++;
+    }
   });
+}
 class Store extends SqliteIdentityStore {
   withDatabase(run) {
     return super.withDatabase((db) => {
@@ -139,7 +142,10 @@ class Store extends SqliteIdentityStore {
       let holdStart;
       db.exec = (sql) => {
         const result = exec(sql);
-        if (tracking && /^BEGIN\b/i.test(sql)) holdStart = performance.now();
+        if (tracking && /^BEGIN\b/i.test(sql)) {
+          holdStart = performance.now();
+          holding = true;
+        }
         if (tracking && holdStart !== undefined && /^(COMMIT|ROLLBACK)\b/i.test(sql)) {
           holds.push(performance.now() - holdStart);
           holdStart = undefined;
@@ -147,7 +153,9 @@ class Store extends SqliteIdentityStore {
         }
         return result;
       };
-      if (!process.env.PROFILE_SQL) return run(db);
+      if (!process.env.PROFILE_SQL) {
+        return run(db);
+      }
       db.prepare = (sql) => {
         const s = prepare(sql);
         return new Proxy(s, {
@@ -163,7 +171,9 @@ class Store extends SqliteIdentityStore {
               } finally {
                 if (tracking) {
                   const entry = timings.get(sql) || { count: 0, insideCount: 0, ms: 0 };
-                  if (holdStart !== undefined) entry.insideCount++;
+                  if (holdStart !== undefined) {
+                    entry.insideCount++;
+                  }
                   entry.count++;
                   entry.ms += performance.now() - start;
                   timings.set(sql, entry);
@@ -248,7 +258,9 @@ try {
   const run = () => Reflect.apply(observe, storage, [records, access, evidence]);
   const recordDigest = (rows) => {
     const hash = createHash("sha256");
-    for (const row of rows) hash.update(JSON.stringify(row) + "\n");
+    for (const row of rows) {
+      hash.update(JSON.stringify(row) + "\n");
+    }
     return hash.digest("hex");
   };
   const snapshot = () =>
