@@ -10,7 +10,7 @@ export type SessionTranscriptHydrationConsumer = (
   transfers: ArrayBuffer[],
 ) => void | Promise<void>;
 
-/** One framing owner for native row bytes; the consumer owns acknowledged delivery. */
+/** One framing owner for native row bytes and already-selected retained entries. */
 export function createSessionTranscriptHydrationStream(
   encoding: string,
   consume: SessionTranscriptHydrationConsumer,
@@ -51,8 +51,23 @@ export function createSessionTranscriptHydrationStream(
       return flush();
     }
   };
+  const encoder = new TextEncoder();
   return {
     writeFrame,
+    async writeJsonEvent(value: unknown) {
+      const encoded = encoder.encode(JSON.stringify(value));
+      for (let offset = 0; ; offset += SESSION_TRANSCRIPT_SLICE_BYTES) {
+        const data = encoded.slice(offset, offset + SESSION_TRANSCRIPT_SLICE_BYTES);
+        const endOfEvent = data.byteLength < SESSION_TRANSCRIPT_SLICE_BYTES;
+        const pending = writeFrame({ data, endOfEvent }, data.buffer);
+        if (pending) {
+          await pending;
+        }
+        if (endOfEvent) {
+          return;
+        }
+      }
+    },
     async finish() {
       await flush();
       control.throwIfCancelled();

@@ -35,7 +35,10 @@ export function createSessionTranscriptHydrationDecoder(options: {
         }
       }
     },
-    finish(value: SessionTranscriptHydrationWorkerResult): PreparedSessionTranscriptHydration {
+    finish(
+      value: SessionTranscriptHydrationWorkerResult,
+      onSourceRows?: (events: readonly TranscriptEvent[], sequences: readonly number[]) => void,
+    ): PreparedSessionTranscriptHydration {
       if (value.kind === "bounded") {
         return value;
       }
@@ -51,8 +54,8 @@ export function createSessionTranscriptHydrationDecoder(options: {
         ) {
           throw new Error("Session history worker returned an incomplete selected transcript");
         }
-        // SQL streams physical order; restore the semantic window order, including injected boundaries.
         const selectedEvents = value.sequences.map((seq) => bySequence.get(seq)!);
+        onSourceRows?.(selectedEvents, value.sequences);
         return {
           kind: "bounded",
           snapshot: {
@@ -63,6 +66,9 @@ export function createSessionTranscriptHydrationDecoder(options: {
           ...(value.transcript ? { transcript: value.transcript } : {}),
           ...(value.compaction ? { compaction: value.compaction } : {}),
         };
+      }
+      if (onSourceRows && eventSeqs) {
+        onSourceRows(events, eventSeqs);
       }
       return {
         kind: "full",

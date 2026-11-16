@@ -46,6 +46,7 @@ import {
   readTranscriptStorageEncoding,
   transcriptEventJsonSql,
 } from "./transcript-payload.js";
+export type { SessionTranscriptHydrationConsumer } from "./session-transcript-hydration-stream.js";
 
 /** Read the compaction owner's session facts inside the transcript's own read snapshot. */
 export function readSessionCompactionPreparation(
@@ -80,7 +81,9 @@ export async function streamSessionTranscriptHydration(
   control: WorkerTaskControl,
   select?: (
     database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
-  ) => Omit<SessionTranscriptStreamedBoundedResult, "kind" | "eventCount">,
+  ) =>
+    | Omit<SessionTranscriptStreamedBoundedResult, "kind" | "eventCount">
+    | { sequences: number[] },
 ): Promise<Exclude<SessionTranscriptHydrationWorkerResult, { kind: "bounded" }>> {
   return await control.runNativeSection(async () => {
     const opened = openOpenClawAgentDatabaseReadOnly(toDatabaseOptions(request.resolvedScope));
@@ -325,9 +328,10 @@ export async function streamSessionTranscriptHydration(
       }
       const eventCount = await stream.finish();
       outcome = {
-        value: selected
-          ? { kind: "streamed-bounded", ...selected, eventCount }
-          : { kind: "full", version, eventCount },
+        value:
+          selected && "snapshot" in selected
+            ? { kind: "streamed-bounded", ...selected, eventCount }
+            : { kind: "full", version, eventCount },
       };
     } catch (error) {
       outcome = {

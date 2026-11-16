@@ -609,6 +609,11 @@ serveOwnedWorkerTasks(
               source: readActivitySummaryBatch(request),
             };
           }
+          if (request.kind === "compaction-preparation") {
+            const { readPreparedSessionCompaction } =
+              await import("./session-compaction-prepared.worker.js");
+            return readPreparedSessionCompaction(request, control, channel);
+          }
           if (
             request.kind === "transcript-hydration" ||
             request.kind === "transcript-maintenance" ||

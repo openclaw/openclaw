@@ -1,6 +1,7 @@
 import {
   commitCompactionSummary,
   resolveSummaryFloorChars,
+  type PreparedCompactionFloor,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -184,13 +185,20 @@ export function commitSessionCompactionSummary(
   preparation: Parameters<typeof commitCompactionSummary>[1],
   withoutSummary: boolean,
   replayBudget: () => number | undefined,
+  preparedFloor?: PreparedCompactionFloor,
 ): string {
-  return commitCompactionSummary(result, preparation, withoutSummary, replayBudget, (reduction) =>
-    log.warn(
-      `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
-        `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
-        `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
-    ),
+  return commitCompactionSummary(
+    result,
+    preparation,
+    withoutSummary,
+    replayBudget,
+    (reduction) =>
+      log.warn(
+        `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+          `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+          `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+      ),
+    preparedFloor,
   );
 }
 

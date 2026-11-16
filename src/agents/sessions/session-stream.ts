@@ -49,6 +49,8 @@ export function createSessionStreamFn(
   modelRegistry: ModelRegistry,
   settingsManager: SettingsManager,
   thinkingExplicit: boolean | undefined,
+  // Optional assertion from the already-admitted caller; never an admission factory.
+  assertCurrent?: () => void,
 ): NonNullable<AgentOptions["streamFn"]> {
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
@@ -56,10 +58,13 @@ export function createSessionStreamFn(
     context,
     optionsLocal,
   ) => {
+    assertCurrent?.();
     const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
     if (!auth.ok) {
       throw new Error(auth.error);
     }
+    // The admitted caller owns liveness; this stream never creates authority.
+    assertCurrent?.();
     // Isolated session streams bypass the process-default stream facade.
     await import("../ai-transport-runtime-host.js");
     optionsLocal?.signal?.throwIfAborted();
@@ -79,6 +84,7 @@ export function createSessionStreamFn(
           : undefined,
       ),
     };
+    assertCurrent?.();
     return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
   };
   bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);

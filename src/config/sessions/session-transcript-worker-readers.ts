@@ -1,8 +1,10 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   measureSessionStoreTargetInventoryInputBytes,
@@ -345,6 +347,42 @@ const readers: Readers & ThisType<ReaderContext> = {
       (value) => decoder.finish(value),
       signal,
       !input.limits || streamSelection ? receiveChunk : undefined,
+    );
+  },
+  async readPreparedCompaction(input, signal) {
+    const decoder = createSessionTranscriptHydrationDecoder({});
+    return await this.runRequest(
+      () => ({ kind: "compaction-preparation", ...input }),
+      JSON.stringify(input).length * 2,
+      (value) => {
+        if (value.status !== "prepared") {
+          return value;
+        }
+        const decoded = decoder.finish({
+          kind: "full",
+          version: value.version,
+          eventCount: value.retainedEventCount,
+        });
+        if (decoded.kind !== "full") {
+          throw new Error("Prepared retained context did not complete its hydration");
+        }
+        const retained: SessionEntry[] = [];
+        for (const event of decoded.snapshot.events) {
+          if (!isIndexedSessionEntry(event)) {
+            throw new Error("Prepared retained context contains an invalid session entry");
+          }
+          retained.push(event);
+        }
+        const { retainedEventCount: _count, ...prepared } = value;
+        return { ...prepared, plan: { ...value.plan, retained } };
+      },
+      signal,
+      input.operation.kind === "plan"
+        ? (raw) => {
+            // SAFETY: The paired native hydration producer owns this envelope.
+            decoder.accept(raw as SessionTranscriptHydrationChunk);
+          }
+        : undefined,
     );
   },
   readMaintenance: reader(

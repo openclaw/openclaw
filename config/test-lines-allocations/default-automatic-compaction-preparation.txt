@@ -1,0 +1,11 @@
+# This change adds 1991 net test/helper lines against 4b0d586; 400 are unallocated.
+# The remaining lines protect the private default compaction producer/consumer cut:
+# full-fidelity native hydration and source-version rejection, bounded floor/render
+# byte parity, exact projected-row provenance, public API shape, and live owner/auth
+# cancellation before provider effects and guarded transcript writes. Existing host
+# replay/SDK suites remain the shared-policy owners; duplicate SDK policy leaf cases
+# were removed. Review and per-file costs remain required; this adds no test skip,
+# timeout, assertion exception, or baseline/threshold change.
+# Includes 32 lines moved into the prepared-runtime fixture registration owner;
+# the inherited over-cap harness has no growth, with all lazy mock behavior retained.
+1591
