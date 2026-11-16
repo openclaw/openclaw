@@ -149,6 +149,7 @@ function buildAgentStepEvents(
       event.type === "response.output_item.done" &&
       (event.item.type === "function_call" || event.item.type === "custom_tool_call")
     ) {
+      // SAFETY: The routing adapter emits these items through MockResponseStream.tool(MockToolCallItem).
       stream.tool(event.item as MockToolCallItem);
     }
   }
