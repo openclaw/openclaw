@@ -509,15 +509,11 @@ export class GatewayBrowserClient {
     );
   }
 
-  /** Probe an admitted open socket on return, without dropping a healthy connection. */
-  probeOnWake(): boolean {
-    if (!this.connectionHello || !this.connected) {
-      return false;
-    }
+  /** Asks an admitted socket to answer soon; any inbound frame keeps it. */
+  probeOnWake(): void {
     // A suspended page may return with an expired probe; start a fresh deadline.
     this.clearInboundSilenceProbe();
     this.checkInboundSilence(WAKE_LIVENESS_PROBE_TIMEOUT_MS);
-    return true;
   }
 
   private checkInboundSilence(probeTimeoutMs?: number): void {

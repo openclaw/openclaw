@@ -133,14 +133,15 @@ export function startGatewayPageActivation(
       failedProbes = Math.min(failedProbes, 1);
       clearTimeout(probeTimer);
       probeTimer = undefined;
-      if (
-        client &&
-        recoveryAllowed() &&
-        (forceQueuedRecovery || (!client.probeOnWake() && client.needsWakeReconnect))
-      ) {
-        // Replacing the client retires Safari's ghost socket synchronously. A
-        // socket close would depend on the suspended transport firing `close`.
-        gateway.connect();
+      if (client && recoveryAllowed()) {
+        if (forceQueuedRecovery || client.needsWakeReconnect) {
+          // Replacing the client retires Safari's ghost socket synchronously. A
+          // socket close would depend on the suspended transport firing `close`.
+          gateway.connect();
+        } else {
+          // A socket that died while the app was away still looks open until it fails to answer.
+          client.probeOnWake();
+        }
       }
       syncProbe(0);
       if (!refreshQueuedWorker) {

@@ -28,7 +28,7 @@ function setup(phase: ApplicationGatewayPhase, stale = true, hidden = false) {
     client: {
       needsWakeReconnect: stale,
       needsReachabilityReconnect: false,
-      probeOnWake: () => false,
+      probeOnWake: () => {},
       gatewayUrl: "ws://localhost",
     },
   };
@@ -197,6 +197,8 @@ async function connectRecovery() {
   recovery.notify();
   return { ...recovery, socket };
 }
+const healthProbes = (socket: MockWebSocket) =>
+  socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.method === "health");
 
 it.each(["visibility", "focus"])(
   "probes a recently active open socket on %s and retires it promptly if silent",
@@ -213,9 +215,7 @@ it.each(["visibility", "focus"])(
     }
     window.dispatchEvent(new FocusEvent("focus"));
     await vi.advanceTimersByTimeAsync(0);
-    const probes = socket.sent
-      .map((frame) => JSON.parse(frame))
-      .filter((frame) => frame.method === "health");
+    const probes = healthProbes(socket);
     expect(probes).toHaveLength(1);
     expect(probes[0].params).toEqual({ probe: false });
     await vi.advanceTimersByTimeAsync(2_999);
@@ -227,29 +227,37 @@ it.each(["visibility", "focus"])(
   },
 );
 
-it.each([1_000, 120_000])(
-  "keeps a healthy socket when its wake probe answers after %d ms hidden",
-  async (hiddenMs) => {
-    const { socket, visibility, connect } = await connectRecovery();
-    visibility.mockReturnValue("hidden");
-    document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(hiddenMs);
-    visibility.mockReturnValue("visible");
-    document.dispatchEvent(new Event("visibilitychange"));
-    window.dispatchEvent(new FocusEvent("focus"));
-    await vi.advanceTimersByTimeAsync(0);
-    const probe = socket.sent
-      .map((frame) => JSON.parse(frame))
-      .find((frame) => frame.method === "health");
-    expect(probe).toBeDefined();
-    // Reply in the same millisecond as the probe, before the watchdog ticks.
-    socket.emitMessage({ type: "res", id: probe.id, ok: true, payload: {} });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(socket.lastClose).toBeNull();
-    expect(connect).not.toHaveBeenCalled();
-    expect(wsInstances).toHaveLength(1);
-  },
-);
+it("keeps a healthy socket when its wake probe answers", async () => {
+  const { socket, visibility, connect } = await connectRecovery();
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(1_000);
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new FocusEvent("focus"));
+  // A local Gateway can send a frame, take the probe, and answer within one millisecond.
+  socket.emitMessage({ type: "event", event: "tick", seq: 1, payload: {} });
+  await vi.advanceTimersByTimeAsync(0);
+  const [probe] = healthProbes(socket);
+  expect(probe).toBeDefined();
+  socket.emitMessage({ type: "res", id: probe.id, ok: true, payload: {} });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(socket.lastClose).toBeNull();
+  expect(connect).not.toHaveBeenCalled();
+  expect(wsInstances).toHaveLength(1);
+});
+
+it("replaces a socket silent past the tick window at once instead of probing it", async () => {
+  const { socket, visibility, connect } = await connectRecovery();
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(60_000);
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(connect).toHaveBeenCalledOnce();
+  expect(healthProbes(socket)).toEqual([]);
+});
 
 it.each([false, true])(
   "replaces a blackholed opening without an online event (HTTP initially live: %s)",
