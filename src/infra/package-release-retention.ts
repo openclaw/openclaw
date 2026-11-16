@@ -105,6 +105,10 @@ export async function collectPackageReleases(params: {
   const releasesDir = releasesDirOf(selected.prefix);
   const ids = await fs.readdir(releasesDir);
   for (const leftover of ids.filter((id) => id.startsWith(".collecting-"))) {
+    const match = /^\.collecting-(.+)-[0-9a-f]+$/u.exec(leftover);
+    if (!match || readPackageReleaseLeases(selected.prefix, match[1]).live > 0) {
+      continue;
+    }
     await fs.rm(path.join(releasesDir, leftover), { recursive: true, force: true });
   }
   for (const id of ids) {

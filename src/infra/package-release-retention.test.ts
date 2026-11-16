@@ -123,6 +123,28 @@ describe.skipIf(process.platform === "win32")("release collection", () => {
     expect((await collect()).removed).toEqual([path.join(fixture.prefix, "releases", "running")]);
   });
 
+  it("keeps an interrupted collecting release while its lease is live", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    const running = fixture.addRelease("running", "2026.11.3");
+    const next = fixture.addRelease("next", "2026.12.1");
+    fixture.linkTo("running");
+    const release = acquirePackageReleaseLease(running);
+    await switchTo(fixture, next);
+    const collecting = path.join(fixture.prefix, "releases", ".collecting-running-crash");
+    fs.renameSync(path.join(fixture.prefix, "releases", "running"), collecting);
+
+    const outcome = await collectPackageReleases({
+      slot: fixture.slot,
+      prefix: fixture.prefix,
+      readOpenRuns: noOpenRuns,
+      now: Date.now() + PACKAGE_RELEASE_MIN_AGE_MS + 60_000,
+    });
+
+    expect(outcome.removed).toEqual([]);
+    expect(fs.existsSync(collecting)).toBe(true);
+    release();
+  });
+
   it("keeps everything when open update runs cannot be read", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);
     fixture.addRelease("old", "2026.10.9");
