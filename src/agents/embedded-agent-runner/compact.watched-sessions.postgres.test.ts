@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { threadId } from "node:worker_threads";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   attemptServerEndpointCompactionMock,
   buildConfiguredAgentSystemPromptMock,
@@ -13,8 +13,8 @@ import {
 const { compactEmbeddedAgentSessionDirect } = await loadCompactHooksHarness();
 const { mixedAgentConnection, mixedAgentPairs, useMixedAgentPair } =
   await import("../../infra/database-engine/mixed-agent.conformance.test-support.js");
-const { installDatabaseProcessRole } =
-  await import("../../infra/database-engine/admission-scope.js");
+const databaseAdmission = await import("../../infra/database-engine/admission-scope.js");
+const assertEngineStoreExecutionAllowed = databaseAdmission.assertEngineStoreExecutionAllowed;
 const { captureRuntimeConfigAsyncReader } = await import("../../config/io.runtime.js");
 const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
 const { preparePhysicalSessionStorePath, publishSystemEventStoreConfig } =
@@ -28,7 +28,7 @@ const { buildConfiguredAgentSystemPrompt } = await vi.importActual<
 
 // A worker thread would bypass the Gateway's PostgreSQL synchronous-access guard.
 expect(threadId).toBe(0);
-installDatabaseProcessRole("gateway");
+databaseAdmission.installDatabaseProcessRole("gateway");
 
 describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () => {
   for (const { stateEngine, agentEngine } of mixedAgentPairs.filter(
@@ -60,6 +60,21 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
 
         const workspaceDir = join(fixture.root, "workspace");
         resetCompactHooksHarnessMocks(workspaceDir, sessionId);
+        // Compaction projects errors into a result; retain the original denied caller for diagnosis.
+        const deniedDatabaseCalls: string[] = [];
+        const admissionGuard = vi
+          .spyOn(databaseAdmission, "assertEngineStoreExecutionAllowed")
+          .mockImplementation(() => {
+            try {
+              assertEngineStoreExecutionAllowed();
+            } catch (error) {
+              deniedDatabaseCalls.push(
+                error instanceof Error ? (error.stack ?? error.message) : String(error),
+              );
+              throw error;
+            }
+          });
+        onTestFinished(() => admissionGuard.mockRestore());
         buildConfiguredAgentSystemPromptMock.mockImplementation(buildConfiguredAgentSystemPrompt);
         createOpenClawCodingToolsMock.mockReturnValue(
           ["sessions_history", "sessions_list", "read"].map((name) => ({
@@ -93,7 +108,7 @@ describe.skipIf(!mixedAgentConnection)("compaction watched-session prompts", () 
             trigger: "manual",
             toolsAllow,
           });
-          expect(result, JSON.stringify(result)).toMatchObject({
+          expect(result, JSON.stringify({ result, deniedDatabaseCalls })).toMatchObject({
             compacted: true,
             compactionKind: "server-endpoint",
           });
