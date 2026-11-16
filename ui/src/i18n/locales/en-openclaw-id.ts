@@ -79,6 +79,8 @@ const enOpenClawId = {
     memberDeviceAddedNotice: "A member added a device",
     memberDeviceAddedNoticeBody:
       "It has the member’s existing role. Review or remove member devices in Remote access.",
+    memberKitUsedNotice: "{name} used their recovery kit",
+    memberKitUsedNoticeBody: "{device} was added. Review it in Remote access.",
     kitUsedNotice: "Your recovery kit was used to add {device}",
     kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
     kitUsedNoticeBody:

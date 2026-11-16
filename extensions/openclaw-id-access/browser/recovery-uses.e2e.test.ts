@@ -46,7 +46,7 @@ suite.define(() => {
         await page.addInitScript(createControlUiMockSameOriginGatewayScript());
         const link = {
           linked: true,
-          clawId: "synthetic-claw",
+          clawId: "12".repeat(16),
           hostname: "synthetic.claw.example",
           seq: 8,
           ownerDevices: [],
@@ -108,7 +108,27 @@ suite.define(() => {
             "openclawId.people": { link },
           },
         };
-        const gateway = await installNativePluginMockGateway(page, scenario);
+        let receiveMail: ((response: { status: number; body: string }) => void) | undefined;
+        const gateway = await installNativePluginMockGateway(page, scenario, {
+          requestHandlers: {
+            "openclawId.authority": (input) => {
+              // SAFETY: this fixture receives the UI's authority request parameters.
+              const params = input as { action: string; operation?: string };
+              if (params.action !== "device_mail") {
+                return { removal: { devices: 1, connectionsClosed: 0, runsCancelled: 0 } };
+              }
+              if (params.operation === "context") {
+                return { link: mailLink };
+              }
+              if (params.operation === "receive") {
+                return new Promise<{ status: number; body: string }>((resolve) => {
+                  receiveMail = resolve;
+                });
+              }
+              return { status: 200, body: "{}" };
+            },
+          },
+        });
         const prepared = await prepareNativePluginMockGatewayScenario(scenario);
         await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
           route.fulfill({
@@ -123,7 +143,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}plugin?plugin=openclaw-id-access&id=access`);
         const surface = page.locator(".ocid-access");
         await surface.waitFor();
-        const devicePub = await page.evaluate(async () => {
+        const devicePub = await page.evaluate(async (clawId) => {
           const pair = await crypto.subtle.generateKey("Ed25519", false, ["sign", "verify"]);
           const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
           await new Promise<void>((resolve, reject) => {
@@ -137,7 +157,7 @@ suite.define(() => {
             open.addEventListener("success", () => {
               const db = open.result;
               const tx = db.transaction("owner-devices", "readwrite");
-              tx.objectStore("owner-devices").put(pair, "synthetic-claw");
+              tx.objectStore("owner-devices").put(pair, clawId);
               tx.addEventListener("complete", () => {
                 db.close();
                 resolve();
@@ -151,10 +171,17 @@ suite.define(() => {
           return (
             "ed25519:" + Array.from(raw, (value) => value.toString(16).padStart(2, "0")).join("")
           );
-        });
+        }, link.clawId);
         const ownerLink = {
           ...link,
-          ownerDevices: [{ devicePub, label: "Synthetic owner browser", peerKeys: [], cert: {} }],
+          ownerDevices: [
+            {
+              devicePub,
+              label: "Synthetic owner browser",
+              peerKeys: [],
+              cert: { body: { device_pub: devicePub, caps: ["approve_device"] } },
+            },
+          ],
         };
         await gateway.setMethodResponse("openclawId.people", { link: ownerLink });
         await gateway.emitGatewayEvent("openclawId.people.changed", {});
@@ -166,12 +193,12 @@ suite.define(() => {
           .toBe(true);
         const history = page.getByRole("region", { name: "Recovery kit history" });
         expect(await history.count()).toBe(0);
-        const capture = async (stage: string, target = surface) => {
-          for (const width of target === surface || target === history ? [390, 1440] : [1440]) {
+        const capture = async (stage: string, target = surface, widths = [390, 1440]) => {
+          for (const width of widths) {
             await page.setViewportSize({ width, height: 1000 });
-            expect(
-              await surface.evaluate((element) => element.scrollWidth <= element.clientWidth),
-            ).toBe(true);
+            await expect
+              .poll(() => surface.evaluate((element) => element.scrollWidth <= element.clientWidth))
+              .toBe(true);
             for (const mode of ["light", "dark"] as const) {
               await evaluateControlUiContext(
                 page,
@@ -204,7 +231,7 @@ suite.define(() => {
         await expect.poll(() => notice.textContent()).toContain("Mira Example used a recovery kit");
         expect(await notice.textContent()).toContain("Firefox on Linux");
         expect(await notice.textContent()).toContain("Jan 15, 2027, 8:00:00 AM UTC");
-        await capture("recovery-inbox", notice);
+        await capture("recovery-inbox", notice, [1440]);
         await notice.locator("a").click();
         await expect
           .poll(() => new URL(page.url()).search)
@@ -243,9 +270,6 @@ suite.define(() => {
         await confirm.waitFor();
         expect(await gateway.getRequests("openclawId.authority")).toEqual([]);
         await capture("recovery-removal-confirmation");
-        await gateway.setMethodResponse("openclawId.authority", {
-          removal: { devices: 1, connectionsClosed: 0, runsCancelled: 0 },
-        });
         await confirm.click();
         await expect
           .poll(async () => (await gateway.getRequests("openclawId.authority")).length)
@@ -268,6 +292,7 @@ suite.define(() => {
           .poll(() => row.textContent())
           .toContain("This browser has been removed. It no longer has access.");
         expect(await highlighted.count()).toBe(0);
+        expect(await review.count()).toBe(0);
         await capture("recovery-browser-removed");
 
         // The durable projection is independent of the current member/device roster.
@@ -277,6 +302,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("openclawId.people.changed", {});
         await expect.poll(() => surface.locator(".ocid-access__row--member").count()).toBe(0);
         expect(await history.textContent()).toContain("Mira Example (removed) used a recovery kit");
+        expect(await review.count()).toBe(0);
         await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
         await notice.hover();
         await notice
@@ -293,6 +319,70 @@ suite.define(() => {
           await surface.getByRole("button", { name: "Remove device", exact: true }).count(),
         ).toBe(0);
         expect((await gateway.getRequests("openclawId.authority")).length).toBe(1);
+        // Sign in this synthetic owner after the history flow. The production lifetime reads
+        // the browser key, binds its mailbox, then renders notices through the real toast host.
+        const mailLink = { ...ownerLink, seq: 11, members: [], recoveryUses: [use] };
+        await page.evaluate(() => {
+          const key = "openclaw.openclawId.account";
+          localStorage.setItem(
+            key,
+            JSON.stringify({
+              sub: "owner-synthetic",
+              exp: 4_102_444_800,
+              idToken: "fixture-token",
+            }),
+          );
+          window.dispatchEvent(new StorageEvent("storage", { key }));
+        });
+        try {
+          for (const recovery of [false, true]) {
+            await expect.poll(() => Boolean(receiveMail)).toBe(true);
+            const receive = receiveMail!;
+            receiveMail = undefined;
+            receive({
+              status: 200,
+              body: JSON.stringify({
+                cursor: recovery ? "2" : "1",
+                messages: [
+                  {
+                    message_id: recovery ? "recovery-notice" : "ordinary-notice",
+                    claw_id: link.clawId,
+                    to: "owners",
+                    from: { device_fp: "fp:gateway", account_id: "gateway" },
+                    received_at: use.usedAt,
+                    expires_at: use.usedAt + 300,
+                    payload: {
+                      kind: "notice",
+                      event: "member_device_added",
+                      ref: recovery ? use.peerFp : `fp:${"2".repeat(64)}`,
+                    },
+                  },
+                ],
+              }),
+            });
+            const toast = page.locator(".app-toast[data-active='true']");
+            await toast.waitFor();
+            const stage = recovery ? "member-kit-toast" : "ordinary-member-device-toast";
+            await capture(stage, toast);
+            expect(await toast.locator(".app-toast__message").textContent()).toBe(
+              recovery ? "Mira Example used their recovery kit" : "A member added a device",
+            );
+            expect(await toast.locator(".app-toast__description").textContent()).toBe(
+              recovery
+                ? "Firefox on Linux was added. Review it in Remote access."
+                : "It has the member’s existing role. Review or remove member devices in Remote access.",
+            );
+            expect(await toast.locator("a").count()).toBe(0);
+            await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
+            await expect.poll(() => toast.count()).toBe(0);
+          }
+          expect(
+            await gateway.getRequests("openclawId.authority", { action: "submit" }),
+          ).toHaveLength(1);
+        } finally {
+          // End the held synthetic long poll rather than leaking it into fixture shutdown.
+          receiveMail?.({ status: 410, body: "{}" });
+        }
         console.log("Owner recovery screenshots (source core + source plugin):", suite.artifactDir);
       },
     );

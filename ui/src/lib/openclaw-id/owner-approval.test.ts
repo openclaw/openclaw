@@ -20,6 +20,7 @@ import {
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createOwnerApproval, type OwnerApproval } from "./owner-approval.ts";
+import type { OpenClawIdRecoveryUse } from "./types.ts";
 
 const held = vi.hoisted(() => ({ d: undefined as unknown, w: undefined as unknown }));
 // mock-isolation: the signed-in account and device key come from fixtures instead of browser storage.
@@ -153,6 +154,7 @@ async function setup(
     invalid === "member"
       ? []
       : [{ accountId: "alice", displayName: "Alice", email: "alice@example.test" }];
+  const recoveryUses: OpenClawIdRecoveryUse[] = [];
   const mockClient = {
     request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
       if (params.action === "submit") {
@@ -177,6 +179,7 @@ async function setup(
             rootPub,
             seq: 1,
             members,
+            recoveryUses,
             ownerDevices: [
               {
                 devicePub: cert.body.device_pub,
@@ -283,6 +286,7 @@ async function setup(
       await vi.waitFor(() => expect(reads).toBeGreaterThan(before));
       return next.request_id;
     },
+    recoveryUses,
     notice: (
       ref: string,
       event: "kit_used" | "member_device_added" = "kit_used",
@@ -471,9 +475,30 @@ describe("local original-D SAS approval", () => {
     f.notice("fp:other", "member_device_added", "ab".repeat(16));
     f.notice("fp:member-peer", "member_device_added");
     await vi.waitFor(() => expect(f.memberDeviceAdded).toHaveBeenCalledTimes(1));
+    expect(f.memberDeviceAdded).toHaveBeenCalledWith(undefined);
     expect(f.kitUsed).not.toHaveBeenCalled();
     expect(f.operations).toEqual(["accept"]);
     expect(owner.read().requests).toHaveLength(1);
+  });
+  it("identifies a member's kit use only from the Gateway record matching the notice fingerprint", async () => {
+    const f = await setup();
+    const use: OpenClawIdRecoveryUse = {
+      seq: 9,
+      accountId: "member-mira",
+      memberName: "Mira Example",
+      deviceLabel: "Firefox on Linux",
+      peerKey: `iroh:${"12".repeat(32)}`,
+      peerFp: "fp:recovered-peer",
+      usedAt: 1_800_000_000,
+    };
+    f.recoveryUses.push({ ...use, peerFp: "fp:another-peer" }, use);
+    f.notice("fp:ordinary-peer", "member_device_added");
+    f.notice(use.peerFp, "member_device_added");
+    await vi.waitFor(() => expect(f.memberDeviceAdded).toHaveBeenCalledTimes(2));
+    expect(f.memberDeviceAdded).toHaveBeenNthCalledWith(1, undefined);
+    expect(f.memberDeviceAdded).toHaveBeenNthCalledWith(2, use);
+    expect(f.kitUsed).not.toHaveBeenCalled();
+    expect(f.operations).toEqual(["accept"]);
   });
   it("approves a browser without a node", async () => {
     const f = await setup();

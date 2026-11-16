@@ -27,6 +27,7 @@ import {
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createDeviceMail, readOwnerApprovalContext, type DeviceMail } from "./device-mail.ts";
+import type { OpenClawIdRecoveryUse } from "./types.ts";
 
 type Attempt = {
   start: SasStart;
@@ -105,7 +106,7 @@ export function createOwnerApproval(
   client: GatewayBrowserClient,
   onRequest: (request: OwnerApprovalRequest) => void,
   onKitUsed: (device: string | undefined) => void = () => {},
-  onMemberDeviceAdded: () => void = () => {},
+  onMemberDeviceAdded: (recoveryUse: OpenClawIdRecoveryUse | undefined) => void = () => {},
 ) {
   const abort = new AbortController();
   const attempts = new Map<string, Attempt>();
@@ -310,7 +311,10 @@ export function createOwnerApproval(
         const ctx = await readOwnerApprovalContext(client);
         onKitUsed(ctx.link.ownerDevices?.find((device) => device.deviceFp === p.ref)?.label);
       } else if (p.event === "member_device_added") {
-        onMemberDeviceAdded();
+        // The notice is only a hint; the Gateway's retained admission record identifies kit use.
+        const ctx = await readOwnerApprovalContext(client);
+        abort.signal.throwIfAborted();
+        onMemberDeviceAdded(ctx.link.recoveryUses?.find((use) => use.peerFp === p.ref));
       }
       return;
     }

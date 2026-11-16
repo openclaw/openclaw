@@ -757,6 +757,7 @@ describe("Access page", () => {
     );
     expect(history()?.querySelector("time")?.textContent).toMatch(/2027/);
     expect(history()?.querySelector("example, linux")).toBeNull();
+    expect(history()?.querySelector("a")).toBeNull();
     expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(1);
     harness.emit();
     await vi.waitFor(() =>
@@ -764,14 +765,16 @@ describe("Access page", () => {
     );
     expect(history()?.textContent).toContain("Mira <Example> (removed) used a recovery kit");
     expect(history()?.textContent).toContain("Browser added: Firefox <Linux>");
+    expect(history()?.querySelector("a")).toBeNull();
   });
 
   it("opens the exact recovery member and browser, reuses confirmed removal, and updates retained routes", async () => {
+    const deviceFp = `fp:${"1".repeat(64)}` as const;
     const device = {
       peerKey: recoveryUse.peerKey,
-      deviceFp: recoveryUse.peerFp,
+      deviceFp,
       label: recoveryUse.deviceLabel,
-      approvedBy: { kind: "member_recovery_kit" as const, device_fp: recoveryUse.peerFp },
+      approvedBy: { kind: "member_recovery_kit" as const, device_fp: deviceFp },
       connections: 0,
       lastSeenAt: null,
       lastSeen: recoveryUse.usedAt,
@@ -814,6 +817,9 @@ describe("Access page", () => {
     );
     expect(row().textContent).toContain(member.displayName);
     expect(row().textContent).not.toContain(other.displayName);
+    const history = () =>
+      harness.container.querySelector('[aria-labelledby="ocid-access-recovery-uses"]')!;
+    expect(history().querySelector("a")?.textContent).toBe("Review browser");
     const highlighted = row().querySelector<HTMLElement>(".ocid-access__device--highlighted")!;
     expect(highlighted.textContent).toContain(device.label);
     expect(row().querySelector(".ocid-access__device")).toBe(highlighted);
@@ -834,6 +840,8 @@ describe("Access page", () => {
     );
     expect(harness.container.textContent).toContain(`${device.label} removed`);
     expect(row().querySelector(".ocid-access__device--highlighted")).toBeNull();
+    expect(history().textContent).toContain(`Browser added: ${device.label}`);
+    expect(history().querySelector("a")).toBeNull();
     harness.emit();
     await vi.waitFor(() =>
       expect(harness.container.textContent).toContain(
@@ -841,6 +849,8 @@ describe("Access page", () => {
       ),
     );
     expect(harness.container.querySelectorAll(".ocid-access__row--member")).toHaveLength(0);
+    expect(history().textContent).toContain(`Browser added: ${device.label}`);
+    expect(history().querySelector("a")).toBeNull();
     harness.update({ member: other.accountId });
     await vi.waitFor(() => expect(row().textContent).toContain(other.displayName));
     harness.update({});

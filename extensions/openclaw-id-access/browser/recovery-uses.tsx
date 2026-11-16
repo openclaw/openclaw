@@ -49,14 +49,22 @@ export function RecoveryUses(props: {
                       timeZoneName: "short",
                     })}
                   </time>
-                  <a
-                    href={props.navigation.pageHref({
-                      id: "access",
-                      params: { member: use().accountId, device: use().peerKey },
-                    })}
+                  <Show
+                    when={props.members.some(
+                      (member) =>
+                        member.accountId === use().accountId &&
+                        member.peerKeys.includes(use().peerKey),
+                    )}
                   >
-                    Review browser
-                  </a>
+                    <a
+                      href={props.navigation.pageHref({
+                        id: "access",
+                        params: { member: use().accountId, device: use().peerKey },
+                      })}
+                    >
+                      Review browser
+                    </a>
+                  </Show>
                 </div>
               </li>
             )}
