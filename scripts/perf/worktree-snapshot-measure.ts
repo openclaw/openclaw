@@ -10,9 +10,9 @@
  * CPU/allocation regression. Natural GC only; unforced end heap is context.
  * --native-repo <synthetic-checkout> --temporary-root <owned-scratch> exercises
  * native Git against an existing fixture (including partial/APFS clones). It writes
- * refs/openclaw/snapshots/fixture; never point it at a user or production checkout.
+ * refs/openclaw/snapshots/{clean-v1/,}fixture; use only a synthetic checkout.
  * Git maintenance and lazy fetch are disabled. Commit identity/dates are fixed.
- * Native acceptance: identical snapshot commit, lower median/p95 owner wall and
+ * Native acceptance: identical recoverable tree and HEAD, lower median/p95 owner wall and
  * CPU/allocation, no >20% regression; run A/A then five serial interleaved A/B pairs.
  * Phase timings are inclusive; native mode still excludes hydration, IPC, capacity,
  * registry writes and restoration, which require the service removal/restore proof.
@@ -91,6 +91,7 @@ const fixedOutput: Record<string, string | Buffer> = {
   "cat-file": Buffer.from(blobs.map((blob) => `${blob} blob\n`).join("")),
   "commit-tree": commit,
 };
+let snapshotRef = "";
 let commandCounts: Record<string, number> = {},
   effectCounts: Record<string, number> = {};
 let copiedOutputBytes = 0;
@@ -197,7 +198,10 @@ async function respond(request: unknown): Promise<unknown> {
       assert(isRecord(input.options) && input.options.input instanceof Uint8Array);
       const publication = Buffer.from(input.options.input).toString();
       assert(publication.includes(`verify HEAD\0${head}\0`));
-      assert(publication.includes(`update refs/openclaw/snapshots/fixture\0${commit}\0`));
+      assert(
+        publication.includes(`update refs/openclaw/snapshots/fixture\0${commit}\0`) ||
+          publication.includes(`update refs/openclaw/snapshots/clean-v1/fixture\0${head}\0`),
+      );
     }
     const stdout = Buffer.from(output);
     copiedOutputBytes += stdout.byteLength;
@@ -276,10 +280,13 @@ try {
           reason: "synthetic owner measurement",
           provisionedPaths: [],
         });
-        assert.deepEqual(result, {
-          snapshotRef: "refs/openclaw/snapshots/fixture",
-          provisionedState: [],
-        });
+        snapshotRef = result.snapshotRef;
+        assert(
+          ["refs/openclaw/snapshots/fixture", "refs/openclaw/snapshots/clean-v1/fixture"].includes(
+            snapshotRef,
+          ),
+        );
+        assert.deepEqual(result.provisionedState, []);
       },
     );
   for (let index = 0; index < warmup; index++) {
@@ -323,16 +330,12 @@ try {
       phases,
       ...(values["native-repo"]
         ? {
-            snapshotCommit: execFileSync(
-              "git",
-              ["-C", root, "rev-parse", "refs/openclaw/snapshots/fixture"],
-              { encoding: "utf8" },
-            ).trim(),
-            snapshotMetadata: execFileSync(
-              "git",
-              ["-C", root, "cat-file", "commit", "refs/openclaw/snapshots/fixture"],
-              { encoding: "utf8" },
-            ),
+            snapshotCommit: execFileSync("git", ["-C", root, "rev-parse", snapshotRef], {
+              encoding: "utf8",
+            }).trim(),
+            snapshotMetadata: execFileSync("git", ["-C", root, "cat-file", "commit", snapshotRef], {
+              encoding: "utf8",
+            }),
             childCpuMs: values["child-cpu"] ? childCpuMs : undefined,
           }
         : {}),

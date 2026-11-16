@@ -187,6 +187,7 @@ describe("release tooling identity", () => {
         `--verify-publication-${mode}`,
         ...Object.entries({
           "full-release-manifest": manifestPath,
+          "publisher-full-ref": "invalid",
           "source-sha": SHA,
           "workflow-sha": SHA,
         }).flatMap(([key, value]) => [`--${key}`, value]),
@@ -196,6 +197,9 @@ describe("release tooling identity", () => {
         encoding: "utf8",
         env: {
           ...process.env,
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          WORKFLOW_FULL_REF: "invalid",
           FULL_RELEASE_VALIDATION_RUN_ID: RUN_ID,
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
           EXPECTED_RELEASE_SHA: SHA,
@@ -205,7 +209,7 @@ describe("release tooling identity", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Candidate-owned artifact source and qualification SHA differ");
+    expect(result.stderr).toContain("trusted workflow full ref does not match its ref");
     expect(result.stderr).not.toContain("unsettled top-level await");
   });
 

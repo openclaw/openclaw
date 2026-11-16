@@ -270,11 +270,14 @@ it("keeps transcript replacement charges within the shared byte and entry budget
     fixture.replica.close();
     fixture.replica.invalidate();
     const cells: Array<{ replica: Replica; state: SessionActorHotState }> = [];
-    const create = (entryFirst = false, keepOpen = false) => {
+    const create = (entryFirst = false, keepOpen = false, sharedPrompt = "") => {
       const state: SessionActorHotState = {
         ...structuredClone(original),
         target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
       };
+      if (sharedPrompt) {
+        state.entry = { ...state.entry!, skillsSnapshot: { prompt: sharedPrompt, skills: [] } };
+      }
       state.dependencySessionIds = [];
       state.writeToken = tokenFor(state, fixture.database.path);
       if (entryFirst) {
@@ -335,8 +338,12 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         cell.replica.close();
         cell.replica.invalidate();
       }
+      // Retired shared values must release their pool charge before the next cohort.
+      for (let index = 0; index < 40; index++) {
+        create(false, false, String(index).padStart(2, "0").repeat(60000)).replica.invalidate();
+      }
       const small = Array.from({ length: 129 }, (_, index) => {
-        const cell = create(index % 2 === 0, true);
+        const cell = create(index % 2 === 0, true, "Shared instructions".repeat(6000));
         return { cell, transcript: retain(cell, 16) };
       });
       expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();

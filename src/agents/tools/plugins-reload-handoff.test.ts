@@ -670,8 +670,8 @@ it.for([
   { scenario: "task", adopts: true },
   // A kill between yield and resume leaves the stopped task alone.
   { scenario: "killed", adopts: false },
-  // An independent turn in the same child session never takes over an earlier paused task.
-  { scenario: "follow-up", adopts: false },
+  // The chat owns the paused task: a handoff from a later turn in the same child continues it.
+  { scenario: "follow-up", adopts: true },
 ] as const)(
   "resumes a yielded subagent task through its reload handoff: $scenario",
   async ({ scenario, adopts }, { signal, onTestFinished }) => {

@@ -82,10 +82,36 @@ type OpenClawIdConnection =
 /** Owner-only link state (`openclawId.people` result `link`). */
 export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
+  members?: { accountId: string; displayName: string | null; email: string | null }[];
   /** Active owner devices only; removed and expired ones are not listed. */
   ownerDevices?: OpenClawIdOwnerDevice[];
   /** The last publication to Discovery, while one was attempted. */
   publication?: OpenClawIdPublication;
+  /** Member invites; a redeemed one waits for the owner as `pending`. */
+  invites?: OpenClawIdPendingInvite<{
+    reported: { email: string | null; displayName: string | null };
+  }>[];
+  /** Node invites; a redeemed one waits for the owner as `pending`. */
+  nodeInvites?: OpenClawIdPendingInvite[];
+  /** Display-only current-member browser requests; admission still requires SAS. */
+  browserRequests?: {
+    requestId: string;
+    accountId: string;
+    displayName: string | null;
+    email: string | null;
+    label: string;
+    location: string | null;
+    requestedAt: number;
+    expiresAt: number;
+  }[];
+};
+
+/** The parts of a listed invite the Inbox needs; times are unix seconds. */
+type OpenClawIdPendingInvite<Pending = unknown> = {
+  inviteId: string;
+  label: string;
+  status: "open" | "pending" | "approved" | "denied" | "expired";
+  pending?: Pending & { requestedAt: number; decideBy: number };
 };
 
 /** An active owner device as `openclawId.people` lists it. */

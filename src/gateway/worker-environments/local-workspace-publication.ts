@@ -1,6 +1,7 @@
 import { serialize } from "node:v8";
 import { deflateRawSync } from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
@@ -62,7 +63,7 @@ export function prepareLocalWorkspaceUpdate(
     revision: mutation.revision,
     patch,
     rejectedResult: mutation.rejectedResult,
-    mutation: deflateRawSync(serialize({ ...mutation, patch: wirePatch })),
+    mutation: resolveZstdCodec().compress(serialize({ ...mutation, patch: wirePatch }), 1),
     preparations,
   };
 }
@@ -116,7 +117,6 @@ export function readLocalWorkspaceCommit(
               ...(mutation.manifest.treeRoot
                 ? { tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot) }
                 : {}),
-              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
             }
           : {}),
         worktree_id: id,

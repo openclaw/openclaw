@@ -8,6 +8,7 @@ import type {
   WorktreeWorkerAuthority,
 } from "../../agents/worktrees/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
@@ -86,7 +87,7 @@ export const localWorkspaceOperations = {
     // current leases and registry predicates still gate the actual commit below.
     const mutation: LocalWorkspaceMutation =
       input.mutation instanceof Uint8Array
-        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
+        ? (deserialize(resolveZstdCodec().decompress(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {

@@ -391,6 +391,7 @@ describe("ManagedWorktreeService diagnostics", () => {
           finalizeMs: 300,
           preparationMs: 200,
           snapshotMs: 400,
+          recovery: "head",
           checkoutRemovalMs: 500,
           bodyFinalizeMs: 600,
           outcome: "returned",

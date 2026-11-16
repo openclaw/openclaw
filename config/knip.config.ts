@@ -155,6 +155,8 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Stable closeout imports its recovery verifier from the trusted tooling checkout.
+  ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
@@ -451,6 +453,8 @@ const repositoryScriptEntries = [
   "scripts/generate-browser-inspect-script-swift.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
+  // The heap rig preloads its soak observer through --import.
+  "scripts/lib/gateway-heap-rig-soak-preload.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
   "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
@@ -564,6 +568,8 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
+  // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
+  "skills/create-blobster/scripts/cli.mjs!",
   // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
   "skills/create-template/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
@@ -588,14 +594,23 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
-  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+  const stagedToolingRoot =
+    path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")
+      ? ".release-harness"
+      : path.resolve(filePath) ===
+          path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
+        ? ".closeout-tooling"
+        : undefined;
+  if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling))\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
+      .filter(([, , toolingRoot]) => toolingRoot === stagedToolingRoot)
       .map(
-        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+        ([, names, , specifier]) =>
+          `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
       )
       .join("\n");
   }
@@ -636,9 +651,25 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       }
     }
   }
-  return names.size
-    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
-    : "";
+  const consumers = names.size
+    ? [`import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`]
+    : [];
+  // Preserve the planner's actual member uses; an entry exemption would hide unused exports.
+  const plannerPath = source.match(
+    /["']plugin-prerelease-test-plan["']:\s*["']\.\/(scripts\/[^"'\r\n]+)["']/u,
+  )?.[1];
+  const planner = source.match(
+    /\bconst\s+\w+\s*=\s*await\s+import\(\s*targetPlanPath\(["']plugin-prerelease-test-plan["']\)\s*\);[\s\S]*?(?=\n\s*\}\s*catch\b)/u,
+  )?.[0];
+  if (plannerPath && planner) {
+    consumers.push(
+      planner.replace(
+        /targetPlanPath\(["']plugin-prerelease-test-plan["']\)/u,
+        JSON.stringify(`../../${plannerPath}`),
+      ),
+    );
+  }
+  return consumers.join("\n");
 }
 
 function compileShellConsumers(source: string, filePath: string): string {

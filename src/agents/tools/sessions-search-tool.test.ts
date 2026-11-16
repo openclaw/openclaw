@@ -388,7 +388,7 @@ describe("sessions_search tool", () => {
       indexing: true,
       archivedTranscriptsExcluded: 2,
       warning:
-        "Search completeness could not be confirmed; results may be incomplete. Retry sessions_search shortly. Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
+        "Search completeness could not be confirmed; results may be incomplete. Retry sessions_search shortly. Search excludes 2 archived chats. Restore a chat to include it in search.",
     });
     expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
   });
@@ -502,6 +502,7 @@ describe("sessions_search tool", () => {
     const tool = createTool({
       agentId: "main",
       agentSessionKey: MAIN,
+      config: fixtureConfig("all"),
       results: [hit({ sessionKey: MAIN, agentId: "main" })],
       describeError: failure,
     });
@@ -629,12 +630,12 @@ describe("sessions_search tool", () => {
     expectSearch(requests, "work", [WORK]);
   });
 
-  it("accepts the gateway's canonical key for the current-session alias", async () => {
+  it("accepts the current-session canonical key without depending on the session inventory", async () => {
     const tool = createSessionsSearchTool({
       config: fixtureConfig("self"),
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
         if (request.method === "sessions.list") {
-          return { sessions: [], hasMore: false } as T;
+          throw new Error("Unrelated session inventory is unavailable");
         }
         if (request.method === "sessions.describe") {
           return { session: null } as T;

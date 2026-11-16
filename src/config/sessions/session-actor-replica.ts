@@ -14,7 +14,9 @@ import type {
   SessionActorLifetime,
   SessionActorOutcome,
 } from "./session-actor-contract.js";
+import { shareSessionActorEntryFields } from "./session-actor-entry-fields.js";
 import {
+  chargeSessionActorReplicaEntryFields,
   estimateSessionActorReplicaBytes,
   indexSessionActorReplicaCell,
   retainSessionActorReplicaCell,
@@ -44,11 +46,9 @@ import {
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import { internSessionSkillSnapshot } from "./session-skill-snapshot-intern.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
-import type { SessionEntry } from "./types.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -59,7 +59,13 @@ const transcriptSizes = new WeakMap<object, number>();
 
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
-  () => ({ cells: new Map(), cellsBySessionKey: new Map(), snapshots: 0, bytes: 0 }),
+  () => ({
+    cells: new Map(),
+    cellsBySessionKey: new Map(),
+    sharedFields: new Map(),
+    snapshots: 0,
+    bytes: 0,
+  }),
   (owner) => {
     owner.unsubscribe?.();
     owner.unsubscribe = undefined;
@@ -257,6 +263,15 @@ function discard(cell: ReplicaCell): void {
   if (cell.snapshot || cell.entry || cell.transcript) {
     pool.snapshots -= 1;
   }
+  // Shared charges live until the last resident cell releases the immutable field.
+  for (const field of cell.sharedFields ?? []) {
+    const retained = pool.sharedFields.get(field)!;
+    if (--retained.references === 0) {
+      pool.bytes -= retained.bytes;
+      pool.sharedFields.delete(field);
+    }
+  }
+  cell.sharedFields = undefined;
   pool.bytes -= cell.bytes;
   cell.transcript = undefined;
   cell.transcriptBytes = 0;
@@ -265,27 +280,11 @@ function discard(cell: ReplicaCell): void {
   cell.bytes = 0;
 }
 
-function shareEntrySkills(entry: SessionEntry | undefined): SessionEntry | undefined {
-  if (!entry?.skillsSnapshot) {
-    return entry;
-  }
-  const snapshot = entry.skillsSnapshot;
-  const shared = internSessionSkillSnapshot(snapshot);
-  if (shared !== snapshot) {
-    // Prepared publications can be frozen; worker-decoded entries remain owned here.
-    if (Object.isFrozen(entry)) {
-      return { ...entry, skillsSnapshot: shared };
-    }
-    entry.skillsSnapshot = shared;
-  }
-  return entry;
-}
-
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
-  entry.entry = shareEntrySkills(entry.entry);
+  entry.entry = shareSessionActorEntryFields(entry.entry);
   cell.entry = freezeTrustedJsonSnapshot(entry);
-  cell.bytes = estimateSessionActorReplicaBytes(entry);
+  cell.bytes = chargeSessionActorReplicaEntryFields(pool, cell, entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   touch(cell);
@@ -304,7 +303,7 @@ function retainSnapshot(
   // Worker-decoded facts are plain data. Protect borrowed reads without inspecting
   // their shape again; unchanged frozen subtrees retain their identity.
   freezeTrustedJsonSnapshot(state.target);
-  state.entry = shareEntrySkills(state.entry);
+  state.entry = shareSessionActorEntryFields(state.entry);
   freezeTrustedJsonSnapshot(state.entry);
   freezeTrustedJsonSnapshot(state.members);
   freezeTrustedJsonSnapshot(state.participants);
@@ -312,7 +311,7 @@ function retainSnapshot(
   Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
-  cell.bytes = estimateSessionActorReplicaBytes(state);
+  cell.bytes = chargeSessionActorReplicaEntryFields(pool, cell, state);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (

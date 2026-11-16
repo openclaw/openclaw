@@ -13,6 +13,7 @@ import type {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   parseConversationPublications,
   retainConversationWorkerPublication,
@@ -121,7 +122,7 @@ export function createSqliteSessionActorExecutor(
       native: NativeAdmission,
       publication: unknown,
       stage: "transaction" | "commit",
-      snapshot: SessionActorAuthorityFacts,
+      snapshot: SessionActorAuthorityFacts & { writeToken?: string },
     ) => void,
     beforeFinalGrant?: (conversationPublication: unknown) => void,
     entryReference?: () => SessionActorEntryReference | undefined,
@@ -150,7 +151,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The paired kernel owns these facts; references require its exact preimage.
-        let snapshot = facts.snapshot as SessionActorAuthorityFacts;
+        let snapshot = facts.snapshot as SessionActorAuthorityFacts & { writeToken?: string };
         if ("entryReference" in facts.snapshot) {
           const preimage = entryReference?.();
           if (!preimage || facts.snapshot.entryReference !== preimage.writeToken) {
@@ -512,6 +513,13 @@ export function createSqliteSessionActorExecutor(
             if (stage === "transaction" && !capturedPreviousEntry) {
               previousEntry = snapshot.entry;
               capturedPreviousEntry = true;
+              if (snapshot.writeToken !== undefined) {
+                entryReference = {
+                  target: snapshot.target,
+                  entry: freezeTrustedJsonSnapshot(snapshot.entry),
+                  writeToken: snapshot.writeToken,
+                };
+              }
             }
             if (isRecord(publication) && publication.kind === "session-actor-outcome") {
               transfer.accept(publication.transfer);

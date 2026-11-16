@@ -113,6 +113,7 @@ export const TemplatesCatalogDetailParamsSchema = closedObject({
 export const TemplatesCatalogDetailSchema = closedObject({
   ...TemplatesCatalogEntrySchema.properties,
   version: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
   workspaceFiles: Type.Integer({ minimum: 0 }),
@@ -121,7 +122,15 @@ export const TemplatesCatalogDetailSchema = closedObject({
   mcpServers: Type.Integer({ minimum: 0 }),
   scheduledJobs: Type.Integer({ minimum: 0 }),
   contents: Type.Optional(TemplatesCatalogContentsSchema),
-  scanStatus: Type.Optional(NonEmptyString),
+  createdAtMs: Type.Optional(Type.Number({ minimum: 0 })),
+  categories: Type.Optional(Type.Array(NonEmptyString)),
+  /** The exact release's ClawHub audit; absent when no report describes this release. */
+  security: Type.Optional(
+    closedObject({
+      verdict: Type.Optional(NonEmptyString),
+      auditUrl: NonEmptyString,
+    }),
+  ),
 });
 export const TemplatesCatalogDetailResultSchema = closedObject({
   detail: TemplatesCatalogDetailSchema,
@@ -284,7 +293,8 @@ export const TemplatesAddPlanParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
-export const TemplatesAddApplyParamsSchema = closedObject({
+/** Add from a reviewed plan. The setup helper installs through exactly this shape. */
+export const TemplatesAddReviewedApplyParamsSchema = closedObject({
   source: TemplateCatalogCoordinateSchema,
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),
@@ -292,6 +302,21 @@ export const TemplatesAddApplyParamsSchema = closedObject({
   acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
   acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
 });
+
+export const TemplatesAddApplyParamsSchema = Type.Union([
+  TemplatesAddReviewedApplyParamsSchema,
+  // Chat-based Add has no reviewed plan: the Gateway creates the agent and the
+  // agent's own conversation continues setup. agentId is the preferred id; the
+  // Gateway answers with the unused id it chose.
+  closedObject({
+    mode: Type.Literal("chat"),
+    source: TemplateCatalogCoordinateSchema,
+    agentId: NonEmptyString,
+    // Retry targets this admitted agent, even if the setup receipt was consumed.
+    resume: Type.Optional(Type.Literal(true)),
+    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+  }),
+]);
 
 export const TemplatesUpdatePlanParamsSchema = closedObject({
   agentId: NonEmptyString,
@@ -554,6 +579,7 @@ export type TemplateResourceStatus = Static<typeof TemplateResourceStatusSchema>
 export type TemplateStatusEntry = Static<typeof TemplateStatusEntrySchema>;
 export type TemplatesStatusResult = Static<typeof TemplatesStatusResultSchema>;
 export type TemplatesAddApplyParams = Static<typeof TemplatesAddApplyParamsSchema>;
+export type TemplatesAddReviewedApplyParams = Static<typeof TemplatesAddReviewedApplyParamsSchema>;
 export type TemplatesAddPlanParams = Static<typeof TemplatesAddPlanParamsSchema>;
 export type TemplatesUpdatePlanParams = Static<typeof TemplatesUpdatePlanParamsSchema>;
 export type TemplatesUpdateApplyParams = Static<typeof TemplatesUpdateApplyParamsSchema>;

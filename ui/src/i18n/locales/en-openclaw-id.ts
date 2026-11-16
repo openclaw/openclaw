@@ -70,6 +70,12 @@ const enOpenClawId = {
     menuTitle: "OpenClaw ID",
     approveNewDevice: "Approve a new device",
     approvalNotice: "A new device is asking for owner access",
+    approvalMemberClaim: "This request says it’s from {member}.",
+    browserRequestClaim: "Browser request from {name}",
+    browserRequestUnverified: "Unverified request",
+    browserRequestContext: "{browser} · {time} left",
+    browserRequestMember: "a member",
+    browserRequestLocation: "Location reported by OpenClaw ID: {location}",
     memberDeviceAddedNotice: "A member added a device",
     memberDeviceAddedNoticeBody:
       "It has the member’s existing role. Review or remove member devices in Remote access.",
@@ -128,6 +134,14 @@ const enOpenClawId = {
     needsLinkCodeDetail: "Publish them so your devices can reach this claw.",
     publishNewKeys: "Publish new keys",
     newKeysPublished: "New keys published",
+    memberAskedToJoin: "{name} asked to join",
+    nodeAskedToJoin: "{name} asked to join as a node",
+    joinRequestDetail: "Approve or deny it in Access → People.",
+    joinRequestTimeLeft: "{time} left to decide",
+    joinRequestPrompt: "Join request",
+    joinRequestMore: "{count} more waiting",
+    joinRequestLater: "Later",
+    joinRequestReview: "Review",
   },
 } satisfies TranslationMap;
 

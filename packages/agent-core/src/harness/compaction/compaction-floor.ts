@@ -54,143 +54,126 @@ function isUsefulAnchor(kind: string, value: string): boolean {
   return true;
 }
 
-/**
- * Deterministic text for a region dropped without a summary: the user's own words
- * (newest first under the budget), the most-referenced identifiers, and the last
- * assistant replies. Omitted user messages are counted so the loss is never silent.
- */
-type FloorAnchor = { kind: string; value: string; score: number; last: number };
-export type CompactionFloorMessage = {
-  user?: { label: string; text: string };
-  assistant?: string;
-  anchors: Omit<FloorAnchor, "last">[];
-};
-export type PreparedCompactionFloor = {
-  users: Array<{ label: string; text: string }>;
+/** Internal, transferable facts; no history-sized source text or anchor inventory escapes. */
+export type PreparedCompactionFloor = Readonly<{
+  maxChars: number;
   userCount: number;
-  assistants: string[];
-  anchors: FloorAnchor[];
-};
+  /** Newest first, including the recorded sender label. */
+  userLines: readonly string[];
+  /** Score, recency, then lexical order, already fixed by the collector. */
+  anchorLines: readonly string[];
+  /** The last three clipped assistant replies, oldest first. */
+  outcomes: readonly string[];
+}>;
 
-/** Record only bounded excerpts and identifier counts while a payload is resident. */
-export function prepareCompactionFloorMessage(message: AgentMessage): CompactionFloorMessage {
-  if (message.role !== "user" && message.role !== "assistant") {
-    return { anchors: [] };
-  }
-  const text = extractCompactionMessageText(message);
-  if (!text) {
-    return { anchors: [] };
-  }
-  const anchors = new Map<string, Omit<FloorAnchor, "last">>();
-  for (const [kind, pattern] of ANCHOR_PATTERNS) {
-    for (const match of text.matchAll(pattern)) {
-      const value = (match[1] ?? "").replace(/[.,;:]+$/, "");
-      if (!value || !isUsefulAnchor(kind, value)) {
-        continue;
-      }
-      const key = kind + "\u0000" + value;
-      const row = anchors.get(key) ?? { kind, value, score: 0 };
-      row.score += message.role === "user" ? 5 : 1;
-      anchors.set(key, row);
+function fitFloorLines<T>(
+  rows: readonly T[],
+  budget: number,
+  used: number,
+  renderLine: (row: T) => string,
+): string[] {
+  const lines: string[] = [];
+  let usedChars = used;
+  for (const row of rows) {
+    const line = renderLine(row);
+    if (usedChars + line.length + 1 > budget) {
+      break;
     }
+    lines.push(line);
+    usedChars += line.length + 1;
   }
-  // Excerpts and regex captures can retain the entire payload as sliced strings.
-  // Detach these bounded facts before the worker caches them across transcript reads.
-  return structuredClone({
-    ...(message.role === "user"
-      ? {
-          user: {
-            label: formatCompactionUserLabel(message),
-            text: clip(text, MAX_FLOOR_USER_MESSAGE_CHARS),
-          },
-        }
-      : { assistant: clip(text, MAX_FLOOR_OUTCOME_CHARS) }),
-    anchors: [...anchors.values()],
-  });
+  return lines;
 }
 
-/** Keep only the suffix and ranked identifiers any supported floor budget can emit. */
+/**
+ * Collect once at the largest finite, nonnegative render budget. Both selections
+ * stop at the first oversized line, so every smaller budget can only select a
+ * prefix of these facts.
+ * Their strings occupy at most 80% of maxChars plus three 602-character outcomes;
+ * userCount preserves omissions without carrying the rest of the region.
+ */
 export function prepareCompactionFloor(
-  messages: Iterable<CompactionFloorMessage>,
+  messages: readonly AgentMessage[],
   maxChars = MAX_COMPACTION_FLOOR_CHARS,
 ): PreparedCompactionFloor {
-  const users: PreparedCompactionFloor["users"] = [];
+  const users: Array<{ label: string; text: string }> = [];
   const assistants: string[] = [];
-  const anchors = new Map<string, FloorAnchor>();
-  let userCount = 0;
-  let userChars = 120;
-  let index = 0;
-  for (const message of messages) {
-    if (message.user) {
-      userCount++;
-      users.push(message.user);
-      userChars += message.user.label.length + message.user.text.length + 7;
-      while (users.length && userChars > Math.floor(maxChars * USER_SHARE)) {
-        const removed = users.shift();
-        if (removed) {
-          userChars -= removed.label.length + removed.text.length + 7;
+  const anchors = new Map<string, { kind: string; value: string; score: number; last: number }>();
+  messages.forEach((message, index) => {
+    if (message.role !== "user" && message.role !== "assistant") {
+      return;
+    }
+    // Extraction redacts credentials before excerpts and anchors are cut from it.
+    const text = extractCompactionMessageText(message);
+    if (!text) {
+      return;
+    }
+    // Keep recorded origin and sender: user-role rows also carry internal and inter-session input.
+    if (message.role === "user") {
+      users.push({ label: formatCompactionUserLabel(message), text });
+    } else {
+      assistants.push(text);
+    }
+    const weight = message.role === "user" ? 5 : 1;
+    for (const [kind, pattern] of ANCHOR_PATTERNS) {
+      for (const match of text.matchAll(pattern)) {
+        const value = (match[1] ?? "").replace(/[.,;:]+$/, "");
+        if (!value || !isUsefulAnchor(kind, value)) {
+          continue;
         }
+        const key = `${kind}\u0000${value}`;
+        const row = anchors.get(key) ?? { kind, value, score: 0, last: index };
+        row.score += weight;
+        row.last = index;
+        anchors.set(key, row);
       }
     }
-    if (message.assistant) {
-      assistants.push(message.assistant);
-      if (assistants.length > FLOOR_OUTCOMES) {
-        assistants.shift();
-      }
-    }
-    for (const anchor of message.anchors) {
-      const key = anchor.kind + "\u0000" + anchor.value;
-      const previous = anchors.get(key);
-      anchors.set(key, { ...anchor, score: (previous?.score ?? 0) + anchor.score, last: index });
-    }
-    index++;
-  }
+  });
   const ranked = [...anchors.values()].toSorted(
     (left, right) =>
       right.score - left.score || right.last - left.last || left.value.localeCompare(right.value),
   );
-  let anchorChars = 80;
-  const selected: FloorAnchor[] = [];
-  for (const anchor of ranked) {
-    anchorChars += anchor.kind.length + anchor.value.length + 5;
-    if (anchorChars > Math.floor(maxChars * ANCHOR_SHARE)) {
-      break;
-    }
-    selected.push(anchor);
-  }
-  return { users, userCount, assistants, anchors: selected };
-}
-
-export function buildCompactionFloor(
-  messages: readonly AgentMessage[],
-  maxChars = MAX_COMPACTION_FLOOR_CHARS,
-): string {
-  return renderCompactionFloor(
-    prepareCompactionFloor(messages.map(prepareCompactionFloorMessage), maxChars),
+  return {
     maxChars,
-  );
+    userCount: users.length,
+    userLines: fitFloorLines(
+      users.toReversed(),
+      Math.floor(maxChars * USER_SHARE),
+      120,
+      ({ label, text }) => `- [${label}]: ${clip(text, MAX_FLOOR_USER_MESSAGE_CHARS)}`,
+    ),
+    anchorLines: fitFloorLines(
+      ranked,
+      Math.floor(maxChars * ANCHOR_SHARE),
+      80,
+      (anchor) => `- ${anchor.kind}: ${anchor.value}`,
+    ),
+    outcomes: assistants
+      .slice(-FLOOR_OUTCOMES)
+      .map((text) => `- ${clip(text, MAX_FLOOR_OUTCOME_CHARS)}`),
+  };
 }
 
+/** Refit bounded facts, not a truncated larger floor, at any budget up to their prepared maximum. */
 export function renderCompactionFloor(
   prepared: PreparedCompactionFloor,
-  maxChars = MAX_COMPACTION_FLOOR_CHARS,
+  maxChars = prepared.maxChars,
 ): string {
-  const { users, userCount, assistants, anchors } = prepared;
-  if (userCount === 0 && assistants.length === 0) {
+  if (maxChars > prepared.maxChars) {
+    throw new RangeError("Compaction floor budget exceeds its prepared maximum");
+  }
+  const { userCount, outcomes } = prepared;
+  if (userCount === 0 && outcomes.length === 0) {
     return "";
   }
+
   const sections: string[] = [];
-  const userBudget = Math.floor(maxChars * USER_SHARE);
-  const shown: string[] = [];
-  let used = 120;
-  for (const { label, text } of users.toReversed()) {
-    const line = `- [${label}]: ${clip(text, MAX_FLOOR_USER_MESSAGE_CHARS)}`;
-    if (used + line.length + 1 > userBudget) {
-      break;
-    }
-    shown.push(line);
-    used += line.length + 1;
-  }
+  const shown = fitFloorLines(
+    prepared.userLines,
+    Math.floor(maxChars * USER_SHARE),
+    120,
+    (line) => line,
+  );
   if (userCount > 0) {
     const omitted = userCount - shown.length;
     sections.push(
@@ -203,32 +186,35 @@ export function renderCompactionFloor(
     );
   }
 
-  const anchorBudget = Math.floor(maxChars * ANCHOR_SHARE);
-  const ranked = anchors;
-  const anchorLines: string[] = [];
-  used = 80;
-  for (const anchor of ranked) {
-    const line = `- ${anchor.kind}: ${anchor.value}`;
-    if (used + line.length + 1 > anchorBudget) {
-      break;
-    }
-    anchorLines.push(line);
-    used += line.length + 1;
-  }
+  const anchorLines = fitFloorLines(
+    prepared.anchorLines,
+    Math.floor(maxChars * ANCHOR_SHARE),
+    80,
+    (line) => line,
+  );
   if (anchorLines.length > 0) {
     sections.push(
       ["## Identifiers most referenced in the removed region", ...anchorLines].join("\n"),
     );
   }
 
-  const outcomes = assistants
-    .slice(-FLOOR_OUTCOMES)
-    .map((text) => `- ${clip(text, MAX_FLOOR_OUTCOME_CHARS)}`);
   if (outcomes.length > 0) {
     sections.push(["## Last assistant replies before the cut", ...outcomes].join("\n"));
   }
   const floor = sections.join("\n\n");
   return floor.length <= maxChars ? floor : `${floor.slice(0, maxChars - 6)} [...]`;
+}
+
+/**
+ * Deterministic text for a region dropped without a summary: the user's own words
+ * (newest first under the budget), the most-referenced identifiers, and the last
+ * assistant replies. Omitted user messages are counted so the loss is never silent.
+ */
+export function buildCompactionFloor(
+  messages: readonly AgentMessage[],
+  maxChars = MAX_COMPACTION_FLOOR_CHARS,
+): string {
+  return renderCompactionFloor(prepareCompactionFloor(messages, maxChars), maxChars);
 }
 
 /** Characters a committed summary may carry beyond its ceiling for the floor and heading. */
@@ -255,30 +241,33 @@ export function commitCompactionSummary(
   result: Pick<CompactionResult, "summary" | "details">,
   preparation: Pick<
     CompactionPreparation,
-    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget" | "floor"
+    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
   > & { settings: { maxSummaryChars?: number } },
   withoutSummary: boolean,
   replayTokenBudget?: () => number | undefined,
   onFloorReduced?: (reduction: SummaryFloorReduction) => void,
+  preparedFloor?: PreparedCompactionFloor,
 ): string {
   const { maxSummaryChars } = preparation.settings;
   const summary = capCompactionSummary(result.summary, maxSummaryChars);
   if (withoutSummary || parseCompactionDetails(result.details)?.summaryRefused) {
     return summary;
   }
-  const prepared =
-    preparation.floor ??
-    prepareCompactionFloor(
-      [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages].map(
-        prepareCompactionFloorMessage,
-      ),
-    );
-  const renderFloor = (maxChars: number) =>
-    maxChars >= MIN_SUMMARY_FLOOR_CHARS ? renderCompactionFloor(prepared, maxChars) : "";
   const maxFloorChars = resolveSummaryFloorChars(maxSummaryChars) - SUMMARY_FLOOR_HEADING.length;
   const foregroundBudget = preparation.summaryTokenBudget;
   // Accepted edge case: with an unknown window the floor is bounded only by its own budget.
   const tokenBudget = foregroundBudget ?? replayTokenBudget?.();
+  if (maxFloorChars < MIN_SUMMARY_FLOOR_CHARS) {
+    return summary;
+  }
+  const prepared =
+    preparedFloor ??
+    prepareCompactionFloor(
+      [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
+      maxFloorChars,
+    );
+  const renderFloor = (maxChars: number) =>
+    maxChars >= MIN_SUMMARY_FLOOR_CHARS ? renderCompactionFloor(prepared, maxChars) : "";
   // The floor shrinks, then disappears, before the artifact may exceed the token budget.
   const fitted = fitCompactionSummary(
     tokenBudget,

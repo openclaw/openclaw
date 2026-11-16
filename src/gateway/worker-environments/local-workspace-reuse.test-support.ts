@@ -370,11 +370,11 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   const canonical = owner.worktree.path;
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   using first = await prepareSandboxCheckpointFixture(owner);
+  expect(
+    (await readLocalWorkspaceProjection(owner.worktree.id))?.projection_fingerprints,
+  ).not.toBeNull();
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
-  using unchanged = await prepareSandboxCheckpointFixture(owner);
-  expect(unchanged.workspaceDir).toBe(first.workspaceDir);
-  expect(quiesce).not.toHaveBeenCalled();
-
+  // The first reuse must detect a same-size edit despite the retained initialization identities.
   const source = path.join(first.workspaceDir, "source.txt");
   const before = await fs.stat(source);
   await writeText(first.workspaceDir, "source.txt", "modified\n");
@@ -382,6 +382,11 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
   await expectText(canonical, "source.txt", "modified\n");
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
+
+  quiesce.mockClear();
+  using unchanged = await prepareSandboxCheckpointFixture(owner);
+  expect(unchanged.workspaceDir).toBe(first.workspaceDir);
+  expect(quiesce).not.toHaveBeenCalled();
 
   await writeText(canonical, "source.txt", "host edit\n");
   const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
@@ -421,6 +426,12 @@ export async function proveWarmWorkspaceReuseFailure(
   revoke: () => void,
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
+  if (failure === "observation") {
+    // An unchanged inode needs no acceptance; replace it without changing the content.
+    const source = path.join(first.workspaceDir, "source.txt");
+    await fs.copyFile(source, `${source}.replacement`);
+    await fs.rename(`${source}.replacement`, source);
+  }
   const stores = await import("./local-workspace-store.js");
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");

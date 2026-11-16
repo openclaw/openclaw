@@ -525,7 +525,7 @@ describe("session organizer destructive confirmations", () => {
     {
       name: "regular session",
       rows: [sessionRow(0)],
-      text: "keeps an archived copy of its transcript",
+      text: "keeps an archived copy of its chat history",
     },
     {
       name: "incognito flag",
@@ -540,12 +540,12 @@ describe("session organizer destructive confirmations", () => {
     {
       name: "incognito selection",
       rows: [sessionRow(0, { incognito: true }), sessionRow(1, { incognito: true })],
-      text: "their transcripts without an archive",
+      text: "their chat history without an archive",
     },
     {
       name: "mixed selection",
       rows: [sessionRow(0), sessionRow(1, { incognito: true })],
-      text: "Regular transcripts are archived; incognito transcripts are deleted without an archive",
+      text: "Regular chat history is archived; incognito chat history is deleted without an archive",
     },
   ])("explains transcript retention for $name before deletion", async ({ rows, text }) => {
     const h = createHarness(destructiveHarness);
@@ -580,7 +580,7 @@ describe("session organizer destructive confirmations", () => {
     const pending = deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions?This deletes the session entries but keeps archived copies of their transcripts.",
+      "Delete 2 sessions?This deletes the session entries but keeps archived copies of their chat history.",
     );
     answerConfirmDialog(actions, "confirm");
     await pending;

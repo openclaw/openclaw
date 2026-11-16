@@ -8,6 +8,7 @@ import {
   captureCommandOwnerAssertion,
 } from "../../auto-reply/command-owner-authority.js";
 import * as databaseIdentity from "../../infra/sqlite-worker-identity.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -19,9 +20,9 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as nativeEntries from "./session-accessor.sqlite-entry-read.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
-  prepareSessionDeliveryGeneration,
-  prepareSessionGenerationFacts,
-  prepareSessionGenerationFactsBatch,
+  prepareChatDeliveryLease,
+  prepareLeaseFacts,
+  prepareChatLeaseBatch,
 } from "./session-delivery-generation.js";
 import * as entryReads from "./session-entry-read-runtime.js";
 import {
@@ -47,7 +48,12 @@ async function fixture(initialSettings?: typeof settings) {
   };
   const entry = { ...original, ...initialSettings };
   replaceSessionEntrySync(scope, entry);
-  const generation = await prepareSessionGenerationFacts({ ...scope, ...entry });
+  // These cases exercise the live-writer fence; stored references follow the key.
+  const generation = await prepareLeaseFacts({
+    ...scope,
+    ...entry,
+    exact: "lifecycle",
+  });
   onTestFinished(() => generation.release());
   return { database, scope, generation };
 }
@@ -81,9 +87,10 @@ it.each([false, true])(
     onTestFinished(() => {
       vi.restoreAllMocks();
     });
-    const results = await prepareSessionGenerationFactsBatch(
+    const results = await prepareChatLeaseBatch(
+      // A key with no row cannot be leased; the others stay live.
       scopes.map((scope, index) =>
-        index === 1 ? { ...scope, lifecycleRevision: "stale-generation" } : scope,
+        chatRef(index === 1 ? { ...scope, sessionKey: `${scope.sessionKey}:missing` } : scope),
       ),
     );
     onTestFinished(() => {
@@ -114,7 +121,7 @@ it.each([false, true])(
 
 it("checks retained delivery and source authority without polling and refuses database retirement", async () => {
   const { database, scope, generation } = await fixture();
-  const delivery = await prepareSessionDeliveryGeneration({ ...scope, ...original });
+  const delivery = await prepareChatDeliveryLease(chatRef({ ...scope, ...original }));
   const source = await generation.assertCurrent.prepareSessionSource!();
   onTestFinished(async () => {
     try {
@@ -306,14 +313,26 @@ it.each(["revision", "release"] as const)(
   },
 );
 
-it.each(["runtime", "automation"])(
-  "retains generation facts across metadata but invalidates broad %s changes",
+it.each(["runtime", "automation"] as const)(
+  "retains generation facts across committed %s presentation changes",
   async (scope) => {
-    const { generation } = await fixture();
+    const { generation, database, scope: target } = await fixture();
     sessionChanges.emit({ all: true, scope: "profiles" });
     expect(generation.assertCurrent).not.toThrow();
-    sessionChanges.emit({ all: true, scope });
-    expect(generation.assertCurrent).toThrow(generationError());
+    runOpenClawAgentWriteTransaction(
+      () => {
+        sessionChanges.emit({ ...target, scope }, database.db);
+      },
+      { agentId: target.agentId, path: target.storePath },
+    );
+    expect(generation.assertCurrent).not.toThrow();
+    runOpenClawAgentWriteTransaction(
+      () => {
+        sessionChanges.emit({ all: true, scope }, database.db);
+      },
+      { agentId: target.agentId, path: target.storePath },
+    );
+    expect(generation.assertCurrent).not.toThrow();
   },
 );
 

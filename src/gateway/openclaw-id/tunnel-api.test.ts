@@ -293,7 +293,7 @@ describe("OpenClaw ID tunnel API", () => {
         await claw.sign({
           op: "add",
           account_id: "acct-guest",
-          role: "guest",
+          role: "unconfigured-role",
           peer_keys: [peer],
           invite_id: null,
         }),

@@ -532,8 +532,6 @@ describe("createCodexDynamicToolBridge", () => {
     expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onToolOutcome).toHaveBeenLastCalledWith({
       toolName: unavailableToolName,
-      argsHash: "",
-      resultHash: "",
       terminalPresentation: undefined,
       presentationOnly: true,
     });

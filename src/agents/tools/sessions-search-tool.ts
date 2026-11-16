@@ -379,10 +379,6 @@ export function createSessionsSearchTool(opts?: {
           readPositiveIntegerParam(params, "limit", {
             max: SESSIONS_SEARCH_MAX_LIMIT,
           }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-        // The host-bound scope is already the complete search universe. Reuse the
-        // targeted authorization path instead of listing every session to filter it back down.
-        const requestedSessionKey =
-          readToolStringParam(params, "sessionKey") || opts?.sessionReadScopeKey;
         const {
           cfg,
           mainKey,
@@ -393,6 +389,12 @@ export function createSessionsSearchTool(opts?: {
           sessionVisibility: visibility,
           a2aPolicy,
         } = resolveSessionToolContext(opts);
+        // Host-bound and self scopes already identify the complete search universe.
+        // Reuse targeted authorization instead of enumerating unrelated sessions.
+        const requestedSessionKey =
+          readToolStringParam(params, "sessionKey") ||
+          opts?.sessionReadScopeKey ||
+          (visibility === "self" ? "current" : undefined);
         const requesterAgentId = resolveSessionAgentId({
           sessionKey: effectiveRequesterKey,
           config: cfg,
@@ -590,7 +592,7 @@ export function createSessionsSearchTool(opts?: {
                   error.requestDispatched === true)
               ) {
                 throw new Error(
-                  "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
+                  "Chat history search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
                   { cause: error },
                 );
               }
@@ -629,7 +631,7 @@ export function createSessionsSearchTool(opts?: {
         const warnings = [
           indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
           archivedTranscriptsExcluded > 0
-            ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+            ? `Search excludes ${archivedTranscriptsExcluded} archived chats. Restore a chat to include it in search.`
             : undefined,
         ].filter(Boolean);
         return jsonResult({

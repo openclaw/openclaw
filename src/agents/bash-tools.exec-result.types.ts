@@ -54,6 +54,8 @@ export type ExecToolDetails = {
       cwd?: string;
       nodeId?: string;
       warningText?: string;
+      fullOutputPath?: string;
+      spillTruncated?: true;
     }
   | {
       status: "approval-pending";

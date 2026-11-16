@@ -512,7 +512,7 @@ describe("placement startup reconnect", () => {
           sendState: "waiting-reconnect",
         },
       });
-      expect(chatStartupStatusLabel(null, reconnecting)).toBe("Reconnecting…");
+      expect(chatStartupStatusLabel(null, reconnecting)).toBe("Reconnecting");
       expect(startup.hasPendingTurn(key)).toBe(true);
       startup.retry(key);
       const replacement = { ...client, recoveryScopeReady: true };
