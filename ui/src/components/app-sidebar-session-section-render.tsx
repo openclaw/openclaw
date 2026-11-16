@@ -392,7 +392,7 @@ export function renderSessionSection(params: {
                     handleNavigationClick(event, () => host().onNavigate?.("sessions"))
                   }
                 >
-                  <Icon name="maximize" />
+                  <Icon name="sessionPanelExpand" />
                 </a>
               </Show>
             </>
