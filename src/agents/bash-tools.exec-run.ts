@@ -690,8 +690,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 outcome: completed.outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
-                aggregateOutputDropped:
-                  run.session.totalOutputChars > run.session.aggregated.length,
+                session: run.session,
               })
             : {
                 content: [

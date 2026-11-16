@@ -29,6 +29,7 @@ import {
   appendExecTimeoutRetryGuidance,
   hasExitWake,
   renderExecExitLabel,
+  renderExecOutputFile,
 } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -198,7 +199,7 @@ function prepareExecExitWake(
   if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
     return undefined;
   }
-  // The retained tail (last 2,000 chars) lets the woken turn act without process log.
+  // The retained tail (last 2,000 chars) lets the woken turn act; the output file has the rest.
   const tail = session.tail;
   const output = tail.trim();
   if (
@@ -212,15 +213,19 @@ function prepareExecExitWake(
   const header = `Exec ${status} (${session.id.slice(0, 8)}, ${renderExecExitLabel(session)}, ${
     formatDurationCompact((session.endedAt ?? Date.now()) - session.startedAt) ?? "0s"
   })`;
+  const file = session.outputFile;
   const summary = !output
     ? `${header} with no output.`
-    : session.totalOutputChars > tail.length
-      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
-          session.totalOutputChars > session.aggregated.length
-            ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
-            : "process log has the rest"
-        }):\n${output}`
-      : `${header}:\n${output}`;
+    : session.totalOutputChars <= tail.length
+      ? `${header}:\n${output}`
+      : file
+        ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars:\n${output}\n${renderExecOutputFile(file)}`
+        : // Sandbox, node and durable commands keep no host output file.
+          `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
+            session.totalOutputChars > session.aggregated.length
+              ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
+              : "process log has the rest"
+          }):\n${output}`;
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
