@@ -3,6 +3,7 @@
 // Gateway over IPC for control and over the ingress socket for data. Logs
 // carry `fp:` labels only, never key material.
 import fs from "node:fs/promises";
+import { MAX_CONCURRENT_STREAMS } from "../../../../packages/openclaw-id-protocol/src/index.js";
 import {
   TUNNEL_EXIT_KEY_MISMATCH,
   TUNNEL_EXIT_KEY_MISSING,
@@ -103,6 +104,7 @@ async function serve(
       secretKey: key,
       relayUrl: start.relayUrl,
       alpns: [TUNNEL_ALPN_BYTES],
+      maxConcurrentBiStreams: MAX_CONCURRENT_STREAMS,
       ...(start.bindAddr ? { bindAddr: start.bindAddr } : {}),
     });
   } finally {

@@ -106,6 +106,8 @@ export interface BindOptions {
   ipTransports?: boolean
   /** QUIC connection keep-alive interval in milliseconds (nonzero). */
   keepAliveMs?: number
+  /** Initial peer-opened bidirectional stream credit; omitted uses iroh's default. */
+  maxConcurrentBiStreams?: number
 }
 
 /** How a connection ended, as returned by `Connection.closed()`. */

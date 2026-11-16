@@ -59,6 +59,7 @@ export type IrohBinding = {
     relayUrl?: string;
     alpns?: Uint8Array[];
     bindAddr?: string;
+    maxConcurrentBiStreams?: number;
   }): Promise<IrohEndpoint>;
   /** The endpoint class; bindings built before relay status was exposed lack its watcher. */
   Endpoint: { prototype: Partial<Pick<IrohEndpoint, "watchHomeRelay">> };
