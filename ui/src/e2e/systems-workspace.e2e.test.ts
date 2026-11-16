@@ -173,7 +173,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         await installSystemsGateway(page, 0);
-        const header = page.locator(".systems-page-header");
+        const header = page.locator(".systems-toolbar");
         const gutter = () =>
           header.evaluate((element) => {
             const { x, width } = element.getBoundingClientRect();
@@ -348,7 +348,7 @@ suite.define(() => {
           expect(layoutShifts.value, JSON.stringify(layoutShifts, null, 2)).toBe(0);
           await shifts.evaluate((probe) => probe.stop());
           await shifts.dispose();
-          const more = page.locator(".systems-volume-summary button");
+          const more = page.locator(".systems-volumes-link");
           await more.focus();
           await page.keyboard.press("Enter");
           await page.locator(".systems-details").waitFor();
@@ -768,18 +768,18 @@ suite.define(() => {
       const inventory = page.locator(".systems-sidebar");
       await inventory.getByRole("button", { name: /Cloud worker/ }).click();
       await expect
-        .poll(() => page.locator(".systems-heading h2").textContent())
+        .poll(() => page.locator(".systems-heading h1").textContent())
         .toBe("Cloud worker");
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
-      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
+      expect(await inventory.locator(".systems-group .systems-machine").count()).toBe(1);
       // Leave through a page without a sidebar so the Sessions view and its inventory remain.
       await evaluateControlUiContext(page, (app) => app.navigate("usage"));
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
       await evaluateControlUiContext(page, (app) => app.navigate("systems"));
       await inventory.waitFor();
       await expect
-        .poll(() => page.locator(".systems-heading h2").textContent())
+        .poll(() => page.locator(".systems-heading h1").textContent())
         .toBe("Cloud worker");
       await page.setViewportSize({ width: 640, height: 900 });
       const picker = page.locator(".systems-mobile-picker");
@@ -804,7 +804,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await inventory.getByRole("button", { name: "Refresh devices" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
-      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
+      expect(await inventory.locator(".systems-group").count()).toBe(0);
       await page.setViewportSize({ width: 640, height: 900 });
       expect(await picker.locator('option[value="worker-one"]').count()).toBe(0);
     } finally {

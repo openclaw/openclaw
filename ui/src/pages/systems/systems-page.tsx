@@ -15,7 +15,6 @@ import {
 import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import "../../components/desktop/desktop-panel-solid.tsx";
-import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -375,6 +374,13 @@ function SystemsWorkspace(props: {
                   ? "systems.desktopAccessRequired"
                   : "systems.accessHint",
               );
+  const backups = () =>
+    controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
+      <SystemsBackups
+        controller={controller()}
+        onDetails={() => controller().updatePresentation({ showDetails: true })}
+      />
+    ) : null;
   const Desktop = () => {
     let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
     onSettled(() => {
@@ -398,19 +404,18 @@ function SystemsWorkspace(props: {
   };
   return (
     <section class="systems-workspace" aria-label={t("systems.title")}>
-      <HubPageHeader
-        active="systems"
-        wide
-        docsUrl="https://docs.openclaw.ai/web/control-ui/sessions-and-sidebar#systems-workspace"
-        class="systems-page-header"
-      />
       <header class="systems-toolbar">
         <div
           class="systems-heading"
           style={{ visibility: inventoryKnown() ? undefined : "hidden" }}
         >
-          <h2>{title()}</h2>
-          <span>{row() ? systemKindLabel(row()!) : t("systems.selectHint")}</span>
+          <h1 class="page-title">{title()}</h1>
+          <span class="systems-heading__facts" data-status={row()?.environment.status}>
+            {row() ? <i class="systems-machine__dot" aria-hidden="true" /> : null}
+            {row()
+              ? [systemKindLabel(row()!), systemPlatform(row()!)].filter(Boolean).join(" · ")
+              : t("systems.selectHint")}
+          </span>
         </div>
         <select
           class="settings-select systems-mobile-picker"
@@ -493,15 +498,24 @@ function SystemsWorkspace(props: {
           </details>
         ) : null}
         {controller().statsVisible() ? (
-          <div class="systems-overview__telemetry">
+          <div
+            class={[
+              "systems-overview__telemetry",
+              { "systems-overview__telemetry--collapsed": controller().state.healthCollapsed },
+            ]}
+          >
             <Show
               when={row()}
               fallback={
-                <Show when={props.inventoryRead.pending()}>
-                  <div class="systems-metrics" aria-hidden="true">
+                <Show when={props.inventoryRead.pending()} fallback={backups()}>
+                  <div class="systems-metrics">
                     <div class="systems-vitals">
-                      <Repeat count={3}>{() => <div class="systems-vital skeleton" />}</Repeat>
+                      <Repeat count={3}>
+                        {() => <div class="systems-vital skeleton" aria-hidden="true" />}
+                      </Repeat>
+                      {backups()}
                     </div>
+                    <div class="systems-metrics-caption" />
                   </div>
                 </Show>
               }
@@ -512,17 +526,16 @@ function SystemsWorkspace(props: {
                   controller={controller()}
                   summary
                   onDetails={() => controller().updatePresentation({ showDetails: true })}
+                  cards={backups()}
+                  collapsed={controller().state.healthCollapsed}
+                  onCollapsedChange={(collapsed) => controller().setHealthCollapsed(collapsed)}
                 />
               )}
             </Show>
           </div>
-        ) : null}
-        {controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
-          <SystemsBackups
-            controller={controller()}
-            onDetails={() => controller().updatePresentation({ showDetails: true })}
-          />
-        ) : null}
+        ) : (
+          backups()
+        )}
       </div>
       <div class="systems-body">
         <div class="systems-desktop">

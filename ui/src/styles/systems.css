@@ -5,45 +5,46 @@ openclaw-systems-page {
   min-height: 0;
   height: 100%;
 }
+/* Systems renders in the full-bleed chat content column and reads in the standard wide
+   page column (.settings-page--wide: 1120px, --space-4 inline padding), centred. The
+   device head, the health strip and the desktop card share its edges. */
 .systems-workspace {
+  --systems-inset: var(--space-4);
+  --systems-card-height: 100px;
+
   display: flex;
   flex-direction: column;
   flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg);
-}
-/* Systems renders in the full-bleed chat content column: supply the page top inset
-   other pages get from content padding, and inset the title to the toolbar heading.
-   The selector outranks the shared hub-header insets. */
-.systems-workspace > .content-header.hub-page-header.systems-page-header {
-  flex: 0 0 auto;
-  margin-top: var(--space-4);
-  padding-inline: 18px;
 }
 .systems-toolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-4) var(--systems-inset) 14px;
   flex: 0 0 auto;
 }
 .systems-heading {
   flex: 1;
   min-width: 0;
 }
-.systems-heading h2 {
+.systems-heading > .page-title {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
   overflow-wrap: anywhere;
-  color: var(--text-strong);
 }
-.systems-heading > span {
+.systems-heading__facts {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  min-width: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .systems-icon-button {
   display: inline-grid;
@@ -77,17 +78,123 @@ openclaw-systems-page {
   width: 17px;
   height: 17px;
 }
-/* Reserve both summaries even for workers without telemetry or Gateway backups.
-   Complete lists live in Details; the overview never acquires a nested scrollbar. */
+/* The health strip: one row of equal cards, then one caption line. Complete lists live
+   in Details; the strip never acquires a nested scrollbar. */
 .systems-overview {
   flex: 0 0 auto;
-  min-height: 316px;
+  padding: 0 var(--systems-inset) 14px;
+}
+/* Loading, a device without telemetry and a full reading keep one strip height. */
+.systems-overview__telemetry:not(.systems-overview__telemetry--collapsed) {
+  min-height: calc(var(--systems-card-height) + 30px);
 }
 .systems-overview--compact {
-  min-height: 76px;
+  min-height: calc(var(--systems-card-height) + 14px);
 }
-.systems-overview__telemetry {
-  height: 240px;
+.systems-overview .systems-metrics {
+  padding: 0;
+  border: 0;
+}
+.systems-overview .systems-vitals {
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+.systems-overview .systems-vital,
+.systems-overview .systems-volume-summary,
+.systems-overview .systems-backups--summary,
+.systems-overview .systems-no-telemetry {
+  min-width: 0;
+  min-height: var(--systems-card-height);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
+  background: var(--bg-hover);
+}
+.systems-overview .systems-volume-summary,
+.systems-overview .systems-backups--summary,
+.systems-overview .systems-no-telemetry {
+  padding: 8px 10px;
+}
+/* Disk and Backups head their cards like the load and memory tiles. */
+.systems-overview .systems-volume-summary > span,
+.systems-overview .systems-backups--summary h2 {
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 20px;
+  text-transform: uppercase;
+}
+.systems-overview .systems-metrics-caption {
+  flex-wrap: nowrap;
+  align-items: center;
+  white-space: nowrap;
+  min-height: 24px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.systems-strip__toggle {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-inline-end: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+.systems-strip__toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.systems-strip__toggle svg,
+.systems-strip-line svg {
+  width: 14px;
+  height: 14px;
+}
+/* Collapsed, the strip is one quiet line of headline values that expands again. */
+.systems-strip-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px 6px 12px;
+  border: 0;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+.systems-strip-line:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.systems-strip-line__values {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 2px 20px;
+  min-width: 0;
+}
+.systems-strip-line strong {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.systems-metrics[data-stale="true"] .systems-strip-line strong {
+  color: var(--muted);
+}
+.systems-strip__toggle:focus-visible,
+.systems-strip-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .systems-metrics {
   padding: 12px 18px 8px;
@@ -241,17 +348,23 @@ openclaw-systems-page {
 }
 .systems-body {
   display: flex;
+  gap: 12px;
   flex: 1;
   min-height: 0;
   min-width: 0;
+  padding: 0 var(--systems-inset) var(--systems-inset);
   position: relative;
 }
+/* The viewer is its own card at the composer's radius and takes the remaining height. */
 .systems-desktop {
   display: flex;
   flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--composer-radius);
+  background: var(--card);
 }
 .systems-state {
   display: flex;
@@ -317,7 +430,8 @@ openclaw-systems-page {
   width: 260px;
   padding: 16px;
   background: var(--card);
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--composer-radius);
   overflow: auto;
 }
 .systems-details header {
@@ -529,27 +643,18 @@ openclaw-systems-page {
   font-weight: 500;
   color: var(--muted);
 }
-.systems-group h3 > span:first-child {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.systems-group__count {
-  font-size: calc(10px * var(--control-ui-text-scale, 1));
-  font-variant-numeric: tabular-nums;
-  opacity: 0.7;
-}
-/* Rows mirror .sidebar-recent-session: one line, name in --text, meta in --muted,
+/* Rows read as two lines: the name in --text, the device fact under it in --muted,
    selection as a text-tinted fill rather than an accent border. */
 .systems-machine {
   --systems-row-bg: transparent;
 
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--sidebar-row-gap, 8px);
   width: 100%;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height, 30px);
-  padding: 4px 6px 4px var(--sidebar-inset, 8px);
+  padding: 6px 6px 6px var(--sidebar-inset, 8px);
   border: 0;
   border-radius: var(--radius-md);
   background: var(--systems-row-bg);
@@ -578,18 +683,27 @@ openclaw-systems-page {
   background: var(--muted);
   opacity: 0.45;
 }
-.systems-machine[data-status="available"] .systems-machine__dot {
+.systems-machine > .systems-machine__dot {
+  margin-top: calc((var(--sidebar-title-line-height, 18px) - 6px) / 2);
+}
+[data-status="available"] > .systems-machine__dot {
   background: var(--ok);
   opacity: 1;
 }
-.systems-machine[data-status="starting"] .systems-machine__dot,
-.systems-machine[data-status="stopping"] .systems-machine__dot {
+[data-status="starting"] > .systems-machine__dot,
+[data-status="stopping"] > .systems-machine__dot {
   background: var(--warn);
   opacity: 1;
 }
-.systems-machine[data-status="error"] .systems-machine__dot {
+[data-status="error"] > .systems-machine__dot {
   background: var(--danger);
   opacity: 1;
+}
+.systems-machine__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
 }
 .systems-machine__name {
   flex: 1 1 auto;
@@ -610,10 +724,15 @@ openclaw-systems-page {
   color: var(--muted);
 }
 .systems-machine__meta {
-  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 16px;
   font-size: calc(11px * var(--control-ui-text-scale, 1));
   color: var(--muted);
-  white-space: nowrap;
+}
+.systems-machine__meta:empty {
+  display: none;
 }
 .systems-machine[aria-pressed="true"] .systems-machine__meta {
   color: var(--text);
@@ -621,6 +740,7 @@ openclaw-systems-page {
 .systems-machine__desktop {
   display: inline-flex;
   flex: 0 0 auto;
+  margin-top: 2px;
   color: var(--muted);
 }
 .systems-machine__desktop svg {
@@ -658,16 +778,18 @@ openclaw-systems-page {
   .systems-desktop .desktop-toolbar select.settings-select {
     border-color: var(--border);
   }
-  .systems-workspace > .content-header.hub-page-header.systems-page-header {
-    padding-inline: 10px;
+  .systems-workspace {
+    --systems-inset: 10px;
   }
   .systems-toolbar {
-    padding: 10px;
+    align-items: center;
+    padding-block: 10px;
     gap: 7px;
   }
   .systems-details {
     position: absolute;
     inset: 0 0 0 auto;
+    border-radius: 0;
     z-index: 2;
     width: min(300px, 90%);
     box-shadow: var(--shadow-lg);
@@ -675,6 +797,13 @@ openclaw-systems-page {
   .systems-metrics,
   .systems-backups {
     padding: 8px 10px;
+  }
+  .systems-overview .systems-vitals {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .systems-overview__telemetry:not(.systems-overview__telemetry--collapsed) {
+    min-height: calc(2 * var(--systems-card-height) + 40px);
   }
   .systems-sample-time {
     margin-left: 0;
@@ -703,12 +832,9 @@ openclaw-systems-page {
 @media (max-width: 640px) {
   /* Keep the persistent outlet at the chat inset; pad only this page's content. */
   .systems-workspace {
-    padding: 8px 8px 16px;
-    background: transparent;
-  }
+    --systems-inset: 0px;
 
-  .systems-workspace > .content-header.hub-page-header.systems-page-header {
-    margin-top: 0;
+    padding: 8px 8px 16px;
   }
 
   /* With stats off the viewer takes the space: Backups goes with the stats and only
@@ -789,9 +915,6 @@ openclaw-systems-page {
   }
 }
 
-.systems-overview__telemetry .systems-vitals {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
 .systems-volume-summary {
   margin-top: 6px;
   color: var(--muted);
@@ -837,7 +960,6 @@ openclaw-systems-page {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: 20px 20px;
   gap: 4px 12px;
-  min-height: 76px;
 }
 .systems-backups--summary h2,
 .systems-backups--summary p {
@@ -851,12 +973,4 @@ openclaw-systems-page {
 }
 .systems-backups__summary[data-status="failed"] {
   color: var(--danger);
-}
-.systems-overview .systems-metrics-caption {
-  flex-wrap: nowrap;
-  white-space: nowrap;
-}
-
-.systems-overview__telemetry .systems-vital {
-  min-height: 90px;
 }

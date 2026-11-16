@@ -203,13 +203,15 @@ function SystemsInventory(props: { controller: Systems }) {
         onClick={() => controller().select(row.environment.id)}
       >
         <i class="systems-machine__dot" aria-hidden="true" />
-        <span class="systems-machine__name">{systemName(row)}</span>
-        <span class="systems-machine__meta">
-          {!online
-            ? status()
-            : row.environment.worker
-              ? shortId(row.environment.id)
-              : (platform ?? null)}
+        <span class="systems-machine__text">
+          <span class="systems-machine__name">{systemName(row)}</span>
+          <span class="systems-machine__meta">
+            {!online
+              ? status()
+              : row.environment.worker
+                ? shortId(row.environment.id)
+                : (platform ?? null)}
+          </span>
         </span>
         {row.environment.desktop ? (
           <span class="systems-machine__desktop">
@@ -288,16 +290,13 @@ function SystemsInventory(props: { controller: Systems }) {
               <Show when={group().length}>
                 <section class="systems-group">
                   <h3>
-                    <span>
-                      {t(
-                        kind === "node"
-                          ? "systems.nodes"
-                          : kind === "worker"
-                            ? "systems.workers"
-                            : "systems.devices",
-                      )}
-                    </span>
-                    <span class="systems-group__count">{group().length}</span>
+                    {t(
+                      kind === "node"
+                        ? "systems.nodes"
+                        : kind === "worker"
+                          ? "systems.workers"
+                          : "systems.devices",
+                    )}
                   </h3>
                   <For each={group()}>{renderRow}</For>
                 </section>

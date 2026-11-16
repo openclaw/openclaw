@@ -186,7 +186,7 @@ describe("Systems workspace", () => {
       await waitForSolid(() => expect(text(page, ".systems-no-telemetry")).toBe("Loading…"));
       controller.select(worker.id);
       controller.updatePresentation({ showDetails: true });
-      await waitForSolid(() => expect(text(page, ".systems-heading h2")).toBe("Cloud worker"));
+      await waitForSolid(() => expect(text(page, ".systems-heading h1")).toBe("Cloud worker"));
       expect(page.querySelector(".systems-details")).not.toBeNull();
       const healthyMethod = method === "system.info" ? "node.list" : "system.info";
       controller.select(healthyMethod === "system.info" ? host.id : offline.id);
@@ -225,7 +225,7 @@ describe("Systems workspace", () => {
       const { controller } = harness(async () => [device]);
       controller.select(device.id);
       const { page } = await mount(controller);
-      expect(text(page, ".systems-heading span")).toBe(label);
+      expect(text(page, ".systems-heading__facts")).toBe(label);
     },
   );
 
@@ -258,7 +258,7 @@ describe("Systems workspace", () => {
       backups,
     );
     const { page } = await mount(controller);
-    expect(text(page, ".systems-heading h2")).toBe("Select a device");
+    expect(text(page, ".systems-heading h1")).toBe("Select a device");
     expect(text(page, ".systems-backups")).toContain("Loading backups…");
     pending.reject(new Error("Backup history unavailable"));
     await waitForContent(page, '.systems-backups [role="alert"]', "Backup history unavailable");
@@ -637,7 +637,6 @@ describe("Systems workspace", () => {
     const names = (selector = ".systems-machine__name") =>
       [...sidebar.querySelectorAll(selector)].map((entry) => entry.textContent?.trim());
     const nodeNames = () => names(".systems-group:first-of-type .systems-machine__name");
-    const counts = () => names(".systems-group__count");
     const choose = async (value: string) => {
       const menu = sidebar.querySelector(".systems-filter-menu");
       const trigger = menu?.querySelector<HTMLButtonElement>(".oc-menu-trigger");
@@ -661,7 +660,6 @@ describe("Systems workspace", () => {
     };
 
     expect(nodeNames()).toEqual(["Be\u0301ta", "Zulu laptop", "Álpha", "Delta laptop"]);
-    expect(counts()).toEqual(["4", "3"]);
     const selected = [...sidebar.querySelectorAll<HTMLButtonElement>(".systems-machine")].find(
       (button) => button.querySelector(".systems-machine__name")?.textContent === "Zulu laptop",
     );
@@ -674,8 +672,7 @@ describe("Systems workspace", () => {
     expect(nodeNames()).toEqual(["Álpha", "Delta laptop", "Be\u0301ta", "Zulu laptop"]);
     await choose("status:offline");
     expect(names()).toEqual(["Álpha", "Delta laptop", "Retained worker"]);
-    expect(counts()).toEqual(["2", "1"]);
-    expect(text(page, ".systems-heading h2")).toBe("Zulu laptop");
+    expect(text(page, ".systems-heading h1")).toBe("Zulu laptop");
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(offline.id);
 
     await choose("status:online");
@@ -735,7 +732,7 @@ describe("Systems workspace", () => {
           .slice(0, 3)
           .map((disk) => disk.path),
       );
-      const more = page.querySelector<HTMLButtonElement>(".systems-volume-summary button")!;
+      const more = page.querySelector<HTMLButtonElement>(".systems-volumes-link")!;
       expect(more.textContent).toBe(
         count > 3 ? `+${count - 3} more volumes in Details` : "All volumes in Details",
       );
