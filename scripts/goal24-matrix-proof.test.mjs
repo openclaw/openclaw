@@ -10,7 +10,7 @@ const report = (kind, original) => ({
         failureMessages: [
           kind === "wire"
             ? "Error: expected M_FORBIDDEN: MatrixError: [403] Cannot se… { …(7) } to match object { retryable: false, …(1) }\n    at /source/extensions/matrix/src/matrix/sdk/transport.test.ts:154:35"
-            : "MatrixError: [403] M_FORBIDDEN",
+            : "OutboundDeliveryError: message failed: MatrixError: [403] M_FORBIDDEN\n    at /source/src/agents/tools/message-tool-execution.test.ts:457:21\n    at runWithTimeout (/vitest.js:3276:10)",
         ],
       })),
     },

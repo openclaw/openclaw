@@ -34,15 +34,26 @@ export function admit(report, exitCode, kind, original = false) {
           errors,
           kind === "wire"
             ? /^Error: expected M_FORBIDDEN: MatrixError: \[403\] Cannot se… \{ …\(7\) \} to match object \{ retryable: false, …\(1\) \}/
-            : /MatrixError: \[403\] M_FORBIDDEN/,
+            : /^OutboundDeliveryError: message failed: MatrixError: \[403\] M_FORBIDDEN\n/,
         );
         if (kind === "wire") {
           assert.match(
             errors,
             /\/extensions\/matrix\/src\/matrix\/sdk\/transport\.test\.ts:154:35/,
           );
+        } else {
+          assert.match(errors, /\/src\/agents\/tools\/message-tool-execution\.test\.ts:457:21/);
         }
-        assert.doesNotMatch(errors, /Cannot find|Failed to load|timed out|Timeout|ECONNREFUSED/i);
+        // Vitest includes runWithTimeout frames in ordinary rejection stacks.
+        // Inspect diagnostics, not stack function names, for infrastructure failure.
+        const diagnostics = errors
+          .split("\n")
+          .filter((line) => !/^\s+at\s/.test(line))
+          .join("\n");
+        assert.doesNotMatch(
+          diagnostics,
+          /Cannot find|Failed to load|timed out|Timeout|ECONNREFUSED/i,
+        );
       }
     }
   } else {
