@@ -3017,10 +3017,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const config = configPath("infra");
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
-      "src/plugin-state/plugin-state-store.runtime.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     ];
-    // Keep the two real prerequisite owners affordable independently of unrelated
-    // inventory changes that can move them into different full-suite parent jobs.
+    // Keep the misc and system-runtime owners distinct so affordable groups
+    // exercise build sharing instead of coalescing into one prerequisite group.
     vi.resetModules();
     mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
     mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
