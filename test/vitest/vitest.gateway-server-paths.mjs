@@ -59,6 +59,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/desktop/node-observe.integration.test.ts",
   "src/gateway/device-pair-setup-completion.test.ts",
   "src/gateway/device-pairing-prune.test.ts",
+  "src/gateway/event-web-push.id-policy.test.ts",
   "src/gateway/event-web-push.test.ts",
   "src/gateway/exec-approval-manager.expiry.test.ts",
   "src/gateway/exec-approval-manager.lifetime.test.ts",
