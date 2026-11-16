@@ -50,6 +50,7 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
+import { resolvePreparedCliChildEnv } from "./cli-runner/execution-env.js";
 import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
@@ -84,7 +85,7 @@ export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
   workspaceDir?: string,
-  options?: { skipTranscriptProbe?: boolean },
+  options?: { skipTranscriptProbe?: boolean; env?: NodeJS.ProcessEnv },
 ): Promise<boolean> {
   if (!provider || !isClaudeCliBackend(provider)) {
     return true;
@@ -101,7 +102,9 @@ export async function isCliBindingFlushed(
     if (delayMs > 0) {
       await sleep(delayMs);
     }
-    if (await claudeCliSessionTranscriptHasContent({ sessionId, workspaceDir })) {
+    if (
+      await claudeCliSessionTranscriptHasContent({ sessionId, workspaceDir, env: options?.env })
+    ) {
       return true;
     }
   }
@@ -333,7 +336,9 @@ async function runPreparedCliAgentOwned(
       sessionBindingDisabled ||
       !isAgentRunDirectAbortReason(error) ||
       !isClaudeCliBackend(params.provider) ||
-      !(await isCliBindingFlushed(sessionId, params.provider, context.cwd ?? context.workspaceDir))
+      !(await isCliBindingFlushed(sessionId, params.provider, context.cwd ?? context.workspaceDir, {
+        env: resolvePreparedCliChildEnv(params, context.preparedBackend),
+      }))
     ) {
       return;
     }
@@ -503,6 +508,15 @@ async function runPreparedCliAgentOwned(
   };
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
+    if (
+      context.reusableCliSession.mode === "invalidate" &&
+      context.reusableCliSession.invalidatedReason === "missing-transcript"
+    ) {
+      const sessionId = params.cliSessionBinding?.sessionId ?? params.cliSessionId;
+      if (sessionId) {
+        await params.onMissingCliSessionTranscript?.(sessionId);
+      }
+    }
     ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
     historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
     if (turnSideEffectsDisabled) {
@@ -551,7 +565,10 @@ async function runPreparedCliAgentOwned(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: acceptsCliLiveSession(context) },
+              {
+                skipTranscriptProbe: acceptsCliLiveSession(context),
+                env: resolvePreparedCliChildEnv(params, context.preparedBackend),
+              },
             );
         // Claude saves each narration and the final answer as its own native row. Keep only the
         // final message here, keyed to its native row, so imported history shows each row once.

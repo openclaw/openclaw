@@ -16,7 +16,6 @@ import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
-import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import {
@@ -24,7 +23,6 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { isClaudeCliProvider } from "../cli-output-records.js";
-import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
@@ -71,7 +69,6 @@ import {
 import {
   buildClaudeCliFallbackContextPrelude,
   resolveCompletionToolPolicy,
-  claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
@@ -367,7 +364,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             })
           : authProfileId;
         const diagnosticOwner = params.deferredLifecycle?.handoffToCli();
-        const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
         const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
           ? resizeExecApprovalContinuationPrompt({
               prompt: params.body,
@@ -424,31 +420,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           params.sessionEntry = cleared ?? params.sessionEntry;
           return Boolean(cleared);
         };
-        const prepareCliSessionBinding = async () => {
-          if (!isClaudeCliProvider(cliExecutionProvider) || !cliSessionBinding?.sessionId) {
-            return;
-          }
-          if (
-            hasCliLiveSession({
-              backendId: cliExecutionProvider,
-              agentId: params.sessionAgentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-            }) ||
-            (await claudeCliSessionTranscriptHasContent({
-              sessionId: cliSessionBinding.sessionId,
-              workspaceDir: cliProcessCwd,
-            }))
-          ) {
-            return;
-          }
-
-          log.warn(
-            `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
-          );
-
-          await clearCliBinding();
-        };
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
           params.sessionKey,
           params.sessionAgentId,
@@ -459,10 +430,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             mediaTaskIdsBefore,
             params.sessionAgentId,
           );
-        await prepareCliSessionBinding();
         const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
-        // Retain the cleared binding as the preparation candidate so missing-transcript
-        // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
         try {
           const forkStoreParams =
@@ -504,6 +472,9 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
+            onMissingCliSessionTranscript: async (sessionId) => {
+              await clearCliBinding(sessionId);
+            },
             forkCliSessionOnResume: cliSessionBinding?.forkNextResume === true,
             ...(forkStoreParams
               ? buildCliSessionForkRunParams(

@@ -121,6 +121,8 @@ export type RunCliAgentParams = Pick<
   cliSessionBindingFacts?: CliSessionBindingFacts;
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
+  /** Clear a stored binding only after preparation checked the effective child transcript root. */
+  onMissingCliSessionTranscript?: (sessionId: string) => Promise<void>;
   /** Consume the backend fork argument on this resume invocation only. */
   forkCliSessionOnResume?: boolean;
   /** Bound a resumed fork at this previously observed assistant checkpoint. */

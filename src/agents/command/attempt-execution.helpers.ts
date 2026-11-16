@@ -133,6 +133,7 @@ function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
   homeDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string | null {
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   if (!sessionId) {
@@ -146,6 +147,7 @@ function claudeCliSessionTranscriptPath(params: {
     resolveClaudeCliProjectDirForWorkspace({
       workspaceDir,
       homeDir: params.homeDir,
+      env: params.env,
     }),
     `${sessionId}.jsonl`,
   );
