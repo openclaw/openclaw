@@ -30,13 +30,30 @@ export function projectSubagentCompletions(
   hidden?: Set<string>,
   matchesSearch?: (message: unknown) => boolean,
 ): ChatItem[] {
-  const items = source.filter(
-    (item) =>
-      showToolCalls || item.kind !== "message" || !messageSubagentCompletions(item.message).length,
-  );
   if (!showToolCalls) {
-    return items;
+    // Hidden receipts hand a settle wake's continuation to the resumed row.
+    let continuation: unknown;
+    return source.flatMap((item): ChatItem[] => {
+      if (item.kind !== "message") {
+        return [item];
+      }
+      const metadata = asOptionalRecord(asOptionalRecord(item.message)?.["__openclaw"]);
+      if (messageSubagentCompletions(item.message).length) {
+        continuation ??= metadata?.continuation;
+        return [];
+      }
+      if (!continuation) {
+        return [item];
+      }
+      const message = {
+        ...asOptionalRecord(item.message),
+        __openclaw: { ...metadata, continuation },
+      };
+      continuation = undefined;
+      return [{ ...item, message }];
+    });
   }
+  const items = source;
   const inserts: ChatProjection[] = [];
   for (const [index, item] of items.entries()) {
     if (item.kind !== "message") {

@@ -14,4 +14,5 @@
 # Exact excess against integrated baseline 9bfad2b: 1425 net test lines minus the
 # normal 400-line allowance. Final review removes the obsolete empty-Stop fixture,
 # fixes lint-safe dispatch setup, and checks mixed completion/error details.
-1025
+# Settle-wake receipts keep the resumed turn, with tool calls shown and hidden.
+1063

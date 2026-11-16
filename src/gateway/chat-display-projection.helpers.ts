@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import {
@@ -327,10 +328,37 @@ function hasForwardedMessageProvenance(message: Record<string, unknown>): boolea
   );
 }
 
-/** Called after original user-input classification; only display facts leave private inputs. */
-export function projectCompletionReportInput(message: Record<string, unknown>) {
+/**
+ * Called after original user-input classification; only display facts leave private inputs.
+ * The receipt replaces its wake, so it carries the wake's turn boundary.
+ */
+export function projectCompletionReportInput(
+  message: Record<string, unknown>,
+  boundary: PendingTurnBoundary,
+) {
   const completions = isCompletionReportInputProvenance(message.provenance)
     ? readSubagentCompletions(readRecord(message["__openclaw"])?.subagentCompletions)
     : [];
-  return completions.length ? subagentCompletionMessage(message, completions) : message;
+  if (!completions.length) {
+    return message;
+  }
+  const receipt = subagentCompletionMessage(message, completions);
+  return boundary ? attachProjectedTurnBoundary(receipt, boundary) : receipt;
+}
+
+export function attachProjectedTurnBoundary(
+  message: Record<string, unknown>,
+  boundary: Exclude<PendingTurnBoundary, false>,
+): Record<string, unknown> {
+  const metadata = readRecord(message["__openclaw"]);
+  return {
+    ...message,
+    __openclaw: {
+      ...metadata,
+      // Exec and restart rows kept `turnBoundary` for clients that read only it;
+      // the continuation fact tells the Control UI the turn goes on.
+      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
+      ...(boundary === true ? {} : { continuation: { source: boundary } }),
+    },
+  };
 }

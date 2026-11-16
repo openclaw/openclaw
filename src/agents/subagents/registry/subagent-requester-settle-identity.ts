@@ -315,7 +315,7 @@ export function isRequesterYieldCohortMember(
 }
 
 /** Completion rows for a settled batch: one finished, failed, timed-out or stopped row per child. */
-export function settledSubagentCompletions(rows: readonly SubagentRunRecord[]) {
+export function settledCompletions(rows: readonly SubagentRunRecord[]) {
   return rows.flatMap((entry) => {
     const completion = subagentCompletionForOutcome(
       { runId: entry.runId, sessionKey: entry.childSessionKey, label: entry.label },

@@ -28,7 +28,7 @@ import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
   resolveCurrentRequesterSettleWakeBatch,
-  settledSubagentCompletions,
+  settledCompletions,
 } from "../registry/subagent-requester-settle-identity.js";
 import { isClaimedByLiveRequesterTurn } from "../registry/subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -562,9 +562,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             requesterSessionKey,
             requesterAgentId,
             triggerMessage: wakeMessage,
-            subagentCompletions: pauseNotice
-              ? undefined
-              : settledSubagentCompletions(completionRows),
+            subagentCompletions: pauseNotice ? undefined : settledCompletions(completionRows),
             requesterSessionOrigin,
             directOrigin,
             sourceSessionKey: batchSessionKeys[0],

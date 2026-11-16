@@ -457,6 +457,11 @@ it("projects recorded subagent completions without exposing the private continua
   ]);
   expect(JSON.stringify(projected)).not.toContain("PRIVATE");
   expect(projectChatDisplayMessages(projected)).toEqual(projected);
+  // A settle wake's receipt keeps the wake's continuation, so the resumed run stays in its turn.
+  const settle = { ...input, provenance: { ...input.provenance, sourceTool: "subagent_settle" } };
+  expect(projectChatDisplayMessages([settle])).toMatchObject([
+    { subagentCompletions: [completion], __openclaw: { continuation: { source: "subagent" } } },
+  ]);
   // The completion row follows activity nested under the preceding answer.
   const at = (message: object, rawSeq: number, activity?: object) => ({
     ...message,

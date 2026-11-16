@@ -24,6 +24,7 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-o
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
+  attachProjectedTurnBoundary,
   projectCompletionReportInput,
   extractProjectedText,
   hasAssistantNonTextContent,
@@ -100,7 +101,7 @@ export function createSubagentCoordinationHistoryProjection(
         if (typeof steerTargetRunId === "string") {
           visibleSteerRunIds.add(steerTargetRunId);
         }
-        return projectCompletionReportInput(record);
+        return projectCompletionReportInput(record, projectedHistoryTurnBoundary(record));
       }
       // A delivery mirror records a reply the run sent to the human, such as a
       // message(action=send) from a private coordination turn; it is the outcome.
@@ -466,23 +467,6 @@ export function projectedHistoryTurnBoundary(message: unknown): PendingTurnBound
     return sourceTool;
   }
   return kind === "inter_session" && sourceTool === "subagent_settle" ? "subagent" : false;
-}
-
-function attachProjectedTurnBoundary(
-  message: Record<string, unknown>,
-  boundary: Exclude<PendingTurnBoundary, false>,
-): Record<string, unknown> {
-  const metadata = readRecord(message["__openclaw"]);
-  return {
-    ...message,
-    __openclaw: {
-      ...metadata,
-      // Exec and restart rows kept `turnBoundary` for clients that read only it;
-      // the continuation fact tells the Control UI the turn goes on.
-      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
-      ...(boundary === true ? {} : { continuation: { source: boundary } }),
-    },
-  };
 }
 
 function canCarryProjectedTurnBoundary(message: RoleContentMessage | null): boolean {
