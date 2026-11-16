@@ -14,7 +14,7 @@ const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 // H3 models use the Images API (/v1/images/*); image-01 keeps /v1/image_generation.
-const H3_MODELS = ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"] as const;
+const H3_MODELS: readonly string[] = ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"];
 const H3_RESOLUTIONS: Array<"1K" | "2K" | "4K"> = ["1K", "2K", "4K"];
 const MINIMAX_MAX_IMAGE_RESULTS = 9;
 const H3_MAX_INPUT_IMAGES = 16;
@@ -115,7 +115,7 @@ export function buildMinimaxImageGenerationProvider(
       });
 
       const model = req.model || DEFAULT_MODEL;
-      const isH3 = (H3_MODELS as readonly string[]).includes(model);
+      const isH3 = H3_MODELS.includes(model);
       const body: Record<string, unknown> = {
         model,
         prompt: req.prompt,
