@@ -31,6 +31,7 @@ import {
 } from "../../scripts/lib/release-candidate-changelog.mts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
+import { evaluateReleasePublishGates } from "../../scripts/lib/release-publish-gates.mts";
 import {
   buildReleasePublishDispatchCommand,
   formatReleasePublishPreflight,
@@ -62,7 +63,6 @@ import {
   requireRunIdFromDispatchOutput,
   run,
   validateCandidateCheckout,
-  validateFullManifest,
   validateNpmPreflightRunSource,
   validateParallelsRegistryPackageArtifact,
   validatePreflightManifest,
@@ -596,8 +596,12 @@ describe("release candidate checklist", () => {
         workflowName: "Full Release Validation",
         targetSha,
         releaseProfile: options.releaseProfile,
+        rerunGroup: "all",
+        runReleaseSoak: options.releaseProfile === "beta" ? "false" : "true",
+        controls: { performanceBlocking: options.releaseProfile !== "beta" },
       };
       const authenticatedEvidence = {
+        evidence: { current: { manifest: fullManifest } },
         source: "direct",
         run: { headSha: targetSha },
         publicationAdmission: registryAdmission
@@ -759,7 +763,7 @@ describe("release candidate checklist", () => {
           validatePluginSdkApiReleaseEvidence,
           PluginSdkApiAcknowledgementError,
           stripLeadingPackageManagerSeparator,
-          validateFullManifest: () => {},
+          evaluateReleasePublishGates,
           preflightCorePackageTarballs,
           preflightDependencyTarballs,
           runParallelsIfNeeded: () => ({ status: "skipped" }),
@@ -1859,26 +1863,6 @@ describe("release candidate checklist", () => {
     expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1-1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
   });
-
-  it.each(["stable", "full"])(
-    "requires soak but leaves performance advisory for %s",
-    (releaseProfile) => {
-      const manifest = {
-        workflowName: "Full Release Validation",
-        targetSha: "candidate-sha",
-        releaseProfile,
-        rerunGroup: "all",
-        runReleaseSoak: "true",
-        controls: { performanceBlocking: false },
-        childRuns: { productPerformance: { conclusion: "failure" } },
-      };
-      const params = { targetSha: "candidate-sha", releaseProfile };
-      expect(() => validateFullManifest(manifest, params)).not.toThrow();
-      expect(() => validateFullManifest({ ...manifest, runReleaseSoak: "false" }, params)).toThrow(
-        "runReleaseSoak=true",
-      );
-    },
-  );
 
   it.each<
     [

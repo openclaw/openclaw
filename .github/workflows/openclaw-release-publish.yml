@@ -525,7 +525,6 @@ jobs:
             ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
             exit 1
           fi
-          trusted_main_ref="refs/remotes/origin/main"
           if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
             trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
             git fetch --no-tags origin \
@@ -535,10 +534,7 @@ jobs:
               exit 1
             fi
           fi
-          git fetch --no-tags origin \
-            "+refs/heads/main:${trusted_main_ref}"
-          TRUSTED_MAIN_REF="${trusted_main_ref}" \
-            MANIFEST_FILE="$manifest" \
+          MANIFEST_FILE="$manifest" \
             node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"
           node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/lib/release-publish-gates.mts" \
             --consumer publisher --manifest "$manifest"

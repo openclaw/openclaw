@@ -553,10 +553,10 @@ describe("candidate-owned publish consumer chain", () => {
       if (mode === "changelog") {
         const staleArtifacts = consumers({ ...root, manifest: current.manifest }, client);
         await expect(staleArtifacts.npm()).rejects.toThrow(
-          "Candidate-owned artifact source and qualification SHA differ",
+          "Publication artifact is not bound to authenticated candidate qualification",
         );
         await expect(staleArtifacts.docker()).rejects.toThrow(
-          "Candidate-owned artifact source and qualification SHA differ",
+          "Publication artifact is not bound to authenticated candidate qualification",
         );
       }
     },
@@ -579,9 +579,6 @@ describe("candidate-owned publish consumer chain", () => {
         expectedCoreNpmPublication: { npmDistTag: "beta" },
         verifierSourceSha: f.p,
         verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-        isTrustedMainAncestor: () => {
-          throw new Error("Q must not require main ancestry");
-        },
       },
       f.client,
     );

@@ -201,6 +201,14 @@ reject envelopes; moving main does not upgrade them. New readers accept historic
 unencoded receipts. Never rewrite authenticated receipts or reuse digests for
 changed bytes. This change authorizes no dispatch/publication.
 
+### Shared qualification validation
+
+`release-ci-summary.mjs` authenticates qualification once for all consumers;
+`validate-full-release-validation-evidence.mjs` checks the release tag and
+publication selection, including plugin subsets, and rechecks live authority.
+Recovery preserves the original admission, candidate, artifacts, and coverage.
+Existing waiver, historical-evidence, profile, soak, and performance rules apply.
+
 ### Frozen qualification identity
 
 | Identity                | Owns                                                                                                                                                                                                      |

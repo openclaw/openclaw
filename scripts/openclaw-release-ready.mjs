@@ -652,13 +652,6 @@ async function main() {
       },
       verifierSourceSha: tooling.sha,
       verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
-      isTrustedMainAncestor: (sha) => {
-        const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
-        return (
-          ["ahead", "identical"].includes(comparison.status) &&
-          comparison.merge_base_commit?.sha === sha
-        );
-      },
     });
     const npmArtifact = validatePreparedNpmArtifactDescriptor(
       authenticated.evidence.current.manifest.publicationArtifacts?.pluginNpm,
