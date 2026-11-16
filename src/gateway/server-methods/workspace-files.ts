@@ -232,16 +232,15 @@ async function toSessionFileEntry(
   }
   // Images may be inlined up to the image preview cap, but only when the
   // content is verified as a browser-safe image (MIME sniff on the prefix,
-  // not the extension alone); image-named non-images keep the generic text
-  // preview cap, so oversized text stays content-free without an edit hash.
+  // not the extension alone).  Remote bridges report prefix reads as
+  // "unsupported"; when content verification is unavailable the generic
+  // preview cap is retained instead of trusting the extension, preserving
+  // the remote-preview contract (PR #159895) that kept existing limits.
   const extIsImage = IMAGE_PREVIEW_EXTENSIONS.has(path.extname(browserPath).toLowerCase());
   let previewCap = WORKSPACE_PREVIEW_MAX_BYTES;
   if (extIsImage) {
     const sniff = await readWorkspaceFilePrefix(readRoot, browserPath, MIME_SNIFF_PREFIX_BYTES);
-    if (sniff === "unsupported") {
-      // Remote bridges cannot prefix-sniff; keep the extension-based cap.
-      previewCap = WORKSPACE_IMAGE_PREVIEW_MAX_BYTES;
-    } else if (sniff) {
+    if (sniff && sniff !== "unsupported") {
       const sniffMime = await detectMime({ buffer: sniff.buffer });
       if (sniffMime && BROWSER_IMAGE_MIME_TYPES.has(sniffMime)) {
         previewCap = WORKSPACE_IMAGE_PREVIEW_MAX_BYTES;

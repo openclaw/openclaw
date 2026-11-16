@@ -9,6 +9,29 @@ import {
   WORKSPACE_PREVIEW_MAX_BYTES,
 } from "../workspace-file-limits.js";
 import { getSessionWorkspaceFile } from "./workspace-files.js";
+import type { WorkspaceRoot } from "./workspace-fs.js";
+
+// Remote-bridge simulation: a registered remote root reports "unsupported"
+// for prefix reads (an oversized remote file must not be downloaded just to
+// sniff it), while full reads still honor the caller's maxBytes. The flag
+// toggles the mock for the remote-parity tests; all other calls delegate to
+// the real implementation.
+const prefixReadState = vi.hoisted(() => ({ remoteBridge: false }));
+
+vi.mock("./workspace-fs.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./workspace-fs.js")>();
+  return {
+    ...original,
+    readWorkspaceFilePrefix: vi.fn(
+      async (rootDir: string | WorkspaceRoot, browserPath: string, maxBytes: number) => {
+        if (prefixReadState.remoteBridge) {
+          return "unsupported";
+        }
+        return original.readWorkspaceFilePrefix(rootDir, browserPath, maxBytes);
+      },
+    ),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(vi.restoreAllMocks);
@@ -185,5 +208,65 @@ describe("workspace file preview caps", () => {
     expect(small.previewKind).toBe("text");
     expect(small.content).toBe(smallText);
     expect(small.hash).toBe(createHash("sha256").update(smallText).digest("hex"));
+  });
+  it("keeps the text cap for a remote .png of UTF-8 text when prefix sniffing is unsupported", async () => {
+    const dir = tempDirs.make("openclaw-workspace-preview-cap-");
+    const unit = "晨雪光 事实核对\n";
+    const repeats = Math.ceil((300 * 1024) / Buffer.byteLength(unit, "utf8"));
+    const text = unit.repeat(repeats);
+    const textBytes = Buffer.byteLength(text, "utf8");
+    expect(textBytes).toBeGreaterThan(TEXT_CAP);
+    expect(textBytes).toBeLessThan(IMAGE_CAP);
+    await putFile(dir, "report.png", Buffer.from(text, "utf8"));
+
+    // Remote parity: main returns a preview-limited entry for this file
+    // (no inline content, no CAS edit hash); the 5 MiB image cap must not
+    // apply where content verification is unavailable.
+    prefixReadState.remoteBridge = true;
+    try {
+      const file = await getEntry(dir, "report.png");
+      expect(file.size).toBe(textBytes);
+      expect(file.previewKind).toBeUndefined();
+      expect(file.content).toBeUndefined();
+      expect(file.hash).toBeUndefined();
+    } finally {
+      prefixReadState.remoteBridge = false;
+    }
+  });
+
+  it("keeps a remote 1.7 MB PNG at the generic cap when prefix sniffing is unsupported", async () => {
+    const dir = tempDirs.make("openclaw-workspace-preview-cap-");
+    const target = 1_703_501;
+    await putFile(dir, "remote.png", buildPng(target));
+
+    prefixReadState.remoteBridge = true;
+    try {
+      const file = await getEntry(dir, "remote.png");
+      expect(file.size).toBe(target);
+      expect(file.previewKind).toBeUndefined();
+      expect(file.content).toBeUndefined();
+      expect(file.mimeType).toBeUndefined();
+    } finally {
+      prefixReadState.remoteBridge = false;
+    }
+  });
+
+  it("still inlines a remote image below the generic cap when prefix sniffing is unsupported", async () => {
+    const dir = tempDirs.make("openclaw-workspace-preview-cap-");
+    const rel = "small-remote.png";
+    const png = buildPng(180 * 1024);
+    await putFile(dir, rel, png);
+
+    prefixReadState.remoteBridge = true;
+    try {
+      const file = await getEntry(dir, rel);
+      expect(file.size).toBe(180 * 1024);
+      expect(file.previewKind).toBe("image");
+      expect(file.mimeType).toBe("image/png");
+      expect(file.contentEncoding).toBe("base64");
+      expect(Buffer.from(file.content!, "base64").equals(png)).toBe(true);
+    } finally {
+      prefixReadState.remoteBridge = false;
+    }
   });
 });
