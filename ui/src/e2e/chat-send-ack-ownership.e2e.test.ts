@@ -78,7 +78,6 @@ suite.define(() => {
         });
         await successorTool.waitFor();
         expect(await successorTool.count()).toBe(1);
-        await successorTool.scrollIntoViewIfNeeded();
       }
 
       const historyRequests = (await gateway.getRequests("chat.history")).length;
