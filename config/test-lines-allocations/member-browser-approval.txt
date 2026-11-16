@@ -3,4 +3,6 @@
 # Separate ordering, bounded saturation/replay, and full-capacity restart regressions
 # prove contracts that UI mocks or pure metadata tests cannot replace.
 # Local reader regression also proves notice transport cannot gate SAS denial.
-535
+# Review repairs add production-reader replacement/in-flight and uncertain-handoff
+# regressions, mounted-UI recovery navigation, and real predecessor-row reopen proof.
+689
