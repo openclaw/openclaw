@@ -55,7 +55,7 @@ it.each([
       [...document.querySelectorAll("openclaw-modal-actions button")].map((b) =>
         b.textContent?.trim(),
       ),
-    ).toEqual(["Approve browser", "Deny request"]);
+    ).toEqual(["Deny request", "Approve browser"]);
     expect(document.body.textContent).not.toMatch(/482\s?917/);
     expect(document.querySelector(".openclaw-id-approval__number")).toBeNull();
     expect(document.querySelector('input[type="number"]')).toBeNull();

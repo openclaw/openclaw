@@ -156,6 +156,80 @@ it("restores browser notices and cancellation receipts without changing membersh
   expect(canceled.current()?.authority).toEqual(before);
 });
 
+it("opens pre-notice v2 rows and adds browser requests without changing schema or other values", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const { member_browser_requests: requests, ...record } = fullClaw("Example");
+  record.authority!.members = Object.fromEntries(
+    Object.entries(record.authority!.members).slice(0, 2),
+  );
+  record.authority!.owner_devices = Object.fromEntries(
+    Object.entries(record.authority!.owner_devices).slice(0, 2),
+  );
+  record.authority!.invites = {};
+  record.invite_reports = {};
+  record.member_approved_at = Object.fromEntries(
+    Object.entries(record.member_approved_at!).slice(0, 2),
+  );
+  record.token_bindings = record.token_bindings!.slice(0, 2);
+  const { authority, invite_reports, member_approved_at, token_bindings, ...core } = record;
+  const { owner_devices, members, invites, ...anchor } = authority!;
+  // Persist the v2 row contract used before browser notices, independently of the new row writer.
+  const priorRows = {
+    current: { ...core, v: 2, authority: anchor },
+    "owner-devices": owner_devices,
+    members,
+    invites,
+    "invite-reports": invite_reports,
+    "member-approvals": member_approved_at,
+    "token-bindings": { v: 1, bindings: token_bindings },
+  };
+  const store = createCorePluginStateKeyedStore<unknown>({
+    ownerId: "core:openclaw-id",
+    namespace: "claw",
+    retention: "retained",
+  });
+  for (const [key, value] of Object.entries(priorRows)) {
+    await store.register(key, value);
+  }
+  const unrelated = createCorePluginStateKeyedStore<unknown>({
+    ownerId: "core:openclaw-id",
+    namespace: "upgrade-sentinel",
+    retention: "retained",
+  });
+  await unrelated.register("untouched", { value: "preserve me" });
+  const inspect = () =>
+    withEngineStoreAdmission(() => {
+      const { db } = openOpenClawStateDatabase();
+      return {
+        schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+        version: db.prepare("PRAGMA user_version").get(),
+        unrelated: db
+          .prepare("SELECT * FROM plugin_state_entries WHERE namespace = 'upgrade-sentinel'")
+          .all(),
+      };
+    });
+  const before = inspect();
+  await closeOpenClawStateDatabaseAsync();
+  const loaded = await readStoredClaw();
+  expect(loaded).toEqual(record);
+  expect(inspect()).toEqual(before);
+  const [accountId, request] = Object.entries(requests!)[0]!;
+  await writeStoredClaw({ ...loaded!, member_browser_requests: { [accountId]: request } });
+  await closeOpenClawStateDatabaseAsync();
+  expect(await readStoredClaw()).toEqual({
+    ...record,
+    member_browser_requests: { [accountId]: request },
+  });
+  expect(inspect()).toEqual(before);
+  const rows = new Map((await store.entries()).map(({ key, value }) => [key, value]));
+  for (const [key, value] of Object.entries(priorRows)) {
+    expect(rows.get(key)).toEqual(value);
+  }
+  expect(rows.get("member-browser-requests:0")).toEqual({ [accountId]: request });
+});
+
 it("moves prior rows without losing bindings and refuses an incomplete partitioned record", async ({
   state,
 }) => {

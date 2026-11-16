@@ -336,7 +336,8 @@ it.each(["local_operator", "tunnel"] as const)(
       {
         kind: "openClawIdBrowserRequest",
         label: "Browser request from Alice Example",
-        detail: "alice@example.test\nLocation reported by OpenClaw ID: Example City",
+        detail:
+          "Safari on iOS · 30m left\nalice@example.test\nLocation reported by OpenClaw ID: Example City",
         arrivedAtMs: request.requestedAt * 1000,
         action: { kind: "openClawIdBrowserApproval", remote: channel === "tunnel" },
       },

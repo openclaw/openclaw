@@ -492,16 +492,6 @@ footer.sidebar-issues-panel__mentions-note {
   flex: none;
 }
 
-[data-attention-kind="openClawIdBrowserRequest"] .sidebar-issues-panel__state-row {
-  flex-wrap: wrap;
-  white-space: normal;
-}
-
-[data-attention-kind="openClawIdBrowserRequest"] .sidebar-issues-panel__meta-context {
-  overflow: visible;
-  white-space: normal;
-}
-
 .sidebar-issues-panel__navigation-link {
   display: flex;
   min-width: 0;

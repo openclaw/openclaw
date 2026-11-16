@@ -7,7 +7,6 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { openBrowserRequestApproval } from "../lib/openclaw-id/open-browser-approval.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -185,6 +184,8 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (item.action.kind === "openClawIdBrowserApproval") {
       const client = context.gateway.snapshot.client;
       try {
+        const { openBrowserRequestApproval } =
+          await import("../lib/openclaw-id/open-browser-approval.ts");
         await openBrowserRequestApproval(
           client,
           item.action.remote,

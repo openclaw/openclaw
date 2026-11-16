@@ -2,6 +2,8 @@
 import "./owner-devices-dialog.css";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { resolveControlUiPaths } from "../../app/browser.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
@@ -25,6 +27,7 @@ function ApprovalRow(props: {
   claw: string;
   owner: OwnerApproval;
   onDevices: () => void;
+  onClose: () => void;
 }) {
   const [days, setDays] = createSignal("");
   const [comparedCode, setComparedCode] = createSignal("");
@@ -80,7 +83,9 @@ function ApprovalRow(props: {
       <Show when={error()}>
         {(message) => (
           <div class="openclaw-id-devices__error openclaw-id-owner-enter" role="alert">
-            {message().message}
+            {props.request.uncertain && props.request.member
+              ? t("openclawId.approvalMemberUncertain", { member: props.request.member.name })
+              : message().message}
           </div>
         )}
       </Show>
@@ -119,7 +124,7 @@ function ApprovalRow(props: {
       </Show>
       <Show when={!inactive()}>
         <Show when={props.request.member}>
-          <label class="openclaw-id-approval__expiry openclaw-id-approval__member-code">
+          <label class="field">
             <span>{t("openclawId.approvalMemberCode")}</span>
             <input
               type="text"
@@ -152,6 +157,14 @@ function ApprovalRow(props: {
         <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
           <button
             type="button"
+            class="btn"
+            disabled={props.request.busy}
+            onClick={() => void props.owner.decide(props.request.id, false)}
+          >
+            {t(props.request.member ? "openclawId.approvalMemberDeny" : "openclawId.approvalDeny")}
+          </button>
+          <button
+            type="button"
             class="btn primary"
             disabled={
               props.request.busy ||
@@ -175,21 +188,26 @@ function ApprovalRow(props: {
                 : "openclawId.approvalApprove",
             )}
           </button>
-          <button
-            type="button"
-            class="btn"
-            disabled={props.request.busy}
-            onClick={() => void props.owner.decide(props.request.id, false)}
-          >
-            {t(props.request.member ? "openclawId.approvalMemberDeny" : "openclawId.approvalDeny")}
-          </button>
         </openclaw-modal-actions>
       </Show>
       <Show when={props.request.uncertain}>
         <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
-          <button type="button" class="btn primary" onClick={() => props.onDevices()}>
-            {t("openclawId.yourDevices")}
-          </button>
+          <Show
+            when={props.request.member}
+            fallback={
+              <button type="button" class="btn primary" onClick={() => props.onDevices()}>
+                {t("openclawId.yourDevices")}
+              </button>
+            }
+          >
+            <a
+              class="btn primary"
+              href={`${pathForRoute("plugin", resolveControlUiPaths(window.location.pathname)[0])}?plugin=openclaw-id-access&id=access`}
+              onClick={() => props.onClose()}
+            >
+              {t("openclawId.approvalMemberDevices")}
+            </a>
+          </Show>
         </openclaw-modal-actions>
       </Show>
     </section>
@@ -264,6 +282,7 @@ export function showOwnerApprovalDialog(params: {
                     t("openclawId.yourClaw")
                   }
                   owner={owner!}
+                  onClose={() => modal.finish(undefined)}
                   onDevices={() => {
                     modal.finish(undefined);
                     params.onDevices();

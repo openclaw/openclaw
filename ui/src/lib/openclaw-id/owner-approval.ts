@@ -34,6 +34,7 @@ type Attempt = {
   sender: string;
   member?: { name: string; email: string | null; location: string | null };
   expires: number;
+  receivedAt: number;
   expiryTimer?: ReturnType<typeof setTimeout>;
   ephemeral: EphemeralKey;
   secret?: Uint8Array;
@@ -194,7 +195,6 @@ export function createOwnerApproval(
   ) => {
     const d = payload.data;
     if (
-      attempts.size >= 16 ||
       attempts.has(payload.request_id) ||
       !isRandomId(payload.request_id) ||
       message.received_at <
@@ -231,12 +231,7 @@ export function createOwnerApproval(
     }
     let member: Attempt["member"];
     if (d.member_account_id !== undefined) {
-      if (
-        typeof d.member_account_id !== "string" ||
-        !d.member_account_id ||
-        node ||
-        [...attempts.values()].some((a) => a.start.member_account_id === d.member_account_id)
-      ) {
+      if (typeof d.member_account_id !== "string" || !d.member_account_id || node) {
         return;
       }
       const ctx = await readOwnerApprovalContext(client);
@@ -267,19 +262,27 @@ export function createOwnerApproval(
       commitment: d.commit,
       sender,
       expires,
+      receivedAt: message.received_at,
       ephemeral: await generateEphemeralKey(),
       busy: false,
     };
     abort.signal.throwIfAborted();
-    // Do not evict an in-flight or uncertain admission with a new start from the same D.
-    if ([...attempts.values()].some((previous) => previous.sender === sender && previous.busy)) {
+    const replaces = (previous: Attempt) =>
+      previous.sender === sender ||
+      (typeof d.member_account_id === "string" &&
+        previous.start.member_account_id === d.member_account_id);
+    const previous = [...attempts].filter(([, a]) => replaces(a));
+    // Admission owns its outcome; a delayed older start cannot replace the latest request.
+    if (
+      previous.some(([, a]) => a.busy || a.submissionStarted || a.receivedAt > message.received_at)
+    ) {
       return;
     }
-    // Keep one newest request for a device, so repeated starts do not duplicate approval actions.
-    for (const [id, previous] of attempts) {
-      if (previous.sender === sender) {
-        drop(id);
-      }
+    if (attempts.size - previous.length >= 16) {
+      return;
+    }
+    for (const [id] of previous) {
+      drop(id);
     }
     // A fresh request replaces the prior expired display, keeping retained facts bounded.
     expiredRequests.clear();
@@ -598,7 +601,9 @@ export function createOwnerApproval(
         const detail = failure instanceof Error ? failure.message : String(failure);
         // Do not add an automatic retry of an external write or admit the same N twice.
         a.error = a.submissionStarted
-          ? `${detail} Check Your devices: if this browser was admitted, revoke it before starting a new request.`
+          ? a.member
+            ? `${detail} Check the member’s devices in Access: if this browser was admitted, remove it before starting a new request.`
+            : `${detail} Check Your devices: if this browser was admitted, revoke it before starting a new request.`
           : detail;
         a.busy = Boolean(a.submissionStarted);
         publish();

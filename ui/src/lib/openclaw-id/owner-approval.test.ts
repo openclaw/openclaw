@@ -254,6 +254,35 @@ async function setup(
     id: start.request_id,
     kitUsed,
     memberDeviceAdded,
+    async replacement(offset = 1) {
+      const receivedAt = ts + offset;
+      const device = await generateEd25519Signer();
+      const next = {
+        ...start,
+        request_id: "78".repeat(16),
+        device_pub: formatEd25519PublicKey(device.publicKey),
+        peer_key: formatIrohEndpointKey(device.publicKey),
+      };
+      const before = reads;
+      queue.push({
+        ...first,
+        received_at: receivedAt,
+        from: { ...first.from, device_fp: await fingerprint(next.device_pub) },
+        payload: {
+          kind: "enrollment",
+          step: "start",
+          request_id: next.request_id,
+          data: {
+            ...next,
+            expires_at: receivedAt + 1800,
+            commit: await sasCommitment(ephN.publicKey, next),
+          },
+        },
+      });
+      wake?.();
+      await vi.waitFor(() => expect(reads).toBeGreaterThan(before));
+      return next.request_id;
+    },
     notice: (
       ref: string,
       event: "kit_used" | "member_device_added" = "kit_used",
@@ -319,6 +348,61 @@ describe("local original-D SAS approval", () => {
     });
     expect(f.read().submitted?.body.target).not.toHaveProperty("role");
     expect(f.read().handoff).toMatchObject({ cert: null });
+  });
+  it("replaces an abandoned member attempt with a newer browser request", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    const id = await f.replacement();
+    expect(owner.read().requests.map((request) => request.id)).toEqual([id]);
+    await owner.decide(f.id, true, null, "000000");
+    expect(f.operations).toEqual(["accept", "accept"]);
+  });
+  it("keeps the newer member attempt when an older browser request arrives late", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    await f.replacement(-1);
+    expect(owner.read().requests.map((request) => request.id)).toEqual([f.id]);
+    expect(f.operations).toEqual(["accept"]);
+  });
+  it("does not replace a member admission already being submitted", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    const admitted = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[1].action === "submit") {
+        admitted.resolve();
+        await release.promise;
+      }
+      return original(...args);
+    });
+    const deciding = owner.decide(f.id, true, null, owner.read().requests[0]!.code);
+    try {
+      await admitted.promise;
+      await f.replacement();
+      expect(owner.read().requests.map((request) => request.id)).toEqual([f.id]);
+      expect(owner.read().requests[0]?.busy).toBe(true);
+    } finally {
+      release.resolve();
+      await deciding;
+    }
+    expect(f.operations).toEqual(["accept", "submit", "sealed"]);
+  });
+  it("directs a member's uncertain sealed handoff to their devices in Access", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (
+        args[1].operation === "send" &&
+        JSON.parse(args[1].body as string).payload.step === "sealed"
+      ) {
+        throw new Error("Mailbox unavailable");
+      }
+      return original(...args);
+    });
+    await owner.decide(f.id, true, null, owner.read().requests[0]!.code);
+    expect(f.read().submitted?.body.target.op).toBe("add_member_device");
+    expect(owner.read().requests[0]).toMatchObject({ uncertain: true, busy: true });
+    expect(owner.read().requests[0]?.error).toContain("member’s devices in Access");
+    expect(owner.read().requests[0]?.error).not.toContain("Your devices");
   });
   it("never presents a claim for a nonmember", async () => {
     const f = await setup(false, "member", undefined, "stranger");

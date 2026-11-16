@@ -158,6 +158,10 @@ export async function readOpenClawIdAttention(
           name: request.displayName || request.email || t("openclawId.browserRequestMember"),
         }),
         detail: [
+          t("openclawId.browserRequestContext", {
+            browser: request.label,
+            time: formatDurationHuman(request.expiresAt * 1000 - nowMs),
+          }),
           request.email && request.email !== request.displayName ? request.email : null,
           request.location
             ? t("openclawId.browserRequestLocation", { location: request.location })

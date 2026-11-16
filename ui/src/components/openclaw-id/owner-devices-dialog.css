@@ -206,18 +206,6 @@
   transition: box-shadow 0.2s;
 }
 
-.openclaw-id-approval__member-code {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-
-.openclaw-id-approval__member-code input {
-  width: 100%;
-  box-sizing: border-box;
-  height: 44px;
-}
-
 .openclaw-id-approval__expiry input:focus {
   outline: none;
   box-shadow:
