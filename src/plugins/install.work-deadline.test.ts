@@ -66,43 +66,9 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await state.cleanup();
 });
-
-it.each(["darwin", "linux", "win32"] as const)(
-  "isolates setup npm stdin only on macOS (platform: %s)",
-  async (platform) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    expect(
-      await installPluginFromNpmSpec({
-        spec: "deadline-fixture@1.0.0",
-        npmDir: path.join(state.root, "npm"),
-        extensionsDir: path.join(state.root, "extensions"),
-        config: {},
-      }),
-    ).toMatchObject({ ok: true });
-
-    const calls = runCommand.mock.calls as [string[], CommandOptions][];
-    expect(calls.some(([argv]) => argv.includes("--package-lock-only"))).toBe(true);
-    expect(calls.some(([argv]) => npmCommandArgs(argv)?.[0] === "view")).toBe(true);
-    expect(
-      calls.some(
-        ([argv]) =>
-          npmCommandArgs(argv)?.[0] === "install" && !argv.includes("--package-lock-only"),
-      ),
-    ).toBe(true);
-    for (const [, options] of calls) {
-      expect(options.killProcessTree).toBe(true);
-      if (platform === "darwin") {
-        expect(options.input).toBe("");
-      } else {
-        expect(options).not.toHaveProperty("input");
-      }
-    }
-  },
-);
 
 it.each([
   ["install", undefined, 300_000, 120_000, 120_000],

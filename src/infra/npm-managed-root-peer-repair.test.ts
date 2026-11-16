@@ -75,12 +75,12 @@ async function expectPeerMetadataRemoved(
 
 describe("managed npm root peer repair", () => {
   it.each([
-    { platform: "darwin", workTimeoutMs: undefined, expectedTimeoutMs: 300_000 },
-    { platform: "linux", workTimeoutMs: null, expectedTimeoutMs: undefined },
-    { platform: "win32", workTimeoutMs: 50, expectedTimeoutMs: 50 },
-  ] as const)(
-    "repairs stale managed peer state on $platform with work deadline $workTimeoutMs",
-    async ({ platform, workTimeoutMs, expectedTimeoutMs }) => {
+    { workTimeoutMs: undefined, expectedTimeoutMs: 300_000 },
+    { workTimeoutMs: null, expectedTimeoutMs: undefined },
+    { workTimeoutMs: 50, expectedTimeoutMs: 50 },
+  ])(
+    "repairs stale managed peer state with work deadline $workTimeoutMs",
+    async ({ workTimeoutMs, expectedTimeoutMs }) => {
       const npmRoot = await makeTempRoot();
       await fs.mkdir(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
       await writeManagedPeerMetadata(npmRoot, "2026.5.4", "@openclaw/discord", "2026.5.4");
@@ -93,16 +93,9 @@ describe("managed npm root peer repair", () => {
       const runCommand = vi
         .spyOn(processExec, "runCommandWithTimeout")
         .mockResolvedValue(successfulSpawn);
-      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, workTimeoutMs })).resolves.toBe(
         true,
       );
-      const options = runCommand.mock.calls[0]?.[1];
-      if (platform === "darwin") {
-        expect(options).toHaveProperty("input", "");
-      } else {
-        expect(options).not.toHaveProperty("input");
-      }
       expect(runCommand).toHaveBeenCalledExactlyOnceWith(
         expectedNpmCommand([
           "uninstall",
