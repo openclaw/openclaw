@@ -34,7 +34,6 @@ export type PreparedCompactionReplayOptions = Omit<
   model: Model;
   sessionId: string;
   replayEnabled: boolean;
-  authProfileId?: string;
   historyLimit?: number;
   observedTokenCount?: number;
 };
@@ -107,7 +106,6 @@ export async function prepareCompactionReplay(
     model,
     {
       sessionId: options.sessionId,
-      authProfileId: options.authProfileId,
       enabled: options.replayEnabled,
     },
   );

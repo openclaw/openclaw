@@ -267,6 +267,7 @@ export function prepareChatHistoryResponsePage(
   );
   return {
     messages: composeTranscriptDisplay(capped),
+    ...(historyPage.skillsUsed ? { skillsUsed: historyPage.skillsUsed } : {}),
     ...(capped.some((message) => activity.has(message))
       ? { activity: capped.flatMap((message) => activity.get(message) ?? []) }
       : {}),

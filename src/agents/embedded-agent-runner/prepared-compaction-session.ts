@@ -158,7 +158,6 @@ export async function prepareEmbeddedCompactionSession(
           }),
           isOpenAIResponsesApi: responsesApi,
           sessionId: params.sessionId,
-          authProfileId: runtime.runtimePlan.auth.forwardedAuthProfileId,
           replayEnabled,
           historyLimit: getHistoryLimitFromSessionKey(params.sessionKey, params.config, {
             accountId: params.agentAccountId,

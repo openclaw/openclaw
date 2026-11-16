@@ -835,8 +835,10 @@ it.each(["all", "off"] as const)(
   },
 );
 
-it("finalizes Block Kit work links with bounded labels and numbered fallbacks", async () => {
+it.each(["final", "block"] as const)("settles Block Kit work links after %s", async (kind) => {
   const draftStream = useDraftStream(true);
+  const payload = { text: FINAL_REPLY_TEXT, mediaUrl: "https://example.com/demo.png" };
+  mockedDispatchSequence = [{ kind, payload }];
   mockedReplyOptionEvents = [
     {
       kind: "item",
@@ -848,9 +850,7 @@ it("finalizes Block Kit work links with bounded labels and numbered fallbacks", 
     },
     {
       kind: "visible_work",
-      sessions: Array.from({ length: 6 }, (_, i) =>
-        workSession(i + 1, i ? undefined : "🚀".repeat(40)),
-      ),
+      sessions: Array.from({ length: 6 }, (_, i) => workSession(i + 1, i ? "" : "🚀".repeat(40))),
     },
   ];
   await dispatch({
@@ -886,7 +886,7 @@ it("finalizes Block Kit work links with bounded labels and numbered fallbacks", 
     ),
   );
   expect(deliverRepliesMock).toHaveBeenCalledOnce();
-  expect(delivered().replies).toEqual([{ text: FINAL_REPLY_TEXT }]);
+  expect(delivered().replies).toEqual([payload]);
   expectNoCalls(draftStream.clear, startSlackStreamMock);
 });
 
