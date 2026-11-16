@@ -20,7 +20,7 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { rememberSectionLocation } from "../lib/section-navigation.ts";
+import { forgetSectionLocation } from "../lib/section-navigation.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
   sidebarCollapsedByChoice,
@@ -64,13 +64,8 @@ function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) 
   if (!section) {
     return;
   }
-  const context = host.sessionDataContext;
-  if (
-    context &&
-    host.navigationView === section &&
-    (section === "automations" || section === "dashboards")
-  ) {
-    rememberSectionLocation(context.gateway, section, null);
+  if (host.navigationView === section && (section === "automations" || section === "dashboards")) {
+    forgetSectionLocation(section);
   }
   if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
     host.onToggleSidebar?.();
