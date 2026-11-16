@@ -30,6 +30,7 @@ async function probeChild(url: URL, input: object, check: (result: unknown) => v
     const pending = receive(child, () => "Probe exited before replying: " + stderr);
     child.send(input);
     const result = await pending;
+    expect(result, stderr).not.toHaveProperty("error");
     check(result);
     expect(await exited).toBe(0);
   } finally {

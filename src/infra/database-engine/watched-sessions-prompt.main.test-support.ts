@@ -6,7 +6,9 @@ import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPromptAsync,
 } from "../../agents/watched-sessions-prompt.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { publishSystemEventStoreConfig } from "../../config/sessions/session-store-path.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
 import {
   handleSessionStateSessionReset,
@@ -39,6 +41,9 @@ async function probeMain({ stateDir }: { stateDir: string }) {
     assert.equal(threadId, 0);
     installDatabaseProcessRole("gateway");
     await installGatewayDatabaseEngine();
+    // Gateway startup publishes config and its store resolver before session producers run.
+    const config = await captureRuntimeConfigAsyncReader()();
+    publishSystemEventStoreConfig(config);
     const sessionKey = "agent:main:telegram:group:watched";
     const watcher = "agent:main:main";
     assert.equal(await registerMainSessionGroupWatch({ sessionKey, agentId: "main" }), true);
