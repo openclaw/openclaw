@@ -447,7 +447,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             replay: {
               model: effectiveModel,
               sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
               enabled: compactionReplayEnabled,
             },
           });

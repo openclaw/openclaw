@@ -26,15 +26,8 @@ export async function prepareCompactionSessionReplay({
   policy: TranscriptPolicy;
   replayEnabled: boolean;
 }) {
-  const {
-    params,
-    effectiveModel,
-    modelId,
-    provider,
-    effectiveWorkspace,
-    allowedToolNames,
-    runtimePlan,
-  } = runtime;
+  const { params, effectiveModel, modelId, provider, effectiveWorkspace, allowedToolNames } =
+    runtime;
   const responsesApi =
     effectiveModel.api === "openai-responses" ||
     effectiveModel.api === "openai-chatgpt-responses" ||
@@ -80,7 +73,6 @@ export async function prepareCompactionSessionReplay({
     effectiveModel,
     {
       sessionId: params.sessionId,
-      authProfileId: runtimePlan.auth.forwardedAuthProfileId,
       enabled: compactionReplayEnabled,
     },
   );

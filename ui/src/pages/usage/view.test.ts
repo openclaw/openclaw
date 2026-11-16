@@ -227,14 +227,9 @@ describe("renderUsage", () => {
   });
 
   it.each(["session", "day"] as const)(
-    "restores the range warning after clearing a known-zero %s filter",
+    "distinguishes selected %s pricing and restores the range warning when cleared",
     (filter) => {
       const fixture = createRecordedCostUsage();
-      const zeroSession = fixture.sessions[0]!;
-      const selected: Partial<UsageProps["filters"]> =
-        filter === "session"
-          ? { selectedSessions: [zeroSession.key] }
-          : { selectedDays: zeroSession.usage!.activityDates! };
       const props = usageFixture(
         {
           ...fixture,
@@ -243,26 +238,23 @@ describe("renderUsage", () => {
         { startDate: fixture.costDaily[0]!.date },
       );
       const clearedFilters = { ...props.filters };
-      const container = document.createElement("div");
-      const [currentFilters, setFilters] = createSignal(props.filters);
-      mountUsage(
-        {
-          ...props,
-          get filters() {
-            return currentFilters();
-          },
-          get data() {
-            return { ...props.data, ...projectUsageData(fixture.sessions, currentFilters()) };
-          },
-        },
-        container,
-      );
-      for (const { filters, missing, value } of [
-        { filters: clearedFilters, missing: true, value: "$0.03" },
-        { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
-        { filters: clearedFilters, missing: true, value: "$0.03" },
-      ]) {
+      const { container, setFilters, setData } = mountReactiveUsage(props);
+      for (const [index, missing, value, cost] of [
+        [-1, true, "$0.03", "$0.20"],
+        [0, false, "$0.00", "$0.00"],
+        [-1, true, "$0.03", "$0.20"],
+        [1, false, "$0.10", "$0.20"],
+        [2, true, "$0.00", "Unpriced"],
+      ] as const) {
+        const session = fixture.sessions[index];
+        const selected: Partial<UsageProps["filters"]> = !session
+          ? {}
+          : filter === "session"
+            ? { selectedSessions: [session.key] }
+            : { selectedDays: session.usage!.activityDates! };
+        const filters = { ...clearedFilters, ...selected };
         setFilters(filters);
+        setData({ ...props.data, ...projectUsageData(fixture.sessions, filters) });
         flush();
         expect(averageCostSummary(container)).toEqual({
           hint: missing
@@ -270,6 +262,7 @@ describe("renderUsage", () => {
             : "Known cost, including estimates, divided by all user and agent messages.",
           value,
         });
+        expect(texts(container, ".usage-metric-badge strong", false)[1]).toBe(cost);
       }
     },
   );
