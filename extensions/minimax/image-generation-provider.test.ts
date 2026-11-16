@@ -112,7 +112,12 @@ describe("minimax image-generation provider", () => {
   });
 
   it.each([
-    ["generate", "/v1/images/generations", { aspectRatio: "16:9" }, { aspect_ratio: "16:9" }],
+    [
+      "generate",
+      "/v1/images/generations",
+      { aspectRatio: "16:9", resolution: "1K" as const },
+      { aspect_ratio: "16:9", area: "1K" },
+    ],
     [
       "edit",
       "/v1/images/edits",
@@ -144,4 +149,24 @@ describe("minimax image-generation provider", () => {
       });
     },
   );
+
+  it("reports MiniMax-H3-Image per-item failures", async () => {
+    const error = { code: "1027", message: "output image failed content safety check" };
+    const result = await generateImage(
+      { model: "MiniMax-H3-Image", count: 2 },
+      {
+        output_format: "webp",
+        data: [{ b64_json: Buffer.from("img").toString("base64") }, { error }],
+      },
+    );
+    expect(result.images).toMatchObject([{ mimeType: "image/webp", fileName: "image-1.webp" }]);
+    expect(result.metadata).toEqual({
+      warning: "1 of 2 images failed: 1027: output image failed content safety check",
+    });
+    await expect(
+      generateImage({ model: "MiniMax-H3-Image" }, { data: [{ error }] }),
+    ).rejects.toThrow(
+      "MiniMax image generation returned no images: 1027: output image failed content safety check",
+    );
+  });
 });

@@ -1,5 +1,7 @@
 import {
+  parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
+  toImageDataUrl,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -13,8 +15,9 @@ const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const H3_MODEL = "MiniMax-H3-Image";
+const H3_HIGHSPEED_MODEL = "MiniMax-H3-Image-Highspeed";
+const H3_RESOLUTIONS = ["1K", "2K", "4K"] as const;
 const DEFAULT_OUTPUT_MIME = "image/png";
-const H3_OUTPUT_MIME = "image/jpeg";
 const MINIMAX_MAX_IMAGE_RESULTS = 9;
 const H3_MAX_INPUT_IMAGES = 16;
 const H3_TIMEOUT_MS = 610_000;
@@ -65,27 +68,35 @@ export function buildMinimaxImageGenerationProvider(
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
-    models: [DEFAULT_MODEL, H3_MODEL],
+    models: [DEFAULT_MODEL, H3_MODEL, H3_HIGHSPEED_MODEL],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         supportsSize: false,
         supportsAspectRatio: true,
-        supportsResolution: false,
+        supportsResolution: true,
       },
       edit: {
         enabled: true,
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         maxInputImages: 1,
-        maxInputImagesByModel: { [H3_MODEL]: H3_MAX_INPUT_IMAGES },
+        maxInputImagesByModel: {
+          [H3_MODEL]: H3_MAX_INPUT_IMAGES,
+          [H3_HIGHSPEED_MODEL]: H3_MAX_INPUT_IMAGES,
+        },
         supportsSize: false,
         supportsAspectRatio: true,
-        supportsResolution: false,
+        supportsResolution: true,
       },
       geometry: {
         aspectRatios: [...MINIMAX_SUPPORTED_ASPECT_RATIOS],
-        aspectRatiosByModel: { [H3_MODEL]: [] },
+        aspectRatiosByModel: { [H3_MODEL]: [], [H3_HIGHSPEED_MODEL]: [] },
+        resolutionsByModel: {
+          [DEFAULT_MODEL]: [],
+          [H3_MODEL]: [...H3_RESOLUTIONS],
+          [H3_HIGHSPEED_MODEL]: [...H3_RESOLUTIONS],
+        },
       },
     },
     async generateImage(req) {
@@ -105,7 +116,7 @@ export function buildMinimaxImageGenerationProvider(
       });
 
       const model = req.model || DEFAULT_MODEL;
-      const isH3 = model === H3_MODEL;
+      const isH3 = model === H3_MODEL || model === H3_HIGHSPEED_MODEL;
       const body: Record<string, unknown> = {
         model,
         prompt: req.prompt,
@@ -118,11 +129,11 @@ export function buildMinimaxImageGenerationProvider(
       }
 
       if (isH3) {
+        if (req.resolution) {
+          body.area = req.resolution;
+        }
         if (req.inputImages?.length) {
-          body.images = req.inputImages.map((ref) => {
-            const mime = ref.mimeType || "image/jpeg";
-            return { image_url: `data:${mime};base64,${ref.buffer.toString("base64")}` };
-          });
+          body.images = req.inputImages.map((ref) => ({ image_url: toImageDataUrl(ref) }));
         }
       } else {
         const ref = req.inputImages?.at(0);
@@ -138,7 +149,10 @@ export function buildMinimaxImageGenerationProvider(
           : "/v1/images/generations"
         : "/v1/image_generation";
       const data = await postJsonResponse<{
-        data?: { image_base64?: string[] } | Array<{ b64_json?: string }>;
+        data?:
+          | { image_base64?: string[] }
+          | Array<{ b64_json?: string; error?: { code?: string; message?: string } }>;
+        output_format?: string;
         metadata?: {
           success_count?: number;
           failed_count?: number;
@@ -173,10 +187,34 @@ export function buildMinimaxImageGenerationProvider(
         throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
       }
 
-      const rawData = data.data;
-      const base64Images = Array.isArray(rawData)
-        ? rawData.flatMap((item) => (item.b64_json ? [item.b64_json] : []))
-        : (rawData?.image_base64 ?? []);
+      if (isH3) {
+        const items = Array.isArray(data.data) ? data.data : [];
+        const errors = items.flatMap((item) =>
+          item.error ? [`${item.error.code}: ${item.error.message}`] : [],
+        );
+        const images = parseOpenAiCompatibleImageResponse(
+          { data: items.filter((item) => !item.error) },
+          { defaultMimeType: `image/${data.output_format ?? "jpeg"}`, sniffMimeType: true },
+        );
+        if (images.length === 0) {
+          throw new Error(
+            `MiniMax image generation returned no images: ${errors.join("; ") || "no images returned"}`,
+          );
+        }
+        return {
+          images,
+          model,
+          ...(errors.length > 0
+            ? {
+                metadata: {
+                  warning: `${errors.length} of ${items.length} images failed: ${errors.join("; ")}`,
+                },
+              }
+            : {}),
+        };
+      }
+
+      const base64Images = Array.isArray(data.data) ? [] : (data.data?.image_base64 ?? []);
       const failedCount = data.metadata?.failed_count ?? 0;
 
       if (base64Images.length === 0) {
@@ -185,8 +223,6 @@ export function buildMinimaxImageGenerationProvider(
         throw new Error(`MiniMax image generation returned no images: ${reason}`);
       }
 
-      const mimeType = isH3 ? H3_OUTPUT_MIME : DEFAULT_OUTPUT_MIME;
-      const extension = isH3 ? "jpg" : "png";
       const images = base64Images
         .map((b64, index) => {
           if (!b64) {
@@ -198,8 +234,8 @@ export function buildMinimaxImageGenerationProvider(
           }
           return {
             buffer: Buffer.from(canonicalBase64, "base64"),
-            mimeType,
-            fileName: `image-${index + 1}.${extension}`,
+            mimeType: DEFAULT_OUTPUT_MIME,
+            fileName: `image-${index + 1}.png`,
           };
         })
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null);

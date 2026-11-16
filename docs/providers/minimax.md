@@ -215,10 +215,10 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
 
 ### Image generation
 
-The MiniMax plugin registers `image-01` and `MiniMax-H3-Image` for the `image_generate` tool on both `minimax` and `minimax-portal`, reusing the same `MINIMAX_API_KEY` or OAuth auth as the text models.
+The MiniMax plugin registers `image-01`, `MiniMax-H3-Image`, and `MiniMax-H3-Image-Highspeed` for the `image_generate` tool on both `minimax` and `minimax-portal`, reusing the same `MINIMAX_API_KEY` or OAuth auth as the text models.
 
 - `image-01`: `/v1/image_generation`, aspect ratio control, up to 9 output images, 1 reference image per edit
-- `MiniMax-H3-Image`: `/v1/images/generations` and `/v1/images/edits`, aspect ratio control, up to 16 reference images, 610s default request timeout
+- `MiniMax-H3-Image` and `MiniMax-H3-Image-Highspeed`: `/v1/images/generations` and `/v1/images/edits`, aspect ratio control, `resolution` `1K`/`2K`/`4K` (default `4K`), up to 16 reference images, 610s default request timeout
 - Supported aspect ratios for `image-01`: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`
 
 ```json5
