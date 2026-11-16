@@ -6,11 +6,47 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../../infra/boundary-path.js";
 import {
   resolveSessionFilePathCore,
+  resolveSessionFilePathCoreAsync,
   resolveSessionStorePathCore,
   SessionStoreAgentIdRequiredError,
 } from "./paths.js";
 
 const tempDirs: string[] = [];
+
+it.skipIf(process.platform === "win32")(
+  "keeps async path containment, rerooting, and symlink changes aligned",
+  async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-async-path-")));
+    tempDirs.push(root);
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const siblingDir = path.join(root, "agents", "worker", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(siblingDir, { recursive: true });
+    const transcript = path.join(siblingDir, "sess-1.jsonl");
+    const outside = path.join(root, "outside.jsonl");
+    fs.writeFileSync(transcript, "{}");
+    fs.writeFileSync(outside, "{}");
+    const alias = path.join(sessionsDir, "alias.jsonl");
+    fs.symlinkSync(transcript, alias);
+    const options = { sessionsDir, agentId: "worker" };
+    const compare = async (sessionFile: string) => {
+      const expected = resolveSessionFilePathCore("sess-1", { sessionFile }, options);
+      expect(await resolveSessionFilePathCoreAsync("sess-1", { sessionFile }, options)).toBe(
+        expected,
+      );
+    };
+    await compare(alias);
+    fs.unlinkSync(alias);
+    fs.symlinkSync(outside, alias);
+    await compare(alias);
+    await compare("/old-root/agents/worker/sessions/sess-1.jsonl");
+    await compare("../outside.jsonl");
+    await compare("sqlite:session-1");
+    expect(await resolveSessionFilePathCoreAsync("sess-1", undefined, options)).toBe(
+      path.join(sessionsDir, "sess-1.jsonl"),
+    );
+  },
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
