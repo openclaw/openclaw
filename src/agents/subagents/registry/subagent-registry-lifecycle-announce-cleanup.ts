@@ -17,7 +17,7 @@ import {
 import {
   ensureDeliveryState,
   getDeliveryLastError,
-  hasConsumedRequesterInput,
+  hasConsumedPrivateRequesterInput,
   isDeliverySuspended,
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
@@ -214,7 +214,7 @@ export const startSubagentAnnounceCleanupFlow = (
   const alreadyDelivered = () =>
     typeof entry.delivery?.announcedAt === "number" ||
     entry.delivery?.status === "delivered" ||
-    hasConsumedRequesterInput(entry);
+    hasConsumedPrivateRequesterInput(entry);
   const finalizeDelivered = (options?: { skipRequesterDelivery: boolean }) =>
     finalizeSubagentCleanup(context, entry, cleanup, "delivered", cleanupGeneration, stateContext, {
       skipAnnounce: true,

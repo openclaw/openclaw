@@ -233,16 +233,38 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** A committed result is delivered, whatever the turn did next; an answer that missed its channel is not. */
+/** A yielded final still owes its visible answer after the input is committed. */
+function owesOnlyItsInput(entry: SubagentRunRecord): boolean {
+  return (
+    hasConsumedRequesterInput(entry) && entry.requesterSettleWake?.yieldedFinalDeliverable !== true
+  );
+}
+
+export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    owesOnlyItsInput(entry) &&
+    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+  );
+}
+
+/**
+ * A committed result is delivered when its turn failed before answering. A turn that answered,
+ * or ended for a recorded reason, keeps its own outcome: a missed send stays a failure.
+ */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
   outcome: SubagentAnnounceDeliveryResult | undefined,
 ): SubagentAnnounceDeliveryResult | undefined {
+  const turnFailedBeforeAnswer =
+    outcome?.reason === undefined && outcome?.finalAssistantVisibleText === undefined;
   return outcome &&
     !outcome.delivered &&
-    outcome.finalAssistantVisibleText === undefined &&
     entries.length > 0 &&
-    entries.every(hasConsumedRequesterInput)
+    entries.every(
+      (entry) =>
+        hasConsumedPrivateRequesterInput(entry) ||
+        (turnFailedBeforeAnswer && owesOnlyItsInput(entry)),
+    )
     ? { delivered: true, path: "direct" }
     : outcome;
 }

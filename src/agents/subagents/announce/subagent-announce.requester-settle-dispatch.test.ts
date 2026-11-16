@@ -237,8 +237,10 @@ describe("requester settle dispatch deadline", () => {
       throw error;
     });
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    await expect(run()).resolves.toBe(true);
-    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+    // The interrupted turn keeps its own failure; its committed input is never dispatched again.
+    await expect(run()).resolves.toBe(false);
+    expect(completeBatch).toHaveBeenCalledOnce();
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
     expect(child.requesterSettleWake).toBeUndefined();
     await expect(run()).resolves.toBe(false);
     expect(startTurn).toHaveBeenCalledOnce();
@@ -824,8 +826,8 @@ describe("requester settle dispatch deadline", () => {
         } else {
           stop.abort(new Error("requester stopped"));
         }
-        // The turn committed its input: the result is delivered whatever the turn did next.
-        await expect(wake).resolves.toBe(true);
+        // The turn committed its input: it settles once, whatever the turn did next.
+        await expect(wake).resolves.toBe(outcome !== "stop");
         expect(startTurn).toHaveBeenCalledOnce();
         expect(deliver).toHaveBeenCalledOnce();
         expect(timedOut).toHaveBeenCalledTimes(outcome === "runtime timeout" ? 1 : 0);
@@ -840,7 +842,9 @@ describe("requester settle dispatch deadline", () => {
         } else {
           expect(acceptedSignal?.aborted).toBe(true);
           expect(completeBatch).toHaveBeenCalledOnce();
-          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
+            delivered: outcome !== "stop",
+          });
         }
         const later = vi.fn();
         let laterClaim: ReturnType<typeof getCurrentSessionControllerClaim>;

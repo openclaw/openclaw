@@ -528,10 +528,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       await input.onTranscriptCommitted!("requester-continuation");
       return { ...failure };
     });
-    const recordRequesterDelivery: Parameters<typeof wake>[0]["recordRequesterDelivery"] = async (
-      batch,
-      fact,
-    ) => {
+    const recordRequesterDelivery: NonNullable<
+      NonNullable<Parameters<typeof wake>[0]>["recordRequesterDelivery"]
+    > = async (batch, fact) => {
       for (const entry of batch) {
         entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
       }
