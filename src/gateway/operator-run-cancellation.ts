@@ -13,7 +13,8 @@ import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-inte
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   captureAbortedPartial,
   deferAbortedPartialPersistence,
@@ -33,10 +34,7 @@ type OperatorRunCancellationContext = Pick<
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
-  params: Omit<
-    Parameters<typeof captureGatewayOperatorRunAuthority>[0],
-    "independentContinuation"
-  > & {
+  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
     entry?: RpcSourceRef;
@@ -47,13 +45,9 @@ export async function retainGatewayOperatorRun(
 ) {
   const captured = params.systemTurn
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : await captureGatewayOperatorRunAuthority({
-        ...params,
-        // An accepted turn owns its authority until it ends. A requester's recovery
-        // turn or scheduled occurrence ending must not revoke it; the retained
-        // continuation still checks device, profile, role and access grant.
-        independentContinuation: true,
-      });
+    : // An accepted turn owns its authority until it ends. The requester's turn ending,
+      // or its chat being edited, must not revoke it; current policy still can.
+      await captureGatewayOperatorContinuation(params);
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;

@@ -52,14 +52,15 @@ import {
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
 import {
-  bindGatewayOperatorContinuationAuthority,
   captureChannelOperatorRunAuthority,
+  captureGatewayOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -400,17 +401,9 @@ async function restoreGatewayOperatorSnapshot(params: {
       references += 1;
       return releaseHold();
     };
-    const policyAuthority = createAdmittedRunOperatorAuthority({
-      ...live,
-      signal: signal.signal,
-      recoverySnapshot: snapshot,
-      retain: retainPolicy,
-      get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
-      },
-    });
     const authority = createAdmittedRunOperatorAuthority({
-      ...policyAuthority,
+      ...live,
+      recoverySnapshot: snapshot,
       signal: AbortSignal.any([signal.signal, claim.signal]),
       assertCurrent: assertRecoveryCurrent,
       retain: () => {
@@ -419,10 +412,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         return retainPolicy();
       },
       get modelPolicy() {
-        return policyAuthority.modelPolicy;
+        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
       },
     });
-    bindGatewayOperatorContinuationAuthority(authority, policyAuthority);
     authority.assertCurrent();
     const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));
     if (!profile) {
@@ -586,5 +578,35 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   } catch (error) {
     release();
     throw error;
+  }
+}
+
+/** Accepted work holds its origin's saved facts and current policy, not its accepting request. */
+export async function captureGatewayOperatorContinuation(
+  input: Parameters<typeof captureGatewayOperatorRunAuthority>[0],
+): ReturnType<typeof captureGatewayOperatorRunAuthority> {
+  const inherited = input.client?.internal?.operatorRunAuthority;
+  const context = input.context.resolveGatewayContext?.();
+  const facts = inherited && captureQueuedOperatorRecoverySource(inherited);
+  if (!input.client || !context || !facts || facts.kind === "unavailable") {
+    // A source without saved facts keeps its live authority.
+    return await captureGatewayOperatorRunAuthority(input);
+  }
+  const restored = await restoreGatewayQueuedOperatorRecovery({
+    source: facts,
+    context,
+    assertCurrent: () => {},
+  });
+  try {
+    const { client } = input;
+    return await captureGatewayOperatorRunAuthority({
+      ...input,
+      client: {
+        ...client,
+        internal: { ...client.internal, operatorRunAuthority: restored.authority },
+      },
+    });
+  } finally {
+    restored.release();
   }
 }
