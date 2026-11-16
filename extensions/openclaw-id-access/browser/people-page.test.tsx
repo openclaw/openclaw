@@ -5,7 +5,6 @@ import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
-import { PeoplePage } from "./people-page.js";
 import {
   button,
   disposers,
