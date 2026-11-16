@@ -43,16 +43,15 @@ export function providerReplayContextMatches(
   state: ProviderReplayContext,
   context: ProviderReplayContext,
 ): boolean {
-  // Replay state is fenced to its provider, model, endpoint and session. The auth
-  // profile is deliberately not part of the fence: one credential reaches the
-  // transport through different lookup paths (a profile or provider config), and
-  // fencing on that path discarded a session's own checkpoints. The provider owns
-  // credential binding and rejects foreign items (invalid_encrypted_content,
-  // item_conflict), which the replay recovery already handles.
+  // Replay state is fenced to its provider API, endpoint and session. Neither the
+  // credential path nor the model is part of the fence: sessions switch both
+  // routinely (fallbacks, config- versus profile-supplied keys), providers accept
+  // their own checkpoints across models, and fencing on either discarded a
+  // session's own checkpoints. The provider rejects items it cannot use
+  // (invalid_encrypted_content, item_conflict), and replay recovery handles that.
   return (
     state.provider === context.provider &&
     state.api === context.api &&
-    state.model === context.model &&
     state.baseUrlHash === context.baseUrlHash &&
     state.sessionHash === context.sessionHash
   );
