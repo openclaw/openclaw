@@ -618,10 +618,15 @@ it.each(
 });
 
 it("keeps an owner device's media tickets independent of its linked local role", async () => {
+  const localRole: GatewayOperatorRolesConfig["definitions"][string] = {
+    ...viewerRole,
+    scopes: [],
+    sessions: { others: "none" },
+  };
   const profile = await namedReader("owner-media-reader@example.test", {
-    viewer: { ...viewerRole, scopes: [], sessions: { others: "none" } },
+    viewer: localRole,
   });
-  cfg.gateway!.roles!.definitions.viewer.accessPolicyPlugin = "unavailable-local-access";
+  localRole.accessPolicyPlugin = "unavailable-local-access";
   const principal: OpenClawIdTunnelPrincipal = {
     kind: "owner",
     peerKey: `iroh:${"b".repeat(64)}`,
