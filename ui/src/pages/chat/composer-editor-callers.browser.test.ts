@@ -195,10 +195,11 @@ describe.each(["chat", "new-session"] as const)(
       ["@Bob ", false],
       ["@Bo", true],
       ["@Bob ", true],
+      ["@Bo", false, true],
     ] as const)(
       "undoes and redoes a person selected from %s (existing mention: %s)",
-      async (query, existing) => {
-        const prefix = existing ? "Ask @Alex after " : "";
+      async (query, existing, dollar = false) => {
+        const prefix = existing ? "Ask @Alex after " : dollar ? "Use $HOME and " : "";
         const f = composerFixture(
           kind,
           prefix.trimEnd(),
@@ -215,7 +216,7 @@ describe.each(["chat", "new-session"] as const)(
         const input = f.query("textarea") as HTMLTextAreaElement;
         focusComposerInput(input);
         selectComposerInput(input, input.value.length, input.value.length);
-        await userEvent.keyboard((existing ? " " : "") + query);
+        await userEvent.keyboard((prefix ? " " : "") + query);
         f.refresh();
         const beforePick = f.value();
         expect(beforePick.draft).toBe(prefix + query);
