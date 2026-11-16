@@ -134,9 +134,9 @@ operation—not restoration/reinterpretation of historical plan, observations, o
 - Closed `openclaw.full-release-receipt-recovery/v1` input: new request UUID, repository,
   original qualification-admission descriptor, parent run/attempt, complete sealed
   candidate binding, all five original beta child selections, original publication
-  descriptors. Original C=Q; original publication selection, complete coverage, and
-  frozen upgrade baselines remain authoritative. No new test selection/current-registry
-  baseline resolution.
+  descriptors. Preserve the originally admitted C/Q tuple; original publication
+  selection, complete coverage, and frozen upgrade baselines remain authoritative.
+  No new test selection/current-registry baseline resolution.
 - Authenticate original admission/dispatches, current policy-passing child attempts and
   complete composite receipts, sealed candidate/package bytes, all npm/SDK/plugin/Docker
   producer receipts/payload digests. Only admission-authenticated version selects P-owned
