@@ -1,0 +1,33 @@
+# frozen_main	964ab52230985b87545865a23cdf10f0699a181e
+# approved_source	4aef4e18c88852f75b3b750610fa5630c526a25b
+# source_base	4a0e45492b8987d67d8b56e8d6dcdb3765aa61ed
+# rank is the piece-local ordinal; suite mappings retained from PR 198916
+rank	removed_lines	file	keeper_files	reason
+1	238	src/agents/embedded-agent-runner/compaction-successor.lifetime.test.ts	src/agents/embedded-agent-runner/compaction-successor.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+2	212	src/agents/embedded-agent-runner/context-engine-maintenance.ownership.test.ts	src/agents/embedded-agent-runner/context-engine-maintenance.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+3	226	src/agents/embedded-agent-runner/context-engine-maintenance.preparation.test.ts	src/agents/embedded-agent-runner/context-engine-maintenance.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+4	263	src/agents/embedded-agent-runner/context-engine-maintenance.resources.test.ts	src/agents/embedded-agent-runner/context-engine-maintenance.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+5	206	src/agents/embedded-agent-runner/run-entry.accounting.test.ts	src/agents/embedded-agent-runner/run-entry.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+6	200	src/agents/embedded-agent-runner/run-entry.cyber-failover.runner.test.ts	src/agents/embedded-agent-runner/run-entry.cyber-failover.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+7	227	src/agents/embedded-agent-runner/run-entry.model-hook.test.ts	src/agents/embedded-agent-runner/run-entry.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+8	360	src/agents/embedded-agent-runner/run/assistant-failure.failover.test.ts	src/agents/embedded-agent-runner/run/assistant-failure.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+9	204	src/agents/embedded-agent-runner/run/lane-controller.lifecycle.test.ts	src/agents/embedded-agent-runner/run/lane-controller.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+10	531	src/agents/embedded-agent-runner/run/lane-controller.queue-liveness.test.ts	src/agents/embedded-agent-runner/run/lane-controller.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+11	192	src/agents/embedded-agent-runner/run/llm-idle-timeout.progress.test.ts	src/agents/embedded-agent-runner/run/llm-idle-timeout.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+12	219	src/agents/embedded-agent-runner/run/message-tool-terminal.loop.test.ts	src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+13	72	src/agents/embedded-agent-runner/run/message-tool-terminal.test-support.ts	src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts	Orphan helper: all four exports are used only by the deleted loop and tool-authored message-terminal suites.
+14	280	src/agents/embedded-agent-runner/run/message-tool-terminal.tool-authored.test.ts	src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+15	690	src/agents/embedded-agent-runner/run/payloads.errors.test.ts	src/agents/embedded-agent-runner/run/payloads.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+16	220	src/agents/embedded-agent-runner/run/settled-turn-finalization.borrowed.test.ts	src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+17	222	src/agents/embedded-agent-runner/run/settled-turn-finalization.delivery.test.ts	src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+18	316	src/agents/embedded-agent-runner/run/settled-turn-finalization.incomplete.test.ts	src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+19	181	src/agents/embedded-agent-runner/run/settled-turn-finalization.silence.test.ts	src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+20	154	src/agents/embedded-agent-runner/run/settled-turn-finalization.stale-error.test.ts	src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+21	324	src/agents/embedded-agent-runner/run/settled-turn-finalization.transport.test.ts	src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+22	234	src/agents/embedded-agent-runner/run/terminal-preparation.run-stats.test.ts	src/agents/embedded-agent-runner/run/terminal-preparation.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+23	215	src/agents/embedded-agent-runner/run/terminal-preparation.yield.test.ts	src/agents/embedded-agent-runner/run/terminal-preparation.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+24	566	src/agents/embedded-agent-runner/runs.generation.test.ts	src/agents/embedded-agent-runner/runs.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+25	282	src/agents/embedded-agent-runner/runs.lifecycle-targets.test.ts	src/agents/embedded-agent-runner/runs.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+26	285	src/agents/embedded-agent-runner/runs.liveness.test.ts	src/agents/embedded-agent-runner/runs.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+27	193	src/agents/embedded-agent-runner/runs.steering.test.ts	src/agents/embedded-agent-runner/runs.test.ts;src/agents/harness/gateway-question.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
+28	133	src/agents/embedded-agent-runner/tool-result-context-guard.image.test.ts	src/agents/embedded-agent-runner/tool-result-context-guard.test.ts	Approved embedded lifecycle consolidation; existing same-owner suites retained.
