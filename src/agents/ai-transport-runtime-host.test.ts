@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import { attachProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import "./ai-transport-runtime-host.js";
 import { attachModelProviderLocalServiceReconciler as attachReconciler } from "./provider-local-service-reconcile.js";
 import {
@@ -22,7 +23,6 @@ import {
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -38,7 +38,6 @@ const owners: PluginMetadataSnapshotOwnerMaps = {
 
 it("retains guarded defaults and configured observers across native SDK loading", async () => {
   const originalHost = getDefaultAiTransportHost();
-  expect(originalHost.buildModelFetch).toBe(buildGuardedModelFetch);
   const requests: unknown[] = [];
   const fetchObserver = vi.fn<typeof fetch>(async (input, init) => {
     requests.push(await new Request(input, init).json());
@@ -48,7 +47,6 @@ it("retains guarded defaults and configured observers across native SDK loading"
     );
   });
   const buildModelFetch = () => fetchObserver;
-  configureAiTransportHost({ ...originalHost, buildModelFetch });
   const model = attachModelProviderRequestRouteFacts(
     makeProviderModelFixture<"openai-completions">({
       id: "prepared-model",
@@ -62,6 +60,22 @@ it("retains guarded defaults and configured observers across native SDK loading"
     .spyOn(globalThis, "fetch")
     .mockRejectedValue(new Error("Unexpected real fetch"));
   try {
+    // The process-wide host may retain another module copy; verify its guard, not function identity.
+    const retiredAuthority = new Error("Provider credential owner retired");
+    const guardedFetch = originalHost.buildModelFetch(
+      attachProviderAuthAuthority(model, () => {
+        throw retiredAuthority;
+      }),
+    );
+    if (!guardedFetch) {
+      throw new Error("Guarded model fetch is not installed");
+    }
+    await expect(guardedFetch(`${model.baseUrl}/chat/completions`)).rejects.toThrow(
+      retiredAuthority,
+    );
+    expect(unexpectedFetch).not.toHaveBeenCalled();
+
+    configureAiTransportHost({ ...originalHost, buildModelFetch });
     const plugin = path.join(temp.make("native-fetch-observer-"), "index.cjs");
     fs.writeFileSync(plugin, `module.exports = require("openclaw/plugin-sdk/llm");`);
     const load = createPluginModuleLoader({ tryNative: true, pluginSdkResolution: "src" });
