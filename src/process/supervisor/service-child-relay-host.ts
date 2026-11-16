@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { Duplex, Readable } from "node:stream";
+import { prepareChildRuntimeFailure } from "../../infra/child-runtime-viability.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
@@ -72,9 +73,10 @@ export async function createServiceChildRelayAdapter(
     (!useWindowsJobAnchor && (!control || !lineage || !child.stdout || !child.stderr))
   ) {
     stopServiceChildOwner(child, useLinuxSubreaper);
-    const error = new Error(
+    let error = new Error(
       "service child cleanup identity lost: lifecycle channels were not created",
     );
+    error = (await prepareChildRuntimeFailure({ error })) ?? error;
     cleanup.completion.reject(error);
     throw error;
   }
@@ -648,7 +650,7 @@ export async function createServiceChildRelayAdapter(
       void stderrRelay.drain();
       // Ready assigns commandPid after native admission; retain transport for its closing/ACK join.
       stopServiceChildOwner(child, useLinuxSubreaper, commandPid ? kill : undefined);
-      throw error;
+      throw (await prepareChildRuntimeFailure({ error, started: Boolean(commandPid) })) ?? error;
     } finally {
       params.abortSignal?.removeEventListener("abort", onConstructionAbort);
     }

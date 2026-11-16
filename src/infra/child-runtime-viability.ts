@@ -78,7 +78,9 @@ export async function prepareChildRuntimeViability(params?: {
   let available = !(runtime.execPath === execPath && runtime.failure);
   if (available) {
     try {
-      await fs.access(execPath, constants.X_OK);
+      const probe = await probeChildRuntimeExecutable(execPath);
+      const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
+      available = !classifyRuntimeProbe(execPath, probe, identity, probe.error);
     } catch (error) {
       available = publishRuntimeViability(execPath, error).available;
     }
@@ -181,13 +183,15 @@ export function assertChildRuntimeAvailable(): void {
   }
 }
 
-function recordUnavailableRuntime(execPath: string, cause?: unknown): Error {
+function recordUnavailableRuntime(execPath: string, cause?: unknown, stderr?: string): Error {
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
   runtime.execPath = execPath;
+  const warning = formatMissingChildRuntimeWarning({ execPath, available: false });
+  const detail = stderr?.trim();
   runtime.failure = Object.assign(
-    new Error(formatMissingChildRuntimeWarning({ execPath, available: false }), { cause }),
+    new Error(detail ? `${warning}\n${detail}` : warning, { cause }),
     { code: "NODE_RUNTIME_UNAVAILABLE" },
   );
   createSubsystemLogger("gateway/runtime").error(runtime.failure.message);
@@ -229,7 +233,7 @@ function classifyRuntimeProbe(
         hasErrnoCode(probe.error, "ENOEXEC") ||
         hasErrnoCode(probe.error, "EACCES") ||
         hasErrnoCode(probe.error, "EPERM")));
-  return unavailable ? recordUnavailableRuntime(execPath, cause) : undefined;
+  return unavailable ? recordUnavailableRuntime(execPath, cause, probe.stderr) : undefined;
 }
 
 /** The public synchronous SQLite reader retains immediate failure classification. */
@@ -245,7 +249,7 @@ export function classifyChildRuntimeFailure(params: RuntimeFailure): Error | und
     loaderFailure.test(params.stderr ?? "") ||
     (params.error && !readChildRuntimeViability({ execPath }).available)
   ) {
-    return recordUnavailableRuntime(execPath, params.error);
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
   if (!needsRuntimeProbe(params)) {
     return undefined;
@@ -273,9 +277,9 @@ export async function prepareChildRuntimeFailure(
     loaderFailure.test(params.stderr ?? "") ||
     (params.error && !(await prepareChildRuntimeViability({ execPath })).publish().available)
   ) {
-    return recordUnavailableRuntime(execPath, params.error);
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
-  if (!needsRuntimeProbe(params)) {
+  if (params.error || !needsRuntimeProbe(params)) {
     return undefined;
   }
   // IPC can fail before stderr arrives. Worker-only crashes must not disable healthy Node.
