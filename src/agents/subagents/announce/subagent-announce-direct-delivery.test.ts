@@ -462,7 +462,32 @@ it.each([
 });
 it.each([
   ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
-  ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
+  [
+    "cancelled requester turn",
+    { status: "timeout", stopReason: "rpc" },
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "committed progress before cancellation",
+    {
+      status: "timeout",
+      result: {
+        payloads: [],
+        meta: { aborted: true },
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "Progress already sent",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+    },
+    { disposition: undefined, reason: "visible_reply_missing" },
+  ],
   [
     "saved-state conflict with intentional suppression",
     {

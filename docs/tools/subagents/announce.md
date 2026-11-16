@@ -34,6 +34,12 @@ delivery notice. The child result remains available in its session and the
 to answer the user: later parent turns own any outstanding answer. A child task
 itself still owes its result; this quiet settlement applies to the parent reviewing it.
 
+An aborted requester completion turn is not a quiet settlement. If it has no
+committed outbound effects or uncertain send, its completion uses the existing bounded
+requester retry schedule (three attempts, with 30-second and two-minute delays).
+Explicit Stop, retired work, and intentional delivery suppression still take
+precedence; cancellation does not revive work those owners have closed.
+
 By default, delivery depends on requester depth:
 
 - Top-level requester sessions use a follow-up `agent` call. External conversations use `deliver=true`; WebChat conversations stay in-session with `deliver=false`.

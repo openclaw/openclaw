@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/agent-run-dispatch-outcome.js";
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
@@ -17,6 +18,10 @@ import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
+import {
+  createAgentRunDirectAbortError,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../run-termination.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
@@ -90,9 +95,11 @@ describe("requester settle dispatch deadline", () => {
     { persistent: true, returned: false },
     { persistent: false, returned: true },
     { persistent: true, returned: true },
+    { persistent: false, returned: true, aborted: true },
+    { persistent: true, returned: false, aborted: true },
   ])(
-    "retries saved-state rejection after admission with a bounded budget ($persistent, returned=$returned)",
-    async ({ persistent, returned }) => {
+    "retries interrupted settlement with a bounded budget ($persistent, returned=$returned, aborted=$aborted)",
+    async ({ persistent, returned, aborted }) => {
       const context = createContext();
       const { child, completeBatch, params } = dispatchFixture();
       useDirectDelivery();
@@ -101,6 +108,37 @@ describe("requester settle dispatch deadline", () => {
         acceptTurn(turn);
         runIds.push(turn.preflight.request.idempotencyKey);
         if (persistent || runIds.length === 1) {
+          if (aborted) {
+            const registration = registerRequesterTurn(turn, 60_000);
+            try {
+              await withSessionTurn(
+                { ...REQUESTER_TURN, controllerInput: registration.entry?.input },
+                async () => registration.controller.abort(createAgentRunDirectAbortError()),
+              );
+              turn.io.emitFinal([
+                true,
+                {
+                  status: "timeout",
+                  ...(returned
+                    ? {
+                        result: {
+                          payloads: [],
+                          meta: resolveAgentRunAbortLifecycleFields(registration.controller.signal),
+                        },
+                      }
+                    : {
+                        stopReason: resolveGatewayAgentAbortStopReason(
+                          registration.controller.signal,
+                        ),
+                      }),
+                },
+                undefined,
+              ]);
+            } finally {
+              registration.cleanup();
+            }
+            return;
+          }
           const error = {
             kind: "incomplete_turn",
             code: "item_conflict",
@@ -121,6 +159,13 @@ describe("requester settle dispatch deadline", () => {
       const run = () =>
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
+      if (aborted) {
+        expect(await deliver.mock.results[0]?.value).toMatchObject({
+          delivered: false,
+          reason: "requester_aborted",
+          disposition: "retryable",
+        });
+      }
       expect(completeBatch).not.toHaveBeenCalled();
       expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
       using clock = vi.spyOn(Date, "now");
