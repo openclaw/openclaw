@@ -2500,7 +2500,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     {
       file: "openclaw-npm-preflight.yml",
       runner: "blacksmith-32vcpu-ubuntu-2404",
-      job: "check_openclaw_npm",
+      job: "check_openclaw_npm_stage",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
     const workflow = readWorkflow(`.github/workflows/${file}`);
