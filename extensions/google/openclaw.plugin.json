@@ -967,6 +967,11 @@
         "provider": "google",
         "model": "gemini-3.1-flash-lite-image",
         "reason": "Gemini image models are for image generation, not chat."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-nano-banana-2.1",
+        "reason": "Gemini image models are for image generation, not chat."
       }
     ]
   },

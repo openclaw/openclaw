@@ -11,7 +11,7 @@ import type {
   VideoGenerationProviderConfiguredContext,
 } from "openclaw/plugin-sdk/video-generation";
 
-export const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
+export const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-nano-banana-2.1";
 export const GOOGLE_MAX_IMAGE_RESULTS = 4;
 
 export const GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS = {
@@ -55,7 +55,7 @@ export function createGoogleImageGenerationProviderMetadata(): Omit<
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
+    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3.1-flash-image", "gemini-3-pro-image"],
     capabilities: {
       generate: {
         maxCount: GOOGLE_MAX_IMAGE_RESULTS,
@@ -67,6 +67,9 @@ export function createGoogleImageGenerationProviderMetadata(): Omit<
         enabled: true,
         maxCount: GOOGLE_MAX_IMAGE_RESULTS,
         maxInputImages: 5,
+        maxInputImagesByModel: {
+          [DEFAULT_GOOGLE_IMAGE_MODEL]: 14,
+        },
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -74,6 +77,24 @@ export function createGoogleImageGenerationProviderMetadata(): Omit<
       geometry: {
         sizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
         aspectRatios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+        aspectRatiosByModel: {
+          [DEFAULT_GOOGLE_IMAGE_MODEL]: [
+            "1:1",
+            "1:4",
+            "1:8",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:1",
+            "4:3",
+            "4:5",
+            "5:4",
+            "8:1",
+            "9:16",
+            "16:9",
+            "21:9",
+          ],
+        },
         resolutions: ["1K", "2K", "4K"],
       },
     },

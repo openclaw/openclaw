@@ -9,7 +9,7 @@ import { googleImageGenerationProvider } from "./image-generation-provider.js";
 function generateImage(overrides: Partial<ImageGenerationRequest> = {}) {
   return googleImageGenerationProvider.generateImage({
     provider: "google",
-    model: "gemini-3.1-flash-image",
+    model: "gemini-nano-banana-2.1",
     prompt: "draw a cat",
     cfg: {},
     ...overrides,
@@ -96,9 +96,9 @@ it("generates image buffers from the Gemini generateContent API", async () => {
     ]),
   );
 
-  const result = await generateImage({ size: "1536x1024" });
+  const result = await generateImage({ model: undefined, size: "1536x1024" });
 
-  expectGenerationRequest(fetchMock, "gemini-3.1-flash-image", [{ text: "draw a cat" }], {
+  expectGenerationRequest(fetchMock, "gemini-nano-banana-2.1", [{ text: "draw a cat" }], {
     aspectRatio: "3:2",
     imageSize: "2K",
   });
@@ -110,7 +110,7 @@ it("generates image buffers from the Gemini generateContent API", async () => {
       { buffer: imageBytes, mimeType: "image/png", fileName: "image-1.png" },
       { buffer: imageBytes, mimeType: "image/jpeg", fileName: "image-2.jpg" },
     ],
-    model: "gemini-3.1-flash-image",
+    model: "gemini-nano-banana-2.1",
   });
 });
 
@@ -183,3 +183,20 @@ it.each([
     );
   },
 );
+
+it("supports gemini-nano-banana-2.1 with panoramic aspect ratios and 4K resolution", async () => {
+  const fetchMock = installGoogleFetchMock();
+  const result = await generateImage({
+    model: "gemini-nano-banana-2.1",
+    aspectRatio: "1:8",
+    resolution: "4K",
+    inputImages: [reference],
+  });
+  expectGenerationRequest(
+    fetchMock,
+    "gemini-nano-banana-2.1",
+    [inlineImage(reference.buffer), { text: "draw a cat" }],
+    { aspectRatio: "1:8", imageSize: "4K" },
+  );
+  expect(result.model).toBe("gemini-nano-banana-2.1");
+});

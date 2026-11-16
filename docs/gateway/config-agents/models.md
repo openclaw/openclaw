@@ -34,7 +34,7 @@ title: "Configuration — agent models"
       mediaModels: {
         image: {
           primary: "openai/gpt-image-2",
-          fallbacks: ["google/gemini-3.1-flash-image"],
+          fallbacks: ["google/gemini-nano-banana-2.1"],
         },
         video: {
           primary: "qwen/wan2.6-t2v",
