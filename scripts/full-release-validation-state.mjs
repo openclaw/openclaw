@@ -1057,7 +1057,26 @@ async function publicationMode(mode) {
       throw new Error("invalid publication upload action digest");
     }
     uploaded.digest = `sha256:${uploaded.digest}`;
-    const metadata = createReleaseEvidenceClient(source.repository).getArtifact(uploaded.id);
+    const client = createReleaseEvidenceClient(source.repository);
+    let metadata;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        metadata = client.getArtifact(uploaded.id);
+        break;
+      } catch (error) {
+        // A successful upload can precede metadata visibility. Retry only its exact ID;
+        // authentication errors and invalid metadata remain fatal, without a name fallback.
+        if (attempt >= 4 || !(error instanceof Error) || !/HTTP 404\b/u.test(error.message)) {
+          throw error;
+        }
+        const delay = 1000 * 2 ** attempt;
+        console.warn(
+          `Publication artifact ${uploaded.id} is not visible yet; retrying in ${delay}ms`,
+        );
+        await abortableSleep(delay);
+      }
+    }
+
     const descriptor = validatePublicationObservationArtifactIdentity(metadata, source, uploaded);
     admission = createPublicationAdmission(
       source,
