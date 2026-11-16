@@ -8818,23 +8818,13 @@ describe("ci workflow guards", () => {
       runtimeJobs: true,
       targetFiles: ["ui/src/pages/chat/chat-pane-retention.test.ts"],
       historicalCompatibility: false,
-      releaseGate: true,
+      releaseGate: false,
       eventName: "workflow_dispatch",
       scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_RUN_UI_TESTS: "true" },
       nodeTestShards: [
         {
           checkName: "checks-node-runtime-proof",
           shardName: "runtime-proof",
-          configs: ["fixture-bun.config.ts"],
-          targets,
-          requiresDist: false,
-          runner: "ubuntu-24.04",
-          timeoutMinutes: 20,
-        },
-        {
-          checkName: "checks-node-bound-proof",
-          shardName: "bound-proof",
-          testRuntime: "node",
           configs: ["fixture-bun.config.ts"],
           targets,
           requiresDist: false,
@@ -8852,12 +8842,10 @@ describe("ci workflow guards", () => {
     expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
       "checks-node-runtime-proof (node)",
       "checks-node-runtime-proof (bun)",
-      "checks-node-bound-proof (node)",
     ]);
     expect(rows.map((row: { base_check_name: string }) => row.base_check_name)).toEqual([
       "checks-node-runtime-proof",
       "checks-node-runtime-proof",
-      "checks-node-bound-proof",
     ]);
     for (const row of rows) {
       expect(row).toMatchObject({ targets, timeout_minutes: 20, test_runtime_policy: policy });
@@ -8874,21 +8862,7 @@ describe("ci workflow guards", () => {
         }),
       ).toBe(row.test_runtime);
     }
-    const uiRows = readJsonOutput(manifest.outputs, "ui_test_matrix").include;
-    expect(uiRows.map((row: { test_runtime: string }) => row.test_runtime)).toEqual([
-      "node",
-      "bun",
-      "node",
-      "bun",
-      "node",
-      "bun",
-    ]);
-    expect(new Set(uiRows.map((row: { check_name: string }) => row.check_name)).size).toBe(6);
-    expect(
-      uiRows.filter(
-        (row: { shard: number; run_auxiliary: boolean }) => row.shard === 1 && row.run_auxiliary,
-      ),
-    ).toHaveLength(1);
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(3);
     const gate = readCiWorkflow().jobs["ci-gate"];
     expect(gate.needs).toContain("checks-node-core-test-nondist-shard");
     expect(gate.needs).toContain("checks-ui");

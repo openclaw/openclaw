@@ -411,7 +411,7 @@ jobs:
               if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== (runtimePolicy !== "node"))) {
                 throw new Error(`Target ref does not support requested test_runtime_policy: ${runtimePolicy}`);
               }
-              const runtimes = resolveExtensionRuntimes
+              const runtimes = fullReleaseValidation && resolveExtensionRuntimes
                 ? await resolveExtensionRuntimes({
                     planGroups: shard.planGroups,
                     fullReleaseValidation,

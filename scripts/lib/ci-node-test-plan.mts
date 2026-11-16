@@ -93,11 +93,7 @@ import {
   RELEASE_ONLY_UI_TEST_FILES,
 } from "./ci-proof-test-inventory.mts";
 import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
-import {
-  resolveCiTestRuntimeFiles,
-  resolveCiTestRuntimeInventory,
-  type CiTestRuntimePolicy,
-} from "./ci-test-runtime.mts";
+import { resolveCiTestRuntimeInventory, type CiTestRuntimePolicy } from "./ci-test-runtime.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
   createNativeSoloTimingKey,
@@ -105,7 +101,6 @@ import {
 } from "./ci-test-timings-schema.mts";
 import {
   readCompactGroupTimings,
-  withCiTestTimingRuntime,
   readCompleteSplitGenerationSeconds,
   readRuntimePlacementTimings,
   readToolingFileTimings,
@@ -165,7 +160,6 @@ export type NodeTestShard = Omit<
   cpuBudget?: number;
   predictedSeconds?: number;
   predictedTestSeconds?: number;
-  testRuntime?: "node" | "bun";
 };
 
 type NodeTestPlanOptions = {
@@ -179,7 +173,6 @@ type NodeTestPlanOptions = {
   compactMode?: CompactNodeTestPlanMode;
   compactNodeJobCap?: number;
   mainValidation?: boolean;
-  runtimePolicy?: CiTestRuntimePolicy;
   runnerBackend?: string;
 };
 
@@ -3334,55 +3327,6 @@ export function createNodeTestShardBundles(
   }
   const compactMode =
     options.compactMode ?? (options.compact === true ? "pull-request" : undefined);
-  if (options.runtimePolicy && options.runtimePolicy !== "node") {
-    // Full dispatch keeps its complete inventory, but each independent runtime
-    // must fit the existing bounded packing policy before matrix expansion.
-    const runtimeCompactMode = compactMode ?? "pull-request";
-    const source = createNodeTestShards({ ...options, includeReleaseOnlyToolingShards: true });
-    const profileCap =
-      options.runnerBackend === "github"
-        ? COMPACT_GITHUB_NODE_TEST_JOB_CAP
-        : COMPACT_NODE_TEST_JOB_CAP;
-    const jobs: CompactNodeTestShard[] = [];
-    for (const testRuntime of ["node", "bun"] as const) {
-      const remaining =
-        compactMode === undefined
-          ? profileCap
-          : (options.compactNodeJobCap ?? profileCap) -
-            jobs.filter((job) => !job.requiresDist).length;
-      jobs.push(
-        ...withCiTestTimingRuntime({ policy: options.runtimePolicy, runtime: testRuntime }, () =>
-          applyNativeSoloTimings(
-            createCompactNodeTestShardBundles(
-              source,
-              {
-                ...options,
-                compactMode: runtimeCompactMode,
-                testRuntime,
-                compactNodeJobCap: remaining,
-              },
-              runtimeCompactMode,
-            ),
-            options.runnerBackend,
-          ),
-        ).map((job) => Object.assign(job, { testRuntime })),
-      );
-    }
-    const cap =
-      compactMode === undefined
-        ? profileCap * 2
-        : Math.min(
-            profileCap,
-            (options.compactNodeJobCap ?? profileCap) +
-              jobs.filter((job) => job.requiresDist).length,
-          );
-    if (jobs.length > cap) {
-      throw new Error(
-        `compact ${options.runnerBackend ?? "blacksmith"} runtime test plan exceeds ${cap} jobs (${jobs.length} planned)`,
-      );
-    }
-    return jobs;
-  }
   if (compactMode !== undefined) {
     return applyNativeSoloTimings(
       createCompactNodeTestShardBundles(
@@ -3921,8 +3865,6 @@ function splitOversizedCompactGroup(
   onHostedToolingTailDonation?: (donation: HostedToolingTailDonation) => void,
   selectedToolingFiles?: ReadonlySet<string>,
   hostedMain = false,
-  selectionSeconds?: { profile: number; hosted: number },
-  runtimePacking = false,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
@@ -3940,12 +3882,12 @@ function splitOversizedCompactGroup(
     (group.includePatterns?.length ?? 0) > 1 &&
     group.includePatterns!.includes(HOSTED_MAIN_UPDATE_TEST);
   const measuredProfileSeconds = Math.max(
-    selectionSeconds?.profile ?? estimateCompactGroupSeconds(group, runnerBackend),
+    estimateCompactGroupSeconds(group, runnerBackend),
     observedSeconds,
     storageModuleWorkFloor(group, runnerBackend),
   );
   const measuredHostedSeconds = Math.max(
-    selectionSeconds?.hosted ?? estimateCompactGroupSeconds(group, "github"),
+    estimateCompactGroupSeconds(group, "github"),
     observedSeconds > 0
       ? runnerBackend === "github"
         ? observedSeconds
@@ -4143,19 +4085,13 @@ function splitOversizedCompactGroup(
         : runtimePartition
           ? (seconds * files.reduce((sum, file) => sum + weightForFile(file), 0)) / totalWeight
           : seconds;
-      // Two smaller CLI stripes share the existing 250-second serial budget;
-      // 150-second stripes otherwise strand one row each. No cost is discounted.
-      const stripeSeconds =
-        runtimePacking && group.shard_name === "agentic-cli" && runnerBackend === "hybrid"
-          ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS / 2
-          : COMPACT_GITHUB_MAX_PREDICTED_SECONDS;
       stripes = createStripedBatches(
         files,
         Math.min(
           agentsCoreFiles
             ? Math.max(1, files.filter((file) => agentsCoreFiles.has(file)).length)
             : files.length,
-          Math.max(1, Math.ceil(remainingSeconds / stripeSeconds)),
+          Math.max(1, Math.ceil(remainingSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS)),
         ),
         weightForValue,
         isCliProcess || isTooling ? batchWeight : undefined,
@@ -5080,88 +5016,9 @@ function routeRunsOnJobs(
   return routed.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
 
-/** Partition once before admission; both runner prices use the original group's history. */
-function projectCompactRuntimeGroup(
-  group: NodeTestShardGroup,
-  runtime: "node" | "bun",
-  policy: CiTestRuntimePolicy,
-  runnerBackend: string | undefined,
-): { group: NodeTestShardGroup; seconds?: { profile: number; hosted: number } } | undefined {
-  if (group.requiresDist) {
-    return runtime === "node" ? { group } : undefined;
-  }
-  const inventories = group.configs.map((config) => listNodeTestConfigFiles(config));
-  const inventory =
-    group.includePatterns ??
-    listWholeConfigFiles(group.shard_name) ??
-    (inventories.every(Boolean)
-      ? [...new Set(inventories.flat().filter((file): file is string => file !== undefined))]
-      : undefined);
-  const includePatterns = resolveCiTestRuntimeFiles(group, policy, runtime, inventory);
-  if (includePatterns?.length === 0) {
-    return undefined;
-  }
-  const files = new Set(includePatterns);
-  if (
-    !includePatterns ||
-    (inventory &&
-      inventory.length === includePatterns.length &&
-      inventory.every((file) => files.has(file)))
-  ) {
-    return { group };
-  }
-  const configs = inventories.every(Boolean)
-    ? group.configs.filter((_, index) => inventories[index]!.some((file) => files.has(file)))
-    : group.configs;
-  const weight = (paths: readonly string[]) =>
-    paths.reduce((total, file) => total + stripeFileWeight(file), 0);
-  const selectedWeight = weight(includePatterns);
-  const inventoryWeight = inventory?.length ? weight(inventory) : undefined;
-  const fileFloor = Math.max(...includePatterns.map(stripeFileWeight));
-  const { timingKeys } = createCompactSplitTimingGeneration({
-    configs,
-    env: group.env,
-    parentShardName: `runtime-${runtime}-${parseCompactSplitTimingKey(compactGroupTimingKey(group))?.parentShardName ?? compactGroupTimingKey(group)}`,
-    stripes: [includePatterns],
-  });
-  // Keep startup and indivisible-file floors, without a runtime speed discount.
-  const price = (backend: string | undefined) => {
-    const measured = readCompactGroupTimings(backend === "github" ? "github" : "blacksmith")[
-      timingKeys[0]!
-    ];
-    if (measured !== undefined) {
-      return measured;
-    }
-    const seconds = estimateCompactGroupSeconds(group, backend);
-    return inventoryWeight === undefined
-      ? seconds
-      : Math.max(
-          (seconds * selectedWeight) / inventoryWeight,
-          fileFloor,
-          DEFAULT_WHOLE_GROUP_SECONDS *
-            (backend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
-        );
-  };
-  return {
-    group: {
-      ...group,
-      configs,
-      includePatterns,
-      pretestBuildMode: group.pretestBuildMode
-        ? resolveTestFilesBuildMode(includePatterns)
-        : undefined,
-      timing_key: timingKeys[0]!,
-    },
-    seconds: { profile: price(runnerBackend), hosted: price("github") },
-  };
-}
-
 function createCompactNodeTestShardBundles(
   sourceShards: readonly NodeTestShard[],
-  options: NodeTestPlanOptions & {
-    groupSeconds?: Map<NodeTestShardGroup, number>;
-    testRuntime?: "node" | "bun";
-  },
+  options: NodeTestPlanOptions & { groupSeconds?: Map<NodeTestShardGroup, number> },
   compactMode: CompactNodeTestPlanMode,
   selectedToolingFiles?: ReadonlySet<string>,
   splitHostedToolingTails = false,
@@ -5240,7 +5097,7 @@ function createCompactNodeTestShardBundles(
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
-    let group = applyCompactGroupWorkerPins(
+    const group = applyCompactGroupWorkerPins(
       {
         configs: shard.configs,
         ...(shard.env ? { env: shard.env } : {}),
@@ -5253,20 +5110,6 @@ function createCompactNodeTestShardBundles(
       },
       options.runnerBackend,
     );
-    let selectionSeconds: { profile: number; hosted: number } | undefined;
-    if (options.testRuntime && options.runtimePolicy) {
-      const selected = projectCompactRuntimeGroup(
-        group,
-        options.testRuntime,
-        options.runtimePolicy,
-        options.runnerBackend,
-      );
-      if (!selected) {
-        continue;
-      }
-      selectionSeconds = selected.seconds;
-      group = selected.group;
-    }
     const partitionFiles = group.pretestBuildMode
       ? (group.includePatterns ?? listWholeConfigSplitFiles(group.shard_name))
       : undefined;
@@ -5299,17 +5142,8 @@ function createCompactNodeTestShardBundles(
             selectedToolingFiles,
             options.runnerBackend === "github" &&
               (compactMode === "push" || options.mainValidation === true),
-            selectionSeconds,
-            options.testRuntime !== undefined,
           )
-        : [
-            {
-              group,
-              seconds:
-                selectionSeconds?.profile ??
-                estimateCompactGroupSeconds(group, options.runnerBackend),
-            },
-          ];
+        : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const reducedToolingTier =
       !includeTooling &&
       (shard.configs.every((config) => RELEASE_ONLY_TOOLING_CONFIGS.has(config)) ||
@@ -5448,7 +5282,6 @@ function createCompactNodeTestShardBundles(
       // Exact child measurements replace parent projections. Changed membership
       // keeps its parent floor until the new workload has an observation.
       if (
-        options.testRuntime !== undefined ||
         selectedTooling ||
         isParallelCommandsGroup(group) ||
         planned.group.shard_name !== group.shard_name

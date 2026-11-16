@@ -654,6 +654,13 @@ const testRuntimeMode = testRuntimePolicy
       ? "dual-all"
       : "bun-all")
   : "node";
+// Preserve deliberate daily/PR colocation and capacity. Only full manual validation
+// pays duplicate runtime setup for independent execution and retries.
+const splitRuntimeJobs =
+  eventName === "workflow_dispatch" &&
+  !runtimePullRequest &&
+  !mainValidation &&
+  typeof testRuntimePolicy?.ciTestShardRuntimes === "function";
 // Timing readers and the executor must price the same runtime before planning.
 process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
@@ -919,7 +926,7 @@ const publishedDriverUpdate =
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
 // main have no branch-protection consumers. Dispatch keeps the complete
-// inventory; runtime-capable targets pack each runtime independently below.
+// inventory; runtime-capable full dispatches share the existing bounded packer.
 const compactPlanMode = !isCanonicalRepository
   ? undefined
   : runtimePullRequest
@@ -1310,10 +1317,15 @@ const rawNodeTestShards = runNodeFull
           // Keep the legacy boolean for historical targets. Hourly main uses
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
-          compactMode: mainValidation ? "pull-request" : compactPlanMode,
+          compactMode: mainValidation
+            ? "pull-request"
+            : (compactPlanMode ??
+              (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
           mainValidation,
-          runtimePolicy: testRuntimePolicy?.ciTestShardRuntimes ? testRuntimeMode : undefined,
-          compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
+          compactNodeJobCap:
+            splitRuntimeJobs && testRuntimeMode !== "node"
+              ? undefined
+              : nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
         ...nodeWorkerE2eShards,
@@ -1439,17 +1451,7 @@ const uiTestRuntimePolicy =
   )
     ? testRuntimeMode
     : "node";
-const splitRuntimeJobs = typeof testRuntimePolicy?.ciTestShardRuntimes === "function";
-const uiRuntimeJobs = splitRuntimeJobs
-  ? testRuntimePolicy.ciTestShardRuntimes(
-      {
-        configs: ["ui/vitest.config.ts"],
-        groups: uiTestGroups?.ui,
-        vitestArgs: ["--maxWorkers=3", `--shard=1/${uiTestShardCount}`],
-      },
-      uiTestRuntimePolicy,
-    )
-  : null;
+
 const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
 const knownToolingConfigs = new Set([
   goToolingConfig,
@@ -1508,9 +1510,7 @@ const nodeTestShards = targetNodeTestShards
   .flatMap((shard) => {
     const runtimes =
       !shard.requiresDist && splitRuntimeJobs
-        ? shard.testRuntime
-          ? [shard.testRuntime]
-          : testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
+        ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
         : null;
     // Node-hosted packaging proof also launches a pinned Bun child.
     const needsBunChild =
@@ -1655,9 +1655,6 @@ const nodeTestShards = targetNodeTestShards
           Object.assign({}, row, {
             base_check_name: row.check_name,
             check_name: `${row.check_name} (${runtime})`,
-            ...(shard.testRuntime && row.shard_name
-              ? { shard_name: `${row.shard_name}-${runtime}` }
-              : {}),
             test_runtime: runtime,
             requires_bun: runtime === "bun" || needsBunChild,
           }),
@@ -2006,16 +2003,7 @@ const manifest = {
   ui_test_runtime_policy: uiTestRuntimePolicy,
   ui_test_shard_count: uiTestShardCount,
   ui_test_matrix: createMatrix(
-    Array.from({ length: runUiTests ? uiTestShardCount : 0 }, (_, index) =>
-      uiRuntimeJobs
-        ? uiRuntimeJobs.map((runtime, runtimeIndex) => ({
-            shard: index + 1,
-            check_name: `checks-ui (${index + 1}/${uiTestShardCount}, ${runtime})`,
-            test_runtime: runtime,
-            run_auxiliary: runtimeIndex === 0,
-          }))
-        : [{ shard: index + 1 }],
-    ).flat(),
+    Array.from({ length: runUiTests ? uiTestShardCount : 0 }, (_, index) => ({ shard: index + 1 })),
   ),
   ui_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.ui) : "",
   ui_e2e_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.e2e) : "",

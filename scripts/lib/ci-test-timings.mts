@@ -1,6 +1,5 @@
 // Committed CI measurements are advisory weights, never a test inventory.
 import fs from "node:fs";
-import type { CiTestRuntimePolicy } from "./ci-test-runtime.mts";
 import {
   ciTestTimingsSchema,
   isRuntimePlacementIncludePatterns,
@@ -48,23 +47,9 @@ export function readUiE2eFileTimings(): {
   return readTestTimings()?.uiE2e ?? emptyUiTimings;
 }
 
-type TimingRuntime = { policy: CiTestRuntimePolicy; runtime: "node" | "bun" };
-let timingRuntime: TimingRuntime | undefined;
-
-/** Nested readers share the synchronous planner leg without changing process.env. */
-export function withCiTestTimingRuntime<T>(selection: TimingRuntime, plan: () => T): T {
-  const previous = timingRuntime;
-  timingRuntime = selection;
-  try {
-    return plan();
-  } finally {
-    timingRuntime = previous;
-  }
-}
-
 function selectedTimingPrefix(): string {
-  const policy = timingRuntime?.policy ?? process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
-  const runtime = timingRuntime?.runtime ?? process.env.OPENCLAW_CI_TEST_RUNTIME;
+  const policy = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
+  const runtime = process.env.OPENCLAW_CI_TEST_RUNTIME;
   if (policy !== "bun-all" && policy !== "dual-all") {
     return "";
   }

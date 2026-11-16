@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   ciTestShardRuntimes,
   filterCiTestRuntimeSelections,
-  resolveCiTestRuntimeFiles,
   resolveCiTestRuntimeSelections,
 } from "../../scripts/lib/ci-test-runtime.mts";
 
@@ -21,12 +20,6 @@ describe("CI runtime job inventory", () => {
       { runtime: "bun", vitestArgs: ["--exclude=" + path.resolve(nodeOnly)] },
     ]);
     expect(ciTestShardRuntimes({ groups: [group] }, "bun-all")).toEqual(["node", "bun"]);
-    expect(resolveCiTestRuntimeFiles(group, "bun-all", "node", group.includePatterns)).toEqual(
-      [nodeOnly, bothHosts].toSorted(),
-    );
-    expect(resolveCiTestRuntimeFiles(group, "bun-all", "bun", group.includePatterns)).toEqual(
-      [bothHosts, bunEligible].toSorted(),
-    );
     expect(
       ciTestShardRuntimes(
         { groups: [{ configs: [config], includePatterns: [nodeOnly] }] },
