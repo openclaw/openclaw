@@ -797,11 +797,20 @@ export function register(api) {
         await install(npmInstall("sha512-authority", "2026-10-20T00:00:00.000Z"));
         const inventory = publish();
         const prepareArtifact = preparation.preparePluginGenerationArtifact;
+        let concurrentCapture: ReturnType<typeof createDeferredCore<void>> | undefined;
+        let preparedContenders = 0;
         const prepare = vi
           .spyOn(preparation, "preparePluginGenerationArtifact")
           .mockImplementation(async (...args) => {
+            const gate = concurrentCapture;
             const prepared = await prepareArtifact(...args);
             vi.spyOn(prepared.artifact, "disposeAsync");
+            if (gate) {
+              if (++preparedContenders === 2) {
+                gate.resolve();
+              }
+              await gate.promise;
+            }
             return prepared;
           });
         const retired = await inspect("main");
@@ -836,11 +845,20 @@ export function register(api) {
         expect(providers(neighbor.registry)).toEqual(["fixture-provider:Fixture"]);
 
         const beforeConcurrent = prepare.mock.calls.length;
-        const [left, right] = await Promise.all([inspect("concurrent"), inspect("concurrent")]);
+        const gate = createDeferredCore();
+        concurrentCapture = gate;
+        const [left, right] = await Promise.all([
+          inspect("concurrent"),
+          inspect("concurrent"),
+        ]).finally(() => {
+          concurrentCapture = undefined;
+          gate.resolve();
+        });
         expect(slot.evaluations).toBe(3);
         const contenders = await Promise.all(
           prepare.mock.results.slice(beforeConcurrent).map(({ value }) => value),
         );
+        expect(contenders).toHaveLength(2);
         expect(
           contenders.filter(
             (contender) => vi.mocked(contender.artifact.disposeAsync).mock.calls.length > 0,

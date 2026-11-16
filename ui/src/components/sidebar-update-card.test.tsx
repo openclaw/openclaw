@@ -674,9 +674,7 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain(
-      "You need admin access to change update settings or start an update.",
-    );
+    expect(tooltip?.content).toContain("Admin access required.");
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });

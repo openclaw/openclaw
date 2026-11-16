@@ -33,6 +33,10 @@ Open **Knowledge** from the Control UI sidebar.
 - An agent selector chooses whose effective store to view. It changes only what
   you see; it does not change membership or create a store.
 
+**Original file** downloads a retained source. When the browser offers a save
+picker, the completion message waits for the file write to finish. Otherwise,
+OpenClaw hands the file to browser downloads; check there to confirm it was saved.
+
 **Settings** has four sections:
 
 | Section          | Shows                                                                                                                                                   |

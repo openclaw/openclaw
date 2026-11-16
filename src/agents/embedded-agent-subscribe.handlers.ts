@@ -6,6 +6,7 @@ import {
   type AgentAssistantSourceReceipt,
   bindAgentAssistantSource,
 } from "../infra/agent-events.js";
+import { resolveAssistantReplySource } from "./embedded-agent-reply-source.js";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -29,6 +30,7 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   let assistantSource: AgentAssistantSourceReceipt | undefined;
+  let assistantReplyToId: string | undefined;
   const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
     // Tool-result delivery must settle before later assistant or terminal events;
     // suppression flags would discard those events instead of preserving order.
@@ -75,8 +77,19 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     ) {
       if (evt.type === "message_start" || !assistantSource) {
         assistantSource = {};
+        assistantReplyToId = resolveAssistantReplySource(
+          ctx.params.getUserTranscriptContexts?.(),
+          ctx.params.messageChannel,
+        );
       }
       bindAgentAssistantSource(evt.message, assistantSource);
+      if (evt.type === "message_end" && assistantReplyToId) {
+        // Native persistence follows synchronous emit, before queued handlers can settle.
+        evt.message.openclawDelivery = {
+          ...evt.message.openclawDelivery,
+          sourceMessageId: assistantReplyToId,
+        };
+      }
     }
     // Model facts advance before persistence, independently of queued reply delivery.
     const assistantReasoning = ctx.captureModelEvent(evt);
@@ -85,9 +98,12 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;
     recordEmbeddedToolTrajectoryEvent(ctx, evt, readResult);
     switch (evt.type) {
-      case "message_start":
-        void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
+      case "message_start": {
+        // Delivery can delay lifecycle handlers; snapshot at the native event boundary.
+        const sourceMessageId = assistantReplyToId;
+        void scheduleEvent(evt, () => handleMessageStart(ctx, evt, sourceMessageId));
         return;
+      }
       case "message_update":
         void scheduleEvent(evt, () => handleMessageUpdate(ctx, evt));
         return;

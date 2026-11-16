@@ -192,7 +192,9 @@ The Gateway resolves `requiredByRole` from the person's effective role and this
 plugin's ID; role-bound policies use that fact instead of inferring a binding
 from the default role's name.
 Return `undefined` when the policy does not govern that person. Otherwise return
-`{ assertCurrent, signal }`; reject admission when the required access is absent.
+`{ assertCurrent, signal }`. For an explicit role binding, return `undefined` when
+the required grant is absent; otherwise deny access with an already-aborted signal.
+Throw only when evaluation is unavailable, not to report a policy denial.
 
 A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
 requires a current authority from your registered policy, including when the
@@ -210,13 +212,20 @@ Return a native `AbortSignal`. Registration preserves native cancellation and
 cleanup while keeping the assertion and callable abort-reason values bound to
 the plugin instance. Plugin retirement also ends captured access.
 
-The registration owner records a closed diagnostic `failureCause` before relaying
-an abort or failed assertion. This distinguishes grant revocation, plugin lifetime
-retirement, refused plugin invocation, and unclassified policy check failures
-without exposing plugin error text. It does not change authorization: live
-ingress still fails closed, including when ownership or availability is unknown.
-The durable recovery contract below separately distinguishes an unavailable
-observation from a definitively ended grant.
+The registration owner records a closed diagnostic `failureCause` when the grant
+or plugin lifetime ends. An internal assertion error, including a closed invocation
+scope or a temporarily quiesced plugin, refuses the operation without revoking the
+person or their admitted runs. The Gateway reevaluates the captured grant before
+treating an unclassified exception as a denial. An unavailable evaluation returns
+`UNAVAILABLE` with `details.code: "OPERATOR_ACCESS_UNAVAILABLE"`; before dispatch,
+it is retryable and does not authorize the failed operation. After dispatch starts,
+the response instead warns that execution may have completed and is not automatically
+retryable. HTTP authentication returns a retryable 503 for policy unavailability.
+Later HTTP revalidation failures return 503 with the uncertain-outcome warning;
+an already-started response is closed without framing partial data as complete.
+The log includes the redacted inner
+error name and message. Successful responses remain subject to current authority,
+and the next operation checks the policy again.
 
 The Gateway binds the returned authority to the original person and carries it
 through WebSocket and HTTP requests, and through commands admitted for a linked

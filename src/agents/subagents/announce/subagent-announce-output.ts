@@ -431,7 +431,7 @@ export function filterCurrentDirectChildCompletionRows<
     requesterAgentId?: string;
   },
 >(
-  children: T[],
+  children: readonly T[],
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
@@ -458,7 +458,7 @@ export function filterCurrentDirectChildCompletionRows<
 }
 
 export function selectCurrentRequesterCompletionRows(params: {
-  rows: SubagentRunRecord[];
+  rows: readonly SubagentRunRecord[];
   requesterSessionKey: string;
   requesterAgentId?: string;
   frozenBatch: boolean;

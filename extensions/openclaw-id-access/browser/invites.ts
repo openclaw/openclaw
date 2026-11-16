@@ -1,6 +1,6 @@
 // Invite creation (spec section 6.3): a fresh link secret, its proof key, and an
-// InviteCap signed by this owner device. Only the cap and the proof key reach
-// the Gateway; the secret stays in the link fragment the owner shares.
+// InviteCap signed by this owner device. The selected local profile travels only
+// to the Gateway; the secret stays in the link fragment the owner shares.
 import {
   buildInviteLink,
   bytesToBase64url,
@@ -27,6 +27,7 @@ export async function createInvite(
   link: Link,
   email: string,
   role: MemberRole,
+  existingProfileId?: string,
 ): Promise<CreatedInvite> {
   const now = Math.floor(Date.now() / 1000);
   const { invite_id, secret } = generateInviteSecret();
@@ -46,6 +47,7 @@ export async function createInvite(
     action: "register_invite",
     cap,
     proofKey: bytesToBase64url(proofKey),
+    ...(existingProfileId ? { existingProfileId } : {}),
   });
   // SAFETY: the Gateway reports rootPub as a formatted ed25519 key; fingerprint rejects anything else.
   const rootFp = await fingerprint(link.rootPub as PublicKeyText);

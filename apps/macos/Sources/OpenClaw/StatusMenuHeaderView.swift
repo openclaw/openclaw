@@ -180,7 +180,8 @@ struct StatusMenuHeaderView: View {
 
     private var statusTitle: String {
         if self.state.connectionMode == .unconfigured {
-            return String(localized: "OpenClaw Not Configured")
+            return MacOpenClawIDDeviceStore.shared.lastRemoval() == nil
+                ? String(localized: "OpenClaw Not Configured") : String(localized: "Not connected")
         }
         if self.state.isPaused {
             return String(localized: "OpenClaw Paused")
@@ -199,7 +200,7 @@ struct StatusMenuHeaderView: View {
     private var connectionModeLabel: String? {
         switch self.state.connectionMode {
         case .unconfigured:
-            nil
+            MacOpenClawIDDeviceStore.shared.lastRemoval()?.subtitle()
         case .local:
             String(localized: "local")
         case .remote:
@@ -403,6 +404,6 @@ struct StatusMenuProblemLineView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .help(self.diagnostic.map { "\(self.label)\n\($0)" } ?? self.label)
+        .help(self.diagnostic.map { "\(self.label)\n\($0)" } ?? "")
     }
 }

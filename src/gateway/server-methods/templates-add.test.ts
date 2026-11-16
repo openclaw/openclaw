@@ -165,7 +165,22 @@ it("drops a preview if Labs is switched off mid-request", async () => {
   let calls = 0;
   planAdd.mockResolvedValue(plan);
   const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
-  expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+  expect(request[0]?.[2]).toMatchObject({
+    code: "FORBIDDEN",
+    details: { mutationAccepted: false },
+  });
+});
+
+it.each([
+  new ClawHubSourceError("clawhub_manifest_invalid", "Manifest is invalid"),
+  new Error("MCP listing failed"),
+])("reports a failed preview as having no effect: %s", async (error) => {
+  planAdd.mockRejectedValueOnce(error);
+  const replies = await callAdd("plan");
+  expect(replies[0]?.[2]).toMatchObject({
+    code: "UNAVAILABLE",
+    details: { mutationAccepted: false },
+  });
 });
 const schedule = {
   name: "daily-brief",
@@ -195,6 +210,29 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   expect(readPolicySync).not.toHaveBeenCalled();
   expect(request).toEqual([[true, ready]]);
 });
+
+it.each(["plan", "apply"] as const)(
+  "templates.add.%s reads MCP servers as the config file declares them",
+  async (operation) => {
+    const declared = { command: "node", env: { TOKEN: "${FIXTURE_MCP_TOKEN}" } };
+    listMcp.mockResolvedValue({
+      ok: true,
+      mcpServers: { docs: { command: "node", env: { TOKEN: "synthetic-token" } } },
+      authoredConfig: { mcp: { servers: { docs: declared } } },
+    });
+    let servers: unknown;
+    planAdd.mockImplementation(async (input) => {
+      servers = await input.sourceMcpServers();
+      return plan;
+    });
+    applyAdd.mockImplementation(async (input) => {
+      servers = await (await input.getPlanningContext()).sourceMcpServers();
+      return ready;
+    });
+    await callAdd(operation);
+    expect(servers).toEqual({ docs: declared });
+  },
+);
 
 it.each(["applied", "applied-restart-required", "restart-pending"] as const)(
   "reports the reload owner's %s receipt without admitting an unpublished agent",

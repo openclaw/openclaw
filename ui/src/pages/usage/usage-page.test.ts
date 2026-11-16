@@ -390,16 +390,16 @@ it("does not transfer a manual detail refresh to a replacement selection", async
   });
   const { page } = await loadUsagePage(request);
   selectUsageSession(page);
-  await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[0]));
+  await vi.waitFor(() => expect(page.read().detail.sessionLogs?.[0]?.content).toBe(keys[0]));
 
   refreshing = true;
   refreshButton(page).click();
   selectUsageSession(page, 1);
-  await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[1]));
+  await vi.waitFor(() => expect(page.read().detail.sessionLogs?.[0]?.content).toBe(keys[1]));
   manual.resolve(result);
   await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));
 
-  expect(textOf(page, ".session-log-content")).toBe(keys[1]);
+  expect(page.read().detail.sessionLogs?.[0]?.content).toBe(keys[1]);
   for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
     expect(
       request.mock.calls.filter(([called]) => called === method).map(([, params]) => params?.key),

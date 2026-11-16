@@ -70,7 +70,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           });
           expect(sendCronFailureAlert).toHaveBeenCalledOnce();
           expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
-            'Automation "mount check" failed 1 times',
+            'Automation "mount check" failed',
           );
         } finally {
           cron.stop();

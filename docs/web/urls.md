@@ -20,6 +20,10 @@ when `gateway.publicOrigin` is configured, including its
 `gateway.controlUi.basePath`. This keeps links shareable when the desktop app
 connects through a local SSH tunnel. Without a public origin, copied links use
 the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
+When you reach the claw through OpenClaw ID remote access, **Copy link** uses the
+claw's own address instead, so it opens for members who reach it the same way.
+Preview and public links keep the public address, because only members can use
+the claw's address.
 Normal navigation and **Open in** continue using the current UI. Copied links
 contain no connection credentials. Recipients need Gateway access unless the
 thread has [public access](/web/urls#public-session-transcripts) enabled.

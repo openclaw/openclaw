@@ -147,6 +147,25 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
+  it("shows seven desktop mentions and keeps the remaining rows scrollable", () => {
+    const shell = shellFor();
+    const mentions = Array.from({ length: 16 }, (_, index) => inboxMention(String(index)));
+    mountPanel(panelParams(inboxEntries([], mentions)), shell);
+    const list = part(shell, "list");
+    const rows = [...shell.querySelectorAll<HTMLElement>(".sidebar-mention-row")];
+    const viewport = bounds(list);
+    const visibleRows = rows.filter((row) => {
+      const content = bounds(part(row, "content"));
+      return content.top >= viewport.top && content.bottom <= viewport.bottom;
+    });
+    expect(visibleRows).toHaveLength(7);
+    expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+    const headerTop = bounds(part(shell, "header")).top;
+    list.scrollTop = list.scrollHeight;
+    expect(bounds(rows.at(-1)!).bottom).toBeLessThanOrEqual(viewport.bottom);
+    expect(bounds(part(shell, "header")).top).toBe(headerTop);
+  });
+
   it("keeps the header and tabs fixed when the selected category is empty", async () => {
     const params = panelParams([authWarning]);
 

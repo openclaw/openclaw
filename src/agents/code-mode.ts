@@ -2,10 +2,11 @@ import { Type } from "typebox";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
-import { createCodeModeCatalogBindings, type CodeModeCatalogBinding } from "./code-mode-catalog.js";
+import type { CodeModeCatalogBinding } from "./code-mode-catalog.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -21,6 +22,7 @@ import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import { markCodeModePermissionChangeResult } from "./code-mode-permission-change.js";
+import { getPreparedCodeModeCatalogBindings } from "./code-mode-prepared-catalog.js";
 import {
   isCodeModeEngagedForModel,
   readCode,
@@ -32,12 +34,10 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
+import { describeRequiredHumanActionTool } from "./tool-description-presets.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
-import {
-  applyToolCatalogCompaction,
-  compactToolSearchCatalogEntry,
-  isDirectVisibleCatalogTool,
-} from "./tool-search-catalog.js";
+import { applyToolCatalogCompaction, isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
+import { getToolSearchCatalogDescriptors } from "./tool-search-prepared-catalog.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -182,12 +182,18 @@ export function buildCodeModeCatalogPrompt(
   catalog: readonly ToolSearchCatalogEntry[],
   usageRanking?: ToolUsageRankingSnapshot,
 ): string {
-  const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
+  const { descriptors, prompts } = getToolSearchCatalogDescriptors(catalog);
+  const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
+  const cacheKey = `code-mode:${swarmEnabled}:${hasToolUsageRanking(usageRanking) ? JSON.stringify(usageRanking) : ""}`;
+  const cached = prompts.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const namespacePrompt = describeCodeModeNamespacesForPrompt(descriptors);
   // Native tools have schema-derived declarations too; keep remote schemas deferred.
   const hasMcp = catalog.some((entry) => entry.source === "mcp") ?? false;
   // Detached reviews retain the admitted catalog. Execution-only restrictions
   // belong to the bridge; applying them here rewrites the shared prompt prefix.
-  const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
   const apiGuidance =
     catalog.length > 0 || swarmEnabled
       ? " Read types with `API.list(prefix?)` and `API.read(path)`; read returns `{ path, description, content, bytes }`, not a string. Use `.content` for declaration text. Native tools: `tools/`. Types are documentation; write plain JavaScript."
@@ -215,26 +221,30 @@ export function buildCodeModeCatalogPrompt(
       : "");
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   // MCP tools bind through namespaces, so skip rendering their compact hints here.
-  const bindings = createCodeModeCatalogBindings(
-    catalog
-      .filter((entry) => entry.source !== "mcp")
-      .map((entry) => compactToolSearchCatalogEntry(entry)),
-  );
+  const bindings = getPreparedCodeModeCatalogBindings(catalog);
   const catalogIndex = formatCodeModeCatalogIndex(bindings, usageRanking);
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
     ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
     : "";
-  return [
+  const askUserTool = bindings.find((entry) => entry.id === "openclaw:core:ask_user");
+  const humanActionGuidance = askUserTool
+    ? describeRequiredHumanActionTool(askUserTool.callableName)
+    : "";
+  const prompt = [
     [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
       .join("")
       .trim(),
     namespacePrompt,
+    humanActionGuidance,
     catalogIndex,
   ]
     .filter(Boolean)
     .join("\n\n");
+  prompts.set(cacheKey, prompt);
+  pruneMapToMaxSize(prompts, 12);
+  return prompt;
 }
 
 function createCodeModeExecDescription(config: ReturnType<typeof resolveCodeModeConfig>): string {

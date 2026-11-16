@@ -168,7 +168,7 @@ describe("sessions_yield tool", () => {
     const childWait = await tool.execute("child-wait", { waitFor: "message" });
     expect(childWait.details).toEqual({
       status: "yielded",
-      note: 'waitFor: "message" was not applied: this turn yielded for its own pending child completions, which resume this session. Omit waitFor when yielding for children.',
+      note: 'waitFor: "message" was not applied: this turn yielded for its own pending child completions or background commands, which resume this session. Omit waitFor when yielding for them.',
     });
     expect((await tool.execute("plain", {})).details).toEqual({ status: "yielded" });
 

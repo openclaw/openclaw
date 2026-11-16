@@ -104,6 +104,24 @@ export function waitForSqliteReclamationCommit(
   }
 }
 
+/** Physical qualification can block; consume the same live or accepted grant afterward. */
+export function assertSqliteReclamationAuthority(
+  buffer: SharedArrayBuffer,
+  assertPendingCurrent?: () => void,
+): void {
+  const state = Atomics.load(new Int32Array(buffer), 0);
+  if (state === COMMITTING) {
+    return;
+  }
+  if (assertPendingCurrent && (state === WAITING || state === REQUESTED)) {
+    assertPendingCurrent();
+    return;
+  }
+  throw new SqliteReclamationRequestRefusedError(
+    "SQLite reclamation authority is no longer current",
+  );
+}
+
 /** Publish only after the transaction ended or its connection successfully closed. */
 export function markSqliteReclamationSettled(buffer: SharedArrayBuffer | undefined): void {
   if (buffer) {

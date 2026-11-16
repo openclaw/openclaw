@@ -104,11 +104,12 @@ export const toolUsageHandlers: GatewayRequestHandlers = {
         agentId,
         agentRuntime: "openclaw",
       });
+      // Inventory MCP rows carry the bundle owner, not the server in their catalog
+      // ID; history resolves MCP calls from exact IDs and recorded server evidence.
       const catalog = inventory.groups.flatMap((group) =>
-        group.tools.map((tool) => ({
-          id: `${tool.source === "mcp" ? "mcp" : "openclaw"}:${tool.pluginId || "core"}:${tool.id}`,
-          name: tool.id,
-        })),
+        group.tools
+          .filter((tool) => tool.source !== "mcp")
+          .map((tool) => ({ id: `openclaw:${tool.pluginId || "core"}:${tool.id}`, name: tool.id })),
       );
       authority.assertCurrent();
       const result = await importAgentToolUsage({

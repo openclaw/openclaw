@@ -16,6 +16,17 @@ Sub-agents report back through completion delivery:
 - Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output cannot satisfy a missing child result and triggers normal missing-answer recovery. A retained completion without a visible result is handed to the requester as `(no output)`, including when several child results are collected together.
 - Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
 
+While a completion waits for its requester, its delivery record carries
+`requesterDelivery.state: "waiting"`, the continuation `runId` once assigned, and
+`blockingRunId` when another requester turn holds the mailbox. Pending handoffs
+have no terminal non-delivery disposition. Once the transcript owner commits the
+input, it immediately records `state: "consumed"` and the consuming run in the
+registry, before the requester source settles. Registry readers use that stored
+fact directly.
+Consumption is distinct from sending a reply to the user. A later cancellation
+does not turn a consumed private result into failed delivery; restart recovery
+and the existing completion retention window remain unchanged.
+
 A requester completion turn may finish with `NO_REPLY` or no visible text. That
 settles the child's completion without a retry, an extra model turn, or a blocked
 delivery notice. The child result remains available in its session and the
@@ -91,8 +102,11 @@ append, so a requester waiting on its child can resume. These tagged mirrors
 record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
-Completion failures retain the concrete delivery error in the run's delivery state
-without queuing a system notice into the parent session. A confirmed handoff remains delivered even if its receipt
+Completion failures retain the concrete delivery error in the run's delivery state.
+A required parent completion that permanently fails also records a visible failure
+notice in the original requester conversation, without starting another agent turn.
+A deleted or reset requester never redirects that notice into a replacement session.
+A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
 
