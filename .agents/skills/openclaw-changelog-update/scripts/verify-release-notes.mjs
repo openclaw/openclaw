@@ -336,12 +336,14 @@ function fetchGithubApi(args) {
           .trim()
           .split(/\r?\n/)
           .filter(Boolean)
-          .every((line) =>
-            response.errors.some(
-              (entry) =>
-                line === "error: GraphQL request failed" ||
-                (typeof entry.message === "string" && line === "gh: " + entry.message),
-            ),
+          .every(
+            (line) =>
+              line === "octopool: graphql delegated to personal token" ||
+              response.errors.some(
+                (entry) =>
+                  line === "error: GraphQL request failed" ||
+                  (typeof entry.message === "string" && line === "gh: " + entry.message),
+              ),
           )
       ) {
         return response;

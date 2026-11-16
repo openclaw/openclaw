@@ -814,7 +814,7 @@ process.exitCode = errors.length ? 1 : 0;
         '  if (mode === "later-conflict" && calls >= 3) { errors.length = 0; data.n122 = { issueOrPullRequest: { __typename: "Issue", number: 122, title: "Changed", author: { __typename: "User", login: "someone-else" } } }; }',
         '  if (mode === "transport") { errors.length = 0; console.error("authentication failed"); process.exitCode = 1; }',
         "}",
-        'if (mode === "proxy" && errors.length) console.error("error: GraphQL request failed");',
+        'if (mode === "proxy" && errors.length) { console.error("octopool: graphql delegated to personal token"); console.error("error: GraphQL request failed"); }',
         'if (mode === "mixed-transport" && errors.length) console.error("ECONNRESET");',
         "console.log(JSON.stringify({ data, errors }));",
         "process.exitCode ||= errors.length ? 1 : 0;",
