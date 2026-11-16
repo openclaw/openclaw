@@ -225,8 +225,8 @@ export function LifecycleOperations(props: {
             when={!unnamedLabel()}
             fallback={<span class="chat-tool-row__title">{unnamedLabel()}</span>}
           >
-            <span class="chat-tool-row__verb">{verb()}</span>{" "}
             <span class="chat-tool-row__title">
+              <span class="chat-tool-row__verb">{verb()}</span>{" "}
               <For each={parts()} keyed={(part) => part.type + part.value}>
                 {(part) => (
                   <Show when={part().type === "element"} fallback={part().value}>
