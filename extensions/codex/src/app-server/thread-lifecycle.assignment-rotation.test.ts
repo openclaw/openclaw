@@ -469,6 +469,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
           threadId: f.parent.threadId,
           changedClient: reason === "client-mismatch",
           claimed: true,
+          nativeCommands: 0,
           protected: true,
           backgroundOnly: reason !== "not-background-only",
         });

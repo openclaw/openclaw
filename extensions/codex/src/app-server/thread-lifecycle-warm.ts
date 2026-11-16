@@ -28,6 +28,10 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
+import {
+  formatCodexNativeThreadHolders,
+  listCodexNativeThreadHolders,
+} from "./native-process-authority.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -246,17 +250,20 @@ export async function releaseCodexBoundLiveThread(
     const claimed = isCodexAppServerLiveThreadClaimed(client, options.threadId);
     const protectedWork = isCodexAppServerLiveThreadProtected(client, options.threadId);
     if (claimed || protectedWork) {
+      const holders = listCodexNativeThreadHolders(client, options.threadId);
       embeddedAgentLog.debug("codex app-server retained thread release blocked", {
         threadId: options.threadId,
         changedClient: Boolean(changedClient),
         claimed,
         protected: protectedWork,
         backgroundOnly: isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId),
+        nativeCommands: holders.length,
       });
       throw new AgentHarnessPreflightError(
-        options.waitForBackgroundCleanup && !claimed && protectedWork
+        (options.waitForBackgroundCleanup && !claimed && protectedWork
           ? `Codex thread ${options.threadId} still has background work after waiting for cleanup; stop its running work and retry.`
-          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`) +
+          formatCodexNativeThreadHolders(holders),
       );
     }
     released = await releaseCodexRetainedLiveThread({
