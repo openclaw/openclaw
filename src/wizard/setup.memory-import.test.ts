@@ -11,8 +11,25 @@ import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as MigrationProviderPlugin[],
+  requestOwner: vi.fn(),
+  online: false,
+  controller: new AbortController(),
   planProviderMemoryImport: vi.fn(),
   applyProviderMemoryImport: vi.fn(),
+}));
+
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/local-state-owner.js")>()),
+  runWithLocalStateOwner: async (p: {
+    runLocal: () => Promise<unknown>;
+    onForeignOwner: (s: {
+      requestOwner: typeof mocks.requestOwner;
+      signal: AbortSignal;
+    }) => Promise<unknown>;
+  }) =>
+    mocks.online
+      ? p.onForeignOwner({ requestOwner: mocks.requestOwner, signal: mocks.controller.signal })
+      : p.runLocal(),
 }));
 
 vi.mock("../commands/migrate/memory-import.js", () => ({
@@ -105,6 +122,9 @@ function applied(plan: MigrationPlan): MigrationApplyResult {
 describe("runSetupMemoryImportStep", () => {
   beforeEach(() => {
     mocks.providers = [];
+    mocks.online = false;
+    mocks.controller = new AbortController();
+    mocks.requestOwner.mockReset();
     mocks.planProviderMemoryImport.mockReset();
     mocks.applyProviderMemoryImport.mockReset();
   });
@@ -280,5 +300,187 @@ describe("runSetupMemoryImportStep", () => {
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("copy unavailable");
     expect(notes).toContain("Claude: 1 migrated");
+  });
+  it("retries an uncertain Gateway copy with the same receipt and does not copy twice", async () => {
+    mocks.online = true;
+    const plan = planFor("claude");
+    const receipts = new Map<string, MigrationApplyResult>();
+    let copies = 0;
+    let disconnect = true;
+    mocks.requestOwner.mockImplementation(async (method, params) => {
+      if (method === "migrations.memory.plan") {
+        return {
+          agentId: "main",
+          workspace: "/final-workspace",
+          providers: [
+            {
+              ...plan,
+              providerId: "claude",
+              label: "Claude",
+              found: true,
+              planFingerprint: "a".repeat(64),
+            },
+          ],
+        };
+      }
+      if (params.planFingerprint !== "a".repeat(64)) {
+        throw new Error("unreviewed plan");
+      }
+      if (!receipts.has(params.idempotencyKey)) {
+        copies++;
+        receipts.set(params.idempotencyKey, applied(plan));
+      }
+      if (disconnect) {
+        disconnect = false;
+        throw new Error("connection lost after copy");
+      }
+      return receipts.get(params.idempotencyKey);
+    });
+    const prompter = createWizardPrompter(
+      { confirm: vi.fn(async () => true) },
+      { selectValues: ["retry"] },
+    );
+    expect(await runSetupMemoryImportStep({ config, prompter, runtime: runtime() })).toEqual({
+      status: "completed",
+      providers: [{ providerId: "claude", label: "Claude", migrated: 1, skipped: 0 }],
+    });
+    expect(copies).toBe(1);
+    expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).toContain(
+      "connection lost after copy",
+    );
+    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
+  });
+
+  it("offers retry or skip after a Gateway discovery failure without offline fallback", async () => {
+    mocks.online = true;
+    mocks.requestOwner.mockRejectedValue(new Error("Gateway temporarily unavailable"));
+    const prompter = createWizardPrompter({}, { selectValues: ["retry", "skip"] });
+    expect(await runSetupMemoryImportStep({ config, prompter, runtime: runtime() })).toEqual({
+      status: "skipped",
+      providers: [],
+    });
+    expect(prompter.select).toHaveBeenCalledTimes(2);
+    expect(mocks.planProviderMemoryImport).not.toHaveBeenCalled();
+    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).toContain(
+      "Gateway temporarily unavailable",
+    );
+  });
+
+  it("does not recover from a hosted authority rejection as a copy failure", async () => {
+    mocks.providers = [provider("claude")];
+    mocks.planProviderMemoryImport.mockResolvedValue({ plan: planFor("claude") });
+    const prompter = createWizardPrompter({ confirm: vi.fn(async () => true) });
+    await expect(
+      runSetupMemoryImportStep({
+        config,
+        prompter,
+        runtime: runtime(),
+        beforeApply: async () => {
+          throw new Error("setup replaced");
+        },
+      }),
+    ).rejects.toThrow("setup replaced");
+    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
+    expect(prompter.select).not.toHaveBeenCalled();
+  });
+  it.each(["abort", "prompt", "guard"])(
+    "retains possible copies when %s interrupts recovery",
+    async (interruption) => {
+      mocks.online = true;
+      const plan = planFor("claude");
+      mocks.requestOwner.mockImplementation(async (method) => {
+        if (method === "migrations.memory.plan") {
+          return {
+            workspace: "/final",
+            providers: [
+              {
+                ...plan,
+                providerId: "claude",
+                label: "Claude",
+                found: true,
+                planFingerprint: "a".repeat(64),
+              },
+            ],
+          };
+        }
+        if (interruption === "abort") {
+          mocks.controller.abort(new Error("connection aborted"));
+        }
+        throw new Error("connection lost after copy");
+      });
+      const onProviderOutcome = vi.fn();
+      let guardCalls = 0;
+      const prompter = createWizardPrompter({
+        confirm: vi.fn(async () => true),
+        select: vi.fn(async () => {
+          if (interruption === "prompt") {
+            throw new Error("recovery cancelled");
+          }
+          return "retry";
+        }) as WizardPrompter["select"],
+      });
+      await expect(
+        runSetupMemoryImportStep({
+          config,
+          prompter,
+          runtime: runtime(),
+          onProviderOutcome,
+          beforeApply: async () => {
+            if (++guardCalls > 1) {
+              throw new Error("setup replaced");
+            }
+          },
+        }),
+      ).rejects.toThrow(
+        interruption === "abort"
+          ? "connection aborted"
+          : interruption === "prompt"
+            ? "recovery cancelled"
+            : "setup replaced",
+      );
+      expect(onProviderOutcome).toHaveBeenCalledExactlyOnceWith({
+        providerId: "claude",
+        label: "Claude",
+        failure: "connection lost after copy",
+        copiesIndeterminate: true,
+      });
+    },
+  );
+
+  it("imports a healthy source when another source cannot be planned", async () => {
+    mocks.online = true;
+    const plan = planFor("claude");
+    mocks.requestOwner.mockImplementation(async (method) =>
+      method === "migrations.memory.plan"
+        ? {
+            workspace: "/final",
+            providers: [
+              {
+                ...plan,
+                providerId: "codex",
+                label: "Codex",
+                found: false,
+                error: "source unreadable",
+                items: [],
+              },
+              {
+                ...plan,
+                providerId: "claude",
+                label: "Claude",
+                found: true,
+                planFingerprint: "a".repeat(64),
+              },
+            ],
+          }
+        : applied(plan),
+    );
+    const prompter = createWizardPrompter({ confirm: vi.fn(async () => true) });
+    expect(await runSetupMemoryImportStep({ config, prompter, runtime: runtime() })).toEqual({
+      status: "completed",
+      providers: [{ providerId: "claude", label: "Claude", migrated: 1, skipped: 0 }],
+    });
+    expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).toContain("source unreadable");
+    expect(prompter.select).not.toHaveBeenCalled();
   });
 });

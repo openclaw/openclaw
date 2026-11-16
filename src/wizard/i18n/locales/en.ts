@@ -148,6 +148,8 @@ export const en = {
       targetWorkspace: "Target workspace directory",
     },
     memoryImport: {
+      recovery: "Retry memory import or skip it for now?",
+      retry: "Retry",
       applyFailed:
         "{label} memory import failed: {reason}\nRetry from the dashboard's Memory import page (Settings → Import Memory).",
       confirm: "Import these memories into your OpenClaw workspace?",
