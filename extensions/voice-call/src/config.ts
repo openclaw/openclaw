@@ -181,6 +181,29 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
   })
   .strict();
 
+const VoiceCallRealtimeElevationConfigSchema = z
+  .object({
+    /** Let allowlisted inbound callers raise this call's consult tool policy with a keypad PIN. */
+    enabled: z.boolean().default(false),
+    /** 4-12 digit PIN. Prefer a SecretRef; the value is never logged or sent to the model. */
+    pin: SecretInputSchema.optional(),
+    /** Keypad key that starts PIN entry. */
+    prefix: z
+      .string()
+      .regex(/^[0-9*]$/, "Expected one keypad key: 0-9 or *")
+      .default("*"),
+    /** Consult tool policy for the rest of the call after a correct PIN. */
+    elevatedToolPolicy: z.enum(["safe-read-only", "owner"]).default("owner"),
+    /** Wrong PIN entries before the call is hung up and the caller is locked out. */
+    maxAttempts: z.number().int().min(1).max(10).default(3),
+    /** How long a caller stays locked out of elevation after maxAttempts failures. */
+    lockoutMs: z.number().int().positive().default(3_600_000),
+  })
+  .strict();
+export type VoiceCallRealtimeElevationConfig = z.infer<
+  typeof VoiceCallRealtimeElevationConfigSchema
+>;
+
 const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
   "minimal",
@@ -220,6 +243,10 @@ const VoiceCallRealtimeConfigSchema = z
     /** Bounded agent persona/context injection for the fast realtime voice path. */
     agentContext: VoiceCallRealtimeAgentContextConfigSchema.default(
       VoiceCallRealtimeAgentContextConfigSchema.parse({}),
+    ),
+    /** Opt-in per-call consult tool policy elevation via keypad PIN. */
+    elevation: VoiceCallRealtimeElevationConfigSchema.default(
+      VoiceCallRealtimeElevationConfigSchema.parse({}),
     ),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: z
@@ -361,6 +388,7 @@ const VoiceCallConfigSchema = z
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
+const REALTIME_ELEVATION_PIN_PATH = "plugins.entries.voice-call.config.realtime.elevation.pin";
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
   const normalized = normalizeWebhookPath(servePath);
@@ -476,6 +504,25 @@ export function resolveVoiceCallEffectiveConfig(
   };
 }
 
+/** Resolve the keypad elevation PIN, or undefined when elevation is off. */
+export function resolveRealtimeElevationPin(
+  config: Pick<VoiceCallConfig, "realtime">,
+): string | undefined {
+  const { elevation } = config.realtime;
+  if (!elevation.enabled) {
+    return undefined;
+  }
+  const pin = normalizeResolvedSecretInputString({
+    value: elevation.pin,
+    path: REALTIME_ELEVATION_PIN_PATH,
+  });
+  if (!pin || !/^\d{4,12}$/.test(pin)) {
+    // Never echo the configured value.
+    throw new Error(`${REALTIME_ELEVATION_PIN_PATH} must resolve to 4-12 digits`);
+  }
+  return pin;
+}
+
 function definedConfigEntries(value: unknown): unknown {
   const entries = asOptionalRecord(value);
   return entries
@@ -513,6 +560,7 @@ export function normalizeVoiceCallConfig(value: unknown): VoiceCallConfig {
             ...realtime,
             fastContext: realtime?.fastContext === undefined ? {} : realtime.fastContext,
             agentContext: realtime?.agentContext === undefined ? {} : realtime.agentContext,
+            elevation: realtime?.elevation === undefined ? {} : realtime.elevation,
             providers: definedConfigEntries(realtime?.providers),
           }
         : config.realtime,
@@ -673,6 +721,29 @@ export function validateProviderConfig(config: VoiceCallConfig) {
     errors.push(
       'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
     );
+  }
+
+  const { elevation } = config.realtime;
+  if (config.realtime.enabled && elevation.enabled) {
+    const elevationPath = "plugins.entries.voice-call.config.realtime.elevation";
+    if (!hasConfiguredSecretInput(elevation.pin)) {
+      errors.push(`${elevationPath}.pin is required when realtime.elevation.enabled is true`);
+    }
+    if (config.inboundPolicy !== "allowlist" && config.inboundPolicy !== "pairing") {
+      errors.push(
+        `plugins.entries.voice-call.config.inboundPolicy must be "allowlist" or "pairing" when realtime.elevation.enabled is true`,
+      );
+    }
+    if (config.realtime.toolPolicy === "none") {
+      errors.push(
+        `plugins.entries.voice-call.config.realtime.toolPolicy must not be "none" when realtime.elevation.enabled is true`,
+      );
+    }
+    if (config.provider && config.provider !== "twilio" && config.provider !== "mock") {
+      errors.push(
+        `plugins.entries.voice-call.config.provider must be "twilio" when realtime.elevation.enabled is true (keypad digits arrive on Twilio Media Streams)`,
+      );
+    }
   }
 
   if (config.realtime.enabled && config.streaming.enabled) {

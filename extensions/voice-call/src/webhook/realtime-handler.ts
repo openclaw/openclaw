@@ -15,7 +15,6 @@ import {
   createSpeechThresholdGate,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-  readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
   resolveRealtimeVoiceBargeIn,
   resolveRealtimeVoiceSessionPolicy,
@@ -27,10 +26,6 @@ import {
   type RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   rejectWebSocketUpgrade,
@@ -52,9 +47,20 @@ import {
   type RealtimeCallControlResult,
 } from "./realtime-call-session-control.js";
 import {
+  createRealtimeElevationReporter,
+  type DtmfElevationGate,
+} from "./realtime-dtmf-elevation.js";
+import {
   appendTranscriptText,
-  resolveFinalTranscriptText,
+  captureNativeConsultTranscript,
+  clearRecentFinalUserTranscript,
+  consumeUserTranscript,
   limitPartialUserTranscript,
+  resolveFinalTranscriptText,
+  type NativeConsultTranscript,
+  type TranscriptSnapshot,
+  type UserTranscriptState,
+  withFallbackConsultQuestion,
 } from "./realtime-transcript-text.js";
 import type { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 import { StreamFrameAdapter } from "./stream-frame-adapter.js";
@@ -77,32 +83,6 @@ const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const CALLER_SPEECH_RMS_THRESHOLD = 0.035;
-
-function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
-  const providerQuestion = readRealtimeVoiceConsultQuestion(args);
-  const question = fallback?.trim();
-  if (providerQuestion) {
-    if (
-      question &&
-      providerQuestion.length <= 40 &&
-      question.length >= providerQuestion.length + 8
-    ) {
-      const record = asOptionalRecord(args);
-      const context = normalizeOptionalString(record?.context);
-      const fallbackContext = `Realtime provider supplied a shorter consult question: ${providerQuestion}`;
-      return {
-        ...record,
-        question,
-        context: context ? `${context}\n\n${fallbackContext}` : fallbackContext,
-      };
-    }
-    return args;
-  }
-  if (!question) {
-    return args;
-  }
-  return { ...asOptionalRecord(args), question };
-}
 
 type StreamSessionRequest = {
   providerName: "twilio" | "telnyx";
@@ -141,16 +121,6 @@ type ForcedConsultState = {
   completedAt?: number;
 };
 
-type UserTranscript = { text: string; raw?: string; updatedAt?: number };
-type TranscriptSnapshot = { buffer: UserTranscript | undefined; text: string | undefined };
-type NativeConsultTranscript = () => TranscriptSnapshot;
-
-type UserTranscriptState = {
-  partial?: UserTranscript;
-  recentFinal?: UserTranscript;
-  recentFinalTimer?: ReturnType<typeof setTimeout>;
-};
-
 type NativeConsultState = {
   owner: ActiveRealtimeVoiceBridge;
   readonly invocationId: string;
@@ -160,43 +130,6 @@ type NativeConsultState = {
   cancel: () => void;
 };
 
-function captureNativeConsultTranscript(state: UserTranscriptState): NativeConsultTranscript {
-  // Keep the current utterance, including its remaining incremental ASR text.
-  const buffer = state.partial ?? state.recentFinal;
-  return () => ({ buffer, text: buffer?.text });
-}
-
-function clearRecentFinalUserTranscript(state: UserTranscriptState): void {
-  clearTimeout(state.recentFinalTimer);
-  state.recentFinalTimer = undefined;
-  state.recentFinal = undefined;
-}
-
-function consumeUserTranscript(
-  state: UserTranscriptState,
-  consumed: TranscriptSnapshot | undefined,
-): void {
-  const buffer = consumed?.buffer;
-  const text = consumed?.text?.trim();
-  if (
-    !buffer ||
-    !text ||
-    (buffer !== state.partial && buffer !== state.recentFinal) ||
-    !buffer.text.toLowerCase().startsWith(text.toLowerCase())
-  ) {
-    return;
-  }
-  const remaining = buffer.text.slice(text.length).trimStart();
-  if (remaining) {
-    buffer.text = remaining;
-    buffer.raw = remaining;
-  } else if (buffer === state.partial) {
-    state.partial = undefined;
-  } else {
-    clearRecentFinalUserTranscript(state);
-  }
-}
-
 type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivity" | "error";
 
 // Each socket keeps its exact binding; the call map only grants current-generation
@@ -205,6 +138,11 @@ type RealtimeTelephonyBinding = {
   bridge: ActiveRealtimeVoiceBridge;
   acknowledgeCarrierMark: (markName?: string) => void;
   close: (cause?: RealtimeCallEndCause) => Promise<void>;
+  /** Consult tool policy for this binding, including keypad elevation. */
+  consultToolPolicy: () => VoiceCallRealtimeConfig["toolPolicy"];
+  acceptDtmf: (digit: string) => void;
+  /** True while PIN digits are being entered; caller audio is withheld from the model. */
+  isCollectingPin: () => boolean;
   endCall: () => void;
   noteMediaActivity: () => void;
   playVoicemail: (instructions: string) => Promise<void>;
@@ -236,6 +174,7 @@ export class RealtimeCallHandler {
     private readonly streamDisconnectLifecycle: StreamDisconnectGrace,
     private readonly coreConfig?: OpenClawConfig,
     private readonly holdOpeningMaxMs?: number,
+    private readonly elevation?: DtmfElevationGate,
   ) {}
 
   setPublicUrl(url: string): void {
@@ -393,9 +332,17 @@ export class RealtimeCallHandler {
           if (!telephonyBinding) {
             return;
           }
+          if (frame.kind === "dtmf") {
+            // Keypresses never reach the realtime model or the transcript.
+            telephonyBinding.acceptDtmf(frame.digit);
+            return;
+          }
           if (frame.kind === "media") {
             const audio = Buffer.from(frame.payloadBase64, "base64");
             telephonyBinding.noteMediaActivity();
+            if (telephonyBinding.isCollectingPin()) {
+              return;
+            }
             telephonyBinding.bridge.sendAudio(audio);
             if (frame.timestampMs !== undefined) {
               if (lastMediaTimestamp !== undefined) {
@@ -865,7 +812,10 @@ export class RealtimeCallHandler {
                 question: handle.question,
               },
               callId,
-              { abortSignal: abortController.signal },
+              {
+                abortSignal: abortController.signal,
+                toolPolicy: telephonyBinding.consultToolPolicy(),
+              },
             );
           }),
         };
@@ -1260,6 +1210,22 @@ export class RealtimeCallHandler {
     }
     const session = candidate;
     nativeConsultOwner = session;
+    const elevationCall = this.elevation?.openCall(
+      callRecord,
+      createRealtimeElevationReporter({
+        callId,
+        caller: callRecord.from,
+        isCurrent: () => !sessionClosed && this.isActiveBridgeOwner(callId, session),
+        sendNotice: (notice) => session.sendUserMessage(notice),
+        hangUp: async () => {
+          const result = await this.manager.endCall(callId);
+          if (result.success) {
+            telephonyBinding.endCall();
+          }
+          return result;
+        },
+      }),
+    );
     const localBargeIn =
       !(session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn) &&
       resolveRealtimeVoiceBargeIn({
@@ -1305,6 +1271,7 @@ export class RealtimeCallHandler {
         return sessionClosePromise ?? Promise.resolve();
       }
       sessionClosed = true;
+      elevationCall?.close();
       outboundGreeting.close();
       hostSpeech.close();
       activity.close();
@@ -1378,6 +1345,9 @@ export class RealtimeCallHandler {
         }
       },
       close: (cause) => closeBinding(cause),
+      consultToolPolicy: () => elevationCall?.toolPolicy ?? this.config.toolPolicy,
+      acceptDtmf: (digit) => elevationCall?.acceptDigit(digit),
+      isCollectingPin: () => elevationCall?.collecting === true,
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
         // response can reach the caller after the hang-up request succeeds.
@@ -1703,9 +1673,12 @@ export class RealtimeCallHandler {
             return undefined;
           }
           transcript = consultTranscript?.();
+          const binding = this.activeTelephonyBindingsByCallId.get(callId);
           const context = {
             partialUserTranscript: transcript?.text,
             abortSignal: abortController.signal,
+            toolPolicy:
+              binding?.bridge === bridge ? binding.consultToolPolicy() : this.config.toolPolicy,
           };
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
           return await invokeHandler(handlerArgs, context);

@@ -279,6 +279,73 @@ When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures
 remain errors; ending the phone session suppresses pending consult results.
 
+### Keypad PIN elevation
+
+`realtime.elevation` lets a trusted caller raise one call's consult tool policy
+with a keypad PIN, so the default `toolPolicy` can stay `safe-read-only`. It is
+off by default.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          provider: "twilio",
+          inboundPolicy: "allowlist",
+          allowFrom: ["+15550001234"],
+          realtime: {
+            enabled: true,
+            toolPolicy: "safe-read-only",
+            elevation: {
+              enabled: true,
+              pin: { source: "env", provider: "default", id: "VOICE_CALL_ELEVATION_PIN" },
+              prefix: "*",
+              elevatedToolPolicy: "owner",
+              maxAttempts: 3,
+              lockoutMs: 3600000,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+| Field                | Default   | Behavior                                                                     |
+| -------------------- | --------- | ---------------------------------------------------------------------------- |
+| `enabled`            | `false`   | Turns keypad elevation on.                                                   |
+| `pin`                | none      | Required. 4 to 12 digits. Use a [SecretRef](/gateway/secrets); never logged. |
+| `prefix`             | `*`       | One key (`0`-`9` or `*`) that starts PIN entry.                              |
+| `elevatedToolPolicy` | `owner`   | Consult tool policy for the rest of the call after a correct PIN.            |
+| `maxAttempts`        | `3`       | Wrong entries before OpenClaw hangs up and locks the caller out (1 to 10).   |
+| `lockoutMs`          | `3600000` | How long the caller number stays locked out of elevation.                    |
+
+During a call, the caller presses the prefix, the PIN, then `#`. Entry also
+submits after 3 seconds without a key or at 12 digits; `*` restarts entry. Each
+consult reads the call's policy when it starts, so a consult that is already
+running keeps the policy it started with.
+
+- Only inbound calls from numbers in `allowFrom` can elevate. Elevation needs
+  `inboundPolicy: "allowlist"` or `"pairing"` and a `toolPolicy` other than
+  `none`. Caller ID can be spoofed, so the PIN is the credential; the allowlist
+  only narrows who may try.
+- Elevation lasts until the call's media stream ends. A stream reconnect or
+  hangup returns the call to `toolPolicy`.
+- Keypad digits never reach the realtime model, the call transcript, or logs.
+  Caller audio is withheld from the model between the prefix and submission.
+  Logs record only the outcome and attempt count. After a correct or wrong PIN,
+  the realtime model receives a short notice so it can tell the caller.
+- Wrong entries count per hashed caller number across calls within
+  `lockoutMs`, so hanging up and redialing does not reset them. After
+  `maxAttempts` wrong entries OpenClaw hangs up and locks the caller out for
+  `lockoutMs`. During a lockout any entry hangs up the call without checking
+  the PIN. A correct PIN clears the caller's failure count. Failure counts and
+  lockouts are held in memory, so a Gateway restart clears them.
+- Keypad digits are read from Twilio Media Streams `dtmf` messages, so elevation
+  requires `provider: "twilio"`.
+
 ### Agent voice context
 
 On hosts with the shared context resolver, every realtime session includes an agent-context paragraph explaining that the

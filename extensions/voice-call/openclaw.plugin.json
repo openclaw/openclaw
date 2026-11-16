@@ -230,6 +230,34 @@
       "label": "Agent Voice Context Files",
       "advanced": true
     },
+    "realtime.elevation.enabled": {
+      "label": "Enable Keypad PIN Elevation",
+      "help": "Lets an allowlisted inbound caller press the prefix key and a PIN to raise this call's consult tool policy until hangup.",
+      "advanced": true
+    },
+    "realtime.elevation.pin": {
+      "label": "Keypad Elevation PIN",
+      "help": "4-12 digits. Use a SecretRef.",
+      "sensitive": true,
+      "advanced": true
+    },
+    "realtime.elevation.prefix": {
+      "label": "Keypad Elevation Prefix Key",
+      "advanced": true
+    },
+    "realtime.elevation.elevatedToolPolicy": {
+      "label": "Elevated Tool Policy",
+      "advanced": true
+    },
+    "realtime.elevation.maxAttempts": {
+      "label": "Keypad Elevation Max Attempts",
+      "advanced": true
+    },
+    "realtime.elevation.lockoutMs": {
+      "label": "Keypad Elevation Lockout (ms)",
+      "help": "In-memory; a Gateway restart clears lockouts.",
+      "advanced": true
+    },
     "realtime.providers": {
       "label": "Realtime Provider Config",
       "advanced": true
@@ -934,6 +962,35 @@
               }
             }
           },
+          "elevation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "pin": {
+                "type": ["string", "object"]
+              },
+              "prefix": {
+                "type": "string",
+                "pattern": "^[0-9*]$"
+              },
+              "elevatedToolPolicy": {
+                "type": "string",
+                "enum": ["safe-read-only", "owner"]
+              },
+              "maxAttempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "lockoutMs": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
           "providers": {
             "type": "object",
             "additionalProperties": {
@@ -1255,6 +1312,7 @@
     "secretInputs": {
       "paths": [
         { "path": "twilio.authToken", "expected": "string" },
+        { "path": "realtime.elevation.pin", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },
         { "path": "tts.providers.*.apiKey", "expected": "string" },
