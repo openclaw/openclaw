@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import {
@@ -30,14 +30,14 @@ describe("gateway wizard cancellation lifecycle", () => {
   it(
     "releases disconnected channel setup without an idle timeout, after writes and cleanup settle",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       let phase: "before start reply" | "at prompt" | "during write" | "replacement";
       let entered = createDeferred();
       let continueWork = createDeferred();
       let cleanupStarted = createDeferred();
       let releaseCleanup = createDeferred();
       const fixtureStop = new AbortController();
-      let committed = false;
+      let committed: boolean;
       let submitted = false;
       await using gateway = await startWizardGateway(
         {
@@ -103,7 +103,7 @@ describe("gateway wizard cancellation lifecycle", () => {
         await expectBusy();
         expect(committed).toBe(false);
         continueWork.resolve();
-        await withTestTimeout(cleanupStarted.promise, 1_000, `abandoned ${phase} did not close`);
+        await withinTest(cleanupStarted.promise, signal);
         expect(committed).toBe(phase === "during write");
         expect(submitted).toBe(false);
         await expectBusy();
