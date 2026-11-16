@@ -110,6 +110,8 @@ export function createPriorCiFixtureState(head: string) {
       sourceSha: "",
       combinedState: "failure",
       approval: false,
+      dependencyApproval: false,
+      membership: "",
       role: "admin",
       statusReads: 0,
     },
@@ -143,7 +145,7 @@ const securityStatuses=()=>{
     description:"PR #123: "+(config.combinedState==="success"?"CI and applicable security review requirements passed":config.combinedState==="pending"?"Waiting for CI; review updates automatically":"CI must complete successfully; review updates automatically"),
     created_at:"2026-09-20T00:00:30Z",updated_at:"2026-09-20T00:00:30Z"};
   const statuses=[combined,
-    {...common,id:802,context:"openclaw/dependency-review",state:"success",description:"PR #123: No dependency changes require review."},
+    {...common,id:802,context:"openclaw/dependency-review",state:"success",description:"PR #123: "+(config.dependencyApproval?"Dependency review requirements satisfied.":"No dependency changes require review.")},
     {...common,id:803,context:"openclaw/security-sensitive-review",state:config.fault==="failed-guard"?"failure":"success",description:"PR #123: "+(config.approval?"Sensitive changes have maintainer authority":"No sensitive product changes")}];
   if(config.fault==="missing-guard") statuses.pop();
   if(config.fault==="missing-status") statuses.shift();
@@ -154,7 +156,7 @@ const securityStatuses=()=>{
 };
 const securityResponse=()=>{
   if(!s.priorCi.security.enabled||args[0]!=="api") return false;
-  const endpoint=args.find(arg=>arg.startsWith("repos/fixture/repo/"));
+  const endpoint=args.find(arg=>arg.startsWith("repos/fixture/repo/")||arg.startsWith("orgs/fixture/teams/openclaw-secops/memberships/"));
   if(!endpoint) return false;
   const config=s.priorCi.security;
   const source=config.sourceSha||main();
@@ -164,7 +166,9 @@ const securityResponse=()=>{
     actor:{id:41898282,login:"github-actions[bot]",type:"Bot"},
     path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
-  if(endpoint.includes("/statuses?")) {
+  if(endpoint.startsWith("orgs/fixture/teams/openclaw-secops/memberships/")) {
+    reply({state:config.membership});
+  } else if(endpoint.includes("/statuses?")) {
     config.statusReads++;
     const statuses=securityStatuses();
     const earlier={...statuses.find(status=>status.context==="openclaw/security-sensitive-review"),id:701,context:"openclaw/security-sensitive-review",state:"failure",created_at:"2026-09-19T00:00:00Z",updated_at:"2026-09-19T00:00:00Z"};

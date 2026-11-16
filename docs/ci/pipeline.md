@@ -669,11 +669,11 @@ All four scans use `scripts/install-periphery.sh` to install the checksum-pinned
 Security review separates product changes that maintainers can approve from the
 small set of security policy and enforcement files that require SecOps approval.
 
-| Change                                     | User account with `maintain` or `admin` access   | Other authors                                                                    |
-| ------------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Sensitive product code                     | Informational notice; no extra security approval | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access |
-| Dependency changes requiring review        | Same maintainer exemption                        | `/allow-dependencies-change` from a user with either role                        |
-| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval           | Independent SecOps code-owner approval                                           |
+| Change                                     | User account with `maintain` or `admin` access       | Other authors                                                                                       |
+| ------------------------------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sensitive product code                     | Informational notice; no extra security approval     | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access                    |
+| Dependency changes requiring review        | Admin authors exempt; Maintain alone is insufficient | `/allow-dependencies-change` from a repository admin or active SecOps member; SecOps authors exempt |
+| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval               | Independent SecOps code-owner approval                                                              |
 
 The **Security Review** workflow runs both guards from trusted repository code.
 It publishes a commit status named `openclaw/ci-gate` that requires both the
@@ -842,7 +842,7 @@ that already qualify as informational remain informational.
 Automatic lockfile cleanup is best effort. If neither cleanup App can provide a
 write token, or GitHub explicitly denies the cleanup mutation's permissions, the
 dependency notice explains how to remove the remaining changes or request
-maintainer approval. These expected access limitations do not fail the Actions
+admin or SecOps approval. These expected access limitations do not fail the Actions
 job or satisfy dependency review. Unexpected cleanup errors remain failures.
 
 Edit `.github/security-review-policy.yml` to change path classification. Its
@@ -864,12 +864,17 @@ and dependency caches disabled. That action's manifest and npm lock mirror the
 root dependency pins and `pnpm-lock.yaml`; update them together when those pins
 change. Approval decisions and dependency graph analysis remain in JavaScript.
 
-Both guards use current repository permissions. Only GitHub user accounts with
-`maintain` or `admin` access can grant command approval or receive the author exemption.
-`write` access and organization membership are insufficient. A maintainer pushing
-to an external contributor's branch does not transfer the author exemption.
-Automation using a GitHub user account qualifies under the same role check;
-GitHub App bot identities do not qualify.
+Both guards use current GitHub authority. Sensitive product changes retain the
+`maintain` or `admin` author exemption and command approval. Dependency changes
+require repository `admin` access or active membership in `@openclaw/openclaw-secops`
+for either path; Maintain access and organization membership alone are insufficient.
+SecOps membership reads use a separate organization Members-read App token from
+the existing primary/fallback GitHub Apps; repository statuses and notices keep
+using the workflow token. Missing membership credentials or failed reads never
+grant dependency approval. A maintainer pushing to another
+author's branch does not transfer the author exemption. Automation using a GitHub
+user account qualifies under the same guard-specific checks; GitHub App bot
+identities do not qualify.
 
 For other authors, wait for the applicable guard notice to show the current PR
 commit, then post the command on its own line in a new PR comment:

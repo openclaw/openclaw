@@ -189,11 +189,11 @@ function renderApprovedDependencyComment(approval, changes) {
       : "### ✅ Dependency graph changes approved",
     "",
     approval.kind === "author"
-      ? "This maintainer PR changes the dependency graph.\n\n**No secops approval is required. This comment is informational because the PR author has Maintain or Admin access.**"
-      : "A maintainer approved this revision with an explicit dependency approval comment.",
+      ? "This PR changes the dependency graph.\n\n**This comment is informational because the PR author is a repository admin or an active member of `@openclaw/openclaw-secops`.**"
+      : "A repository admin or SecOps member approved this revision with an explicit dependency approval comment.",
     "",
     `- Current SHA: ${markdownCode(approval.sha)}`,
-    `- Maintainer: @${sanitizeGuardDisplayValue(approval.login)}`,
+    `- Approver: @${sanitizeGuardDisplayValue(approval.login)}`,
     `- Repository role: ${markdownCode(approval.role)}`,
     ...(approval.kind === "comment" ? [`- Approval comment: ${approval.url}`] : []),
     "",
@@ -202,7 +202,7 @@ function renderApprovedDependencyComment(approval, changes) {
       : []),
     approval.kind === "author"
       ? "Carefully review these changes before merging."
-      : "A later push requires a fresh approval comment for an external contributor's PR.",
+      : "A later push requires a fresh approval comment unless the author is a repository admin or SecOps member.",
   ].join("\n");
 }
 
@@ -216,13 +216,13 @@ export function renderRemovalOnlyDependencyComment({ dependencyGraphChanges, hea
     "",
     "### Dependency removals noted",
     "",
-    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require additional maintainer approval.",
+    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require additional admin or SecOps approval.",
     "",
     ...removalLines,
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
     "",
-    "A later push that adds or changes dependency graph entries will require a fresh maintainer approval.",
+    "A later push that adds or changes dependency graph entries will require a fresh admin or SecOps approval.",
   ].join("\n");
 }
 
@@ -238,7 +238,7 @@ export function renderAutoscrubbedDependencyComment({
 
 ### Dependency lockfile changes were removed
 
-This PR did not change dependency graph fields in package manifests and had no maintainer approval, so the workflow restored the lockfiles to this PR's merge base automatically.
+This PR did not change dependency graph fields in package manifests and had no admin or SecOps approval, so the workflow restored the lockfiles to this PR's merge base automatically.
 
 Restored lockfiles:
 ${fileLines.join("\n")}
@@ -261,7 +261,7 @@ export function renderClearedDependencyGuardComment({ headSha }) {
     "",
     "### Dependency graph guard cleared",
     "",
-    `This PR no longer has dependency changes awaiting review. A future dependency graph change from an external contributor requires a maintainer's ${markdownCode(dependencyApprovalCommand)} comment after the guard notice identifies that revision.`,
+    `This PR no longer has dependency changes awaiting review. A future dependency graph change requires an admin or SecOps member’s ${markdownCode(dependencyApprovalCommand)} comment after the guard notice identifies that revision.`,
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
   ].join("\n");
@@ -306,9 +306,9 @@ export function renderBlockedDependencyComment({
   return [
     dependencyGraphGuardMarker,
     "",
-    "### ⚠️ Maintainer dependency review required",
+    "### ⚠️ Dependency review required",
     "",
-    "This external contributor PR changes the dependency graph. A maintainer must review these changes before merging.",
+    "This PR changes the dependency graph. A repository admin or an active member of `@openclaw/openclaw-secops` must review these changes before merging.",
     "",
     `Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
     "",
@@ -334,7 +334,7 @@ function renderAutoscrubStatusLines(status) {
   if (status.kind === "unavailable") {
     return [
       "",
-      "Automatic lockfile cleanup is best effort. These lockfile changes remain in this PR. If they are unintentional, remove them using the commands below. Otherwise, a maintainer can review and approve them with `/allow-dependencies-change`.",
+      "Automatic lockfile cleanup is best effort. These lockfile changes remain in this PR. If they are unintentional, remove them using the commands below. Otherwise, a repository admin or SecOps member can review and approve them with `/allow-dependencies-change`.",
     ];
   }
   if (status.kind === "blocked-by-dependency-manifest-fields") {
@@ -714,7 +714,7 @@ export async function reviewDependencyChanges(
         );
         if (!commit) {
           await writeSummary(
-            "## Dependency Guard\n\nMaintainer approval arrived; lockfile changes were preserved.",
+            "## Dependency Guard\n\nAdmin or SecOps approval arrived; lockfile changes were preserved.",
           );
           return true;
         }

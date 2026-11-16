@@ -115,6 +115,8 @@ function runGuard(options: Options = {}) {
     "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": {
       role_name: options.approverRole ?? "maintain",
     },
+    "GET /orgs/openclaw/teams/openclaw-secops/memberships/contributor": { httpError: 404 },
+    "GET /orgs/openclaw/teams/openclaw-secops/memberships/maintainer": { httpError: 404 },
     ...options.routes,
   };
   writeFileSync(
@@ -157,6 +159,7 @@ function runGuard(options: Options = {}) {
       env: {
         PATH: process.env.PATH,
         GITHUB_TOKEN: "fixture-token",
+        GH_APP_TOKEN: "fixture-members-token",
         GITHUB_EVENT_PATH: eventPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "123",

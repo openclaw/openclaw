@@ -304,7 +304,7 @@ export async function readGuardReview(previousReview) {
   const pullPath = `/repos/${owner}/${repo}/pulls/${number}`;
   let review = null;
   let checkedAt = Date.now();
-  const api = createGitHubApi(GITHUB_TOKEN, {
+  const apiOptions = {
     userAgent: "openclaw-security-review",
     beforeRead: async (path) => {
       if (
@@ -319,7 +319,15 @@ export async function readGuardReview(previousReview) {
       await assertGuardUnchanged(review, { allowFileCountChange: true });
       checkedAt = Date.now();
     },
-  });
+  };
+  const api = createGitHubApi(GITHUB_TOKEN, apiOptions);
+  const membershipApi = process.env.GH_APP_TOKEN
+    ? createGitHubApi(process.env.GH_APP_TOKEN, apiOptions)
+    : {
+        request() {
+          throw new Error("SecOps membership requires the organization Members-read App token.");
+        },
+      };
   const pullRequest = await api.request(pullPath);
   if (previousReview) {
     // Diff counts may settle and merged reviews may finish across recovery.
@@ -365,6 +373,7 @@ export async function readGuardReview(previousReview) {
   let issueNotices;
   review = {
     api,
+    membershipApi,
     owner,
     repo,
     event,
@@ -460,7 +469,7 @@ export async function failGuard(guard, error, { terminal = false } = {}) {
   );
 }
 
-async function maintainerRole(guard, user) {
+async function approverRole(guard, user) {
   if (user?.type !== "User" || !user.login) {
     return null;
   }
@@ -470,12 +479,27 @@ async function maintainerRole(guard, user) {
       `/repos/${guard.owner}/${guard.repo}/collaborators/${encodeURIComponent(user.login)}/permission`,
     );
   } catch (error) {
-    if (error?.status === 404) {
-      return null;
+    if (error?.status !== 404) {
+      throw error;
     }
-    throw error;
   }
-  return permission.role_name === "maintain" || permission.role_name === "admin"
+  if (guard.approvalCommand === securityReviewContracts.dependency.approvalCommand) {
+    if (permission?.role_name === "admin") {
+      return "admin";
+    }
+    try {
+      const membership = await guard.membershipApi.request(
+        `/orgs/${guard.owner}/teams/openclaw-secops/memberships/${encodeURIComponent(user.login)}`,
+      );
+      return membership.state === "active" ? "openclaw-secops" : null;
+    } catch (error) {
+      if (error?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+  return permission?.role_name === "maintain" || permission?.role_name === "admin"
     ? permission.role_name
     : null;
 }
@@ -526,7 +550,7 @@ export function withApprovalRequest(guard, body) {
 export async function findMaintainerApproval(guard) {
   const { pullRequest } = guard;
   const sha = pullRequest.head.sha;
-  const authorRole = await maintainerRole(guard, pullRequest.user);
+  const authorRole = await approverRole(guard, pullRequest.user);
   if (authorRole) {
     return { kind: "author", login: pullRequest.user.login, role: authorRole, sha };
   }
@@ -545,7 +569,7 @@ export async function findMaintainerApproval(guard) {
     ) {
       continue;
     }
-    const role = await maintainerRole(guard, comment.user);
+    const role = await approverRole(guard, comment.user);
     if (role) {
       return { kind: "comment", login: comment.user.login, role, sha, url: comment.html_url };
     }
@@ -561,7 +585,11 @@ export async function finishGuard(guard, { description, requiresApproval = false
   await publishGuardStatus(
     guard,
     allowed ? "success" : "pending",
-    allowed ? description : "A maintainer must approve the current PR revision",
+    allowed
+      ? description
+      : guard.approvalCommand === securityReviewContracts.dependency.approvalCommand
+        ? "An admin or SecOps member must approve the current PR revision"
+        : "A maintainer must approve the current PR revision",
   );
   guard.approval = approval;
   return allowed;
