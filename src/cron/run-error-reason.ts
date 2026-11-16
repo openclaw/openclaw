@@ -60,7 +60,8 @@ export function resolveCronAgentErrorClassification(
     case "blocked":
     case "abandoned":
     case "failed":
-      return reason ? { kind: "reason", reason } : { kind: "permanent" };
+      // An unknown run failure does not invalidate the automation's operator source.
+      return { kind: "reason", reason: reason ?? "unknown" };
   }
   return terminal.reason satisfies never;
 }

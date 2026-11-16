@@ -29,6 +29,25 @@ function stopOwnOperation(
 describe("runCronIsolatedAgentTurn watchdog cause", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it.each([
+    "Synthetic failure HTTP 503",
+    'Session "agent:main:cron:job-1" changed while starting work. Retry.',
+  ])(
+    "keeps unknown execution failures non-retryable without invalidating the source: %s",
+    async (message) => {
+      harness.runWithModelFallbackMock.mockRejectedValueOnce(new Error(message));
+      const result = await runCron(makeIsolatedAgentParamsFixture());
+      expect(result).toMatchObject({
+        status: "error",
+        errorClassification: { kind: "reason", reason: "unknown" },
+      });
+      expect(
+        resolveTransientCronRetryDecision({ ...result, error: result.error, consecutiveErrors: 1 })
+          .retryable,
+      ).toBe(false);
+    },
+  );
+
   it.each([false, true])(
     "preserves a nested-lane timeout without caller abort (user stop=%s)",
     async (userStop) => {
