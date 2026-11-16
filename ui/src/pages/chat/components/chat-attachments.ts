@@ -1,5 +1,6 @@
 import { t } from "../../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
@@ -161,8 +162,24 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
     imageFiles.push(pasted.file);
   }
   if (imageFiles.length === 0) {
-    // Clipboard text is user input regardless of length; file conversion would
-    // route it through document extraction's untrusted external-content boundary.
+    if (
+      text &&
+      text.length > 1000 &&
+      (props.getDraft?.() ?? props.draft ?? "").trim() &&
+      !props.imagesOnly &&
+      !props.readSignal?.aborted
+    ) {
+      const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
+      if (
+        admitAttachmentFiles([file], props.attachmentLimits, stagedAttachmentBytes(props)).length
+      ) {
+        const dataUrl = `data:text/plain;base64,${bytesToBase64(new TextEncoder().encode(text))}`;
+        const attachment = chatAttachmentFromFile(file, dataUrl);
+        attachment.origin = "paste";
+        props.onAttachmentsChange([...currentAttachments(props), attachment]);
+        e.preventDefault();
+      }
+    }
     return;
   }
   e.preventDefault();

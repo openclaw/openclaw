@@ -117,6 +117,7 @@ export async function prepareChatSendAttachments(params: {
               url: ref.mediaRef,
               contentType: ref.mimeType,
               fileName: ref.label,
+              origin: ref.origin,
             }));
         },
         {

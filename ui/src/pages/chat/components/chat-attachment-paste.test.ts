@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 
 it.each(["", "Review this plan:\n"])(
-  "keeps a long text paste as native user input with draft %j",
+  "keeps an empty draft inline and collapses a long paste beside an existing draft %j",
   (draft) => {
     const text = "Keep my instructions as user text. 🦞\n".repeat(50);
     const event = new Event("paste", { cancelable: true });
@@ -17,7 +17,13 @@ it.each(["", "Review this plan:\n"])(
       onAttachmentsChange,
     });
 
-    expect(event.defaultPrevented).toBe(false);
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(Boolean(draft));
+    if (draft) {
+      expect(onAttachmentsChange).toHaveBeenCalledWith([
+        expect.objectContaining({ origin: "paste", mimeType: "text/plain" }),
+      ]);
+    } else {
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+    }
   },
 );
