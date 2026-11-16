@@ -723,7 +723,9 @@ function streamCase(keyboardUp: boolean): Case {
         drawnMotion: [
           {
             from: early?.t ?? end,
-            to: filled ?? end,
+            // Past the late window's start: each window measures from its own first frame, so a
+            // jump right at the boundary would be the late window's baseline.
+            to: filled === undefined ? end : filled + 500,
             area: { ...transcript, height: early ? footerTop(early) - transcript.y : 0 },
             screenWidth: layout.screen.width,
           },
