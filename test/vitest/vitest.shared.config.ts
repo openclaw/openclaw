@@ -64,7 +64,6 @@ export const sharedVitestConfig = {
       BUNDLED_PLUGIN_TEST_GLOB,
       "packages/**/*.test.ts",
       "test/**/*.test.ts",
-      "ui/src/pages/chat/tool-stream.node.test.ts",
     ],
     setupFiles: [resolveRepoRootPath("test/setup.ts")],
     exclude: [...sharedVitestExcludePatterns],
