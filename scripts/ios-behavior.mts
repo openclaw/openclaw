@@ -1012,8 +1012,11 @@ try {
               (value) => String(Math.round(value)),
             ),
           ]).stdout,
-        ) as { frames: number; strips: number; maxMovePt: number };
+        ) as { frames: number; strips: number; maxMovePt: number; unexplainedFrames: number };
         result.metrics.drawnMovePt = measured.maxMovePt;
+        // Reported, not gated: on `main` the live bubble → final row handoff redraws the reply
+        // about 2 pt right and 1 pt down for a few frames, which no vertical shift explains.
+        result.metrics.drawnUnexplainedFrames = measured.unexplainedFrames;
         // A window outside the recording or a blank area reads as 0 pt without seeing anything.
         result.gates["recording covers the window with content (setup)"] =
           measured.frames >= 2 && measured.strips > 0;
