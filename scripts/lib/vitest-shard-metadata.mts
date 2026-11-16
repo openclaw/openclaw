@@ -276,6 +276,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/server.sessions.create.worktrees.test.ts", 23],
   // Two-run median case-body anchors from main runs 33504478720/33509347578.
   // These balance files; membership-specific wrapper spans own admission.
+  ["src/gateway/server.sessions.archive-worktree-lifecycle.test.ts", 34],
   ["src/gateway/server.sessions.delete-worktree-lifecycle.test.ts", 31],
   ["src/gateway/server.chat.gateway-server-chat-b.test.ts", 37],
   ["src/gateway/server.chat.gateway-server-chat.test.ts", 22],

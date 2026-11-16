@@ -17,7 +17,7 @@ rank	removed_lines	file	keeper_files	reason
 1072	848	src/agents/subagents/registry/subagent-registry-worker.test.ts	src/agents/subagents/registry/subagent-registry.test.ts;src/agents/subagents/registry/subagent-registry-lifecycle.test.ts	Approved file-level area consolidation; named final keepers retained.
 861	912	src/cli/update-cli/update-command-doctor-delegation.test.ts	src/cli/update-cli/update-command.test.ts	Approved file-level area consolidation; named final keepers retained.
 855	913	src/cli/update-cli/update-command-service.test.ts	src/cli/update-cli/update-command.test.ts	Approved file-level area consolidation; named final keepers retained.
-1069	849	src/commands/doctor-session-entry-state.test.ts	src/infra/state-migrations.test.ts	Approved file-level area consolidation; named final keepers retained.
+1069	0	src/commands/doctor-session-entry-state.test.ts	src/commands/doctor-session-entry-state.test.ts	Retained exact selected main: Doctor backs up and repairs retained ISO endedAt without losing session data or repeating repair.
 884	904	src/config/io.observe-recovery.test.ts	src/config/io.write-config.test.ts	Approved file-level area consolidation; named final keepers retained.
 869	909	src/config/sessions/session-accessor.sqlite-replacement-receipts.test.ts	src/config/sessions/session-accessor.test.ts;src/config/sessions/session-accessor.conformance.test.ts	Approved file-level area consolidation; named final keepers retained.
 833	920	src/config/sessions/session-actor-entry-residency.test.ts	src/config/sessions/session-accessor.conformance.test.ts;src/config/sessions/session-accessor.test.ts	Approved file-level area consolidation; named final keepers retained.
@@ -29,13 +29,13 @@ rank	removed_lines	file	keeper_files	reason
 1081	846	src/gateway/server-methods/artifacts.test.ts	src/gateway/server.agent-artifact-apis.test.ts;src/gateway/artifact-downloads.test.ts	Approved file-level area consolidation; named final keepers retained.
 835	918	src/gateway/server-methods/chat-send-pending-inputs.test.ts	src/gateway/server.chat.gateway-server-chat-b.test.ts	Approved file-level area consolidation; named final keepers retained.
 1093	843	src/gateway/server-plugins.session-facts.test.ts	src/gateway/server-plugins.test.ts	Approved file-level area consolidation; named final keepers retained.
-1060	852	src/gateway/server.sessions.archive-worktree-lifecycle.test.ts	src/gateway/sessions-patch.test.ts;src/agents/worktrees/service.test.ts	Approved file-level area consolidation; named final keepers retained.
+1060	0	src/gateway/server.sessions.archive-worktree-lifecycle.test.ts	src/gateway/server.sessions.archive-worktree-lifecycle.test.ts	Retained exact selected main: automatic archive, maintenance cleanup, rearchive and conversation restoration composition.
 845	916	src/gateway/session-list-serialization.test.ts	src/gateway/session-utils.test.ts;src/gateway/session-row-projection.test.ts	Approved file-level area consolidation; named final keepers retained.
 1096	842	src/gateway/worker-environments/inference-lifecycle.test.ts	src/worker/worker.runtime.test.ts	Approved file-level area consolidation; named final keepers retained.
 846	916	src/gateway/worker-environments/placement-dispatch-prepared.test.ts	src/gateway/worker-environments/service-prepare.test.ts;src/worker/worker.runtime.test.ts	Approved file-level area consolidation; named final keepers retained.
 1091	844	src/gateway/worker-environments/placement-dispatch-recovery.test.ts	src/worker/worker.runtime.test.ts;src/gateway/worker-environments/service-prepare.test.ts	Approved file-level area consolidation; named final keepers retained.
 1082	0	src/gateway/worker-environments/skill-resource-transfer.test.ts	src/gateway/worker-environments/skill-resource-transfer.test.ts	Retained exact selected main 0b305a28be644140b1ee0fef413ebfca237610b4: Worker skill-resource transfer coverage.
-1079	847	src/infra/run-node.test.ts	test/openclaw-launcher.e2e.test.ts;test/scripts/runtime-postbuild.test.ts	Approved file-level area consolidation; named final keepers retained.
+1079	0	src/infra/run-node.test.ts	src/infra/run-node.test.ts	Retained exact selected main: local build stdout routes to stderr before JSON command output.
 1064	851	src/infra/session-cost-usage.test.ts	src/gateway/server-methods/usage.test.ts	Approved file-level area consolidation; named final keepers retained.
 1066	0	src/infra/sqlite-readonly-worker.auth.test.ts	src/infra/sqlite-readonly-worker.auth.test.ts	Retained: exact current-main version 84579cbdcc6373edf365d459b07e8d088e372f97 has updated coverage; keep its complete selector entry and resolve the modify/delete conflict without deleting the test.
 1058	853	src/infra/sqlite-worker-store.test.ts	src/infra/sqlite-database-admission.worker.test.ts;src/state/openclaw-agent-db.test.ts	Approved file-level area consolidation; named final keepers retained.
@@ -45,7 +45,7 @@ rank	removed_lines	file	keeper_files	reason
 1083	846	test/openai-model-discovery-auth-order.test.ts	extensions/openai/openai-provider.test.ts;src/agents/models.profiles.live.test.ts	Approved file-level area consolidation; named final keepers retained.
 1085	845	test/scripts/ci-known-main-red.test.ts	test/scripts/watch-pr-ci.test.ts;test/scripts/ci-workflow-planning.test.ts;test/scripts/ci-workflow-guards.test.ts	Approved file-level area consolidation; named final keepers retained.
 850	0	test/scripts/full-release-child-reuse.test.ts	test/scripts/full-release-child-reuse.test.ts	Retained: exact current-main version 84579cbdcc6373edf365d459b07e8d088e372f97 has updated coverage; keep its complete selector entry and resolve the modify/delete conflict without deleting the test.
-868	910	test/scripts/pr-merge-rest.test.ts	test/scripts/pr-wrappers.test.ts	Approved file-level area consolidation; named final keepers retained.
+868	0	test/scripts/pr-merge-rest.test.ts	test/scripts/pr-merge-rest.test.ts	Retained exact selected main: actual 1.1 MiB REST merge body dispatch and retained UUID polling coverage.
 1055	0	src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts	src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts	Retained: Exact selected-file capacity qualification and its test require this suite; no deletion credit.
 872	0	src/gateway/test-helpers.acquisition.test.ts	src/gateway/test-helpers.acquisition.test.ts	Retained: Gateway acquisition runtime-selection and multi-config fixtures require this suite; no deletion credit.
 1090	0	src/auto-reply/reply/session-event-config-readmission.test.ts	src/auto-reply/reply/session-event-config-readmission.test.ts	Retained: New main visitor-policy terminal cases; no deletion credit.
