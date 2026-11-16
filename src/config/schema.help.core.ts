@@ -316,7 +316,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.realtime.consultRouting":
     "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
   "talk.consultThinkingLevel":
-    "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
+    "Preferred thinking level for the regular agent run behind Talk realtime consults. Unsupported choices are mapped to a supported level for the selected model; off can still enable thinking when the model requires it. Leave unset to preserve normal session/model behavior.",
   "talk.consultFastMode":
     "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
   "talk.speechLocale":
