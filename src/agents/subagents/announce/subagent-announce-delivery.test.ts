@@ -238,7 +238,7 @@ describe("queued completion handoff", () => {
         expect(executed).toBe(false);
         if (outcome === "delivery deadline") {
           deliveryDeadline.abort(new Error("completion delivery expired"));
-          expect(await delivery).toMatchObject({ delivered: false, path: "none" });
+          expect(await delivery).toMatchObject({ delivered: false, disposition: "retryable" });
           parentSettled.resolve();
           await vi.advanceTimersByTimeAsync(0);
           expect(executed).toBe(false);

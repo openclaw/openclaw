@@ -1,9 +1,11 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/agent-run-dispatch-outcome.js";
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
@@ -32,6 +34,7 @@ import {
   registerRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   deliver,
   registryRead,
@@ -97,9 +100,15 @@ describe("requester settle dispatch deadline", () => {
     { persistent: true, returned: true },
     { persistent: false, returned: true, aborted: true },
     { persistent: true, returned: false, aborted: true },
+    { persistent: false, returned: false, failure: "preparation" },
+    { persistent: true, returned: false, failure: "preparation" },
+    { persistent: false, returned: false, failure: "worker" },
+    { persistent: true, returned: false, failure: "worker" },
+    { persistent: false, returned: true, failure: "timeout" },
+    { persistent: true, returned: true, failure: "timeout" },
   ])(
-    "retries interrupted settlement with a bounded budget ($persistent, returned=$returned, aborted=$aborted)",
-    async ({ persistent, returned, aborted }) => {
+    "retries interrupted settlement with a bounded budget ($persistent, returned=$returned, aborted=$aborted, failure=$failure)",
+    async ({ persistent, returned, aborted, failure }) => {
       const context = createContext();
       const { child, completeBatch, params } = dispatchFixture();
       useDirectDelivery();
@@ -108,6 +117,22 @@ describe("requester settle dispatch deadline", () => {
         acceptTurn(turn);
         runIds.push(turn.preflight.request.idempotencyKey);
         if (persistent || runIds.length === 1) {
+          if (failure === "timeout") {
+            turn.io.emitFinal([
+              true,
+              { status: "timeout", stopReason: "timeout", replaySafe: true },
+              undefined,
+            ]);
+            return;
+          }
+          if (failure === "preparation") {
+            throw new SessionWorkStartChangedError(
+              "Session target preparation outlived its attempt",
+            );
+          }
+          if (failure === "worker") {
+            throw new WorkerTaskError("worker task timed out", "timeout");
+          }
           if (aborted) {
             const registration = registerRequesterTurn(turn, 60_000);
             try {
@@ -160,10 +185,14 @@ describe("requester settle dispatch deadline", () => {
       const run = () =>
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
-      if (aborted) {
+      if (aborted || failure) {
         expect(await deliver.mock.results[0]?.value).toMatchObject({
           delivered: false,
-          reason: "requester_aborted",
+          reason: aborted
+            ? "requester_aborted"
+            : failure === "preparation"
+              ? "requester_preparation_changed"
+              : "requester_timed_out",
           disposition: "retryable",
         });
       }
@@ -178,10 +207,63 @@ describe("requester settle dispatch deadline", () => {
       expect(runIds).toHaveLength(persistent ? 3 : 2);
       expect(new Set(runIds).size).toBe(runIds.length);
       expect(completeBatch).toHaveBeenCalledOnce();
+      if (persistent) {
+        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
+          delivered: false,
+          disposition: "permanent_failure",
+        });
+      }
       await expect(run()).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledTimes(persistent ? 3 : 2);
     },
   );
+
+  it.each([
+    new WorkerTaskError("worker task timed out", "timeout"),
+    new SessionWorkStartChangedError("Session target preparation outlived its attempt"),
+  ])("does not repeat unknown effects after execution ($name)", async (error) => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    useDirectDelivery();
+    startTurn.mockImplementation(async (turn) => {
+      acceptTurn(turn);
+      turn.io.emitExecutionStarted?.();
+      throw error;
+    });
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    await expect(run()).resolves.toBe(false);
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ disposition: "permanent_failure" });
+    expect(child.requesterSettleWake).toBeUndefined();
+    await expect(run()).resolves.toBe(false);
+    expect(startTurn).toHaveBeenCalledOnce();
+  });
+
+  it("bounds cancellation before dispatch instead of retiring path none as a permanent failure", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    useDirectDelivery();
+    deliver.mockImplementation((request) =>
+      sendSubagentAnnounceDirectly({ ...request, signal: AbortSignal.abort() }),
+    );
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    using clock = vi.spyOn(Date, "now");
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).not.toHaveBeenCalled();
+      if (attempt < 3) {
+        expect(completeBatch).not.toHaveBeenCalled();
+        expect(child.requesterSettleWake).toMatchObject({
+          status: "pending",
+          attemptCount: attempt,
+        });
+        expect(child.requesterSettleWake?.nextAttemptAt).toBeGreaterThan(Date.now());
+        clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
+      }
+    }
+    expect(completeBatch).toHaveBeenCalledOnce();
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ disposition: "permanent_failure" });
+    expect(child.requesterSettleWake).toBeUndefined();
+  });
 
   it("keeps a followup completion owed while its policy is unavailable", async () => {
     const context = createContext();
@@ -581,7 +663,6 @@ describe("requester settle dispatch deadline", () => {
       const context = createContext();
       const createFacade = context.createAgentTurnFacade;
       const { child, completeBatch, params } = dispatchFixture();
-      const initialWake = structuredClone(child.requesterSettleWake);
       useDirectDelivery();
       startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
         if (failure === "admitted") {
@@ -604,7 +685,10 @@ describe("requester settle dispatch deadline", () => {
       if (failure === "unavailable") {
         expect(startTurn).not.toHaveBeenCalled();
         expect(completeBatch).not.toHaveBeenCalled();
-        expect(child.requesterSettleWake).toEqual(initialWake);
+        expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
+        using clock = vi
+          .spyOn(Date, "now")
+          .mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
         context.createAgentTurnFacade = createFacade;
         startTurn.mockImplementation(async ({ preflight, io }) => {
           io.emitAcceptance([
