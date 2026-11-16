@@ -50,6 +50,7 @@ export function isMemberBrowserRequestPayload(
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
+  // SAFETY: the guard above establishes an object; each field remains unknown until checked below.
   const payload = value as Record<string, unknown>;
   return (
     Object.keys(payload).every((key) =>

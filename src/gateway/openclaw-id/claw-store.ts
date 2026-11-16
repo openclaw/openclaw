@@ -250,6 +250,7 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
             {},
             ...[...entries]
               .filter(([key]) => key.startsWith("member-browser-requests:"))
+              // SAFETY: clawStoreRows writes member request records into every browser-request chunk.
               .map(([, value]) => value as NonNullable<StoredClaw["member_browser_requests"]>),
           ),
         }
