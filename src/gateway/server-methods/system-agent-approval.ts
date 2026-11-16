@@ -305,8 +305,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
+      // An in-process caller identity is admitted by this gateway, so it keeps the
+      // existing "restricted only when explicitly denied" posture. A wire identity is
+      // not admitted here: it must carry the signed Full Access grant explicitly.
       const signedFullPermission =
-        (callerIdentity?.fullPermission ?? trustedAgentRuntime?.fullPermission) === true;
+        callerIdentity !== undefined
+          ? callerIdentity.fullPermission !== false
+          : trustedAgentRuntime?.fullPermission === true;
       let automatic = false;
       let approvalReason = describeDelegatedChangePolicyApproval(
         proposal.operation,
