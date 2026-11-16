@@ -18,7 +18,6 @@ import {
   registerActiveCronTaskRun,
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
-import { isDeferredCronAdmission } from "./admission-deferred.js";
 import {
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
@@ -79,7 +78,8 @@ async function deliverPrimaryWebhook(
   if (
     plan.mode !== "webhook" ||
     result.triggerEval?.fired === false ||
-    isDeferredCronAdmission(job, result)
+    // A skip before execution has status text, not output, even after a fired trigger.
+    (result.status === "skipped" && result.executionStarted === false)
   ) {
     return result;
   }

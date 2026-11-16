@@ -652,6 +652,64 @@ describe("cron trigger startup", () => {
 
 describe("cron webhook optional output", () => {
   installHarnessCleanup();
+  it("does not deliver an admission deferral after a trigger fires", async () => {
+    const evaluateCronTrigger = vi.fn(async () => evaluated(true));
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "skipped" as const,
+      summary: "Automation admission deferred by its current window or foreground activity",
+      executionStarted: false,
+      admissionDeferred: true,
+      admissionDeferredReason: "busy" as const,
+      delivered: false,
+      deliveryAttempted: false,
+    }));
+    const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
+    const h = await createHarness({
+      evaluateCronTrigger,
+      runIsolatedAgentJob,
+      sendCronWebhook,
+    });
+    const job = await h.cron.add(
+      watcher({ delivery: { mode: "webhook", to: "https://example.invalid/hook" } }),
+    );
+
+    await runWhenDue(h.cron, job.id);
+
+    expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    expect(sendCronWebhook).not.toHaveBeenCalled();
+    expect(h.events.find((event) => event.action === "finished")).toMatchObject({
+      status: "skipped",
+      triggerFired: true,
+      deliveryStatus: "not-requested",
+    });
+    expect(h.cron.getJob(job.id)?.state.triggerEvalCount).toBe(1);
+  });
+
+  it("does not deliver a skip before execution as output", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
+    const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
+    const h = await createHarness({ runIsolatedAgentJob, sendCronWebhook });
+    const job = await h.cron.add(
+      watcher({
+        trigger: undefined,
+        payload: { kind: "agentTurn", message: "Check the scratch", skipIfScratchEmpty: true },
+        delivery: { mode: "webhook", to: "https://example.invalid/hook" },
+      }),
+    );
+    await h.cron.writeScratch(job.id, { content: "" });
+
+    await h.cron.run(job.id, "force");
+
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(sendCronWebhook).not.toHaveBeenCalled();
+    expect(h.events.find((event) => event.action === "finished")).toMatchObject({
+      status: "skipped",
+      summary: "Automation scratch is explicitly empty",
+      deliveryStatus: "not-requested",
+    });
+  });
+
   it.each([
     { status: "ok", summary: " \n " },
     { status: "error", summary: undefined },
