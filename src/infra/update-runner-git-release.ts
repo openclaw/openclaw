@@ -67,7 +67,8 @@ export async function updateGitRelease(params: {
   const step = forRunner(timeoutMs);
   const workStep = forRunner(opts.timeoutMs);
   // A release is a worktree of the developer's checkout; Git work happens there.
-  const running = params.gitRoot;
+  // The selected release serves, even when this CLI runs from the preserved checkout.
+  const running = converting ? params.gitRoot : slot;
   const git = (root: string, ...args: string[]) =>
     runCommand(["git", "-C", root, ...args], { cwd: root, timeoutMs });
   const commonDir = (
