@@ -142,6 +142,19 @@ export function createPreparedAccountCatalogAccess(
     }
     return account;
   };
+  // Observation readers outlive acquisition; do not retain request discovery or authority callbacks.
+  const observe = (identityKey: string, published?: AccountCatalogObservation) => {
+    const outcomes = published?.outcomes;
+    return {
+      outcomes: outcomes ?? [],
+      hasPublishedCatalog: outcomes !== undefined,
+      isCurrent: () =>
+        ownerIsCurrent() &&
+        (published
+          ? accounts.get(identityKey) === published && published.outcomes === outcomes
+          : !accounts.has(identityKey)),
+    };
+  };
   retirementSignal?.addEventListener(
     "abort",
     () => {
@@ -275,11 +288,7 @@ export function createPreparedAccountCatalogAccess(
       let observation = readAccount(identityKey, params.credential);
       if (!observation) {
         if (!params.allowDiscovery) {
-          return {
-            outcomes: [],
-            hasPublishedCatalog: false,
-            isCurrent: () => ownerIsCurrent() && !accounts.has(identityKey),
-          };
+          return observe(identityKey);
         }
         observation = createAccount(identityKey, {
           source: "profile",
@@ -335,14 +344,8 @@ export function createPreparedAccountCatalogAccess(
         observation.pending!.refresh ||= params.refresh === true;
         observation = await observation.pending!.promise;
       }
-      const published = observation;
-      assertCurrent(published);
-      const outcomes = published.outcomes;
-      return {
-        outcomes: outcomes ?? [],
-        hasPublishedCatalog: outcomes !== undefined,
-        isCurrent: () => current(published) && published.outcomes === outcomes,
-      };
+      assertCurrent(observation);
+      return observe(identityKey, observation);
     },
   };
 }

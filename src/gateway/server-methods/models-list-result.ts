@@ -100,24 +100,22 @@ export async function buildModelsListResult(
 
 /** Prepares catalog work once; the returned reader revalidates native readiness without I/O. */
 export async function prepareModelsListResult({
-  preparationAuthority,
+  preparationAuthority: authority,
   ...params
 }: BuildModelsListResultParams): Promise<PreparedModelsListResult> {
   const { source } = params;
   const scope = params.readScope;
   const publicationScope = params.publicationScope ?? scope;
   const draft = scope?.draftAccountSelection;
-  const authority =
-    preparationAuthority ??
-    (draft
-      ? {
-          withCurrent: publicationScope?.withCurrent,
-          assertCurrent: () => {
-            draft.assertCurrent();
-            publicationScope?.assertCurrent?.();
-          },
-        }
-      : publicationScope);
+  authority ??= draft
+    ? {
+        withCurrent: publicationScope?.withCurrent,
+        assertCurrent: () => {
+          draft.assertCurrent();
+          publicationScope?.assertCurrent?.();
+        },
+      }
+    : publicationScope;
   const sessionEntry: ChatMetadataSessionEntry | undefined = draft
     ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
     : scope?.sessionEntry;
@@ -718,5 +716,8 @@ export async function prepareModelsListResult({
         };
       },
     };
+  }).finally(() => {
+    // Prepared readers share this context; request authority ends with preparation.
+    authority = undefined;
   });
 }

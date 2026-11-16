@@ -416,7 +416,8 @@ export function createGatewayChatMetadataRuntime(params: {
     {
       result: ModelsListResult;
       source: Parameters<typeof retainPublishedModelsList>[1];
-      readAuthStore: () => AuthProfileStore;
+      agentDir: string;
+      inheritedAuthDir?: string;
     }
   >();
   const retainedModelsList = async (key: string, request: PreparedModelsListRequest) => {
@@ -437,7 +438,11 @@ export function createGatewayChatMetadataRuntime(params: {
     return retainPublishedModelsList(published.result, published.source, {
       config: params.getConfig(),
       agentId: published.source.agentId,
-      authStore: published.readAuthStore(),
+      authStore:
+        getPreparedRuntimeAuthProfileStoreSnapshot(
+          published.agentDir,
+          published.inheritedAuthDir,
+        ) ?? EMPTY_AUTH_STORE,
     });
   };
   const readModelsList = async (
@@ -494,9 +499,8 @@ export function createGatewayChatMetadataRuntime(params: {
           authStore: agent.authStore,
           providerPlugins: metadataSnapshot.owners.providers,
         },
-        readAuthStore: () =>
-          getPreparedRuntimeAuthProfileStoreSnapshot(agentDir, inheritedAuthDir) ??
-          EMPTY_AUTH_STORE,
+        agentDir,
+        inheritedAuthDir,
       });
       pruneMapToMaxSize(publishedModelLists, CHAT_METADATA_CACHE_MAX_ENTRIES);
     }
