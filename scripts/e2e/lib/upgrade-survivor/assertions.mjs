@@ -1872,6 +1872,16 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
           (step?.name === "openclaw doctor" &&
             step.exitCode === 86 &&
             step.advisory?.kind === "package-post-install-doctor") ||
+          // The update owner intentionally skips this probe for remote/TLS profiles
+          // and when an existing Gateway owns the state; restart proof is separate.
+          (step?.name === "activated-gateway-startup" &&
+            step.exitCode === null &&
+            step.advisory?.kind === "recoverable-maintenance" &&
+            !step.termination &&
+            !step.signal &&
+            !step.killed &&
+            !step.outputLimitExceeded &&
+            !step.failureFacts?.length) ||
           (step?.name === "candidate-gateway-startup-cleanup" &&
             step.exitCode === null &&
             step.advisory?.kind === "recoverable-maintenance" &&
