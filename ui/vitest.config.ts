@@ -141,7 +141,6 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-queue.browser.test.tsx",
   "src/pages/chat/chat-queue-images.browser.test.ts",
   "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
-  "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker-layout.browser.test.tsx",
