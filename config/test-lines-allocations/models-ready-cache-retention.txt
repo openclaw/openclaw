@@ -1,2 +1,0 @@
-# Regression for live catalog retention and alternating configuration reuse.
-62

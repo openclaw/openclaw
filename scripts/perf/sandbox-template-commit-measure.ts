@@ -3,16 +3,23 @@
  * node --import ./scripts/tsx.mjs scripts/perf/sandbox-template-commit-measure.ts \
  *   --repo <synthetic-repo> --output <new-output> --image <local-node-pnpm-image> [--fixture]
  * --baseline-dir loads frozen local-workspace-template.ts, local-workspace-checkout.ts,
- * and dependency-template.ts (the first two gateway/worker-environments, last agents/sandbox).
+ * dependency-template.ts and template-cache.ts (gateway/worker-environments,
+ * agents/sandbox and agents/worktrees respectively).
+ * --divergent measures 22-path and 6,002-path transitions between sibling commits
+ * plus same-commit reuse, recording the existing owner diagnostic spans.
  * --registry uses is-number@7.0.0 and bridge networking to exercise pnpm repeat-install
  * behavior without local dependencies. --files may shrink this correctness-only fixture.
  * --contract also checks concurrent source changes and lockfile invalidation;
+ * --seed-only followed by --resume --burst 20 in another process checks restart reuse.
+ * --alternate [--burst 20] seeds three commits, then measures concurrent A/B/C waves.
+ * Results are saved before asserting zero repeated dependency preparations.
+ * Reuse the same --output; burst CPU/allocation are aggregate, not per-caller costs.
  * --profile records a separate source-change CPU profile (exclude from timing pairs).
  * Create them with git show <base>:src/gateway/worker-environments/<name>.ts.
  * Run two baseline A/A controls, then five counterbalanced baseline/candidate pairs.
  * Acceptance: same exact source and source-dependent install output; one refresh for
- * concurrent consumers, lock changes rebuild, lower owner cost; target prepare+apply
- * <10 s on source-only changes. Inclusive child phases must not be added twice.
+ * concurrent consumers, lock changes rebuild. For attribution-only changes, owner
+ * medians must remain within ±10%. Inclusive child phases must not be added twice.
  * Main-thread CPU/allocation exclude workers, Git, Docker, and guest processes.
  * Process CPU includes JS workers but excludes Git, Docker, and guest processes.
  * Prepare the local image from node:26.12.1-bookworm with
@@ -44,6 +51,11 @@ const { values } = parseArgs({
     files: { type: "string", default: "62000" },
     profile: { type: "boolean" },
     contract: { type: "boolean" },
+    "seed-only": { type: "boolean" },
+    resume: { type: "boolean" },
+    burst: { type: "string" },
+    alternate: { type: "boolean" },
+    divergent: { type: "boolean" },
     "baseline-dir": { type: "string" },
   },
 });
@@ -55,8 +67,8 @@ assert(
 );
 const repo = path.resolve(values.repo);
 const output = path.resolve(values.output);
-await fs.mkdir(output);
-await fs.mkdir(path.join(output, "tmp"));
+await fs.mkdir(output, { recursive: values.resume });
+await fs.mkdir(path.join(output, "tmp"), { recursive: values.resume });
 for (const key of Object.keys(process.env)) {
   if (key.toUpperCase().startsWith("GIT_")) {
     delete process.env[key];
@@ -142,8 +154,21 @@ if (values.fixture) {
   git("config", "gc.auto", "0");
   git("add", ".");
   git("commit", "-qm", "initial");
+  git("tag", "fixture-base");
+  if (values.divergent) {
+    git("commit", "--allow-empty", "-qm", "seed sibling");
+  }
   git("tag", "fixture-initial");
   for (const label of ["source-one", "source-two"]) {
+    if (values.divergent) {
+      git("checkout", "--quiet", "--detach", "fixture-base");
+      for (let i = 0; i < (label === "source-one" ? 20 : Math.min(6000, payloadFiles)); i++) {
+        await fs.appendFile(
+          path.join(repo, "src", `group-${Math.floor(i / 100)}`, `file-${i}.txt`),
+          `\n${label}\n`,
+        );
+      }
+    }
     await fs.writeFile(path.join(repo, "source.txt"), `${label}\n`);
     await fs.writeFile(
       path.join(repo, "vendor/dependency/index.js"),
@@ -168,7 +193,9 @@ Object.defineProperty(globalThis, instrumentation, {
 const owners = ["local-workspace-template.ts", "local-workspace-checkout.ts"];
 const hooks = registerHooks({
   load(url, context, next) {
-    const name = owners.find((file) => url.endsWith(`/src/gateway/worker-environments/${file}`));
+    const name = url.endsWith("/src/agents/worktrees/template-cache.ts")
+      ? "template-cache.ts"
+      : owners.find((file) => url.endsWith(`/src/gateway/worker-environments/${file}`));
     if (name && values["baseline-dir"]) {
       return {
         format: "module-typescript",
@@ -193,6 +220,7 @@ const hooks = registerHooks({
     return next(url, context);
   },
 });
+const { withDiagnosticsTimelineObserver } = await import("../../src/infra/diagnostics-timeline.js");
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const config = {
   logging: {
@@ -236,9 +264,9 @@ const guard = {
 const backend = await detectWorktreeFilesystemBackend(output, guard);
 assert(backend, "Native filesystem acceleration is required");
 const templateRoot = path.join(output, "templates");
-await fs.mkdir(templateRoot);
+await fs.mkdir(templateRoot, { recursive: values.resume });
 const rows: object[] = [];
-async function clone(label: string, ref: string) {
+async function clone(label: string, ref: string, verify = true) {
   const baseCommit = git("rev-parse", ref);
   const destination = path.join(output, label);
   const inspector = values.profile && label === "source-change" ? new Session() : undefined;
@@ -254,20 +282,34 @@ async function clone(label: string, ref: string) {
   const before = installs;
   const started = performance.now();
   const load = loadavg();
+  const phases: Record<string, number> = {};
   assert(
-    await withWorktreePreparationTiming("managed", () =>
-      cloneLocalWorkspaceTemplate({
-        source: repo,
-        repoRoot: repo,
-        baseCommit,
-        destination,
-        branch: `openclaw/${label}`,
-        temporaryRoot: path.join(output, "tmp"),
-        templateRoot,
-        env: process.env,
-        sandbox,
-        guard,
-      }),
+    await withDiagnosticsTimelineObserver(
+      (name, _attributes, duration) => {
+        if (duration !== undefined) {
+          phases[name] = (phases[name] ?? 0) + duration;
+          return undefined;
+        }
+        const start = performance.now();
+        return () => {
+          phases[name] = (phases[name] ?? 0) + performance.now() - start;
+        };
+      },
+      () =>
+        withWorktreePreparationTiming("managed", () =>
+          cloneLocalWorkspaceTemplate({
+            source: repo,
+            repoRoot: repo,
+            baseCommit,
+            destination,
+            branch: `openclaw/${label}`,
+            temporaryRoot: path.join(output, "tmp"),
+            templateRoot,
+            env: process.env,
+            sandbox,
+            guard,
+          }),
+        ),
     ),
   );
   const elapsedMs = performance.now() - started;
@@ -275,6 +317,7 @@ async function clone(label: string, ref: string) {
   const processUsed = process.cpuUsage(processCpu);
   const row = {
     label,
+    phases,
     elapsedMs,
     mainThreadCpuMs: (used.user + used.system) / 1000,
     processCpuMs: (processUsed.user + processUsed.system) / 1000,
@@ -293,6 +336,12 @@ async function clone(label: string, ref: string) {
   }
   rows.push(row);
   console.log(JSON.stringify(row));
+  if (verify) {
+    await verifyClone(destination, baseCommit);
+  }
+  return destination;
+}
+async function verifyClone(destination: string, baseCommit: string) {
   assert.equal(
     execFileSync("git", ["-C", destination, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     baseCommit,
@@ -316,17 +365,65 @@ async function clone(label: string, ref: string) {
       `${git("show", `${baseCommit}:vendor/dependency/index.js`)}\n`,
     );
   }
-  return destination;
 }
+async function burst(label: string, ref: string, count: number) {
+  const processCpu = process.cpuUsage();
+  const allocated = getHeapStatistics().total_allocated_bytes;
+  const before = installs;
+  const started = performance.now();
+  const destinations = await Promise.all(
+    Array.from({ length: count }, (_, i) => clone(`${label}-${process.pid}-${i}`, ref, false)),
+  );
+  rows.push({
+    label,
+    elapsedMs: performance.now() - started,
+    processCpuMs: Object.values(process.cpuUsage(processCpu)).reduce((a, b) => a + b) / 1000,
+    mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+    installs: installs - before,
+    ...(values.alternate ? { generations: await listTemplatesAsync(process.env) } : {}),
+  });
+  for (const destination of destinations) {
+    await verifyClone(destination, git("rev-parse", ref));
+  }
+}
+let alternationInstalls: number | undefined;
 try {
-  await clone("seed", "fixture-initial");
-  await clone("source-change", "fixture-source-one");
-  if (values.contract) {
+  if (!values.resume) {
+    await clone("seed", "fixture-initial");
+  }
+  if (values.alternate) {
+    assert(!values.resume && !values["seed-only"] && !values.contract && !values.profile);
+    const count = Number(values.burst ?? "3");
+    assert(Number.isSafeInteger(count) && count >= 3 && count <= 100);
+    await clone("seed-source-one", "fixture-source-one");
+    await clone("seed-source-two", "fixture-source-two");
+    rows.push({ label: "seed-generations", generations: await listTemplatesAsync(process.env) });
     const before = installs;
-    await Promise.all([
-      clone("waiter-a", "fixture-source-two"),
-      clone("waiter-b", "fixture-source-two"),
-    ]);
+    for (const [index, ref] of [
+      "fixture-initial",
+      "fixture-source-one",
+      "fixture-source-two",
+    ].entries()) {
+      await burst(`alternate-${index}`, ref, Math.floor(count / 3) + (index < count % 3 ? 1 : 0));
+    }
+    alternationInstalls = installs - before;
+  } else if (values.burst) {
+    const count = Number(values.burst);
+    assert(Number.isSafeInteger(count) && count > 0 && count <= 100);
+    const before = installs;
+    await burst("burst", "fixture-initial", count);
+    assert.equal(installs - before, 0, "Restart with unchanged template inputs must not reinstall");
+  } else if (!values["seed-only"]) {
+    await clone("source-change", "fixture-source-one");
+    if (values.divergent) {
+      await clone("large-change", "fixture-source-two");
+      await clone("same-commit", "fixture-source-two");
+    }
+  }
+  if (values.contract) {
+    const concurrentRef = values.divergent ? "fixture-base" : "fixture-source-two";
+    const before = installs;
+    await Promise.all([clone("waiter-a", concurrentRef), clone("waiter-b", concurrentRef)]);
     assert.equal(installs - before, 1, "Concurrent callers must share one install");
     await clone("lock-change", "fixture-lock");
   }
@@ -338,6 +435,7 @@ try {
         files: payloadFiles,
         payloadBytes: payloadFiles * 17742,
         installs,
+        alternationInstalls,
         rows,
         templates: await listTemplatesAsync(process.env),
       },
@@ -345,6 +443,9 @@ try {
       2,
     ),
   );
+  if (values.alternate) {
+    assert.equal(alternationInstalls, 0, "Returning to three prepared commits must not reinstall");
+  }
 } finally {
   // Cleanup only this isolated database's builders; never enumerate global containers.
   for (const entry of (await readRegistry({ env: process.env })).entries) {

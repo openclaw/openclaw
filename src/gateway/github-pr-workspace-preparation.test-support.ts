@@ -31,6 +31,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as skillsRuntime from "../skills/runtime/refresh.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import {
   createPublicationRepositories,
@@ -48,6 +49,38 @@ import * as workspaceStore from "./worker-environments/local-workspace-store.js"
 import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 export const mocks = githubPublicationTestMocks();
+
+export function observeManagedLayoutCaptures() {
+  let layoutChanged = false;
+  const ensureMounts = skillsRuntime.prepareSandboxMountSources;
+  const mounts = vi
+    .spyOn(skillsRuntime, "prepareSandboxMountSources")
+    .mockImplementation(async (...args) => (layoutChanged = await ensureMounts(...args)));
+  const observations: string[] = [];
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const storeObserver = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, run) =>
+      withStore(params, (store) =>
+        run({
+          ...store,
+          manifest: async (row, action) => {
+            if (layoutChanged && (action.kind === "probe" || action.kind === "scan")) {
+              observations.push(`${action.kind}:${action.target}`);
+            }
+            return await store.manifest(row, action);
+          },
+        }),
+      ),
+    );
+  return {
+    observations,
+    [Symbol.dispose]() {
+      storeObserver.mockRestore();
+      mounts.mockRestore();
+    },
+  };
+}
 
 const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
   ...process.env,

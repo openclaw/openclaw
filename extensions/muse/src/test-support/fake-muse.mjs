@@ -72,6 +72,15 @@ function answer() {
       visibleOutput: "file content",
     });
   }
+  if (active.prompt === "usage") {
+    // Two completions of this turn count; another turn's and a malformed notice must not.
+    const notice = (turnId, promptTokens, totalTokens, usage = { reasoningTokens: 5 }) =>
+      event("session/tokenUsage", { turnId, promptTokens, totalTokens, usage });
+    notice(active.turnId, 1000, 1020);
+    notice(active.turnId, 1200, 1234);
+    notice("other", 5, 9);
+    notice(active.turnId, "1", 9);
+  }
   const responses = new Map([
     ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],
     ["effort", `effort:${active.reasoningEffort}`],

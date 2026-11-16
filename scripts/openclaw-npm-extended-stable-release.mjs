@@ -3,7 +3,11 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import {
+  classifyReleaseTrain,
+  parseReleaseVersion,
+  validateRetiredLineReason,
+} from "./lib/release-version.mjs";
 import { decodePluginSdkApiArtifact } from "./plugin-sdk-api-release-evidence.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["beta", "latest", "extended-stable"]);
@@ -203,12 +207,20 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     };
   }
 
-  validateActiveExtendedStableLine(releaseVersion, request.mainPackageVersion);
+  validateActiveExtendedStableLine(
+    releaseVersion,
+    request.mainPackageVersion,
+    request.retiredLineReason,
+  );
   return { extendedStable: true, releaseVersion, extendedStableBranch };
 }
 
 // Core admission, parent dispatch, and plugin mutation share one retirement policy.
-export function validateActiveExtendedStableLine(releaseVersion, mainPackageVersion) {
+export function validateActiveExtendedStableLine(
+  releaseVersion,
+  mainPackageVersion,
+  retiredLineReason,
+) {
   const releaseVersionParsed = validateNpmPublishBoundary(releaseVersion, "extended-stable");
   const mainVersion = parseReleaseVersion(mainPackageVersion);
   if (
@@ -220,8 +232,14 @@ export function validateActiveExtendedStableLine(releaseVersion, mainPackageVers
   }
   const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
   const releaseCalendarMonth = releaseVersionParsed.year * 12 + releaseVersionParsed.month;
+  if (retiredLineReason !== undefined) {
+    validateRetiredLineReason(retiredLineReason);
+    if (mainCalendarMonth - releaseCalendarMonth <= 1) {
+      throw new Error("A retired-line decision is only valid for an older extended-stable line.");
+    }
+  }
   // Keep one active trailing-month line; advancing main another month retires the older line.
-  if (mainCalendarMonth - releaseCalendarMonth !== 1) {
+  if (mainCalendarMonth - releaseCalendarMonth !== 1 && retiredLineReason === undefined) {
     const expectedYear = mainVersion.month === 1 ? mainVersion.year - 1 : mainVersion.year;
     const expectedMonth = mainVersion.month === 1 ? 12 : mainVersion.month - 1;
     throw new Error(
@@ -231,6 +249,47 @@ export function validateActiveExtendedStableLine(releaseVersion, mainPackageVers
   if (classifyReleaseTrain(mainVersion) !== "stable") {
     throw new Error("Protected main must remain on a daily patch below 33.");
   }
+}
+
+// Retirement is authorized only by the existing human-approved parent receipt.
+// Raw workflow inputs and the core testing bypass do not grant this right.
+async function retiredLineReasonFromParent(releaseVersion, mainPackageVersion) {
+  try {
+    validateActiveExtendedStableLine(releaseVersion, mainPackageVersion);
+    if (!process.env.RETIRED_LINE_PUBLICATION_REASON) {
+      return undefined;
+    }
+  } catch (error) {
+    const mainVersion = parseReleaseVersion(mainPackageVersion);
+    const release = parseReleaseVersion(releaseVersion);
+    if (
+      !mainVersion ||
+      !release ||
+      mainVersion.year * 12 + mainVersion.month - (release.year * 12 + release.month) <= 1 ||
+      !process.env.RELEASE_PUBLISH_RUN_ID
+    ) {
+      throw error;
+    }
+  }
+  const { downloadReleaseApprovalReceipt } = await import("./release-approval-receipt.mjs");
+  const env = process.env;
+  const { receipt } = await downloadReleaseApprovalReceipt({
+    expected: {
+      repository: env.GITHUB_REPOSITORY,
+      parentRunId: env.RELEASE_PUBLISH_RUN_ID,
+      parentRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT,
+      toolingRef: env.EXPECTED_WORKFLOW_BRANCH ?? env.GITHUB_REF_NAME,
+      toolingFullRef: env.EXPECTED_WORKFLOW_FULL_REF ?? env.GITHUB_REF,
+      toolingSha: env.EXPECTED_WORKFLOW_SHA ?? env.GITHUB_WORKFLOW_SHA,
+      releaseTag: "v" + releaseVersion,
+      targetSha: env.RELEASE_TARGET_SHA ?? git(["rev-parse", "HEAD"]),
+      npmDistTag: "extended-stable",
+      parentStatePolicy: "active",
+    },
+    token: env.GH_TOKEN,
+  });
+  validateActiveExtendedStableLine(releaseVersion, mainPackageVersion, receipt.retiredLineReason);
+  return receipt.retiredLineReason;
 }
 
 export function validateExtendedStableRunIdentity({
@@ -368,7 +427,7 @@ function packageVersionAt(ref) {
   return JSON.parse(git(["show", `${ref}:package.json`])).version;
 }
 
-function validateRequestFromRepository() {
+async function validateRequestFromRepository() {
   const npmDistTag = process.env.RELEASE_NPM_DIST_TAG ?? "";
   const releaseTag = process.env.RELEASE_TAG ?? "";
   const npmWorkflowRef = process.env.NPM_WORKFLOW_REF ?? "";
@@ -420,6 +479,9 @@ function validateRequestFromRepository() {
       );
     }
     const checkoutSha = git(["rev-parse", "HEAD"]);
+    const mainPackageVersion = bypassExtendedStableGuard
+      ? ""
+      : packageVersionAt("refs/remotes/origin/main");
     return validateExtendedStableNpmReleaseRequest({
       npmDistTag,
       bypassExtendedStableGuard,
@@ -430,9 +492,10 @@ function validateRequestFromRepository() {
       tagSha: checkoutSha,
       extendedStableBranchSha: "",
       packageVersion,
-      mainPackageVersion: bypassExtendedStableGuard
-        ? ""
-        : packageVersionAt("refs/remotes/origin/main"),
+      mainPackageVersion,
+      retiredLineReason: bypassExtendedStableGuard
+        ? undefined
+        : await retiredLineReasonFromParent(packageVersion, mainPackageVersion),
     });
   }
   execFileSync(
@@ -451,6 +514,9 @@ function validateRequestFromRepository() {
     ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
     { stdio: "inherit" },
   );
+  const mainPackageVersion = bypassExtendedStableGuard
+    ? ""
+    : packageVersionAt("refs/remotes/origin/main");
   return validateExtendedStableNpmReleaseRequest({
     npmDistTag,
     bypassExtendedStableGuard,
@@ -460,13 +526,14 @@ function validateRequestFromRepository() {
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
     packageVersion,
-    mainPackageVersion: bypassExtendedStableGuard
-      ? ""
-      : packageVersionAt("refs/remotes/origin/main"),
+    mainPackageVersion,
+    retiredLineReason: bypassExtendedStableGuard
+      ? undefined
+      : await retiredLineReasonFromParent(packageVersion, mainPackageVersion),
   });
 }
 
-function main() {
+async function main() {
   const command = process.argv[2];
   if (command === "validate-active-line") {
     const repository = process.env.GITHUB_REPOSITORY ?? "";
@@ -479,11 +546,16 @@ function main() {
       { encoding: "utf8", timeout: 30_000 },
     );
     const mainPackageVersion = JSON.parse(Buffer.from(content, "base64").toString("utf8")).version;
-    validateActiveExtendedStableLine(process.env.PACKAGE_VERSION ?? "", mainPackageVersion);
+    const version = process.env.PACKAGE_VERSION ?? "";
+    validateActiveExtendedStableLine(
+      version,
+      mainPackageVersion,
+      await retiredLineReasonFromParent(version, mainPackageVersion),
+    );
     return;
   }
   if (command === "validate-request") {
-    const result = validateRequestFromRepository();
+    const result = await validateRequestFromRepository();
     console.log(
       result.extendedStable
         ? `Validated extended-stable npm release ${result.releaseVersion}.`
@@ -547,7 +619,7 @@ function main() {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    main();
+    await main();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`openclaw-npm-extended-stable-release: ${message}`);

@@ -1,5 +1,0 @@
-# Regression coverage for PR #194741: preserve safe startup failure reasons only
-# in desktop chat, keep shared/mobile copy unchanged, and verify persistence,
-# malformed metadata, native consent/binding guards, and concise UI rendering.
-# Exact net new test lines after consolidating 51 lines of repeated scaffolding.
-317

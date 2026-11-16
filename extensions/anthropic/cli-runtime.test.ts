@@ -228,7 +228,7 @@ describe("Claude native stdio boundary", () => {
           turn: 1,
           argv: expect.arrayContaining(["--resume", context.sessionId]),
           initialize: {
-            appendSystemPrompt: "changed authoritative instructions",
+            systemPrompt: "changed authoritative instructions",
             systemPromptSnapshot: false,
           },
         });
@@ -690,13 +690,15 @@ describe("Claude native stdio boundary", () => {
       ["mcp__openclaw__message"],
     ]);
     expect(detail).toMatchObject({
-      initialize: { appendSystemPrompt: SYSTEM, excludeDynamicSections: true },
+      initialize: { systemPrompt: SYSTEM, excludeDynamicSections: true },
       turn: 1,
       user: INPUT,
       synthetic: false,
       privateContext: "private prefix\n\nprivate suffix",
       permission: { behavior: "deny" },
     });
+    // OpenClaw's prompt replaces Claude Code's default prompt instead of extending it.
+    expect(detail.initialize).not.toHaveProperty("appendSystemPrompt");
     expect(
       await expectWarmResume(context, detail, {
         prompt: "Which color?",

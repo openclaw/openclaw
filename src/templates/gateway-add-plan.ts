@@ -14,6 +14,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { selectNextTemplateAgentId } from "./add-agent-id.js";
+import { readRetainedTemplateInitialization } from "./add-checkpoint.js";
 import {
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
@@ -57,10 +58,39 @@ async function selectNewWorkspace(
   throw new Error("No available Template workspace suffix");
 }
 
+export async function selectTemplateAgentWorkspace(
+  config: OpenClawConfig,
+  agentId: string,
+): Promise<string> {
+  const existingAgentIds = listAgentIds(config);
+  const configuredWorkspace = resolveAgentWorkspaceDir(config, agentId);
+  const existingWorkspaces = existingAgentIds.map((existingAgentId) => ({
+    agentId: normalizeAgentId(existingAgentId),
+    workspace: resolveAgentWorkspaceDir(config, existingAgentId),
+  }));
+  const claimedWorkspaces = existingWorkspaces
+    .filter((existing) => existing.agentId !== agentId)
+    .map((existing) => resolveCanonicalWorkspacePath(existing.workspace));
+  const overlapsConfiguredWorkspace = claimedWorkspaces.some((workspace) =>
+    workspacesOverlap(workspace, resolveCanonicalWorkspacePath(configuredWorkspace)),
+  );
+  const baseWorkspace =
+    !resolveAgentConfig(config, agentId)?.workspace && overlapsConfiguredWorkspace
+      ? path.join(resolveStateDir(), `workspace-${agentId}`)
+      : configuredWorkspace;
+  return existingWorkspaces.some((existing) => existing.agentId === agentId)
+    ? baseWorkspace
+    : await selectNewWorkspace(baseWorkspace, claimedWorkspaces);
+}
+
 export type GatewayTemplateAddPlanningContext = {
   config: OpenClawConfig;
-  sourceMcpServers: Record<string, Record<string, unknown>>;
+  sourceMcpServers:
+    | Record<string, Record<string, unknown>>
+    | (() => Promise<Record<string, Record<string, unknown>>>);
   agentId?: string;
+  /** Trusted in-flight creation receipt; never a wire field. */
+  admittedWorkspace?: string;
   packagePreflight?: TemplatePackagePreflight;
 };
 
@@ -72,29 +102,16 @@ export async function buildGatewayTemplateAddPlan(
   const agentId = context.agentId
     ? normalizeAgentId(context.agentId)
     : selectNextTemplateAgentId(source.manifest.agent.id, existingAgentIds);
-  const configuredWorkspace = resolveAgentWorkspaceDir(context.config, agentId);
-  const existingWorkspaces = existingAgentIds.map((existingAgentId) => ({
-    agentId: normalizeAgentId(existingAgentId),
-    workspace: resolveAgentWorkspaceDir(context.config, existingAgentId),
-  }));
-  const claimedWorkspaces = existingWorkspaces
-    .filter((existing) => existing.agentId !== agentId)
-    .map((existing) => resolveCanonicalWorkspacePath(existing.workspace));
-  const overlapsConfiguredWorkspace = claimedWorkspaces.some((workspace) =>
-    workspacesOverlap(workspace, resolveCanonicalWorkspacePath(configuredWorkspace)),
+  const workspace =
+    context.admittedWorkspace ?? (await selectTemplateAgentWorkspace(context.config, agentId));
+  const existingWorkspaces = existingAgentIds.map((id) =>
+    resolveAgentWorkspaceDir(context.config, id),
   );
-  const baseWorkspace =
-    !resolveAgentConfig(context.config, agentId)?.workspace && overlapsConfiguredWorkspace
-      ? path.join(resolveStateDir(), `workspace-${agentId}`)
-      : configuredWorkspace;
-  const workspace = existingWorkspaces.some((existing) => existing.agentId === agentId)
-    ? baseWorkspace
-    : await selectNewWorkspace(baseWorkspace, claimedWorkspaces);
   return await buildTemplateAddPlan({
     manifest: source.manifest,
     templateMarkdownBody: source.templateMarkdownBody,
     packageBootstrap: source.packageBootstrap,
-    openClawProfile: source.openClawProfile,
+    bundledSources: source.snapshot.bundledSources,
     source: source.source,
     diagnostics: source.diagnostics,
     context: {
@@ -103,12 +120,23 @@ export async function buildGatewayTemplateAddPlan(
       ...(!context.agentId ? { agentId } : {}),
       workspace,
       existingAgentIds,
-      existingWorkspacePaths: existingWorkspaces.map((existing) => existing.workspace),
-      existingMcpServers: context.sourceMcpServers,
+      existingWorkspacePaths: existingWorkspaces,
+      ...(context.admittedWorkspace ? { admittedWorkspace: context.admittedWorkspace } : {}),
+      // Most Templates have no MCP declarations. Do not read and validate the
+      // entire authored host configuration for an unrelated requirement type.
+      existingMcpServers:
+        Object.keys(source.manifest.mcpServers).length === 0
+          ? {}
+          : typeof context.sourceMcpServers === "function"
+            ? await context.sourceMcpServers()
+            : context.sourceMcpServers,
       packagePreflight:
         context.packagePreflight ??
-        ((pkg, destinationWorkspace) =>
-          preflightTemplatePackage(pkg, destinationWorkspace, { config: context.config })),
+        ((pkg, destinationWorkspace, sourceContext) =>
+          preflightTemplatePackage(pkg, destinationWorkspace, {
+            config: context.config,
+            ...sourceContext,
+          })),
     },
   });
 }
@@ -132,6 +160,32 @@ export async function planTemplateAddForGateway(
       source: ClawHubCoordinate;
     },
 ): Promise<TemplateLifecyclePlanResult> {
+  // Apply resumes an agent that a failed Add kept when its pending initialization
+  // matches this source. Review that agent as apply will: without its admission.
+  let context: GatewayTemplateAddPlanningContext = input;
+  const agentId = input.agentId ? normalizeAgentId(input.agentId) : undefined;
+  if (agentId && input.config.agents?.entries?.[agentId]) {
+    const workspace = await selectTemplateAgentWorkspace(input.config, agentId);
+    const retained = await readRetainedTemplateInitialization(
+      input.config,
+      agentId,
+      workspace,
+      input.source,
+      () => {},
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (retained) {
+      const entries = { ...input.config.agents.entries };
+      delete entries[agentId];
+      context = {
+        ...input,
+        config: { ...input.config, agents: { ...input.config.agents, entries } },
+        admittedWorkspace: workspace,
+      };
+    }
+  }
   const resolved = await withResolvedClawHubSource({
     coordinate: input.source,
     mode: "preview",
@@ -139,8 +193,8 @@ export async function planTemplateAddForGateway(
     ...(input.token ? { token: input.token } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
     run: async (source, trust) => {
-      const plan = await buildGatewayTemplateAddPlan(source, input);
-      return projectGatewayTemplateAddPlan(plan, source, trust, input.config);
+      const plan = await buildGatewayTemplateAddPlan(source, context);
+      return projectGatewayTemplateAddPlan(plan, source, trust, context.config);
     },
   });
   return resolved.value;

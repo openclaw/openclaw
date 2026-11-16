@@ -1,9 +1,9 @@
 // Per-claw mailbox: store-and-forward of opaque, end-to-end authenticated messages.
-import { isKeyFingerprint, type KeyFingerprint } from "../keys.js";
+import { isKeyFingerprint, isRandomId, type KeyFingerprint } from "../keys.js";
 import type { SignedStatement, UnixSeconds } from "../statements/types.js";
 
 /** Who reads a message: the claw's Gateway, every owner device, or one device by key fingerprint. */
-export type MailboxRecipient = "gateway" | "owners" | KeyFingerprint;
+export type MailboxRecipient = "gateway" | "owners" | "self" | KeyFingerprint;
 
 /** SAS enrollment steps carried through the mailbox (owner-key spec section 6.1). */
 export const ENROLLMENT_STEPS = ["start", "accept", "key", "sealed", "abort"] as const;
@@ -13,13 +13,16 @@ export type EnrollmentStep = (typeof ENROLLMENT_STEPS)[number];
 /**
  * Notice events the Gateway may mail. `seq_conflict` tells the one device whose root statement
  * was refused for a stale seq that the Gateway has republished its snapshot; its `ref` is the
- * Gateway's current seq. Every other event goes to all owner devices.
+ * Gateway's current seq. `rebind` tells every owner device that the claw moved to new machine
+ * keys; its `ref` is the new binding_seq. Every other event goes to all owner devices.
  */
 export const MAILBOX_NOTICE_EVENTS = [
   "kit_used",
   "redemption_pending",
   "redemption_resolved",
   "seq_conflict",
+  "rebind",
+  "member_device_added",
 ] as const;
 /** One of {@link MAILBOX_NOTICE_EVENTS}. */
 export type MailboxNoticeEvent = (typeof MAILBOX_NOTICE_EVENTS)[number];
@@ -27,8 +30,50 @@ export type MailboxNoticeEvent = (typeof MAILBOX_NOTICE_EVENTS)[number];
 /** Longest notice `ref` (an invite id, key fingerprint or decimal seq). */
 export const MAILBOX_NOTICE_REF_MAX_LENGTH = 128;
 
+/** Display-only member browser requests expire within thirty minutes. */
+export const MEMBER_BROWSER_REQUEST_TTL_SECONDS = 1800;
+
+/** An Inbox hint, not an enrollment or admission statement. Contains no device keys. */
+export type MemberBrowserRequestPayload = {
+  kind: "member_browser_request";
+  request_id: string;
+  action: "request" | "cancel";
+  member_account_id: string;
+  label: string;
+  expires_at: UnixSeconds;
+};
+
+/** Strict bounded shape; receivers separately check membership and their own clock. */
+export function isMemberBrowserRequestPayload(
+  value: unknown,
+): value is MemberBrowserRequestPayload {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  // SAFETY: the guard above establishes an object; each field remains unknown until checked below.
+  const payload = value as Record<string, unknown>;
+  return (
+    Object.keys(payload).every((key) =>
+      ["kind", "request_id", "action", "member_account_id", "label", "expires_at"].includes(key),
+    ) &&
+    payload.kind === "member_browser_request" &&
+    isRandomId(payload.request_id) &&
+    (payload.action === "request" || payload.action === "cancel") &&
+    typeof payload.member_account_id === "string" &&
+    payload.member_account_id.trim().length > 0 &&
+    payload.member_account_id.length <= 256 &&
+    typeof payload.label === "string" &&
+    payload.label.trim().length > 0 &&
+    payload.label.length <= 256 &&
+    typeof payload.expires_at === "number" &&
+    Number.isSafeInteger(payload.expires_at) &&
+    payload.expires_at > 0
+  );
+}
+
 /** Message payloads. Every security-relevant payload is a signed statement the reader verifies. */
 export type MailboxPayload =
+  | MemberBrowserRequestPayload
   | { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> }
   | { kind: "invite_redemption"; redemption: SignedStatement<"InviteRedemption"> }
   /** R-signed statements: kit enrollment (add_owner_device) and other root changes. */
@@ -44,18 +89,23 @@ export type MailboxPayload =
 
 /**
  * Whether a notice may go to a recipient: `seq_conflict` only to one device fingerprint (the
- * refused sender), every other event to the owner devices or one device.
+ * refused sender), `rebind` only to all owner devices, every other event to the owner devices
+ * or one device.
  */
 export function noticeRecipientAllowed(event: MailboxNoticeEvent, to: MailboxRecipient): boolean {
-  if (to === "gateway") {
+  if (to === "gateway" || to === "self") {
     return false;
+  }
+  if (event === "rebind") {
+    return to === "owners";
   }
   return event === "seq_conflict" ? isKeyFingerprint(to) : true;
 }
 
 /**
  * Checks a notice's event and `ref`; for `seq_conflict` the ref must be the Gateway's current
- * seq in decimal (no sign, no leading zeros, at most 15 digits).
+ * seq and for `rebind` the new binding_seq, in decimal (no sign, no leading zeros, at most 15
+ * digits).
  */
 export function isValidNotice(event: unknown, ref: unknown): event is MailboxNoticeEvent {
   // SAFETY: widening a literal tuple to its element supertype only for the membership test.
@@ -65,7 +115,7 @@ export function isValidNotice(event: unknown, ref: unknown): event is MailboxNot
   if (ref.length === 0 || ref.length > MAILBOX_NOTICE_REF_MAX_LENGTH) {
     return false;
   }
-  return event !== "seq_conflict" || parseSeqConflictRef(ref) !== undefined;
+  return (event !== "seq_conflict" && event !== "rebind") || parseSeqConflictRef(ref) !== undefined;
 }
 
 /** The Gateway's current seq from a `seq_conflict` notice ref, or undefined if malformed. */
@@ -75,6 +125,7 @@ export function parseSeqConflictRef(ref: string): number | undefined {
 
 /** Payload kinds the Gateway accepts from its mailbox. Device-signed MembershipChanges are not among them. */
 export const GATEWAY_MAILBOX_KINDS = [
+  "member_browser_request",
   "invite_redemption",
   "node_redemption",
   "root_statement",

@@ -127,12 +127,12 @@ selection, and self-hosted setup retains its existing range and toolchain-cache
 policy. A restored cache key is not runtime proof: record the selected binary and
 `node -v` when comparing runner backends.
 
-Runner choice does not depend on the pull request author. Same-repository PRs use the configured backend. Fork first attempts, including first-time contributors, use the default Blacksmith routes when repository variables are unavailable; their Node planner uses Blacksmith timings and the same capacity promotion. Fork check jobs keep the logical GitHub stripe layout because forks cannot mount the trusted caches that size the all-in-one jobs. Runner placement is separate from that layout and cache authority. The maintainers accepted the added Blacksmith spend. Fork retries route to GitHub-hosted runners. The repository backend override cannot reroute fork first attempts when the variable is unavailable. Pushes and manual dispatches are unaffected. Cache trust is a separate, stricter boundary: exact dependency restores require a pull request from `openclaw/openclaw`, and ordinary CI never publishes the shared archives. The separate trusted warmer owns publication.
+Same-repository PRs use the configured backend, subject to its author and starter admission. Fork PRs into `openclaw/openclaw` use GitHub-hosted runners for preflight, checks, Node shards, and failure reporting on every attempt, including when repository variables are unavailable. Their logical GitHub stripe layout and hosted Node plan match that placement. They do not acquire Boat or Blacksmith runners. Pushes and manual dispatches are unaffected. Cache trust remains separate: exact dependency restores require a pull request from `openclaw/openclaw`, and ordinary CI never publishes the shared archives. The separate trusted warmer owns publication.
 
 | Runner                          | Jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ubuntu-24.04`                  | The three ordinary upstream same-repository hybrid critical controls (`preflight`, selected `pr-failure-report`, and `openclaw/ci-gate`), hybrid preflight retries, `check-docs` in every mode (its ClawHub mirror clone is unauthenticated by design), `security-fast` outside hybrid first attempts, manual CI dispatch and other repository fallbacks, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, the whole Install Smoke workflow, all configurable CI jobs in `github` mode, and the remaining light lanes plus rerun Blacksmith lanes in `hybrid` mode. The GitHub/hybrid planner profile expands the Node matrix, QA Smoke to six parts, core oxlint across five stripes (two jobs on ordinary non-frozen hybrid push/PR runs), and current test-type checks across five core stripe jobs plus the central extensions/root/scripts tail. Extension/scripts lint plus optional UI and format checks stay in `check-lint`; frozen targets retain their historical three-job type layout. |
-| `blacksmith-4vcpu-ubuntu-2404`  | Automatic upstream `preflight` first attempts with an unset, `blacksmith`, or `runson` backend, retained hybrid fork and qualification routes, hybrid first-attempt `security-fast`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, and `skills-python`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `blacksmith-4vcpu-ubuntu-2404`  | Automatic upstream `preflight` first attempts with an unset, `blacksmith`, or `runson` backend, retained hybrid qualification routes, hybrid first-attempt `security-fast`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, and `skills-python`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `blacksmith-8vcpu-ubuntu-2404`  | Current-main hybrid first-attempt four-part QA Smoke, retained heavy Linux Node suites and native compact rows previously requesting the 4-class, the `checks-ui-e2e` browser-extension row, boundary/extension-heavy `check-additional-*` shards except runtime topology architecture, and `android`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `blacksmith-16vcpu-ubuntu-2404` | Main CI build artifacts, other automatic QA Smoke, Docker seed, Control UI E2E, current-target real-Gateway E2E, lint, dependencies, test types, core test-type stripes, extension package boundaries, and runtime topology architecture                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `blacksmith-32vcpu-ubuntu-2404` | Full CLI bins, memory-gated Node rows, two-child compact bins, Blacksmith tooling and agent-support bins, hybrid unified and SDK declaration compiler fixture bins, frozen-target real-Gateway E2E, Android Store Release and Internal distribution, separate npm release preflight and reusable release/E2E workflows, `report-plugin-sdk-api-diff`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -153,9 +153,9 @@ The table lists default placement. On eligible hybrid first attempts, the [hoste
 
 Control UI unit rows (`checks-ui`) stay on the existing Blacksmith 8-class for canonical hybrid/RunsOn first attempts, with the existing 20-minute timeout. Optional hosted admission does not move these shards. Explicit hosted routes, including retries and the `github` override, retain their 35-minute timeout. Coverage, workers, and per-test deadlines are unchanged.
 
-Baseline ratchets and Node shards start independently after preflight; the final gate still requires the selected ratchets to pass. Standalone ratchets use the Blacksmith 4-class on same-repository hybrid first attempts, automatic main runs, and admitted qualification dispatches. `check-plan` uses the 16-class for shared compiler snapshot memory on upstream first attempts with an unset, `blacksmith`, or `hybrid` backend, including fork PRs. The GitHub override, retries, ordinary manual and frozen targets, RunsOn planners, and other repository contexts retain hosted planning. Fork core type stripes with an unset or `blacksmith` backend also use the 16-class on current automatic first attempts. Their logical GitHub profile, five-stripe coverage, and restore-only cache authority remain unchanged; hybrid health admission retains its existing placement rules. Compiler and lint rows still wait for their complete plan; eligible guards and dependency rows start after preflight. See [admission measurements and cost](/ci/routing-costs#ratchet-admission-and-node-tests).
+Baseline ratchets and Node shards start independently after preflight; the final gate still requires the selected ratchets to pass. Standalone ratchets use the Blacksmith 4-class on same-repository hybrid first attempts, automatic main runs, and admitted qualification dispatches. `check-plan` uses the 16-class for shared compiler snapshot memory on upstream first attempts with an unset, `blacksmith`, or `hybrid` backend, excluding fork PRs. The GitHub override, retries, ordinary manual and frozen targets, RunsOn planners, and other repository contexts retain hosted planning. Fork core type stripes remain hosted with their logical GitHub profile, five-stripe coverage, and restore-only cache authority; same-repository hybrid health admission retains its existing placement rules. Compiler and lint rows still wait for their complete plan; eligible guards and dependency rows start after preflight. See [admission measurements and cost](/ci/routing-costs#ratchet-admission-and-node-tests).
 
-Current upstream core lint stripes use the 16-class on automatic first attempts with an unset, `blacksmith`, or `hybrid` backend, including fork PRs. The same five fork rows still own their core and extension lint chunks; the remaining extension chunk stays in the combined `check-lint` row, which already uses the 16-class. Standalone `check-lint-extensions-*` rows are hybrid-only and retain their existing route. PR caches stay restore-only. Retries, ordinary dispatches, frozen targets, other repositories, and `OPENCLAW_CI_RUNNER_BACKEND=github` keep hosted core lint; existing RunsOn and qualification routes are unchanged.
+Current upstream core lint stripes use the 16-class on automatic first attempts with an unset, `blacksmith`, or `hybrid` backend, excluding fork PRs. Five hosted fork rows own their core and extension lint chunks; the remaining extension chunk stays in the hosted `check-lint` row. Standalone `check-lint-extensions-*` rows are hybrid-only and retain their existing route. PR caches stay restore-only. Retries, ordinary dispatches, frozen targets, other repositories, and `OPENCLAW_CI_RUNNER_BACKEND=github` keep hosted core lint; existing RunsOn and qualification routes are unchanged.
 
 RunsOn retains its hosted placement for standalone ratchets and check planning, including qualification dispatches.
 
@@ -268,8 +268,8 @@ more than the build diagnostic. The label does not promise 32 usable CPUs; see
 
 ### Blacksmith runner capacity
 
-Npm preflight retains `blacksmith-32vcpu-ubuntu-2404`. Main CI previously used
-the same class for test types, core type stripes, and runtime-topology checks
+Main CI previously used `blacksmith-32vcpu-ubuntu-2404` for test types,
+core type stripes, and runtime-topology checks
 to compensate for smaller delivered machines.
 In the [2026-09-01 capacity check](https://github.com/openclaw/openclaw/actions/runs/33538827388),
 that label was the first measured class meeting the eight-CPU/24-GiB threshold
@@ -321,8 +321,10 @@ Current-target `build-artifacts` uses the existing 16-class. A [controlled Testb
 
 Existing recommendation-based promotions from the 8-class remain for `checks-node-compact-large-5` and `checks-node-compact-large-9`. Extension bundles follow the planner's runner metadata: the former bundle-16/bundle-25 overrides would attach old recommendations to different work after compaction. The former 32-to-16 overrides for `checks-node-compact-small-3`, `checks-node-compact-small-4`, and `checks-node-compact-small-10` are removed so these rows retain their planner-owned parallel or tooling capacity. Numbered bins can contain different work across profiles and revisions; the retained compact recommendations use a 24-hour window and still need ownership-based replacement when those bins change. A later recommendation identified CPU saturation for `build-artifacts` on the 16-class. Current complete-job duration and memory headroom still need measurement; the earlier controlled proof retains its original source scope.
 
-Current-target `checks-ui-e2e-real-gateway` rows use the 16-class. Frozen or
-unclassified targets retain the 32-class. The
+In Boat mode, `checks-ui-e2e-real-gateway` runs directly on GitHub-hosted
+`ubuntu-24.04`, including full release validation with a configured runner group.
+Other backends retain their routing: current targets use the 16-class, while
+frozen or unclassified targets retain the 32-class. The
 planner balances serial fixtures and audited parallel standalone files in the
 first row; the second owns the remaining parallel files. The first row also owns
 the desktop transport proof when selected by full manual/release validation or
@@ -330,7 +332,7 @@ a direct desktop-spec edit. Both rows retain their existing worker limits, build
 ordering, hosted fallbacks, and test deadlines. Runtime-only preparation leaves
 SDK declaration generation and validation with `build-artifacts`. The split adds
 one job and possible registration when the lane is selected, while ordinary PRs
-continue to omit it. Backend routing is unchanged. Exact-head
+continue to omit it. Exact-head
 CI measures complete row walls, including setup and transport proof.
 
 An earlier 16-class attempt exceeded the 20-minute Blacksmith budget.
@@ -383,27 +385,69 @@ unchanged by the measured-worker cutover.
 Backend routing still applies. Hybrid retries and fork retries retain their
 hosted routes. Ordinary manual CI dispatches remain hosted in hybrid mode;
 Full Release Validation's existing frozen-target lint exception remains separate.
-Npm preflight build and test jobs use the larger Blacksmith request by default
-and retain their explicit `use_github_hosted_runners` option, which Full Release
-Validation exposes as `npm_preflight_use_github_hosted_runners`. The final npm
+Npm preflight validates the caller, phase, and release ref on `ubuntu-24.04`
+before any compute job can run. Its build and test jobs are prepared to use
+`boat-xlarge` (16 vCPU, 32 GiB) when `OPENCLAW_CI_RUNNER_BACKEND=boat`, while
+retaining the explicit `use_github_hosted_runners` option exposed by Full Release
+Validation as `npm_preflight_use_github_hosted_runners`. The final npm
 qualification job uses `ubuntu-24.04`, honoring `OPENCLAW_RELEASE_RUNNER_GROUP`.
 It validates and seals the existing artifacts without rerunning builds or tests.
+
+In Boat mode, package Telegram E2E uses `boat-large` (8 vCPU, 16 GiB) and the
+release runtime-pair lane uses `boat` (4 vCPU, 8 GiB). Existing runner groups
+and other backend routes are unchanged. These selectors do not activate Boat
+or change account policy; live qualification remains a separate rollout gate.
 
 Candidate discovery and binding, plus short Full Release Validation admission,
 reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
 Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their existing runner selection and 720-minute
-budgets; standard hosted runners cannot preserve that lifetime.
+and the nightly watcher keep their 720-minute budgets. When
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
+and register ephemeral organization runners for those three jobs. Native Boat
+CI has a six-hour limit, so these watchers use regular VMs instead.
+
+This route requires the repository secrets `BOAT_API_KEY` and
+`BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
+`BOAT_RELEASE_RUNNER_GROUP`, and `BOAT_RUNNER_APP_ID`. Use a dedicated Boat runner
+GitHub App with organization self-hosted runner write access and a dedicated
+runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
+hosted runners. App token creation must succeed before a VM is provisioned;
+a missing app ID or private key stops provisioning.
+The runner group must admit the nightly workflow on `main` and
+`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
+Full Release Validation pins that reviewed watcher definition from its immutable
+`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
+verifier. When changing the watcher definition, update the caller pin and
+runner-group entry together. Install a Crabbox release supporting
+`actions register --receipt` and `actions unregister --receipt` before enabling
+the backend. The provisioning preflight rejects older clients before creating
+a VM.
+
+Each VM requests four CPUs, 8 GB RAM, and a 24-hour lifetime. Provisioning checks
+the granted deadline before registering a runner. Same-run job outputs carry
+only the VM creation identity and exact runner registration, without SSH keys or
+private Crabbox claims. Cleanup attempts deregistration and VM deletion
+independently, including after failed provisioning. A hard interruption before
+outputs reach GitHub can prevent automated cleanup; the provider expiry limits
+compute lifetime, but does not prove data deletion. An unconfirmed deletion
+reports its operation ID for reconciliation with `boat deletion status`.
 
 Mantis Discord and web UI actor authorization, request resolution, and ref
 validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
 placement and deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
-The QA controls honor their `runner_group` input. QA profile planning, builds,
-shards, aggregation, and live transport workloads keep their existing runners.
+The QA controls honor their `runner_group` input. Reusable live/E2E and QA
+profile runtime jobs are prepared to use Boat when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`. Existing source and actor admission still
+apply. Live/E2E jobs using the xlarge selector and repo E2E jobs use
+`boat-xlarge` (16 vCPU, 32 GiB). Medium live/E2E and QA profile jobs use
+`boat` (4 vCPU, 8 GiB). Explicit hosted overrides and
+runner groups retain their precedence, and other backend settings retain their
+existing routes. Activation requires compatible Boat account policy; these
+selectors do not change that policy. Live transport placement remains separate.
 
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
@@ -440,14 +484,15 @@ The `macos-swift` lane builds Swift tests once and runs each test once per job. 
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
-| Value                 | Light lanes                                                                            | Heavy lanes                                                                      | Rerun behavior                                                                        |
-| --------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks                 | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Existing behavior is unchanged                                                        |
-| `github`              | GitHub-hosted                                                                          | GitHub-hosted                                                                    | Every configurable job remains hosted                                                 |
-| `hybrid`              | Ordinary upstream same-repository critical controls and light lanes use hosted runners | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`               | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity  |
-| `runson`              | Hybrid baseline                                                                        | Hybrid baseline, with pure cron child rows on RunsOn for eligible first attempts | Automatic Spot-interruption retries disabled; other reruns retain the hybrid fallback |
+| Value                 | Light lanes                                                                            | Heavy lanes                                                                      | Rerun behavior                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks                 | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Existing behavior is unchanged                                                                     |
+| `github`              | GitHub-hosted                                                                          | GitHub-hosted                                                                    | Every configurable job remains hosted                                                              |
+| `hybrid`              | Ordinary upstream same-repository critical controls and light lanes use hosted runners | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`               | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity               |
+| `boat`                | Hybrid logical plan with admitted Boat Linux runners                                   | Boat on admitted first attempts; GitHub-hosted otherwise                         | Only same-repository runs authored and started by the rollout users listed below may allocate Boat |
+| `runson`              | Hybrid baseline                                                                        | Hybrid baseline, with pure cron child rows on RunsOn for eligible first attempts | Automatic Spot-interruption retries disabled; other reruns retain the hybrid fallback              |
 
-Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift and iOS build jobs use GitHub-hosted `xcode-27` with Xcode 27; iOS screenshot capture uses `xcode-27-xlarge`. The focused `macos-node` lane uses GitHub-hosted `xcode-27` in every backend mode, with the same test inventory and two-worker limit. Ordinary push and scheduled runs in `openclaw/openclaw`, and its same-repository PRs, use hosted `ubuntu-24.04` for `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` when `OPENCLAW_CI_RUNNER_BACKEND=hybrid`. Fork first attempts retain their existing Blacksmith preflight and gate; their reporter is already hosted. Runner groups remain honored. The `checks-windows` job uses `windows-2025` in every backend mode, retaining the optional full-release runner group. Its selected rows count toward the existing hosted-row budget on eligible non-frozen first attempts; the 40-row base and 45-row total limits are unchanged. Outside these macOS and Windows routes, all `workflow_dispatch` qualification/release overrides, retries, and backend modes keep their existing routes. The logical planner profile, cache trust, steps and deadlines are unchanged. These controls remove three Blacksmith assignments per eligible PR and two per eligible main run, with no new jobs. They count in the existing [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload); this is mandatory routing, independent of optional offload admission. Hosted assignment can still delay completion; see [measurements and estimated cost](/ci/routing-costs#hosted-assignment-on-the-critical-path). `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. For ordinary same-repository hybrid runs, `security-fast` retains a Blacksmith control assignment only when optional hosted admission is closed. Existing conservative registration reservations remain unchanged; this routing change does not assert free organization-wide capacity. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on upstream automatic runs (six rows for manual dispatches), `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, only the browser-extension E2E row may move to hosted Ubuntu; together with `security-fast`, preflight admits at most two optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
+Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift and iOS build jobs use GitHub-hosted `xcode-27` with Xcode 27; iOS screenshot capture uses `xcode-27-xlarge`. The focused `macos-node` lane uses GitHub-hosted `xcode-27` in every backend mode, with the same test inventory and two-worker limit. Ordinary push and scheduled runs in `openclaw/openclaw`, and its same-repository PRs, use hosted `ubuntu-24.04` for `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` when `OPENCLAW_CI_RUNNER_BACKEND=hybrid`. Fork PRs use hosted preflight, gate, and reporter jobs on every attempt. Runner groups remain honored. The `checks-windows` job uses `windows-2025` in every backend mode, retaining the optional full-release runner group. Its selected rows count toward the existing hosted-row budget on eligible non-frozen first attempts; the 40-row base and 45-row total limits are unchanged. Outside these macOS and Windows routes, all `workflow_dispatch` qualification/release overrides, retries, and backend modes keep their existing routes. The logical planner profile, cache trust, steps and deadlines are unchanged. These controls remove three Blacksmith assignments per eligible PR and two per eligible main run, with no new jobs. They count in the existing [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload); this is mandatory routing, independent of optional offload admission. Hosted assignment can still delay completion; see [measurements and estimated cost](/ci/routing-costs#hosted-assignment-on-the-critical-path). `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. For ordinary same-repository hybrid runs, `security-fast` retains a Blacksmith control assignment only when optional hosted admission is closed. Existing conservative registration reservations remain unchanged; this routing change does not assert free organization-wide capacity. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on upstream automatic runs (six rows for manual dispatches), `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, only the browser-extension E2E row may move to hosted Ubuntu; together with `security-fast`, preflight admits at most two optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
 
 The dispatch-only Plugin SDK API report requests the 32-class. Recent 8-class
 jobs exposed two CPUs and about 8 GiB of memory, below the parallel-render
@@ -460,33 +505,96 @@ this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
 
+### Android Store routing
+
+The standalone Android Store Release job selects `boat-xlarge` when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`. Its 16-vCPU, 32-GiB shape applies to first
+attempts and retries. Other backend modes retain
+`blacksmith-8vcpu-ubuntu-2404`. Scheduled and manual releases keep their existing
+canonical-main admission, protected environments, commands, and 120-minute deadline.
+
+### Hourly plugin routing
+
+Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
+backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
+16 GiB). Logical planner labels and test concurrency stay unchanged. Manual
+dispatches retain their existing `ubuntu-24.04` override; runner groups, coverage,
+runtime policies, artifact identities and deadlines are unchanged.
+
 ### Boat build qualification
+
+Live Media Runner Image and Sandbox Common Smoke are prepared to use
+GitHub-hosted `ubuntu-24.04` when the repository-wide Boat backend is enabled.
+Until that cutover, qualify Boat with the admitted `runner_backend=boat` dispatch
+below. The utility jobs retain their 30- and 45-minute budgets and existing
+triggers, permissions, and Docker commands. Other backend settings retain their
+existing routes.
 
 A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 `release_gate=true`, `pull_request_number`, and `target_ref` set to the full
 current same-repository PR head. The workflow branch and revision must match
 that head. Existing maintainer and exact-head admission applies.
 
-The default-shape first attempt runs only `build-artifacts` on `boat-xlarge`,
-using store-only dependency setup. Other runner routes use `hybrid`.
-Retries use the existing hosted route. Boat is not a repository backend value;
-this pilot does not change defaults, fork admission, or worker limits. The Boat
-GitHub integration, repository access, and account capacity must be configured
-before dispatch. Resource, cache, and artifact behavior still require live
-qualification before expanding the cutover.
+To qualify merged main, dispatch `ci.yml` from `main` with `runner_backend=boat`,
+`ci_shape=main`, `validation_tier=main`, `release_gate=false`,
+`release_scope=full`, `include_android=true`, and an empty `test_runtime_policy`.
+Leave `pull_request_number` empty and set `target_ref` to the full SHA of the
+main revision running the workflow. This route requires the canonical repository, branch
+ref, matching checkout/workflow/target SHA, and a maintainer actor. It selects
+scheduled-main coverage, including Bun, all platform families and full tooling,
+within the existing 77-row Node cap, even for docs-only or empty change sets.
+The dispatch actor supplies author provenance; both actor and starter must be
+in the rollout list below to allocate Boat runners. It does not change the repository backend.
 
-For artifact consumer qualification, set `ci_shape=main`. The Boat build keeps
-the 35-minute dispatch budget, and the plan selects the existing macOS runtime
-and published-driver artifact consumers even for a CI-only change. Those
-consumers remain selected on hosted retries. The macOS scope retains its native
-Node, Swift, and shared-package checks; no platform proof moves to Boat.
+`OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
+same-repository first attempts whose source author and starter are each one of
+`davemorin`, `jalehman`, `joshavant`, `steipete`, or `vincentkoc` may allocate Boat
+runners. Other authors, starters, forks, and retries use GitHub-hosted runners.
+Source author still means the PR creator or push commit author; an owner merging
+a contributor commit does not change that provenance. Scheduled and ordinary
+manual runs with no source author stay hosted. A maintainer qualification
+dispatch retains exact-head admission and checks the target PR author (or the
+validated main dispatch actor) as well as the starter.
 
-With `ci_shape=main` and `test_runtime_policy=node`, the first attempt also routes
-`checks-node-compact-large-4` to `boat-xlarge` when the existing plan selects its
-8-class, serial, source-only row. It retains the planned groups, worker limits,
-8-GiB Node heap, and 60-minute job budget. This row uses store-only dependency
-setup; failed-job-only retries stay hosted even when preflight outputs are reused.
-Retire the build and row overrides when the general Boat backend replaces this pilot.
+Boat's account-level public-CI allowlist is a separate admission layer. This
+workflow rollout admits only the five human owners above; it does not admit
+bot-authored or bot-started ordinary CI.
+
+Final Linux jobs map the Blacksmith 4/8-class to `boat`, 16-class to `boat-large`,
+and 32-class to `boat-xlarge`. Node jobs retain their logical 2/4/8-CPU budgets;
+group memory floors can select a larger physical runner without increasing those
+budgets. Rows that prepare the real worker compiler use at least `boat-large`
+(8 CPUs, 16 GiB), retaining their logical CPU budget. The selected board-store job requires 28 GiB and uses `boat-xlarge` with
+a 4-CPU budget. Baseline ratchets use the 16-GiB `boat-large` class. Actual RAM
+still gates overlap and memory-qualified workers. Node test children drop the
+inherited read/search capability so ordinary Unix permission checks apply.
+Android uses `boat-large`; its compact and main-PR test profiles retain their
+logical two-CPU budget. Full core lint uses five separate stripes with a 25-minute
+job timeout on the first Boat attempt, including setup. Other backends and hosted
+retries retain 15 minutes. Aside from the prepared-workspace exception below,
+Node packing, groups, timing identities, explicit workers, heaps, native providers,
+and release runner groups are unchanged. The
+build retains its 35-minute Boat budget.
+
+The prepared-workspace startup test runs in its own GitHub-hosted `ubuntu-24.04`
+row in Boat mode. Other files retain their Boat placement. The hosted row bypasses
+release runner groups and keeps its two-worker limit, preparation, and original
+job deadline; the test's 30-second child limit is unchanged.
+
+Boat uses store-only dependency setup. Scheduled cache warmers stay on hosted
+Ubuntu and retain the existing hosted namespace; a cache miss is valid. The
+former build and named Node-row pilots are replaced by this general route.
+Failed-job-only retries retain their emitted plan but execute on hosted runners
+without the Boat CPU cap. Rerunning all jobs creates a new GitHub-hosted plan.
+
+### Scheduled Android CodeQL routing
+
+Android Critical Security uses `boat-xlarge` for scheduled runs on canonical
+`openclaw/openclaw` main when `OPENCLAW_CI_RUNNER_BACKEND=boat`, including retries.
+Manual dispatches, other refs, and other backend modes retain
+`blacksmith-8vcpu-ubuntu-2404`. The CodeQL configuration, security permissions,
+build commands, and 45-minute deadline stay unchanged.
 
 ### RunsOn qualification
 
@@ -523,7 +631,7 @@ untrusted or unrelated targets cannot use this override.
 
 For a main-shaped measurement, set `ci_shape=main` with the same exact-head
 PR admission and choose `runner_backend=hybrid` or `runson`. This uses push
-coverage, the 70-row Node cap, Node runtime, and ordinary main proof/native
+coverage, the 70-row Node cap, daily Bun runtime, and ordinary main proof/native
 selection. It omits PR extension fallback and the two cron comparison controls;
 it does not add full-manual release-only work. Raw GitHub event/ref still own
 trust, concurrency, cache publication and provenance. The initial preflight is
@@ -572,15 +680,15 @@ Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the fa
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
 ```
 
-The `github` override also routes Full Release Validation orchestration, npm qualification, live QA, performance, package Telegram, OpenWebUI, and release runtime-pair jobs to GitHub-hosted Ubuntu. Existing explicit hosted-runner inputs remain supported. Runner placement changes; coverage, artifact identities, approvals, worker limits, and timeouts do not. Already-running jobs are not moved. Keep OpenWebUI disk requirements and performance baseline hardware differences in mind when interpreting hosted results.
+The `github` override also routes Full Release Validation orchestration, npm qualification, live QA, performance, package Telegram, and OpenWebUI jobs to GitHub-hosted Ubuntu. The release runtime-pair lane deliberately has no hosted fallback. Existing explicit hosted-runner inputs remain supported. The performance and QA Lab transport workflows also select `ubuntu-24.04` in `boat` mode, preserving their runner-group overrides. Runner placement changes; coverage, artifact identities, approvals, worker limits, and timeouts do not. Already-running jobs are not moved. Keep OpenWebUI disk requirements and performance baseline hardware differences in mind when interpreting hosted results.
 
-Hosted `ci.yml` paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs use the logical `github` check profile even when repository variables are unavailable, so broad core lint and test-type workloads retain hosted stripes instead of falling back to oversized all-in-one jobs that need trusted caches. Fork first attempts use Blacksmith Node labels when the backend variable is unavailable, so `node_runner_backend` uses the Blacksmith default and they get its measured timings and capacity promotion; fork retries plan Node shards with `github`. Failed-job-only fork retries keep their first-attempt matrix on hosted runners, where the shard executor clamps overlapping children to one. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Blacksmith Node and plateau lanes restore the exact workspace dependency archive from the trusted warmer. Eligibility uses the actual runner environment, so hosted lanes and retries stay on the ordinary store cache. The exact key includes the resolved Node patch, OS, architecture, and semantic dependency inputs; a different runner image safely misses and follows the existing store-install path. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the trusted warmer alone publishes each backend-local protected seed. The warmer's selected runner route determines whether that publication reaches Blacksmith's cache or GitHub's cache. Core oxlint keeps five fixed hosted stripes with one lint thread per process. The large agents, Gateway, infrastructure, and UI targets run in separate processes within their assigned stripe so native semantic caches are released before neighboring targets run. This isolation applies to explicit core-stripe invocations. Automatic full lint, including the published Git updater preflight, retains its original five aggregated core Programs even when CI environment variables are inherited. Ordinary non-frozen hybrid push/PR runs group stripes 1+2 and 3+4+5 sequentially across two jobs. Eligible first attempts and admitted qualification dispatches use the Blacksmith 16-class for both packed rows; hosted assignment placed them on the measured critical path. The first row took 621 seconds on the 8-class, including 568 seconds of lint; the second later exceeded its 15-minute job limit while running stripes 3, 4, and 5. Both retain four actual CPUs and the existing memory policy for larger bounded checks. Other admitted unpaired stripes use the 8-class. The aggregate gate follows the critical-control routing above: ordinary same-repository hybrid runs use hosted Ubuntu, while existing fork, dispatch, qualification, release and other backend overrides remain. The available GitHub override, retries, ordinary manual dispatches, and other repositories retain hosted routing. A failing stripe stops its row. The `github` profile, frozen targets, manual dispatches, and release gates retain five jobs; GitHub plugin stripes keep their existing owners. Plugin lint ownership is described below; script lint and optional UI and format checks stay in the existing `check-lint` row. Extension type-aware lint discovers `extensions/tsconfig.json` for plugin tests and helpers, retaining imported dependencies and shared ambient declarations without adding unrelated core/UI/package source roots. Plugin production files keep their existing package-boundary projects. Eligible core-source and test changes in pull requests reuse the local changed-check selector. On current targets with stripe support on `github` or `hybrid`, each of the five `check-test-types-core-*` rows validates the complete core graph boundary, then compiles the changed tests' consuming graphs that belong to its assigned stripe. Stripe membership is assigned before narrowing, so empty intersections stay empty and the union preserves every selected consumer. Ambiguous compiler ownership or a removed test selects every registered core test graph across those same five stripes. The additional-boundary lane transfers its core graph check to these required type rows, and `check-test-types` owns only the extensions/root/scripts tail. Full runs use the same five stripes without consumer narrowing. Frozen targets retain two paired rows for stripes 1+2 and 3+4, with stripe 5 in the central row. Targets without stripe support and the all-Blacksmith profile keep the full central path. Each core type row preserves at most two concurrent compiler children and one builder per child. Core checks retain the standalone resource policy; the remaining type commands retain their existing environment. A failed boundary or compiler stops its row before another command starts.
+Hosted `ci.yml` paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs use the logical `github` check profile even when repository variables are unavailable, so broad core lint and test-type workloads retain hosted stripes instead of falling back to oversized all-in-one jobs that need trusted caches. Fork attempts plan Node shards with `github`, including when the backend variable is unavailable. Failed-job-only fork retries keep their first-attempt matrix on hosted runners, where the shard executor clamps overlapping children to one. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Blacksmith Node and plateau lanes restore the exact workspace dependency archive from the trusted warmer. Eligibility uses the actual runner environment, so hosted lanes and retries stay on the ordinary store cache. The exact key includes the resolved Node patch, OS, architecture, and semantic dependency inputs; a different runner image safely misses and follows the existing store-install path. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the trusted warmer alone publishes each backend-local protected seed. The warmer's selected runner route determines whether that publication reaches Blacksmith's cache or GitHub's cache. Core oxlint keeps five fixed hosted stripes with one lint thread per process. The large agents, Gateway, infrastructure, and UI targets run in separate processes within their assigned stripe so native semantic caches are released before neighboring targets run. This isolation applies to explicit core-stripe invocations. Automatic full lint, including the published Git updater preflight, retains its original five aggregated core Programs even when CI environment variables are inherited. Ordinary non-frozen hybrid push/PR runs group stripes 1+2 and 3+4+5 sequentially across two jobs. Eligible first attempts and admitted qualification dispatches use the Blacksmith 16-class for both packed rows; hosted assignment placed them on the measured critical path. The first row took 621 seconds on the 8-class, including 568 seconds of lint; the second later exceeded its 15-minute job limit while running stripes 3, 4, and 5. Both retain four actual CPUs and the existing memory policy for larger bounded checks. Other admitted unpaired stripes use the 8-class. The aggregate gate follows the critical-control routing above: ordinary same-repository hybrid runs use hosted Ubuntu, while forks stay hosted and existing dispatch, qualification, release and other backend overrides remain. The available GitHub override, retries, ordinary manual dispatches, and other repositories retain hosted routing. A failing stripe stops its row. The `github` profile, frozen targets, manual dispatches, and release gates retain five jobs; GitHub plugin stripes keep their existing owners. Plugin lint ownership is described below; script lint and optional UI and format checks stay in the existing `check-lint` row. Extension type-aware lint discovers `extensions/tsconfig.json` for plugin tests and helpers, retaining imported dependencies and shared ambient declarations without adding unrelated core/UI/package source roots. Plugin production files keep their existing package-boundary projects. Eligible core-source and test changes in pull requests reuse the local changed-check selector. On current targets with stripe support on `github` or `hybrid`, each of the five `check-test-types-core-*` rows validates the complete core graph boundary, then compiles the changed tests' consuming graphs that belong to its assigned stripe. Stripe membership is assigned before narrowing, so empty intersections stay empty and the union preserves every selected consumer. Ambiguous compiler ownership or a removed test selects every registered core test graph across those same five stripes. The additional-boundary lane transfers its core graph check to these required type rows, and `check-test-types` owns only the extensions/root/scripts tail. Full runs use the same five stripes without consumer narrowing. Frozen targets retain two paired rows for stripes 1+2 and 3+4, with stripe 5 in the central row. Targets without stripe support and the all-Blacksmith profile keep the full central path. Each core type row preserves at most two concurrent compiler children and one builder per child. Core checks retain the standalone resource policy; the remaining type commands retain their existing environment. A failed boundary or compiler stops its row before another command starts.
 
 The `agents-sessions` graph owns root `src/agents/session-*.test.ts(x)` tests and the complete `src/agents/sessions/`, `src/agents/session-maintenance/`, `src/agents/subagents/`, and `src/config/sessions/` test subtrees, keeping session runtime, recovery, subagent, and storage tests together. The `agents-tools` graph also owns shell/tool tests, nested sandbox tests, managed-worktree tests, and the complete security and secrets test subtrees. The `agents-other` graph owns the remaining nested agents test subtrees and every root-level model catalog, selection, fallback, and auth test (`src/agents/model-*.test.ts(x)`), plus a few listed root-level prepared-runtime and workspace tests; `agents-root` keeps the remaining root-level agents tests. The `config-cli` graph owns configuration, hook, and CLI tests except the separately owned session, daemon, cron, program, and update subtrees. The `cli-update` graph owns `src/cli/update-cli/` and root `src/cli/update*.test.ts(x)` tests; `commands` owns `src/cli/program/`. Root-level Gateway session tests belong to `gateway-root`; `gateway-server` owns root-level `server*.test.ts(x)` tests and the complete `src/gateway/server/` test subtree. The `gateway-methods` graph owns `src/gateway/server-methods/`; `gateway-other` owns `src/gateway/worker-environments/`, the node-side `src/node-host/` and `src/worker/` test subtrees, and the remaining nested Gateway tests. The `infra` graph owns infrastructure and media tests; `state-logging` owns audit, state, logging, and shared tests plus the root-level `src/infra/sqlite-*` and `src/infra/state-migrations*` tests. The `plugin-sdk` graph owns the complete `src/plugin-sdk/` and `src/channels/` test subtrees; `messaging` owns auto-reply and outbound infrastructure tests. The `services-cron` graph owns cron CLI (the nested `src/cli/cron-cli/` tests and root `src/cli/cron*.test.ts(x)` tests) and cron tests; `services` owns daemon CLI, daemon, process, system-agent, skills, and infrastructure update tests. New graph splits are appended to the shared registry so existing stripe assignments stay stable. The core-test boundary guard requires every test root exactly once across the registered graphs and reports graphs above 720 roots; the root budget fails local checks and is a warning in GitHub Actions. The inventory regression test warns at the same limit so a rebalance gets scheduled. The graphs keep their existing stripe assignments and compiler concurrency; moved tests follow their new graph's stripe. Changed-test selection still checks every consuming graph.
 
 The `ui-e2e-chat` graph owns root-level `ui/src/e2e/chat*.test.ts(x)` tests. The `ui-e2e` graph retains the other UI E2E tests and `ui/src/test-helpers/control-ui-e2e*.test.ts(x)` harness tests. Both retain the UI bootstrap and Solid JSX compiler settings. The new graph is appended to the canonical registry, preserving existing stripe assignments and the five CI type-check rows.
 
-Android admits all four rows together on upstream Blacksmith push and PR first attempts, including fork PRs. Hosted routes, retries, manual dispatches, and schedules retain two. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
+Android admits all four rows together on upstream Blacksmith push and PR first attempts, excluding fork PRs. Hosted routes, including forks, retries, manual dispatches, and schedules retain two. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
 
 Task-scoped Blacksmith sticky disks retain the Gradle user home across dependency changes. Gradle owns content-addressed invalidation and periodic expiry of unused caches and wrapper distributions; CI does not erase the warm home when a dependency fingerprint changes. Protected pushes remain the only snapshot writers, and pull requests consume read-only clones. Dependency resolution remains online so a changed dependency or cold snapshot can populate missing artifacts.
 

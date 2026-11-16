@@ -18,13 +18,16 @@ struct CommandSessionSection: Identifiable {
 enum CommandSessionGrouping {
     static func sections(
         from entries: [OpenClawChatSessionEntry],
-        knownGroups: [String] = []) -> [CommandSessionSection]
+        knownGroups: [String] = [],
+        preservesGroupOrder: Bool = false) -> [CommandSessionSection]
     {
         let pinned = entries.filter { $0.pinned == true }.sorted(by: self.activityComesBefore)
         let unpinned = entries.filter { $0.pinned != true }
         // Stored-but-empty groups still render as sections so they remain
         // visible move targets after their last member leaves.
-        let categoryNames = self.categories(from: unpinned, knownGroups: knownGroups)
+        let categoryNames = preservesGroupOrder
+            ? OpenClawChatSessionGroupCatalog.names(catalog: nil, local: knownGroups, sessions: unpinned)
+            : self.categories(from: unpinned, knownGroups: knownGroups)
         var sections: [CommandSessionSection] = []
 
         if !pinned.isEmpty {

@@ -11,10 +11,17 @@ assert.equal(summary.format, "openclaw-team-shape-v1");
 assert(summary.profile.startsWith("team-shape-"));
 const config = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
 const fromSource = (name) => import(pathToFileURL(path.join(source, name)).href);
-const [{ listAgentIds }, owner, { assertSqliteIntegrity }, stateOwner] = await Promise.all([
+const [
+  { listAgentIds },
+  owner,
+  { assertSqliteIntegrity },
+  { readSqliteDatabaseIntegrityVerification },
+  stateOwner,
+] = await Promise.all([
   fromSource("src/agents/agent-roster.ts"),
   fromSource("src/state/openclaw-agent-db.ts"),
   fromSource("src/infra/sqlite-integrity.ts"),
+  fromSource("src/infra/sqlite-database-admission.ts"),
   fromSource("src/state/openclaw-state-db.ts"),
 ]);
 const results = [];
@@ -23,14 +30,18 @@ for (const agentId of listAgentIds(config)) {
   const database = owner.openOpenClawAgentDatabase({ agentId });
   const relative = path.relative(state, realpathSync(database.path));
   assert(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-  const verified = assertSqliteIntegrity(database.db, `synthetic fixture ${agentId}`);
-  assert.equal(verified.integrityCheck, "ok");
+  const reused = readSqliteDatabaseIntegrityVerification(database.db) !== undefined;
+  if (!reused) {
+    const verified = assertSqliteIntegrity(database.db, `synthetic fixture ${agentId}`);
+    assert.equal(verified.integrityCheck, "ok");
+  }
   await owner.closeOpenClawAgentDatabasesAsync();
   const result = {
     agentId,
     startedAt,
     elapsedMs: Date.now() - startedAt,
     integrityCheck: "full+foreign-keys",
+    verification: reused ? "reused-native-proof" : "fresh-full-scan",
     close: "native owner",
   };
   results.push(result);

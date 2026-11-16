@@ -130,6 +130,7 @@ export function DebugPage() {
     liveError: string | null;
     callMethod: string;
     callParams: string;
+    callOutcomeMethod: string;
     callResult: string | null;
     callError: string | null;
   } = {
@@ -138,6 +139,7 @@ export function DebugPage() {
     liveError: null,
     callMethod: "",
     callParams: "{}",
+    callOutcomeMethod: "",
     callResult: null,
     callError: null,
   };
@@ -282,11 +284,13 @@ export function DebugPage() {
       return;
     }
     const epoch = ++callEpoch;
+    const method = state.callMethod.trim();
+    state.callOutcomeMethod = method;
     state.callError = state.callResult = null;
     publish();
     try {
       const params: unknown = state.callParams.trim() ? JSON.parse(state.callParams) : {};
-      const result = await scope.client.request(state.callMethod.trim(), params);
+      const result = await scope.client.request(method, params);
       if (lifecycle.isCurrent(scope) && epoch === callEpoch) {
         state.callResult = JSON.stringify(result, null, 2);
       }
@@ -466,7 +470,13 @@ export function DebugPage() {
             title={t("common.call")}
             control={
               <>
-                <button class="btn primary" onClick={() => void callDebugMethod()}>
+                <button
+                  class="btn primary"
+                  disabled={
+                    gateway.read().snapshot.phase !== "connected" || !read("callMethod").trim()
+                  }
+                  onClick={() => void callDebugMethod()}
+                >
                   {t("common.call")}
                 </button>
               </>
@@ -474,17 +484,24 @@ export function DebugPage() {
           />
           <Show when={read("callError")}>
             <div class="settings-row settings-row--stacked" role="alert">
+              <span class="settings-row__title mono">{read("callOutcomeMethod")}</span>
               <Status kind="danger" label={t("debug.callFailed")} />
-              <pre class="code-block" role="group" aria-label={t("debug.callFailed")} tabindex={0}>
+              <pre
+                class="code-block"
+                role="group"
+                aria-label={`${read("callOutcomeMethod")}: ${t("debug.callFailed")}`}
+                tabindex={0}
+              >
                 {read("callError")}
               </pre>
             </div>
           </Show>
           <Show when={read("callResult")}>
             <div class="settings-row settings-row--stacked">
+              <span class="settings-row__title mono">{read("callOutcomeMethod")}</span>
               <Status kind="ok" label={t("common.ok")} />
               <CodeBlock
-                title={`${read("callMethod")}: ${t("common.ok")}`}
+                title={`${read("callOutcomeMethod")}: ${t("common.ok")}`}
                 value={read("callResult") ?? ""}
                 format={String}
               />

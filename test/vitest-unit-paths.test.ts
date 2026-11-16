@@ -1,6 +1,7 @@
 // Vitest unit path tests validate unit test include and exclude paths.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isPlainRepoRelativePath } from "./vitest/vitest.include-patterns.ts";
 import {
   filterUnitConfigTestFiles,
   isUnitConfigTestFile,
@@ -32,7 +33,7 @@ describe("isUnitConfigTestFile", () => {
     ).toEqual([packageFile, sourceFile, packageFile]);
   });
 
-  it("preserves native exclusions for noncanonical paths in bulk and singleton discovery", () => {
+  it.each([false, true])("matches native exclusions (canonical: %s)", (canonical) => {
     const included = "src/unowned-fixture.test.ts";
     const excluded = "src/state/openclaw-database-verify.process.test.ts";
     const files = [
@@ -44,8 +45,10 @@ describe("isUnitConfigTestFile", () => {
       excluded.replace("/state/", "/state/../state/"),
       excluded.replaceAll("/", "\\"),
       excluded.toUpperCase(),
+      excluded.replace("openclaw", "OPENCLAW"),
+      "src/.hidden-fixture.test.ts",
       included,
-    ];
+    ].filter((file) => !canonical || isPlainRepoRelativePath(file));
     const expected = files.filter((file) => {
       const normalized = file.split(path.sep).join("/");
       return (

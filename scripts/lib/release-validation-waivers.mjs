@@ -1,10 +1,166 @@
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
 
+// The beta.3 owner accepted these observed failures on 2026-11-14 at 13:30 UTC.
+// CI aggregate causes use workflow job keys, not displayed shard names.
+const BETA3_CI_FAILURES = new Map([
+  ["checks-ui (3/3)", "checks-ui"],
+  ["android-screenshots", "android-screenshots"],
+  ["checks-node-agentic-agents-core-runtime", "checks-node-core-test-nondist-shard"],
+  ["checks-node-agentic-control-plane-runtime-state", "checks-node-core-test-nondist-shard"],
+]);
+const BETA3_DOCKER_JOB = "Run Docker release-path validation / Docker E2E (package/update OpenAI)";
+const STABLE_114_TARGET_SHA = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+const STABLE_114_CI_FAILURES = new Map([
+  ["checks-node-agentic-control-plane-runtime-state", "checks-node-core-test-nondist-shard"],
+  ["checks-ui-e2e-real-gateway (1/2)", "checks-ui-e2e-real-gateway"],
+  ["macos-swift (tests)", "macos-swift"],
+]);
+
+const STABLE_114_D843_TARGET_SHA = "d843d6af39a42cd3c30084edbeabeece732fd93a";
+const STABLE_114_D843_CI_FAILURES = new Map([
+  ["checks-node-agentic-gateway-server-isolated-4", "checks-node-core-test-nondist-shard"],
+]);
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
-export const RELEASE_VALIDATION_WAIVERS = [
+const RELEASE_VALIDATION_WAIVERS = [
+  ...["ios-screenshots-iphone", "ios-screenshots-ipad-13"].map((jobName) => ({
+    targetVersion: "2026.10.33",
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney authorized an iOS-only exception on 2026-11-16 at 22:14 UTC " +
+      "because this extended-stable release does not publish iOS. The observed " +
+      "screenshot jobs failed packaging evidence due to an Xcode version mismatch. " +
+      "Retain raw failures; this is not a test pass or a not-run exemption. Only " +
+      "these two terminal failed screenshot jobs are granted. All other jobs, " +
+      "versions, incomplete evidence, integrity checks and publication approval " +
+      "remain blocking.",
+  })),
+  {
+    targetVersion: "2026.11.5",
+    childRole: "releaseChecksCandidate",
+    jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    reason:
+      "Dallin Romney explicitly authorized this Telegram package-job waiver on " +
+      "2026-11-16 at 18:20 UTC. FRV 43898101600/1, child 43902860005/1, job " +
+      "133430641645 passed the first 15 scenarios, then failed the quiet-progress " +
+      "assertion in scenario 16. Provider success and exactly-once final delivery " +
+      "passed before that assertion; all 18 Telegram plugin shards and the separate " +
+      "live Telegram lane passed. The candidate permits bounded Exec status text " +
+      "that differs from the frozen qualification assertion, supporting a test-contract " +
+      "mismatch rather than demonstrated P0/P1 delivery loss. Actual offending message " +
+      "text was not retained, so a display or detail-exposure defect is not ruled out. " +
+      "Later package scenarios were not proved by that failed run. Retain raw failures " +
+      "and required execution; no not-run exemption. This accepts only the named " +
+      "terminal failed job for this release, not other Gateway/native failures, " +
+      "cancelled or missing evidence, credentials, integrity, install/update, " +
+      "or publication gates.",
+  },
+  {
+    targetVersion: "2026.11.5",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.5 performance waiver on " +
+      "2026-11-16 at 18:13 UTC after reviewing FRV 43898101600/1, child " +
+      "43899049574/1: all 15 runs exceeded RSS budgets, including gateway " +
+      "1418.1-1521 MB versus 1177/1193 MB and agent 1385-1456.7 MB versus " +
+      "1150 MB. One CPU interval was inconclusive. Baseline parity with " +
+      "2026.11.4 is unverified; this is explicit acceptance, not non-regression proof. " +
+      "This release-wide grant covers only the named Kova threshold failures. " +
+      "Retain raw failures and reports; no global budget changes or not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crashes, correctness, " +
+      "isolation, data integrity, install/update and publication gates remain blocking.",
+  },
+  ...[
+    {
+      childRole: "normalCi",
+      jobName: "checks-node-agentic-gateway-server-isolated-4",
+    },
+    {
+      childRole: "releaseChecksIndependent",
+      jobName: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+    },
+  ].map(({ childRole, jobName }) => ({
+    childRole,
+    jobName,
+    targetVersion: "2026.11.4",
+    targetSha: STABLE_114_D843_TARGET_SHA,
+    reason:
+      "Dallin Romney explicitly authorized these two failures on 2026-11-15 at 21:50 UTC " +
+      "for unchanged C/Q d843d6af39a42cd3c30084edbeabeece732fd93a. " +
+      "FRV 43759426550/1: child 43759963756/1 job 132952700537 recorded a catalog " +
+      "warm ownership-file read; child 43759969390/1 job 132953160694 recorded a " +
+      "missing required native read. Both original failures remain unresolved; " +
+      "catalog diagnostic replays are not a fix and the native replay was quota-blocked. " +
+      "Retain raw errors and artifacts. This grant accepts only the named terminal " +
+      "failed jobs on this exact candidate, not a test pass, not-run exemption or " +
+      "historical evidence relabeling. All other jobs, candidates, versions, required " +
+      "coverage, identity, integrity and publication approval remain blocking.",
+  })),
+  ...["Native live gateway core", "Native live test harnesses"].map((suite) => ({
+    targetVersion: "2026.11.4",
+    targetSha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
+    childRole: "releaseChecksIndependent",
+    jobName: `Run repo/live E2E validation / Native live suites (${suite})`,
+    reason:
+      "Dallin Romney explicitly authorized these two native-live failures on " +
+      "2026-11-15 at 15:03 UTC for unchanged C/Q e283dccf68ba35ef1af5b3fa31571db7f4b6bc74. " +
+      "Observed child 43719709063/1 failed gateway core and test harnesses; " +
+      "the original failures remain unresolved. Retain raw failures and artifacts. " +
+      "This grant accepts only the named terminal failed jobs on this exact candidate. " +
+      "Ordinary green-only child reuse is unchanged; fresh executions of these jobs " +
+      "on this candidate may use the grant. There is no not-run exemption. Other " +
+      "jobs, versions, candidates, incomplete evidence, identity, integrity and " +
+      "publication approval remain blocking.",
+  })),
+  ...[...STABLE_114_CI_FAILURES.keys()].map((jobName) => ({
+    targetVersion: "2026.11.4",
+    targetSha: STABLE_114_TARGET_SHA,
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney explicitly waived the three remaining failures on " +
+      "2026-11-15 at 04:13 UTC, retaining candidate " +
+      STABLE_114_TARGET_SHA +
+      " for fresh qualification, reseal and publication of 2026.11.4. " +
+      "Diagnostic origin FRV 43641896010/1 tested old candidate " +
+      "005030c3a09843601af3de546dbff77240175a66, not this candidate. " +
+      "This grant accepts only the named terminal failed job on the fixed candidate; " +
+      "retain raw failures. There is no not-run exemption or historical evidence reuse. " +
+      "Other jobs, versions, candidates, skipped, cancelled, timed-out or incomplete " +
+      "evidence, identity, integrity and publication approval remain blocking.",
+  })),
+  ...[...BETA3_CI_FAILURES.keys(), BETA3_DOCKER_JOB].map((jobName) => ({
+    targetVersion: "2026.11.5-beta.3",
+    childRole: jobName === BETA3_DOCKER_JOB ? "releaseChecksCandidate" : "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney explicitly accepted the remaining beta.3 failures on " +
+      "2026-11-14 at 13:30 UTC and requested beta-profile qualification at 13:31 UTC. " +
+      "Observed in FRV 43594812558/1: UI reply navigation, Android Overview startup, " +
+      "Google Decision deadline, Gateway RPC timeouts, and Docker Codex followthrough " +
+      "without a configured message channel. This grant matches only this version, " +
+      "child role and named failed job; it accepts that job's failures, not a test pass. " +
+      "Retain raw evidence. Missing, cancelled, other jobs, package identity, " +
+      "artifact integrity and publication authorization remain blocking.",
+  })),
+  {
+    targetVersion: "2026.11.5-beta.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.5-beta.3 " +
+      "performance waiver on 2026-11-13 at 20:19 UTC, including CPU, latency " +
+      "and RSS, superseding the prior RSS-only scope. This matches only the " +
+      "exact release version, productPerformance role and failed Kova job. " +
+      "Retain raw failures and reports; there is no not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crash, " +
+      "correctness, isolation, data-integrity and install/update gates remain blocking.",
+  },
   {
     targetVersion: "2026.9.37",
     childRole: "productPerformance",
@@ -33,6 +189,35 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "the operator additionally authorized a new candidate qualification " +
       "with performance explicitly waived-not-run. The old receipt supports " +
       "that exception only; it does not measure or qualify the new candidate.",
+  },
+  {
+    targetVersion: "2026.11.4",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.4 performance " +
+      "waiver on 2026-11-13 at 13:06 UTC, superseding the prior run-specific grant. " +
+      "Like 2026.11.2 and 2026.11.3, this matches the exact version, child role, " +
+      "and failed Kova job across all runs, attempts, and candidates for this release; " +
+      "it does not classify individual performance metrics within that job. " +
+      "Retain raw failures and reports. There is no not-run exemption. Other failed " +
+      "jobs, missing or cancelled evidence, and crash, correctness, isolation, " +
+      "data-integrity, and install/update gates remain blocking.",
+  },
+  {
+    targetVersion: "2026.11.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.3 Kova waiver on " +
+      "2026-11-10 at 03:34 UTC after reviewing FRV 42733555990/1, child " +
+      "42734139245/1 on prior C fb9ce54d: RSS 1809.8-1819.6 MB > 1800 MB, " +
+      "peak gateway CPU 433.7% > 340%, and process-tree CPU 467.4% > 360%. " +
+      "Like 2026.11.2, this matches the exact version, child role, and failed " +
+      "Kova job; it does not classify individual metrics within that job. " +
+      "Retain raw failures. The prior run does not qualify new C 40223c5cc262; " +
+      "there is no not-run exemption. Other failed jobs, missing or cancelled " +
+      "evidence, and all other normal release gates remain blocking.",
   },
   {
     targetVersion: "2026.11.2",
@@ -142,6 +327,62 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (
+    waiver.targetVersion === "2026.10.33" &&
+    waiver.childRole === "normalCi" &&
+    ["ios-screenshots-iphone", "ios-screenshots-ipad-13"].includes(waiver.jobName)
+  ) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: ["ios-screenshot-shard finished with failure (selected=true)"],
+        exactCauses: true,
+      },
+    ];
+  }
+  const stableCiFailures =
+    waiver.targetSha === STABLE_114_TARGET_SHA
+      ? STABLE_114_CI_FAILURES
+      : waiver.targetSha === STABLE_114_D843_TARGET_SHA
+        ? STABLE_114_D843_CI_FAILURES
+        : undefined;
+  if (
+    waiver.targetVersion === "2026.11.4" &&
+    waiver.childRole === "normalCi" &&
+    stableCiFailures?.has(waiver.jobName)
+  ) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: [stableCiFailures.get(waiver.jobName) + " finished with failure (selected=true)"],
+        exactCauses: true,
+      },
+    ];
+  }
+  if (waiver.targetVersion === "2026.11.5-beta.3") {
+    if (waiver.childRole === "normalCi" && BETA3_CI_FAILURES.has(waiver.jobName)) {
+      return [
+        {
+          jobName: "openclaw/ci-gate",
+          stepName: "Verify selected CI lanes",
+          causes: [
+            `${BETA3_CI_FAILURES.get(waiver.jobName)} finished with failure (selected=true)`,
+          ],
+        },
+      ];
+    }
+    if (waiver.childRole === "releaseChecksCandidate" && waiver.jobName === BETA3_DOCKER_JOB) {
+      return [
+        {
+          jobName: "Verify release checks",
+          stepName: "Verify release check results",
+          causes: ["docker_e2e_release_checks ended with failure"],
+        },
+      ];
+    }
+  }
   if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
     return [];
   }
@@ -173,6 +414,10 @@ function aggregateCauses(waiver) {
           jobName: "Verify release checks",
           stepName: "Verify release check results",
           causes: [cause],
+          ...(waiver.targetVersion === "2026.11.4" &&
+          waiver.targetSha === STABLE_114_D843_TARGET_SHA
+            ? { exactCauses: true }
+            : {}),
         },
       ];
     }
@@ -182,10 +427,11 @@ function aggregateCauses(waiver) {
 
 // Raw leaf and workflow conclusions are never rewritten. The caller owns the
 // aggregate validation verdict and must also authenticate failed aggregate logs.
-export function evaluateReleaseChildPolicy({ child, targetVersion }) {
+export function evaluateReleaseChildPolicy({ child, targetVersion, targetSha }) {
   const waivers = RELEASE_VALIDATION_WAIVERS.filter(
     (waiver) =>
       waiver.targetVersion === targetVersion &&
+      (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
       waiver.childRole === child.key &&
       // A reviewed historical failure never grants leniency to a new execution.
       (!waiver.evidence ||
@@ -248,6 +494,27 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
 // not excuse a second failure in that same aggregate job.
 export class ReleaseAggregateValidationError extends Error {}
 
+// Ignore echoed shell source, not error records: only line-leading runner
+// annotations (after a timestamp and optional color) are observed causes.
+function exactAggregateCauses(log) {
+  return log.split(/\r?\n/u).flatMap((line) => {
+    const record = line
+      // eslint-disable-next-line no-control-regex -- Only SGR color is removed; other controls fail closed.
+      .replace(/\u001b\[[0-9;]*m/gu, "")
+      .replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /u, "");
+    const match = /^(?:##\[error\]|::error(?: title=CI job did not succeed)?::)(.*)$/u.exec(record);
+    if (match) {
+      return match[1] === "Process completed with exit code 1." ? [] : [match[1]];
+    }
+    // Malformed error records and remaining control characters fail closed.
+    return /^(?:##\[error|::error)/u.test(record) ||
+      // eslint-disable-next-line no-control-regex -- Reject controls that could conceal an error record.
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(record)
+      ? [record]
+      : [];
+  });
+}
+
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
@@ -273,14 +540,21 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const log = String(await getJobLog(job.id));
-    const causes = log
-      .split(/\r?\n/u)
-      .filter((line) => !line.includes("\u001b"))
-      .flatMap((line) => {
-        const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
-        return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
-      });
-    if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
+    const causes = aggregate.exactCauses
+      ? exactAggregateCauses(log)
+      : log
+          .split(/\r?\n/u)
+          .filter((line) => !line.includes("\u001b"))
+          .flatMap((line) => {
+            const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
+            return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
+          });
+    if (
+      causes.length === 0 ||
+      causes.some((cause) => !aggregate.causes.includes(cause)) ||
+      (aggregate.exactCauses &&
+        (causes.length !== aggregate.causes.length || new Set(causes).size !== causes.length))
+    ) {
       throw new ReleaseAggregateValidationError(
         `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
       );

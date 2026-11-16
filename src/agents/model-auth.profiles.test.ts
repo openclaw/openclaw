@@ -52,16 +52,14 @@ import {
   resolveEnvApiKey,
 } from "./model-auth.js";
 
-const authStateOptions = {
-  layout: "state-only",
-  prefix: "openclaw-auth-",
-  agentEnv: "main",
-} as const;
 function withAuthState(
   run: Parameters<typeof withOpenClawTestState>[1],
   options: Partial<Parameters<typeof withOpenClawTestState>[0]> = {},
 ) {
-  return withOpenClawTestState({ ...authStateOptions, ...options }, run);
+  return withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-auth-", agentEnv: "main", ...options },
+    run,
+  );
 }
 
 function model(id: string, api: Model["api"], extra: Partial<Model> = {}): Model {
@@ -128,22 +126,24 @@ vi.mock("../plugins/provider-external-auth-core.js", async () =>
   (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
 );
 
+// mock-isolation: OAuth fixtures use stored credentials without loading installed provider runtimes.
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
+  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" as const }),
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" as const }),
+}));
+
+// mock-isolation: Profile precedence fixtures control provider policy without loading installed plugins.
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
   resolveProviderDeprecatedAuthProfileIds: ({ provider }: { provider: string }) =>
     provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
-  prepareProviderExternalAuthWithPlugin: async () => undefined,
   prepareProviderSyntheticAuthWithPlugin: async () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
     provider: string;
     context: { resolvedApiKey?: string };
-  }) => {
-    const expectedMarker = params.provider === "demo-local" ? "demo-local" : undefined;
-    return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
-  },
+  }) => params.provider === "demo-local" && params.context.resolvedApiKey?.trim() === "demo-local",
 }));
 
 vi.mock("../plugins/providers.js", () => ({

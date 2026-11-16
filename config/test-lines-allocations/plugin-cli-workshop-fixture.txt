@@ -1,2 +1,0 @@
-3
-# Isolate the existing invalid-plugin diagnostic fixture from Workshop migration.

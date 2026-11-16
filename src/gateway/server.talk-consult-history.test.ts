@@ -708,8 +708,8 @@ it.each(["before-final", "after-final"] as const)(
       expect(generated[0]).toMatchObject({
         role: "user",
         display: false,
-        excludeFromContext: true,
       });
+      expect(generated[0]).not.toHaveProperty("excludeFromContext");
       expect(
         storedMessages.filter((message) => message.role === "assistant").map(extractText),
       ).toEqual([directAnswer]);
@@ -723,7 +723,7 @@ it.each(["before-final", "after-final"] as const)(
         expectNoGeneratedInput(messages, `closed direct call ${view}`);
       }
       const modelContext = SessionManager.openModelContext(scope()).buildSessionContext().messages;
-      expectNoGeneratedInput(modelContext, "closed direct call model context");
+      expect(generatedInputs(modelContext).map(extractText)).toEqual([extractText(generated[0])]);
       expect(modelContext.map(extractText)).toContain(directAnswer);
     } finally {
       releaseModel.resolve();

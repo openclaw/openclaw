@@ -729,6 +729,37 @@ it.each([
   });
 });
 
+it.each([
+  { policy: "dual-all", runtime: "node", expectedCalls: 3 },
+  { policy: "dual-all", runtime: "bun", expectedCalls: 3 },
+  { policy: "bun-all", runtime: "node", expectedCalls: 0 },
+  { policy: "bun-all", runtime: "bun", expectedCalls: 3 },
+])(
+  "runs only $runtime from the $policy extension selection",
+  async ({ policy, runtime, expectedCalls }) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    vi.mocked(prepareVitestRuntime).mockClear();
+    expect(
+      await runExtensionBatchPlan(concurrentPlan(), {
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_TEST_RUNTIME: runtime },
+        runGroup,
+      }),
+    ).toBe(0);
+    expect(runGroup).toHaveBeenCalledTimes(expectedCalls);
+    for (const [invocation] of runGroup.mock.calls) {
+      expect(invocation.env?.OPENCLAW_VITEST_RUNTIME).toBe(runtime);
+    }
+    if (expectedCalls === 0) {
+      expect(prepareVitestRuntime).not.toHaveBeenCalled();
+    } else {
+      expect(prepareVitestRuntime).toHaveBeenCalledOnce();
+      expect(vi.mocked(prepareVitestRuntime).mock.calls[0]?.[1]?.OPENCLAW_VITEST_RUNTIME).toBe(
+        runtime,
+      );
+    }
+  },
+);
+
 it("preserves Codex process bounds with release options", async () => {
   const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
   const expectedFiles = [

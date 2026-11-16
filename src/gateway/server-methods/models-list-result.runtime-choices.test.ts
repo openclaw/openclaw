@@ -5,6 +5,13 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared.js";
+import { applyModelDefaults } from "../../config/defaults.js";
+import * as providerModelConfig from "../../config/model-provider-config.js";
+import {
+  captureRuntimeConfigWithSource,
+  getRuntimeConfigCapture,
+} from "../../config/runtime-config-capture-state.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -253,6 +260,126 @@ it.each([false, true, "revoked"] as const)(
     );
   },
 );
+
+it("bounds configured-row indexing through hydrated implicit OpenAI picker reads", async () => {
+  await withModelsListState(
+    async (state) => {
+      const { validateConfigObjectRaw } = await import("../../config/validation-core.js");
+      const ids = ["model-0", "model-4", "model-8", "model-12", "model-16"];
+      const parsed = validateConfigObjectRaw({
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            workspace: state.workspaceDir,
+            model: "openai/model-0",
+            modelPolicy: { allow: ids.map((id) => "openai/" + id) },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:9/v1",
+              apiKey: "synthetic-test-key",
+              models: Array.from({ length: 17 }, (_, index) => ({
+                id: "model-" + index,
+                name: "Configured " + index,
+              })),
+            },
+          },
+        },
+      });
+      if (!parsed.ok) {
+        throw new Error(JSON.stringify(parsed.issues));
+      }
+      const metadata = createPluginMetadataSnapshotFixture({ plugins: [] });
+      const cfg = captureRuntimeConfigWithSource(
+        applyModelDefaults(parsed.config, { manifestRegistry: metadata.manifestRegistry }),
+        parsed.config,
+      );
+      const runtimeRows = cfg.models?.providers?.openai?.models;
+      const sourceRows = getRuntimeConfigCapture(cfg)?.source.models?.providers?.openai?.models;
+      if (!runtimeRows || !sourceRows) {
+        throw new Error("OpenAI fixture omitted its captured runtime/source rows");
+      }
+      expect(runtimeRows).toHaveLength(17);
+      expect(sourceRows[0]?.reasoning).toBeUndefined();
+      expect(runtimeRows[0]).toMatchObject({ reasoning: false, input: ["text"] });
+      expect(cfg.models?.providers?.openai?.api).toBeUndefined();
+      expect(runtimeRows.every((row) => row.api === undefined && !row.agentRuntime)).toBe(true);
+      const entries = buildConfiguredModelCatalog({ cfg, manifestPlugins: metadata }).filter(
+        (entry) => ids.includes(entry.id),
+      );
+      expect(entries).toHaveLength(5);
+      const merge = providerModelConfig.resolveMergedModelProviderModels;
+      let indexedRows = 0;
+      // Only exported-owner calls with this captured pair are witnessed; lexical calls are not.
+      const witness: typeof merge = (input) => {
+        const result = merge(input);
+        if (input.models && (input.models === runtimeRows || input.models === sourceRows)) {
+          indexedRows += input.models.length;
+        }
+        return result;
+      };
+      using indexing = vi.spyOn(providerModelConfig, "resolveMergedModelProviderModels");
+      indexing.mockImplementation(witness);
+
+      const { params, loadGatewayModelCatalogSnapshot } = preparePicker(
+        cfg,
+        { entries, routeVariants: entries },
+        {},
+      );
+      const afterConstruction = indexedRows;
+      expect(afterConstruction, "Missing canonical construction witness").toBeGreaterThanOrEqual(
+        runtimeRows.length,
+      );
+      const prepared = await prepareModelsListResult({
+        ...params,
+        params: { ...params.params, includeDefaultModels: false },
+      });
+      const afterPreparation = indexedRows;
+      const first = prepared.read();
+      const afterFirstRead = indexedRows;
+      expect(first.models.map(({ id }) => id).toSorted()).toEqual(ids.toSorted());
+      for (const entry of entries) {
+        expect(params.catalogProjector.evaluateEntry(entry, [entry])).toMatchObject({
+          availability: true,
+          evidence: "provider-config",
+          selectedCredential: { source: "direct", provider: "openai", requirement: "api-key" },
+          routeResolution: { kind: "routes", defaultRuntimeId: "openclaw" },
+          selectedRoute: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:9/v1",
+            authRequirement: "api-key",
+            runtimePolicy: { compatibleIds: ["openclaw"] },
+          },
+        });
+      }
+      for (const row of first.models) {
+        expect(row).toMatchObject({
+          provider: "openai",
+          available: true,
+          agentRuntime: { id: "openclaw", source: "implicit" },
+        });
+      }
+      expect(prepared.read()).toEqual(first);
+      expect(indexedRows).toBe(afterFirstRead);
+      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(
+        afterFirstRead - afterConstruction,
+        JSON.stringify({ afterConstruction, afterPreparation, afterFirstRead }),
+      ).toBeLessThanOrEqual(runtimeRows.length);
+    },
+    {
+      agentEnv: "main",
+      env: {
+        ...WITHOUT_OPENAI_ENV_AUTH,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+        OPENCLAW_BUILD_PRIVATE_QA: undefined,
+        OPENCLAW_QA_FORCE_RUNTIME: undefined,
+      },
+    },
+  );
+});
 
 it.each([true, false])(
   "isolates an OpenClaw alternative from native-first metadata (host donor: %s)",

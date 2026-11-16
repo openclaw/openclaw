@@ -1,5 +1,0 @@
-# PR #193134: generation reads accept a WAL index that comes or goes without a commit.
-# Real node:sqlite connections open, close, or close after checkpointing a commit at
-# the final stable read and bind the post-read generation; a commit, or an index that
-# changes or appears with commit evidence, still refuses.
-90
