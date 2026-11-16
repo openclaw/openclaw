@@ -5,6 +5,7 @@ import {
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
 import {
   createMsFormatter,
   formatCompactTokenCount,
@@ -44,6 +45,11 @@ function formatHeadlineCost(totals: UsageTotals): string {
   return totals.totalCost === 0 && totals.missingCostEntries > 0
     ? t("usage.overview.unpriced")
     : formatUsageCost(totals.totalCost);
+}
+
+/** Turn latency is often sub-minute; keep seconds there and drop them for long tails. */
+export function formatLatencyCompact(ms: number): string {
+  return formatDurationCompact(ms, { includeSeconds: ms < 60_000 }) ?? t("usage.common.emptyValue");
 }
 
 export function formatAnalysisCost(value: number): string {

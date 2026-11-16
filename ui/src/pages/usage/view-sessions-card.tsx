@@ -9,7 +9,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
-import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
+import { formatAnalysisCost, formatLatencyCompact, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 
 const SESSION_SORT_OPTIONS = [
@@ -28,6 +28,7 @@ const buildSessionMeta = (
   const provider = session.modelProvider ?? session.providerOverride;
   const counts = session.usage?.messageCounts;
   const tools = session.usage?.toolUsage?.totalCalls;
+  const p95Ms = session.usage?.latency?.p95Ms;
   return [
     session.channel,
     provider && providerDisplayLabel(provider),
@@ -37,6 +38,8 @@ const buildSessionMeta = (
     counts?.errors &&
       `${counts.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}`,
     session.usage?.durationMs && formatDurationCompact(session.usage.durationMs),
+    // Appended last: the meta line is nowrap with an ellipsis, so a narrow row clips p95 first.
+    p95Ms !== undefined && `${t("usage.overview.p95")} ${formatLatencyCompact(p95Ms)}`,
   ].filter((part): part is string => typeof part === "string" && part.length > 0);
 };
 

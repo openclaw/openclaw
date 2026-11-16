@@ -167,6 +167,7 @@ const enUsage = {
       cached: "cached",
       prompt: "prompt",
       calls: "calls",
+      p95: "p95",
       costShare: "{percent}% of cost",
       topModels: "Top models",
       topProviders: "Top providers",

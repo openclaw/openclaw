@@ -6,6 +6,7 @@ import {
   formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
+  formatLatencyCompact,
   formatUsageCost,
 } from "./metrics.ts";
 
@@ -88,6 +89,21 @@ describe("usage cost windows", () => {
       { days: 30, endDate: "2026-08-01", tokens: 128, cost: 16 },
       { days: 90, endDate: "2026-08-01", tokens: 162, cost: 20.25 },
     ]);
+  });
+});
+
+describe("usage turn latency labels", () => {
+  it("keeps seconds for sub-minute tails and drops them above a minute", () => {
+    for (const [ms, expected] of [
+      [1_000, "1s"],
+      [8_540, "8s"],
+      [54_496, "54s"],
+      [59_999, "59s"],
+      [60_000, "1m"],
+      [359_731, "6m"],
+    ] as const) {
+      expect(formatLatencyCompact(ms)).toBe(expected);
+    }
   });
 });
 

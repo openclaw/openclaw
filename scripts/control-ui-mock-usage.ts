@@ -49,12 +49,25 @@ export function buildProfileUsageMocks(baseTime: number) {
         {
           key: "agent:openclaw-mock:marathon",
           label: "Release night marathon",
-          usage: { ...usageCostTotals(4_000_000_000), durationMs: (59 * 60 + 4) * 60 * 1000 },
+          usage: {
+            ...usageCostTotals(4_000_000_000),
+            durationMs: (59 * 60 + 4) * 60 * 1000,
+            latency: { count: 75, avgMs: 183_649, p95Ms: 359_731, minMs: 11_897, maxMs: 374_840 },
+          },
         },
         {
           key: "agent:openclaw-mock:daily",
           label: "Daily driver",
-          usage: { ...usageCostTotals(900_000_000), durationMs: 3 * 60 * 60 * 1000 },
+          usage: {
+            ...usageCostTotals(900_000_000),
+            durationMs: 3 * 60 * 60 * 1000,
+            latency: { count: 4, avgMs: 8_100, p95Ms: 8_540, minMs: 1_200, maxMs: 9_900 },
+          },
+        },
+        {
+          key: "agent:openclaw-mock:quiet",
+          label: "Quiet overnight",
+          usage: { ...usageCostTotals(120_000_000), durationMs: 42 * 60 * 1000 },
         },
       ],
       totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
