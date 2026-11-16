@@ -13,8 +13,16 @@ export function readHostFreeMemoryBytes(): number {
   return available > 0 ? available : os.freemem();
 }
 
-/** Defer optional background work before consuming the last 20% of a process limit. */
-export function isConstrainedProcessLowOnMemory(): boolean {
+/** Defer optional background work before consuming the last 20% of process or host capacity. */
+export function isMemoryPressureHigh(): boolean {
   const limit = process.constrainedMemory();
-  return Number.isSafeInteger(limit) && limit > 0 && process.availableMemory() <= limit * 0.2;
+  if (Number.isSafeInteger(limit) && limit > 0 && process.availableMemory() <= limit * 0.2) {
+    return true;
+  }
+  // Linux Node reports reclaimable host memory even when the process has no memory limit.
+  if (process.platform !== "linux" || process.versions.bun) {
+    return false;
+  }
+  const free = readHostFreeMemoryBytes();
+  return free > 0 && free <= os.totalmem() * 0.2;
 }

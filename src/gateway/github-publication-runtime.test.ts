@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   mixedAgentConnection,
@@ -64,6 +65,10 @@ function createRuntime() {
 function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
   useMixedAgentPair(engine, engine);
   installGitHubPublicationTestHarness();
+  beforeEach(() => {
+    vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+    vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it.each([false, true])(
@@ -442,35 +447,43 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     }
   });
 
-  it("defers publication scans under memory pressure and resumes pending work", async () => {
-    const requestId = "memory-pressure-publication";
-    withEngineStoreAdmission(() =>
-      insertRepositoryGitHubPublicationFixture(repositoryRow(requestId), () => {}),
-    );
-    const runtime = createRecoveryRuntime();
-    await runtime.ready;
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 ** 3);
-    const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
-    const shared = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
-    const repository = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
-    const transport = githubPublicationTestMocks().runCommand;
-    const readStatus = () =>
-      withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture(requestId))?.status;
-    transport.mockClear();
+  it.each(["process", ...(process.versions.bun ? [] : ["host"])])(
+    "defers publication scans under %s memory pressure and resumes pending work",
+    async (cause) => {
+      const requestId = "memory-pressure-publication";
+      withEngineStoreAdmission(() =>
+        insertRepositoryGitHubPublicationFixture(repositoryRow(requestId), () => {}),
+      );
+      const runtime = createRecoveryRuntime();
+      await runtime.ready;
+      if (cause === "host") {
+        vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+        vi.mocked(os.freemem).mockReturnValue(128 * 1024 ** 2);
+      }
+      vi.spyOn(process, "constrainedMemory").mockReturnValue(cause === "host" ? 0 : 1024 ** 3);
+      const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
+      const shared = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
+      const repository = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
+      const transport = githubPublicationTestMocks().runCommand;
+      const readStatus = () =>
+        withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture(requestId))?.status;
+      transport.mockClear();
 
-    await runtime.reconcilePublications();
-    await runtime.reconcilePublications();
-    expect(shared).not.toHaveBeenCalled();
-    expect(repository).not.toHaveBeenCalled();
-    expect(transport).not.toHaveBeenCalled();
-    expect(readStatus()).toBe("requested");
+      await runtime.reconcilePublications();
+      await runtime.reconcilePublications();
+      expect(shared).not.toHaveBeenCalled();
+      expect(repository).not.toHaveBeenCalled();
+      expect(transport).not.toHaveBeenCalled();
+      expect(readStatus()).toBe("requested");
 
-    available.mockReturnValue(512 * 1024 ** 2);
-    await runtime.reconcilePublications();
-    expect(repository).toHaveBeenCalledTimes(4);
-    // The normal recovery path settles the receipt whose synthetic workspace is absent.
-    expect(readStatus()).toBe("failed");
-  });
+      available.mockReturnValue(512 * 1024 ** 2);
+      vi.mocked(os.freemem).mockReturnValue(1024 ** 3);
+      await runtime.reconcilePublications();
+      expect(repository).toHaveBeenCalledTimes(4);
+      // The normal recovery path settles the receipt whose synthetic workspace is absent.
+      expect(readStatus()).toBe("failed");
+    },
+  );
 
   it.each(["stop", "failure"] as const)(
     "does not carry an empty fact past an invocation ending in %s",

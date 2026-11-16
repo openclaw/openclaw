@@ -10,7 +10,7 @@ import {
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -124,7 +124,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     delayMs: params.delayMs,
     retryDelayMs: Math.max(1_000, params.delayMs),
     isClosing: () => params.signal.aborted || params.isClosing(),
-    isBusy: () => isRecovering() || isConstrainedProcessLowOnMemory(),
+    isBusy: () => isRecovering() || isMemoryPressureHigh(),
     waitForReady: params.waitForPostReadyWork,
     log: params.log,
   };

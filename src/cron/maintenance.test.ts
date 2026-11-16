@@ -1,5 +1,6 @@
+import os from "node:os";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -24,6 +25,12 @@ import {
   makeCronReceiptJob,
 } from "./store/run-receipt-store.test-support.js";
 
+beforeEach(() => {
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+});
+afterEach(() => vi.restoreAllMocks());
+
 const DAY = 24 * 60 * 60_000;
 
 function insertHistory(id: string, status = "running", at = 1, runtime = "cron") {
@@ -38,9 +45,14 @@ function readHistory() {
   return runOpenClawStateWriteTransaction(({ db }) => readCronRunRecordsInDatabase(db));
 }
 
-it.each([false, true])(
+it.each(["none", "process", ...(process.versions.bun ? [] : ["host"])])(
   "runs Gateway retention after memory pressure clears (pressure=%s)",
-  async (pressure) => {
+  async (cause) => {
+    const pressure = cause !== "none";
+    if (cause === "host") {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.mocked(os.freemem).mockReturnValue(128 * 1024 ** 2);
+    }
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-maintenance-disabled-" },
       async (state) => {
@@ -53,7 +65,7 @@ it.each([false, true])(
         const gatewayScheduler = createTestGatewayScheduler(clock.clock);
         const constrained = vi
           .spyOn(process, "constrainedMemory")
-          .mockReturnValue(1024 * 1024 * 1024);
+          .mockReturnValue(cause === "host" ? 0 : 1024 * 1024 * 1024);
         const available = vi
           .spyOn(process, "availableMemory")
           .mockReturnValue(pressure ? 128 * 1024 * 1024 : 1024 * 1024 * 1024);
@@ -104,6 +116,7 @@ it.each([false, true])(
               admission.mock.calls.filter(([, label]) => label === "cron:maintenance"),
             ).toHaveLength(0);
             available.mockReturnValue(1024 * 1024 * 1024);
+            vi.mocked(os.freemem).mockReturnValue(1024 ** 3);
             await clock.advanceBy(60_000);
           }
           await stopCronMaintenance();

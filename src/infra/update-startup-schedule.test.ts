@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -174,29 +175,39 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
   expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
 });
 
-it("defers automatic update and catalog checks until constrained memory recovers", async () => {
-  vi.mocked(checkUpdateStatus).mockClear();
-  vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
-  const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 * 1024);
-  const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
-  check = createGatewayUpdateCheck({
-    lifecycle,
-    getConfig: () => ({}),
-    log: { info: vi.fn() },
-    isNixMode: false,
-    applyRemoteCatalogUpdate,
-  });
-  check.start();
+it.each(["process", ...(process.versions.bun ? [] : ["host"])])(
+  "defers automatic update and catalog checks until %s memory recovers",
+  async (cause) => {
+    vi.mocked(checkUpdateStatus).mockClear();
+    if (cause === "host") {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.mocked(os.freemem).mockReturnValue(128 * 1024 ** 2);
+    }
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(
+      cause === "host" ? 0 : 1024 * 1024 * 1024,
+    );
+    const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 * 1024);
+    const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
+    check = createGatewayUpdateCheck({
+      lifecycle,
+      getConfig: () => ({}),
+      log: { info: vi.fn() },
+      isNixMode: false,
+      applyRemoteCatalogUpdate,
+    });
+    check.start();
 
-  await clock.advanceBy(0);
-  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
-  await clock.advanceBy(60_000);
-  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
-  available.mockReturnValue(1024 * 1024 * 1024);
-  await clock.advanceBy(59_999);
-  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
-  await clock.advanceBy(1);
-  expect(checkUpdateStatus).toHaveBeenCalledOnce();
-  expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
-  expect(applyRemoteCatalogUpdate).toHaveBeenCalledOnce();
-});
+    await clock.advanceBy(0);
+    expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+    await clock.advanceBy(60_000);
+    expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+    available.mockReturnValue(1024 * 1024 * 1024);
+    vi.mocked(os.freemem).mockReturnValue(1024 ** 3);
+    await clock.advanceBy(59_999);
+    expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+    await clock.advanceBy(1);
+    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
+    expect(applyRemoteCatalogUpdate).toHaveBeenCalledOnce();
+  },
+);
