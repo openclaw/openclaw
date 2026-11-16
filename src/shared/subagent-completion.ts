@@ -125,5 +125,6 @@ export function preserveCollectedSubagentCompletions<T>(message: T): T {
   }
   const retained = readSubagentCompletions(record?.subagentCompletions);
   const completions = retained.length ? retained : readCollectedSubagentCompletions(record);
+  // SAFETY: the record is the caller's message; adding a field keeps its shape.
   return completions.length ? ({ ...record, subagentCompletions: completions } as T) : message;
 }
