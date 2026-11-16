@@ -554,6 +554,8 @@ it("counts other processes in the Gateway's cgroup against its memory limit", as
     "/sys/fs/cgroup/openclaw.slice/memory.max": `${8 * gib}\n`,
     "/sys/fs/cgroup/openclaw.slice/memory.current": `${6.5 * gib}\n`,
     "/sys/fs/cgroup/openclaw.slice/memory.stat": `anon ${5.5 * gib}\ninactive_file ${gib}\n`,
+    // Not the test host's own container limit.
+    "/sys/fs/cgroup/memory.max": "max\n",
   };
   const readFileSync = fs.readFileSync;
   vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) =>
