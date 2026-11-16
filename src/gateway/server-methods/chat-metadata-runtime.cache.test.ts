@@ -262,6 +262,9 @@ test.each([
           // Spy arguments include the original authority; they must not become the retention owner.
           prepare.mockClear();
           acquire?.mockClear();
+          if (shared) {
+            expect(accountAcquisitions).toBeGreaterThan(0);
+          }
           await collectForRetentionCheck("equivalent-model-lists", 8);
           const live = (values: WeakRef<object>[]) =>
             values.filter((value) => value.deref()).length;
@@ -272,9 +275,6 @@ test.each([
               .join(",")}`,
           ).toEqual([1, 1, 64, 0]);
           expect(preparations).toBe(1);
-          if (shared) {
-            expect(accountAcquisitions).toBeGreaterThan(0);
-          }
           // Keep the actual cache owner alive throughout collection.
           await harness.refresh();
           expect(prepare).not.toHaveBeenCalled();
