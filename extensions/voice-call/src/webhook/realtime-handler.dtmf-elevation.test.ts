@@ -93,7 +93,8 @@ function elevationFixture(gate = createGate()) {
     await vi.waitFor(() => expect(consult).toHaveBeenCalledTimes(before + 1), { interval: 1 });
     return expectDefined(consult.mock.calls.at(-1), "consult call")[2].toolPolicy;
   };
-  return { call, handler, processEvent, endCall, connect, consultPolicy };
+  const lastConsultContext = () => consult.mock.calls.at(-1)?.[2];
+  return { call, handler, processEvent, endCall, connect, consultPolicy, lastConsultContext };
 }
 
 function createGate(maxAttempts = 3) {
@@ -155,6 +156,9 @@ describe("realtime keypad PIN elevation", () => {
     first.ws.close();
     const second = await fixture.connect();
     await expect(fixture.consultPolicy(second.request, "tool-2")).resolves.toBe("safe-read-only");
+    // The reconnected call's transcript still holds elevated answers, so its consults stay in the
+    // call's isolated session even though the tool policy reset.
+    expect(fixture.lastConsultContext()?.elevated).toBe(true);
   });
 
   it("hangs up after max wrong PINs and locks the caller out of later calls", async () => {

@@ -337,7 +337,9 @@ running keeps the policy it started with.
   hangup returns the call to `toolPolicy`.
 - Elevated consults run in a session of their own for that call
   (`<caller session key>:elevated:<callId>`), so results from owner tools
-  never land in the caller's shared session. With the default
+  never land in the caller's shared session. This continues after a stream
+  reconnect: the tool policy resets, but the call's transcript still carries
+  elevated answers, so the call's later consults stay in its own session. With the default
   `sessionScope: "per-phone"`, a later call from the same number without the
   PIN therefore cannot read them back. Consults before the PIN still use the
   caller's normal session. For no carry-over between calls at all, set
