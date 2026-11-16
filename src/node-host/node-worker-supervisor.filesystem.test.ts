@@ -11,6 +11,7 @@ import {
   TEST_WORKER_SOURCE,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
+import { ensureNodeWorkerWorkspaceSessionRoot } from "./node-worker-workspace-identity.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -34,6 +35,16 @@ describe.runIf(process.platform === "linux")("filesystem-isolated worker owner",
         },
       });
       const input = testWorkerLaunchInput(f.workspaceDir, "filesystem-launch");
+      const { environmentId, sessionId, ownerEpoch } = input.descriptor.admission;
+      const session = ensureNodeWorkerWorkspaceSessionRoot(
+        f.bundleRoot,
+        input.gatewayNamespace,
+        environmentId,
+        sessionId,
+      );
+      const workspace = path.join(session, String(ownerEpoch));
+      fs.mkdirSync(workspace);
+      input.descriptor.assignment.workspaceDir = workspace;
       const source = TEST_WORKER_SOURCE.replace(
         "const mode = descriptor.assignment.prompt;",
         `const mode = descriptor.assignment.prompt;
@@ -74,7 +85,7 @@ describe.runIf(process.platform === "linux")("filesystem-isolated worker owner",
         await f.supervisor.launch(input, TEST_WORKER_ENDPOINT);
         expect(await f.terminal(input.launchId)).toMatchObject({ state: "completed" });
         const proof = JSON.parse(
-          fs.readFileSync(f.file("filesystem-launch.filesystem.json"), "utf8"),
+          fs.readFileSync(path.join(workspace, "filesystem-launch.filesystem.json"), "utf8"),
         );
         scratch = proof.tmp;
         expect(proof.rejected).toEqual(["EACCES", "EACCES"]);
@@ -95,6 +106,33 @@ describe.runIf(process.platform === "linux")("filesystem-isolated worker owner",
       }
     },
   );
+
+  it.each(["other-gateway", "next-epoch"])("rejects a workspace for %s", async (mismatch) => {
+    const root = tempDirs.make("worker-placement-");
+    await using f = createObservedNodeWorkerSupervisorFixture(root, {
+      filesystemIsolation: true,
+      env: { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state"), PATH: process.env.PATH },
+    });
+    const input = testWorkerLaunchInput(f.workspaceDir, "foreign-workspace");
+    const { environmentId, sessionId, ownerEpoch } = input.descriptor.admission;
+    const gateway = mismatch === "other-gateway" ? "other-gateway" : input.gatewayNamespace;
+    const session = ensureNodeWorkerWorkspaceSessionRoot(
+      f.bundleRoot,
+      gateway,
+      environmentId,
+      sessionId,
+    );
+    input.descriptor.assignment.workspaceDir = path.join(
+      session,
+      String(mismatch === "next-epoch" ? ownerEpoch + 1 : ownerEpoch),
+    );
+    fs.mkdirSync(input.descriptor.assignment.workspaceDir);
+    await f.supervisor.launch(input, TEST_WORKER_ENDPOINT);
+    expect(await f.terminal(input.launchId)).toMatchObject({
+      state: "failed",
+      errorText: expect.stringContaining("Worker writable storage cannot"),
+    });
+  });
 
   it("releases scratch when the target exits before its worker handshake", async () => {
     const root = tempDirs.make("worker-filesystem-failed-");

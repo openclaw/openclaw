@@ -53,6 +53,7 @@ import {
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import type { NodeWorkerWorkspaceLaunchReference } from "./node-worker-workspace-identity.js";
 
 export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
   confirmExtinction?: () => boolean;
@@ -65,6 +66,7 @@ type NodeWorkerLaunchTransportOptions = {
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
+  placement: NodeWorkerWorkspaceLaunchReference;
   descriptor: WorkerLaunchDescriptor;
   planHash: string;
   supervisor: NodeWorkerProcessIdentity;
@@ -201,6 +203,7 @@ export async function prepareNodeWorkerLaunchTransport(
           ).prepareNodeWorkerFilesystem({
             workspaceDir: options.descriptor.assignment.workspaceDir,
             bundleRoot: options.bundleRoot,
+            placement: options.placement,
             entry,
             homeDir: options.homeDir,
             env: workerOptions.env,
