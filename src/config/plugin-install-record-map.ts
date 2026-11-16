@@ -5,6 +5,7 @@ import { StrictPluginInstallRecordSchema } from "./zod-schema.installs.js";
 
 const PluginInstallRecordSchema = StrictPluginInstallRecordSchema.passthrough();
 
+// gitDirectory is a repository pathname: whitespace is part of its identity.
 const NORMALIZED_STRING_FIELDS = [
   "spec",
   "sourcePath",
@@ -31,7 +32,6 @@ const NORMALIZED_STRING_FIELDS = [
   "gitUrl",
   "gitRef",
   "gitCommit",
-  "gitDirectory",
   "marketplaceName",
   "marketplaceSource",
   "marketplacePlugin",

@@ -37,7 +37,7 @@ describe("plugin install record maps", () => {
         gitDirectory: " plugins/demo ",
       },
     });
-    expect(records?.demo?.gitDirectory).toBe("plugins/demo");
+    expect(records?.demo?.gitDirectory).toBe(" plugins/demo ");
     expect(
       parsePluginInstallRecordMap(JSON.parse(serializePluginInstallRecordMap(records!))),
     ).toEqual(records);
