@@ -34,7 +34,7 @@ export type QuestionDraft = {
 
 export type QuestionPrompt = Pick<
   QuestionRecord,
-  "id" | "questions" | "createdAtMs" | "expiresAtMs" | "blocking"
+  "id" | "questions" | "createdAtMs" | "expiresAtMs"
 > & {
   agentId?: string;
   sessionKey?: string;

@@ -14,8 +14,6 @@ type ToolGroupOptions = {
   activityKeys?: ReadonlyMap<AgentActivityItem, string>;
   /** Exit codes or code-mode bridge dispatch receipts prove execution, not success. */
   executedCommands?: ReadonlySet<string>;
-  /** Executions with source but no shell command have their own factual category. */
-  codeExecutions?: ReadonlySet<string>;
   /** Visible operations whose enclosing execution is still producing children. */
   continuingExecutions?: ReadonlySet<string>;
   /** True only when the cancellation receipt confirms that its target was cancelled. */
@@ -45,11 +43,6 @@ export function describeToolGroup(
     (item) => !options.interruptedCalls?.has(item.toolCallId ?? item.itemId),
   );
   const summary = summarizeAgentActivity(all, options);
-  const code = current.filter(
-    (item) =>
-      !item.hideFromChannelProgress && options.codeExecutions?.has(item.toolCallId ?? item.itemId),
-  );
-  const codeIds = new Set(code.map((item) => item.toolCallId ?? item.itemId));
   const skillSearches = current.filter(
     (item) => !item.hideFromChannelProgress && item.name === "skills_search",
   );
@@ -74,12 +67,9 @@ export function describeToolGroup(
     ...questions,
     ...cancellations,
   ]);
-  const ordinary = current.filter(
-    (item) => !codeIds.has(item.toolCallId ?? item.itemId) && !semanticItems.has(item),
-  );
+  const ordinary = current.filter((item) => !semanticItems.has(item));
   const { other, subagents, ...categories } = summarizeAgentActivity(ordinary, options).counts;
   const counts = {
-    code: code.length,
     ...categories,
     skillSearches: skillSearches.length,
     skillReads: skillReads.length,
@@ -119,17 +109,6 @@ export function describeToolGroup(
       .filter(([, count]) => count > 0)
       .map(([kind]) => kind),
   );
-  if (
-    code.some(
-      (item) =>
-        item.status === "completed" ||
-        (item.status !== "blocked" &&
-          item.status !== "skipped" &&
-          options.executedCommands?.has(item.toolCallId ?? item.itemId)),
-    )
-  ) {
-    completedKinds.add("code");
-  }
   const otherTools = counts.other
     ? [
         ...new Set(
@@ -180,11 +159,6 @@ export function describeToolGroup(
             ? "Summary"
             : "Pending";
         return t("chat.toolCards.activity.cancellations" + phase + continuation);
-      }
-      if (kind === "code") {
-        return t(
-          `chat.toolCards.activity.scripts${code.some((item) => item.status === "running") ? "Running" : completedKinds.has(kind) ? "Summary" : "Pending"}${continuation}`,
-        );
       }
       return kind === "other" && otherTools.length
         ? t(

@@ -58,7 +58,6 @@ export function createGatewayQuestionPanelProps(
           }
         : undefined,
     onCollapsedChange: options.onCollapsedChange,
-    focusOnCollapse: options.focusOnCollapse,
     onPreviousRequest: options.onPreviousRequest,
     onNextRequest: options.onNextRequest,
   };

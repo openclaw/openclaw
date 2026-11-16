@@ -577,7 +577,6 @@ async function runScopedAgentHarnessQuestion(
         {
           id: questionId,
           questions,
-          blocking: true,
           sessionKey: params.sessionKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.runId ? { runId: params.runId } : {}),

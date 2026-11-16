@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   readChatThreadMessageIdentity,
@@ -413,6 +414,7 @@ function groupChatItemSegment(
       key: item.key,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
+        messageSubagentCompletions(item.message).length > 0 ||
         hasVisibleReasoning ||
         (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||

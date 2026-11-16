@@ -4,6 +4,7 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
+import type { SubagentCompletion } from "../shared/subagent-completion.js";
 import type {
   AgentTurnStartOwner,
   RequesterSettleWakeReplay,
@@ -32,6 +33,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   /** Trusted input-owner policy; not accepted from the wire request. */
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  subagentCompletions?: readonly SubagentCompletion[];
   allowSyntheticModelOverride?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;

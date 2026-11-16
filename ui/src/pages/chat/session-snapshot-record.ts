@@ -193,8 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Refill history that previously omitted empty structured cancellation receipts.
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 15;
+// Refill history that omitted structured cancellation and subagent completion receipts.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 16;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(

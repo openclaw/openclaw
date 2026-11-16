@@ -8,11 +8,18 @@ import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
-import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
 import {
   extractAssistantPhaseText,
   isAssistantTextContentBlockType as isAssistantTextContentType,
 } from "../shared/chat-message-content.js";
+import {
+  readSubagentCompletions,
+  subagentCompletionMessage,
+} from "../shared/subagent-completion.js";
 
 export { isAssistantTextContentType };
 
@@ -318,4 +325,12 @@ function hasForwardedMessageProvenance(message: Record<string, unknown>): boolea
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
     isCronRunMessage(message)
   );
+}
+
+/** Called after original user-input classification; only display facts leave private inputs. */
+export function projectCompletionReportInput(message: Record<string, unknown>) {
+  const completions = isCompletionReportInputProvenance(message.provenance)
+    ? readSubagentCompletions(readRecord(message["__openclaw"])?.subagentCompletions)
+    : [];
+  return completions.length ? subagentCompletionMessage(message, completions) : message;
 }

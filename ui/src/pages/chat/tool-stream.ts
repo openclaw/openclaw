@@ -658,6 +658,7 @@ export function handleAgentEvent(
   if (phase === "result") {
     entry.liveDiffStat = undefined;
     entry.resultReceived = true;
+    entry.resultTimestamp ??= payload.ts;
   }
 
   if (approvalReview) {

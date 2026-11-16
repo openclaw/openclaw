@@ -44,6 +44,214 @@ describe("grouped chat rendering", () => {
   beforeEach(() => document.body.append(harness.view));
   const expandedTools = { isToolExpanded: () => true, isToolMessageExpanded: () => true };
 
+  it("keeps completed agents at result time, adjacent only, and once per execution", async () => {
+    const worker = {
+      runId: "child-one",
+      sessionKey: "agent:main:subagent:worker",
+      label: "Worker01",
+      status: "done",
+    };
+    const second = { ...worker, runId: "child-two", label: "Worker02" };
+    const output = JSON.stringify({
+      completed: [worker, second, { ...worker, runId: "failed", status: "failed" }],
+    });
+    const call = {
+      ...createAssistantMessage([createToolCall("collect", "agents_wait", {})]),
+      timestamp: 10,
+      runId: "parent",
+    };
+    const result = {
+      ...createToolResultMessage("collect", "agents_wait", output),
+      timestamp: 30,
+      runId: "parent",
+    };
+    const mixed = createAssistantMessage(
+      [
+        createToolCall("earlier", "read", { path: "brief.md" }),
+        { type: "tool_result", id: "earlier", name: "read", text: "Earlier read", timestamp: 11 },
+        createToolCall("collect", "agents_wait", {}),
+        { type: "tool_result", id: "collect", name: "agents_wait", text: output, timestamp: 30 },
+      ],
+      { timestamp: 10, runId: "parent" },
+    );
+    const receipt = (runId: string, timestamp: number) => ({
+      role: "assistant",
+      phase: "commentary",
+      runId: "parent",
+      timestamp,
+      content: [{ type: "subagent_completion" }],
+      subagentCompletions: [{ ...worker, runId }],
+    });
+    const open = vi.fn();
+    const omitted = createAssistantMessage(
+      [
+        createToolCall("collect", "agents_wait", {}),
+        {
+          type: "tool_result",
+          id: "collect",
+          name: "agents_wait",
+          text: "[Nested tool output omitted: exceeds display limit]",
+          timestamp: 30,
+          subagentCompletions: [worker, second],
+        },
+      ],
+      { timestamp: 10, runId: "parent" },
+    );
+    const boundedDirect = {
+      ...result,
+      content: "Omitted large output",
+      subagentCompletions: [worker, second],
+    };
+    for (const execution of [[call, result], [mixed], [omitted], [call, boundedDirect]]) {
+      const messages = [
+        { role: "user", content: "Collect the workers", timestamp: 1 },
+        execution[0],
+        {
+          ...createAssistantMessage("Waiting here."),
+          timestamp: 20,
+          runId: "parent",
+          phase: "commentary",
+        },
+        {
+          role: "user",
+          content: "Also check the summary.",
+          timestamp: 25,
+          __openclaw: { id: "steer", steerTargetRunId: "parent" },
+        },
+        ...execution.slice(1),
+        receipt(worker.runId, 31),
+        {
+          ...createAssistantMessage("Read after collection."),
+          timestamp: 32,
+          runId: "parent",
+          phase: "commentary",
+        },
+        receipt("child-next-run", 33),
+        createAssistantMessage([createToolCall("collect-again", "agents_wait", {})], {
+          timestamp: 34,
+          runId: "parent",
+        }),
+        createToolResultMessage("collect-again", "agents_wait", output, {
+          timestamp: 35,
+          runId: "parent",
+        }),
+        {
+          ...createAssistantMessage("All collected."),
+          timestamp: 40,
+          runId: "parent",
+          phase: "final_answer",
+        },
+        {
+          role: "user",
+          content: "Queued later request.",
+          timestamp: 28,
+          __openclaw: { id: "pending-next", kind: "pending-send" },
+        },
+      ];
+      const items = buildItems({ messages });
+      const groups = items.filter((item) => item.kind === "group");
+      await renderToolGroups(groups, { subagents: { onOpenSession: open } });
+      const text = harness.view.textContent!;
+      expect(text).toContain("Worker01 and Worker02 finished");
+      expect(text.match(/Worker01 finished/g)).toHaveLength(1);
+      expect(text.indexOf("Waiting here.")).toBeLessThan(
+        text.indexOf("Worker01 and Worker02 finished"),
+      );
+      expect(text.indexOf("Also check the summary.")).toBeLessThan(
+        text.indexOf("Worker01 and Worker02 finished"),
+      );
+      expect(text.indexOf("Worker01 and Worker02 finished")).toBeLessThan(
+        text.indexOf("Queued later request."),
+      );
+      expect(text.indexOf("Read after collection.")).toBeGreaterThan(
+        text.indexOf("Worker01 and Worker02 finished"),
+      );
+      expect(text.indexOf("Worker01 finished")).toBeGreaterThan(
+        text.indexOf("Read after collection."),
+      );
+      harness.view.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!.click();
+      expect(open).toHaveBeenCalledWith(worker.sessionKey);
+      const chain = projectTranscriptChain(items, {
+        sessionKey: "agent:main:dashboard:completion",
+        messages,
+        runWorking: false,
+        searchActive: false,
+      });
+      expect(
+        chain.workGroups
+          .flatMap((work) => work.groups)
+          .flatMap((group) => group.messages)
+          .some((entry) =>
+            Array.isArray((entry.message as Record<string, unknown>).subagentCompletions),
+          ),
+      ).toBe(true);
+      await renderToolGroups(
+        buildItems({ messages, showToolCalls: false }).filter((item) => item.kind === "group"),
+      );
+      expect(harness.view.textContent).not.toContain("finished");
+      await renderToolGroups(
+        buildItems({ messages, searchOpen: true, searchQuery: "unfindable" }).filter(
+          (item) => item.kind === "group",
+        ),
+      );
+      expect(harness.view.textContent).not.toContain("finished");
+      await renderToolGroups(
+        buildItems({ messages, searchOpen: true, searchQuery: "finished" }).filter(
+          (item) => item.kind === "group",
+        ),
+      );
+      expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
+      await renderToolGroups(
+        buildItems({ messages, searchOpen: true, searchQuery: "Worker02" }).filter(
+          (item) => item.kind === "group",
+        ),
+      );
+      expect(harness.view.textContent).toContain("Worker02");
+    }
+    await renderToolGroups(
+      buildItems({
+        messages: [
+          {
+            ...result,
+            __openclaw: { catalogSource: true },
+          },
+        ],
+      }).filter((item) => item.kind === "group"),
+    );
+    expect(harness.view.textContent).not.toContain("finished");
+    const third = { ...worker, runId: "child-three", label: "Worker03" };
+    const a = receipt(worker.runId, 20);
+    const bc = { ...receipt(second.runId, 21), subagentCompletions: [second, third] };
+    await renderToolGroups(
+      buildItems({ messages: [a, bc] }).filter((item) => item.kind === "group"),
+    );
+    expect(harness.view.textContent).toContain("Worker01, Worker02, and 1 more finished");
+    const earlier = { ...receipt(third.runId, 10), subagentCompletions: [third] };
+    const barrier = createAssistantMessage("Earlier result.", {
+      timestamp: 11,
+      phase: "commentary",
+    });
+    await renderToolGroups(
+      buildItems({ messages: [earlier, barrier, a, bc] }).filter((item) => item.kind === "group"),
+    );
+    expect(harness.view.textContent).toContain("Worker03 finished");
+    expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
+    expect(harness.view.textContent).not.toContain("1 more");
+    await renderToolGroups(
+      buildItems({ messages: [a, bc], searchOpen: true, searchQuery: "Worker01" }).filter(
+        (item) => item.kind === "group",
+      ),
+    );
+    expect(harness.view.textContent).toContain("Worker01 finished");
+    expect(harness.view.textContent).not.toContain("Worker02");
+    await renderToolGroups(
+      buildItems({ messages: [a], searchOpen: true, searchQuery: "finished" }).filter(
+        (item) => item.kind === "group",
+      ),
+    );
+    expect(harness.view.textContent).toContain("Worker01 finished");
+  });
+
   function toolResultEntry(key: string, ...args: Parameters<typeof createToolResultMessage>) {
     return createMessageEntry(key, createToolResultMessage(...args));
   }

@@ -1,8 +1,12 @@
 # Tool-activity lifecycle coverage after consolidating command preview tests and
 # removing obsolete renderer assertions and tests for an unused argument helper.
-# Distinct owner contracts cover nested calls, execution outcomes, permission
-# boundaries, file ownership, disclosure/focus, live/history/steer identity,
-# persistent browser-cache reload, and inline/composer question continuity.
-# Existing browser fixtures exercise lossless 60-call retention, actual delivery
-# boundaries, and question takeover; one regression preserves cadence across mode changes.
-1383
+# Prior coverage contributes 2253 net lines against integrated baseline ce49266.
+# This correction adds 305 net lines after removing inline-blocking placement
+# coverage; it does not allocate room for future growth.
+# Retained owners cover nested calls, execution outcomes, permission boundaries,
+# file ownership, disclosure/focus, live/history/steer identity, browser-cache
+# reload, lossless 60-call retention, and command-title cadence.
+# New completion owners cover durable output caps, private history projection,
+# canonical result placement, search, and deduplication across older pages.
+# Exact excess: 2558 net test lines minus the normal 400-line allowance.
+2158

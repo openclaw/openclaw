@@ -145,7 +145,7 @@ describe("installSessionToolResultGuard", () => {
     },
   );
 
-  it("keeps the exec retention-loss disclosure through the session result cap", () => {
+  it("keeps execution and completion receipts through the session result cap", () => {
     const { sm } = setup({ maxToolResultChars: 4_000 });
     const output = buildExecForegroundResult({
       outcome: {
@@ -170,6 +170,26 @@ describe("installSessionToolResultGuard", () => {
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
     expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
+    const collector = setup({ maxToolResultChars: 4_000 }).sm;
+    const completion = {
+      runId: "finished-run",
+      sessionKey: "agent:main:subagent:worker",
+      label: "Worker01",
+      status: "done",
+      result: "x".repeat(40_000),
+    };
+    collector.appendMessage(call("call_1", "agents_wait"));
+    collector.appendMessage({
+      ...result(JSON.stringify({ completed: [completion] }), "agents_wait"),
+      details: { completed: [completion] },
+    });
+    const saved = messages(collector).find((message) => message.role === "toolResult");
+    expect(saved).toMatchObject({
+      subagentCompletions: [
+        { runId: completion.runId, sessionKey: completion.sessionKey, label: completion.label },
+      ],
+    });
+    expect(resultText(collector)).not.toContain(completion.result);
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {

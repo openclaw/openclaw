@@ -2,9 +2,11 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
+import type { SubagentCompletion } from "../../../../src/shared/subagent-completion.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard, ToolCardOutcome } from "../../lib/chat/chat-types.ts";
 import { resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
@@ -355,4 +357,20 @@ export function spawnedSubagentsRenderKey(rows: readonly GatewaySessionRow[] | u
     rosterKeys.set(rows, key);
   }
   return key;
+}
+
+/** Historical display names come from the completion receipt, never the current roster. */
+export function subagentCompletionNames(entries: readonly SubagentCompletion[]): string {
+  if (entries.some((entry) => !entry.label)) {
+    return t(
+      entries.length === 1 ? "chat.toolCards.completionAgent" : "chat.toolCards.completionAgents",
+      { count: String(entries.length) },
+    );
+  }
+  return new Intl.ListFormat(getLocale(), { type: "conjunction" }).format([
+    ...entries.slice(0, 2).map((entry) => entry.label!),
+    ...(entries.length > 2
+      ? [t("chat.toolCards.lifecycleMoreCount", { count: String(entries.length - 2) })]
+      : []),
+  ]);
 }

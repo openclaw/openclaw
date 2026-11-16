@@ -56,7 +56,6 @@ type QuestionManagerRequest = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  blocking?: boolean;
   timeoutMs: number;
   onResolved?:
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
@@ -180,7 +179,6 @@ export class QuestionManager {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.blocking !== undefined ? { blocking: params.blocking } : {}),
       createdAtMs,
       expiresAtMs,
       status: "pending",

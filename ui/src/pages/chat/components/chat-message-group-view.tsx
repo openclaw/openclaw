@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { messageSubagentCompletions } from "../../../../../src/shared/subagent-completion.js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -52,6 +53,7 @@ import {
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
+import { ChatSubagentCompletion } from "./chat-subagent-completion.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 
@@ -156,22 +158,34 @@ function PreparedMessage(props: {
   });
   return (
     <>
-      <GroupedMessage
-        preparation={prepared().source}
-        messageKey={props.item.key}
-        options={options()}
-        onOpenSidebar={props.options.onOpenSidebar}
-        reactions={
-          <Show when={props.bubbleReactions !== false}>
-            <GroupMessageReactions
-              group={props.group}
-              actionDetails={prepared().actions}
-              isStreaming={isStreaming()}
-              options={props.options}
-            />
-          </Show>
+      <Show
+        when={messageSubagentCompletions(props.item.message).length > 0}
+        fallback={
+          <GroupedMessage
+            preparation={prepared().source}
+            messageKey={props.item.key}
+            options={options()}
+            onOpenSidebar={props.options.onOpenSidebar}
+            reactions={
+              <Show when={props.bubbleReactions !== false}>
+                <GroupMessageReactions
+                  group={props.group}
+                  actionDetails={prepared().actions}
+                  isStreaming={isStreaming()}
+                  options={props.options}
+                />
+              </Show>
+            }
+          />
         }
-      />
+      >
+        <ChatSubagentCompletion
+          completions={messageSubagentCompletions(props.item.message)}
+          onOpenSession={
+            props.options.subagents?.onOpenSession ?? props.options.subagents?.onOpenSubagent
+          }
+        />
+      </Show>
       <Show when={resumed()}>
         {(handoff) => (
           <ChatHandoffResume

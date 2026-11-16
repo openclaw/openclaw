@@ -88,10 +88,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       props.panel.onCollapsedChange(value);
     } else {
       setUncontrolledCollapsed(value);
-    }
-    // The composer owns its destination; inline panels keep their trigger focused.
-    if (value && (!props.panel.onCollapsedChange || props.panel.focusOnCollapse)) {
-      onSettled(() => expandButton && focusProgrammatically(expandButton, { preventScroll: true }));
+      // Controlled callers own their destination (for example, the chat composer).
+      if (value) {
+        onSettled(
+          () => expandButton && focusProgrammatically(expandButton, { preventScroll: true }),
+        );
+      }
     }
   };
   const updateDraft = (item: QuestionPanelQuestion, value: QuestionDraft) => {

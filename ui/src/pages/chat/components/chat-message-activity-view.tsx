@@ -236,7 +236,6 @@ function prepareActivityGroup(
       ),
       activityKeys,
       executedCommands,
-      codeExecutions,
       continuingExecutions,
       subagentCancellations,
       interruptedCalls,

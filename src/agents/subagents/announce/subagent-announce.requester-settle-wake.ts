@@ -576,6 +576,19 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             requesterSessionKey,
             requesterAgentId,
             triggerMessage: wakeMessage,
+            subagentCompletions: pauseNotice
+              ? undefined
+              : completionRows.flatMap((entry) =>
+                  entry.execution.outcome?.status === "ok"
+                    ? [
+                        {
+                          runId: entry.runId,
+                          sessionKey: entry.childSessionKey,
+                          label: entry.label,
+                        },
+                      ]
+                    : [],
+                ),
             requesterSessionOrigin,
             directOrigin,
             sourceSessionKey: batchSessionKeys[0],

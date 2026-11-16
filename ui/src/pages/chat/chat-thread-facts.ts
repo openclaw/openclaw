@@ -18,6 +18,7 @@ export type ChatItemsFacts = ReplyAttributionFacts & {
   streamOnset?: Extract<ChatItem, { kind: "stream" }>;
   /** Display history after heartbeat/commentary filtering and composition. */
   history?: readonly unknown[];
+  completionIds?: ReadonlySet<string>;
   /** First history message owning each persisted canvas identity or inline view key. */
   firsts: Map<string, unknown>;
   /** History messages whose divider key includes their transcript index. */

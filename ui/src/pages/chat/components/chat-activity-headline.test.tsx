@@ -223,7 +223,7 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   expect(label()).toBe('Web Search for "API docs"…');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   await draw([exec, search], false);
-  expect(label()).toBe("Running scripts, searching");
+  expect(label()).toBe("Running commands, searching");
   expect(icon()?.getAttribute("aria-hidden")).toBe("true");
   expect(icon()?.getAttribute("aria-label")).toBeNull();
 });

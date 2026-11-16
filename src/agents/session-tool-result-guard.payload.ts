@@ -8,6 +8,7 @@ import {
   jsonUtf8BytesOrInfinity,
   type BoundedJsonUtf8Bytes,
 } from "../infra/json-utf8-bytes.js";
+import { preserveCollectedSubagentCompletions } from "../shared/subagent-completion.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
@@ -234,7 +235,11 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
 }
 
 export function capToolResultForPersistence(msg: AgentMessage, maxChars: number): AgentMessage {
-  const capped = msg.role === "toolResult" ? truncateToolResultMessage(msg, maxChars) : msg;
+  const withCompletion = preserveCollectedSubagentCompletions(msg);
+  const capped =
+    withCompletion.role === "toolResult"
+      ? truncateToolResultMessage(withCompletion, maxChars)
+      : withCompletion;
   if (capped.role !== "toolResult") {
     return capped;
   }

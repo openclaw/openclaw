@@ -176,7 +176,9 @@ it.each([
     await waitForSolid(() => {
       expect(count("openclaw-chat-question-panel")).toBe(1);
       expect(count('textarea[aria-label="Custom draft"]')).toBe(mode === "nondelegating" ? 1 : 0);
-      expect(count(".agent-chat__composer-combobox textarea")).toBe(0);
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(
+        mode === "nondelegating" ? 0 : 1,
+      );
     });
     expect(reportError).toHaveBeenCalledTimes(mode === "failing" ? 1 : 0);
     const answer = provider.querySelector<HTMLInputElement>(".chat-question-panel__other")!;

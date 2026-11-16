@@ -30,8 +30,7 @@ OpenClaw's built-in `ask_user` tool.
 
 You can answer from any supported conversation surface:
 
-- The web Control UI shows a blocking `ask_user` question inline with the
-  requesting agent turn, while keeping the composer available. For
+- The web Control UI docks a question panel directly above the composer. For
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps the full question alongside your answer in a compact summary. Skipped
@@ -137,9 +136,8 @@ not turn an unresolved step into success.
 ## Platform behavior
 
 Answers work on the surfaces listed above. The web Control UI and TUI show one
-question at a time. Collapsing an inline Control UI question keeps a compact
-question in the transcript; collapsing a docked question leaves a slim
-pending-question indicator above the composer. The TUI's `/question` command reopens
+question at a time; collapsing the prompt restores the composer
+with a slim pending-question indicator. The TUI's `/question` command reopens
 it, and a plain reply still answers an eligible pending question. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
 idiom. The TUI keeps a compact resolution notice in the chat; other platforms

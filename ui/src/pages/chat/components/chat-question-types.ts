@@ -34,8 +34,6 @@ export type QuestionPanelProps = {
   onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
-  /** Controlled inline panels keep focus on their own disclosure trigger. */
-  focusOnCollapse?: boolean;
   onPreviousRequest?: () => void;
   onNextRequest?: () => void;
 };
@@ -46,7 +44,6 @@ export type QuestionPanelOptions = Pick<
   | "onSubmit"
   | "onSkip"
   | "onCollapsedChange"
-  | "focusOnCollapse"
   | "onPreviousRequest"
   | "onNextRequest"
   | "onOpenSession"

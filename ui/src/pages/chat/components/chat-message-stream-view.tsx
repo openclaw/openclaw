@@ -14,7 +14,6 @@ import {
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
-import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
@@ -24,10 +23,6 @@ import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 const ChatQuestionSummary = lazy(() => import("./chat-question-summary.tsx"), {
   export: "ChatQuestionSummary",
-});
-
-const ChatQuestionPanel = lazy(() => import("./chat-question-panel.tsx"), {
-  export: "ChatQuestionPanel",
 });
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
@@ -58,11 +53,6 @@ export type StreamGroupOptions = MessageRenderOptions & {
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
-  onGatewayQuestionChange?: () => void;
-  isQuestionCollapsed?: (id: string) => boolean;
-  onQuestionCollapsedChange?: (id: string, collapsed: boolean) => void;
-  onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
-  onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
 
 export function StreamGroupParts(props: {
@@ -124,28 +114,7 @@ export function StreamPartView(props: {
           <Show when={question()}>
             {(prompt) => (
               <ChatLazyBoundary>
-                <Show
-                  when={question()?.status === "pending"}
-                  fallback={<ChatQuestionSummary prompt={prompt()} />}
-                >
-                  <ChatQuestionPanel
-                    props={createGatewayQuestionPanelProps(question()!, {
-                      focusOnCollapse: true,
-                      collapsed: props.options.isQuestionCollapsed?.(prompt().id),
-                      onCollapsedChange: props.options.onQuestionCollapsedChange
-                        ? (collapsed) =>
-                            props.options.onQuestionCollapsedChange?.(prompt().id, collapsed)
-                        : undefined,
-                      onChange: props.options.onGatewayQuestionChange,
-                      onSubmit: props.options.onGatewayQuestionSubmit
-                        ? (answers) => props.options.onGatewayQuestionSubmit?.(prompt().id, answers)
-                        : undefined,
-                      onSkip: props.options.onGatewayQuestionSkip
-                        ? () => props.options.onGatewayQuestionSkip?.(prompt().id)
-                        : undefined,
-                    })}
-                  />
-                </Show>
+                <ChatQuestionSummary prompt={prompt()} />
               </ChatLazyBoundary>
             )}
           </Show>

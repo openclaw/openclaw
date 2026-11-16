@@ -581,6 +581,16 @@ async function runSubagentAnnounceFlowBound(
           requesterAgentId: targetRequesterAgentId,
           triggerMessage,
           internalEvents,
+          subagentCompletions:
+            outcome.status === "ok"
+              ? [
+                  {
+                    runId: params.childRunId,
+                    sessionKey: params.childSessionKey,
+                    label: params.label,
+                  },
+                ]
+              : undefined,
           requesterSessionOrigin: targetRequesterOrigin,
           completionDirectOrigin,
           directOrigin,

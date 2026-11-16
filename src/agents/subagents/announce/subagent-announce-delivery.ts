@@ -266,6 +266,7 @@ async function deliverSubagentAnnouncementBound(
       createUserTurnTranscriptRecorder({
         input: {
           text: transcriptMessage,
+          subagentCompletions: params.subagentCompletions,
           idempotencyKey: `${directIdempotencyKey}:active-wake`,
           provenance,
         },

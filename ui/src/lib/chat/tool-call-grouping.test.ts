@@ -84,14 +84,11 @@ describe("summarizeToolGroup", () => {
     }
   });
 
-  it("keeps code executions distinct from shell commands", () => {
+  it("summarizes code executions and shell commands together", () => {
     const code = prepared("code", "Exec", { name: "exec" });
     const command = prepared("shell", "Exec", { name: "exec" });
-    const codeExecutions = new Set(["code"]);
-    expect(summarizeToolGroup([code, command], { codeExecutions })).toBe(
-      "Ran scripts, ran commands",
-    );
-    expect(summarizeToolGroup([{ ...code, status: "failed" }], { codeExecutions })).toBe("Scripts");
+    expect(summarizeToolGroup([code, command])).toBe("Ran commands");
+    expect(summarizeToolGroup([{ ...code, status: "failed" }])).toBe("Commands");
   });
 
   it("names skill searches and reads as actions beside commands", () => {

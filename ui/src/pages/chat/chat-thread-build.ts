@@ -33,7 +33,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
-import { projectQuestionPrompts } from "./chat-question-placement.ts";
+import { projectResolvedQuestionPrompts } from "./chat-question-placement.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
@@ -590,7 +590,9 @@ export function buildChatItems(
     }
   }
 
-  projections.push(...projectQuestionPrompts(props, resolveProjectionBounds));
+  projections.push(
+    ...projectResolvedQuestionPrompts(props.questionPrompts, resolveProjectionBounds),
+  );
 
   const visibleText = trimAccumulatedStreamPrefix(
     sanitizeStreamText(props.stream ?? ""),

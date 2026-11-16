@@ -23,6 +23,7 @@ export function refreshToolStreamMessage(entry: ToolStreamEntry) {
   if (entry.output || entry.resultReceived) {
     content.push({
       type: "toolresult",
+      timestamp: entry.resultTimestamp,
       name: entry.name,
       text: entry.output ?? "",
       ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),

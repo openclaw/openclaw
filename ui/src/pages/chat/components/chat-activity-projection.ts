@@ -370,7 +370,7 @@ export function segmentActivityGroup<State extends ActivityStructure>(
       )) {
         append(
           { key: context.state.activityKeys.get(activity)!, activity },
-          false,
+          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "" }),
           false,
           `${entry.key}:activity`,
         );

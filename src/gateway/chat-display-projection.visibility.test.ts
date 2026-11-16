@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
@@ -399,3 +400,100 @@ it.each(["state_contention", "unknown"])(
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
   },
 );
+
+it("projects recorded subagent completions without exposing the private continuation", () => {
+  const completion = {
+    runId: "child-run",
+    sessionKey: "agent:main:subagent:worker",
+    label: "Worker01",
+  };
+  const input = buildPersistedUserTurnMessage({
+    text: "PRIVATE CHILD RESULT",
+    timestamp: 10,
+    idempotencyKey: "completion-turn:user",
+    provenance: {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: completion.sessionKey,
+    },
+    subagentCompletions: [completion],
+    display: false,
+  });
+  const messages = [
+    input,
+    {
+      role: "assistant",
+      display: false,
+      __openclaw: { runId: "completion-turn" },
+      content: [{ type: "text", text: "PRIVATE REASONING" }],
+    },
+    {
+      role: "toolResult",
+      display: false,
+      __openclaw: { runId: "completion-turn" },
+      toolName: "read",
+      content: "PRIVATE TOOL RESULT",
+    },
+    userTextMessage("Visible next request", 20),
+    assistantTextMessage("Visible answer", 21),
+  ];
+  const projected = projectChatDisplayMessages(messages);
+  expect(projected).toHaveLength(3);
+  expect(projected[0]).toMatchObject({
+    role: "assistant",
+    phase: "commentary",
+    subagentCompletions: [completion],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE");
+  expect(projectChatDisplayMessages(projected)).toEqual(projected);
+  expect(input.content).toBe("PRIVATE CHILD RESULT");
+  const position = (rawSeq: number) => ({ source: "reader-generation", rawSeq });
+  const positioned = projectChatDisplayMessages([
+    {
+      role: "assistant",
+      content: "Before.",
+      __openclaw: { id: "before", transcriptPosition: position(1) },
+    },
+    {
+      ...input,
+      __openclaw: { ...input["__openclaw"], id: "completion", transcriptPosition: position(2) },
+    },
+    {
+      role: "assistant",
+      content: "After.",
+      __openclaw: { id: "after", transcriptPosition: position(3) },
+    },
+    {
+      role: "toolResult",
+      toolName: "read",
+      content: "Nested output.",
+      __openclaw: {
+        id: "nested",
+        transcriptPosition: {
+          ...position(4),
+          activity: { afterRawSeq: 1, scopeId: "nested-scope", startOrder: 0 },
+        },
+      },
+    },
+  ]);
+  expect(
+    composeTranscriptDisplay(positioned).map(
+      (message) => (message["__openclaw"] as Record<string, unknown>).id,
+    ),
+  ).toEqual(["before", "nested", "completion", "after"]);
+  const collected = { ...completion, status: "done", result: "private-result".repeat(4_000) };
+  const direct = projectChatDisplayMessages([
+    {
+      role: "toolResult",
+      toolName: "agents_wait",
+      toolCallId: "direct-collect",
+      timestamp: 30,
+      content: [{ type: "text", text: JSON.stringify({ completed: [collected] }) }],
+      details: { completed: [collected] },
+    },
+  ])[0]!;
+  expect(direct.role).toBe("toolResult");
+  expect(direct.subagentCompletions).toEqual([completion]);
+  expect(JSON.stringify(direct)).not.toContain(collected.result);
+  expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);
+});

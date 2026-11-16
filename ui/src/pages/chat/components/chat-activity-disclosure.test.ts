@@ -325,9 +325,9 @@ it.each([
 it.each([
   { source: "prepared outcome", expected: "Blocked" },
   { source: "paginated shell results", expected: "Ran commands" },
-  { source: "recorded code inputs", expected: "Ran scripts" },
-  { source: "failed code after dispatch", expected: "Ran scripts" },
-  { source: "failed code before dispatch", expected: "Scripts" },
+  { source: "recorded code inputs", expected: "Ran commands" },
+  { source: "failed code after dispatch", expected: "Ran commands" },
+  { source: "failed code before dispatch", expected: "Commands" },
 ])("renders $source through transcript grouping", async ({ source, expected }) => {
   const messages =
     source === "prepared outcome"
@@ -489,7 +489,7 @@ it.each([
     await settleToolBridges(summaryContainer);
   };
   await draw(false);
-  expect(summaryContainer.textContent).toContain(name === "exec" ? "Running scripts" : "Process");
+  expect(summaryContainer.textContent).toContain(name === "exec" ? "Running commands" : "Process");
   for (const expanded of [false, true]) {
     await draw(true, expanded);
     expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();

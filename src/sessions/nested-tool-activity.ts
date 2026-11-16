@@ -1,6 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { readCollectedSubagentCompletions } from "../shared/subagent-completion.js";
 
 export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
@@ -17,6 +19,15 @@ const activityDetails = z
     toolCallId: correlationId,
     toolName: z.string().min(1).max(256),
     input: z.unknown(),
+    subagentCompletions: z
+      .array(
+        z.object({
+          runId: correlationId,
+          sessionKey: correlationId,
+          label: z.string().optional(),
+        }),
+      )
+      .optional(),
     result: z.object({ content: z.array(z.unknown()), details: z.unknown().optional() }),
     isError: z.boolean(),
     startedAt: z.number().finite(),
@@ -63,6 +74,10 @@ export function readOwnNestedToolActivity(value: unknown): NestedToolActivity | 
 export function createNestedToolActivity(
   details: Omit<NestedToolActivity["details"], "result"> & { result: unknown },
 ): NestedToolActivity {
+  const completions =
+    unwrapToolCallForDisplay({ name: details.toolName, args: details.input }).name === "agents_wait"
+      ? readCollectedSubagentCompletions(details.result)
+      : [];
   const input = boundedJsonUtf8Bytes(details.input, 8_192).complete
     ? structuredClone(details.input)
     : "[Nested tool input omitted: exceeds display limit]";
@@ -77,7 +92,12 @@ export function createNestedToolActivity(
     display: true,
     excludeFromContext: true,
     content: "",
-    details: { ...details, input, result },
+    details: {
+      ...details,
+      input,
+      result,
+      ...(completions.length ? { subagentCompletions: completions } : {}),
+    },
     timestamp: details.startedAt,
   });
 }

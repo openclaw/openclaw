@@ -144,13 +144,6 @@ that subagent in the **Subagents** panel, or its session when the panel does not
 list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
 
-When this session asks a blocking question with `ask_user`, the question appears
-in the transcript beside the agent's work, with the composer still available.
-An asynchronous question stays in the question dock above the composer,
-which remains available while the panel is open. Answering or skipping uses the same question controls;
-closing the panel does not answer the question. Requests without a recorded
-blocking state keep their existing placement.
-
 When a direct child session, such as a visible session started with
 `sessions_spawn`, asks with `ask_user`, its pending question also docks above
 this chat's composer, marked **Asked by** with a link to the child's session.

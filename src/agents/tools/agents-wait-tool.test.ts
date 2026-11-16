@@ -386,6 +386,37 @@ describe("agents_wait", () => {
       timestamp: 2,
     });
     records.clear();
+    const completed = {
+      runId: "finished-child",
+      sessionKey: "agent:worker:subagent:finished",
+      status: "done",
+      label: "Worker01",
+    };
+    const large = createNestedToolActivity({
+      ...activity.details,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              completed: [
+                { ...completed, result: "x".repeat(40_000) },
+                { ...completed, runId: "not-finished", status: "failed" },
+              ],
+            }),
+          },
+        ],
+      },
+    });
+    expect(large.details.result.content).toEqual([
+      { type: "text", text: "[Nested tool output omitted: exceeds display limit]" },
+    ]);
+    const serializedLarge = JSON.stringify(large);
+    expect(
+      readNestedToolActivity(JSON.parse(serializedLarge))?.details.subagentCompletions,
+    ).toEqual([
+      { runId: completed.runId, sessionKey: completed.sessionKey, label: completed.label },
+    ]);
     const persisted = JSON.stringify(activity);
     const history = projectAgentHistoryActivity([
       { messageId: "persisted-wait", message: JSON.parse(persisted) },

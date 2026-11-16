@@ -23,6 +23,7 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-o
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
+  projectCompletionReportInput,
   extractProjectedText,
   hasAssistantNonTextContent,
   hasAssistantDisplayableNonTextContent,
@@ -98,7 +99,7 @@ export function createSubagentCoordinationHistoryProjection(
         if (typeof steerTargetRunId === "string") {
           visibleSteerRunIds.add(steerTargetRunId);
         }
-        return message;
+        return projectCompletionReportInput(record);
       }
       // A delivery mirror records a reply the run sent to the human, such as a
       // message(action=send) from a private coordination turn; it is the outcome.

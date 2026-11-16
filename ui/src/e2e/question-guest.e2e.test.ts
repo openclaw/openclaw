@@ -103,7 +103,7 @@ suite.define(() => {
         turns.push(result);
         expect(await fixture.registration).toMatchObject({ ok: true });
         await fixture.flushEvents();
-        const panel = page.locator(".chat-thread openclaw-chat-question-panel");
+        const panel = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
         const listCount = () =>
           fixture.requests.filter(({ method }) => method === "question.list").length;

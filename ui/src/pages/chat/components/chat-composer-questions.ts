@@ -4,7 +4,6 @@ import { composerInputHasFocus } from "../../../lib/composer-input.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
-import { isInlineBlockingQuestion } from "../chat-question-placement.ts";
 import type { ChatProps } from "../chat-view-frame.ts";
 import {
   createAsyncQuestionPanelProps,
@@ -72,10 +71,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       } satisfies Partial<Parameters<typeof createAsyncQuestionPresentation>[1]>),
     );
     const gatewayQuestions =
-      props.gatewayQuestionPrompts?.filter(
-        (prompt) =>
-          prompt.status === "pending" && !isInlineBlockingQuestion(prompt, props.sessionKey),
-      ) ?? [];
+      props.gatewayQuestionPrompts?.filter((prompt) => prompt.status === "pending") ?? [];
     const asyncIdentity = (itemId: string) =>
       JSON.stringify([props.sessionKey, props.currentAgentId, itemId]);
     const requests =

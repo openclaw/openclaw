@@ -170,11 +170,23 @@ it("preserves mixed-block order and associates late failure results with their c
     ),
     toolResult("successful-call"),
     toolResult("failed-call", true),
+    {
+      role: "assistant",
+      phase: "commentary",
+      content: [{ type: "subagent_completion" }],
+      subagentCompletions: [
+        { runId: "worker-run", sessionKey: "agent:main:subagent:worker", label: "Worker01" },
+      ],
+    },
   ]);
   expect(container.texts(part("entry"))).toEqual(
-    ["Before the command.", "pnpm check:ui", "After the command.", "example"].map((value) =>
-      expect.stringContaining(value),
-    ),
+    [
+      "Before the command.",
+      "pnpm check:ui",
+      "After the command.",
+      "example",
+      "Worker01 finished",
+    ].map((value) => expect.stringContaining(value)),
   );
   const lines = container.all(part("tool-line"));
   const failed = lines.filter((line) => line.textContent?.includes("pnpm check:ui"));
@@ -196,7 +208,7 @@ it.each([true, false])(
       },
     ]);
     expect(container.one(part("tool-group") + " summary")?.textContent?.trim()).toBe(
-      bridgeDispatchStarted ? "Ran scripts" : "Scripts",
+      bridgeDispatchStarted ? "Ran commands" : "Commands",
     );
     expect(container.one(part("error"))).not.toBeNull();
   },

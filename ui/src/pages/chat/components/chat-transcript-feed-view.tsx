@@ -5,12 +5,13 @@ import { createMemo, For } from "solid-js";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
-import "../../../styles/chat/transcript-feed.css";
 import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../../src/chat/tool-content.js";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
+import "../../../styles/chat/transcript-feed.css";
+import { messageSubagentCompletions } from "../../../../../src/shared/subagent-completion.js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { NormalizedMessage, ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -31,7 +32,12 @@ import { formatTimeMs } from "../../../lib/reactive/format.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
-import { ownSessionLaunchCalls, readSubagentCancellation } from "../chat-spawned-subagent.ts";
+import {
+  ownSessionLaunchCalls,
+  readSubagentCancellation,
+  subagentCompletionNames,
+} from "../chat-spawned-subagent.ts";
+import { projectSubagentCompletions } from "../chat-subagent-completions.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
@@ -45,7 +51,7 @@ type Entry = { key: string; timestamp: number | null } & (
       calls: Array<{ key: string; card: ToolCard }>;
     }
   | {
-      kind: "user" | "assistant" | "block";
+      kind: "user" | "assistant" | "block" | "completion";
       text: string;
       cappedMessageId?: string;
       senderSession?: NormalizedMessage["senderSession"];
@@ -71,8 +77,20 @@ function entries(messages: unknown[]): Entry[] {
     }
     history.push(content ? { ...raw, content } : message);
   }
-  for (const item of coalesceToolActivityMessages(buildMessageItems(history))) {
+  for (const item of coalesceToolActivityMessages(
+    projectSubagentCompletions(buildMessageItems(history), true),
+  )) {
     if (item.kind !== "message" || isStandaloneToolMessageForDisplay(item.message)) {
+      continue;
+    }
+    const completions = messageSubagentCompletions(item.message);
+    if (completions.length) {
+      result.push({
+        kind: "completion",
+        key: item.key,
+        timestamp: rawMessageTimestamp(item.message),
+        text: t("chat.toolCards.agentsFinished", { names: subagentCompletionNames(completions) }),
+      });
       continue;
     }
     const normalized = normalizeMessage(item.message);
@@ -277,7 +295,6 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
     return describeToolGroup(activity, {
       ownSessionLaunches,
       executedCommands,
-      codeExecutions,
       subagentCancellations,
     });
   });
@@ -321,9 +338,11 @@ function FeedEntry(props: { entry: Entry }) {
               ? toolIcon(props.entry.calls[0]!.card)
               : props.entry.kind === "user"
                 ? "users"
-                : props.entry.kind === "block"
-                  ? "paperclip"
-                  : "messageSquare"
+                : props.entry.kind === "completion"
+                  ? "bot"
+                  : props.entry.kind === "block"
+                    ? "paperclip"
+                    : "messageSquare"
           }
         />
       </span>
@@ -345,7 +364,13 @@ function FeedEntry(props: { entry: Entry }) {
             markdownOptions={{}}
           />
         ) : (
-          <div class={[`chat-task-feed__${props.entry.kind}`]}>{props.entry.text}</div>
+          <div
+            class={[
+              `chat-task-feed__${props.entry.kind === "completion" ? "block" : props.entry.kind}`,
+            ]}
+          >
+            {props.entry.text}
+          </div>
         )}
       </div>
       {props.entry.timestamp !== null && (

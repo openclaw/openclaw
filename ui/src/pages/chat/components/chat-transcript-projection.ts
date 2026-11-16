@@ -19,7 +19,6 @@ import {
   getExplicitToolExpansion,
   getExpandedToolCards,
   getExpandedUserMessages,
-  setExpansionState,
   syncToolCardExpansionState,
   toggleExpansionState,
 } from "../chat-thread.ts";
@@ -321,12 +320,6 @@ export function projectChatTranscript(
     onOpenSubagents: subagents.listed ? actions.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
-    isQuestionCollapsed: (id) => expandedToolCards.get(`question:${id}`) === false,
-    onQuestionCollapsedChange: (id, collapsed) =>
-      setExpansionState(expandedToolCards, `question:${id}`, !collapsed),
-    onGatewayQuestionChange: props.onGatewayQuestionChange,
-    onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
-    onGatewayQuestionSkip: props.onGatewayQuestionSkip,
     ...messageDisclosures,
   } satisfies StreamGroupOptions;
   const pendingSteerForMessage = createPendingSteerLookup(props.pendingInputs);
@@ -462,9 +455,6 @@ export function projectChatTranscript(
     props.retryAt,
     Boolean(props.waitingApproval),
     props.questionPrompts,
-    props.onGatewayQuestionChange,
-    props.onGatewayQuestionSubmit,
-    props.onGatewayQuestionSkip,
     state.asyncQuestionRevision,
     props.asyncQuestions?.historyKey,
     Boolean(props.autoExpandToolCalls),
@@ -548,7 +538,7 @@ export function projectChatTranscript(
     }
     if (item.kind === "stream-run" || item.kind === "question") {
       return item.kind === "question"
-        ? { kind: "stream", parts: [item], options: streamGroupOptions }
+        ? { kind: "stream", parts: [item], options: { questionPrompts } }
         : { kind: "stream", parts: item.parts, options: streamGroupOptions };
     }
     if (item.kind === "work-group") {
