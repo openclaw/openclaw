@@ -28,7 +28,13 @@ export function inspectTemplateBundledSkill(
   try {
     installId = validateRequestedSkillSlug(loaded.skill.name);
   } catch {
-    installId = validateRequestedSkillSlug(basename(path));
+    try {
+      installId = validateRequestedSkillSlug(basename(path));
+    } catch {
+      throw new Error(
+        `Bundled skill ${path} needs a SKILL.md name or folder name that uses only letters, digits and hyphens.`,
+      );
+    }
   }
   return { name: loaded.skill.name, installId };
 }

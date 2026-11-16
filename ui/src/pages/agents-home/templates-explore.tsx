@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
@@ -68,6 +67,8 @@ type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
   addingPackageName: string | null;
   addDisabled: boolean;
+  /** The last Add that left nothing behind, shown on that Template's card. */
+  addFailure?: { entry: Pick<TemplateCatalogEntry, "packageName">; message: string } | null;
 };
 
 function TemplateCard(
@@ -117,6 +118,11 @@ function TemplateCard(
       <Show when={props.entry.summary}>
         <p class="agents-home__template-summary">{props.entry.summary}</p>
       </Show>
+      <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
+        <p class="agents-home__template-error" role="alert">
+          {props.addFailure?.message}
+        </p>
+      </Show>
     </article>
   );
 }
@@ -158,7 +164,6 @@ function TemplateCatalogSkeleton() {
 export function TemplatesExplore(
   props: TemplateAddProps & {
     onSelect?: (entry: TemplateCatalogEntry) => void;
-    feedback?: JSX.Element;
   },
 ) {
   const context = useApplication();
@@ -273,7 +278,6 @@ export function TemplatesExplore(
                 )}
               </For>
             </CatalogDiscoveryChips>
-            {props.feedback}
             <div class="plugin-catalog-results__body">
               <Show when={unavailable()}>
                 <InlineAlert tone="warning" role="status">
@@ -390,6 +394,7 @@ export function TemplatesExplore(
                                     onAdd={props.onAdd}
                                     addingPackageName={props.addingPackageName}
                                     addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
                                   />
                                 )}
                               </For>
@@ -420,6 +425,7 @@ export function TemplatesExplore(
                                         onAdd={props.onAdd}
                                         addingPackageName={props.addingPackageName}
                                         addDisabled={props.addDisabled}
+                                        addFailure={props.addFailure}
                                       />
                                     )}
                                   </For>
@@ -450,6 +456,7 @@ export function TemplatesExplore(
                                     onAdd={props.onAdd}
                                     addingPackageName={props.addingPackageName}
                                     addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
                                   />
                                 )}
                               </For>

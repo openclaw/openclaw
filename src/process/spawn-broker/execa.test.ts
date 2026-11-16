@@ -1,12 +1,24 @@
 import { ok } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import childProcess from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { serialize } from "node:v8";
 import { execa } from "execa";
-import { afterAll, afterEach, aroundEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  aroundEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
@@ -88,7 +100,23 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
       const ownerContext = new AsyncLocalStorage<string>();
       const refusal = new Error("Sandbox runtime removed");
       let current = !revoked;
-      const launches: Array<{ current: boolean; pid: number; context: string | undefined }> = [];
+      const launches: Array<{ pid: number; context: string | undefined }> = [];
+      const nativeLaunches: Array<{
+        current: boolean;
+        pid: number | undefined;
+        context: string | undefined;
+      }> = [];
+      const nativeSpawn = childProcess.spawn;
+      const spawn = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+        const child = nativeSpawn(...args);
+        nativeLaunches.push({ current, pid: child.pid, context: ownerContext.getStore() });
+        return child;
+      });
+      syncBuiltinESMExports();
+      onTestFinished(() => {
+        spawn.mockRestore();
+        syncBuiltinESMExports();
+      });
       const settled = vi.fn();
       const assertCurrent = vi.fn(() => {
         expect(ownerContext.getStore()).toBe("sandbox-owner");
@@ -106,7 +134,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
       const scope = {
         reserve: () => ({
           spawned: ({ pid }) => {
-            launches.push({ current, pid, context: ownerContext.getStore() });
+            launches.push({ pid, context: ownerContext.getStore() });
           },
           settled,
         }),
@@ -118,7 +146,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
           scope,
         );
       const command = ownerContext.run("sandbox-owner", () => runWithSpawnBroker(host, run));
-      const spawnedSynchronously = launches.length > 0;
+      const spawnedSynchronously = nativeLaunches.length > 0;
       current = false;
       if (revoked) {
         await expect(command).rejects.toBe(refusal);
@@ -128,11 +156,14 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
       } else {
         await expect(command).resolves.toMatchObject({ code: 0 });
         await expect(readFile(marker, "utf8")).resolves.toBe("dispatched");
-        expect(launches).toEqual([
-          { current: guarded, pid: expect.any(Number), context: "sandbox-owner" },
-        ]);
+        expect(launches).toEqual([{ pid: expect.any(Number), context: "sandbox-owner" }]);
         expect(settled).toHaveBeenCalledOnce();
       }
+      expect(nativeLaunches).toEqual(
+        guarded && !revoked
+          ? [{ current: true, pid: expect.any(Number), context: "sandbox-owner" }]
+          : [],
+      );
       expect(spawnedSynchronously).toBe(guarded && !revoked);
       expect(assertCurrent).toHaveBeenCalledTimes(guarded ? 1 : 0);
       await session.dispose();

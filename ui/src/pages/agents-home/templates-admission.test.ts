@@ -13,21 +13,35 @@ import {
   workflowOperator,
 } from "./agents-home-page.test-helpers.ts";
 import { addTemplateAgent } from "./templates-add-agent.ts";
-import { readTemplateAddReviewPlan } from "./templates-catalog-client.ts";
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
+
+const source = {
+  packageName: workflowOperator.packageName,
+  version: workflowOperator.latestVersion,
+};
+/** What the catalog hands over: the card, its release, and the Template's own agent. */
+const template = {
+  entry: workflowOperator,
+  source,
+  agentId: "workflow-operator",
+  agentName: "Workflow Operator",
+};
+
+/** A catalog page is never shown before the roster that names the main session. */
+function createLoadedPage(options: Parameters<typeof createPage>[0]) {
+  const page = createPage(options);
+  return waitForSolid(() => expect(page.context.agents.state.agentsList).not.toBeNull()).then(
+    () => page,
+  );
+}
 
 it.each(["ready", "initialization-failed"] as const)(
   "retains buffered input after durable admission until initialization: %s",
   async (outcome) => {
-    const { request, context, replace, publishEvent } = createPage({
+    const { request, context, replace, publishEvent } = await createLoadedPage({
       templatesEnabled: true,
     });
-    const source = {
-      packageName: workflowOperator.packageName,
-      version: workflowOperator.latestVersion,
-    };
-    const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
     const original = request.getMockImplementation()!;
     const apply = createDeferredCore<unknown>();
     request.mockImplementation((method, params, options) => {
@@ -37,7 +51,7 @@ it.each(["ready", "initialization-failed"] as const)(
       }
       return original(method, params, options);
     });
-    const applying = addTemplateAgent(context, source, plan, false);
+    const applying = addTemplateAgent(context, template, false);
     const composer = context.chatSubmissions.readCreate()!.composer!;
     composer.setMessage("Buffered follow-up");
     expect(composer.enqueue()).toBe(true);
@@ -110,16 +124,10 @@ it.each(["ready", "initialization-failed"] as const)(
 );
 
 it("retries retained Template setup only on click in the same chat and composer", async () => {
-  const { request, context, navigate, replace, publishEvent } = createPage({
+  const { request, context, navigate, replace, publishEvent } = await createLoadedPage({
     templatesEnabled: true,
     riskConsentRequired: true,
-    reviewRequiredOnce: "plugin",
   });
-  const source = {
-    packageName: workflowOperator.packageName,
-    version: workflowOperator.latestVersion,
-  };
-  const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
   const original = request.getMockImplementation()!;
   const first = createDeferredCore<unknown>();
   const second = createDeferredCore<unknown>();
@@ -133,7 +141,7 @@ it("retries retained Template setup only on click in the same chat and composer"
     return original(method, params, options);
   });
   // Consent was already given at the catalog seam; retry must reuse it, not re-add.
-  const applying = addTemplateAgent(context, source, plan, true);
+  const applying = addTemplateAgent(context, template, true);
   const creation = context.chatSubmissions.creation;
   const composer = context.chatSubmissions.readCreate()!.composer!;
   composer.setMessage("Buffered follow-up");
@@ -177,13 +185,13 @@ it("retries retained Template setup only on click in the same chat and composer"
   const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
   expect(applies).toHaveLength(2);
   expect(applies[1]?.[1]).toEqual(applies[0]?.[1]);
-  expect(applies[1]?.[1]).toMatchObject({
+  expect(applies[1]?.[1]).toEqual({
+    mode: "chat",
     agentId: saved.agentId,
     source,
-    planIntegrity: plan.planIntegrity,
     acknowledgeClawHubRisk: true,
   });
-  expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(1);
+  expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(0);
   expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
   expect(request.mock.calls.filter(([method]) => method === "sessions.create")).toHaveLength(0);
   publishEvent({
@@ -205,12 +213,9 @@ it("retries retained Template setup only on click in the same chat and composer"
 });
 
 it("recovers admitted Template A after creating B while A fails in the background", async () => {
-  const { request, context, navigate, publishEvent } = createPage({ templatesEnabled: true });
-  const source = {
-    packageName: workflowOperator.packageName,
-    version: workflowOperator.latestVersion,
-  };
-  const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
+  const { request, context, navigate, publishEvent } = await createLoadedPage({
+    templatesEnabled: true,
+  });
   const original = request.getMockImplementation()!;
   const first = createDeferredCore<unknown>();
   const retry = createDeferredCore<unknown>();
@@ -232,7 +237,7 @@ it("recovers admitted Template A after creating B while A fails in the backgroun
     return original(method, params, options);
   });
   const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
-  const applying = addTemplateAgent(context, source, plan, false);
+  const applying = addTemplateAgent(context, template, false);
   const composer = context.chatSubmissions.readCreateComposer(saved.sessionKey)!;
   composer.setMessage("A buffered follow-up");
   expect(composer.enqueue()).toBe(true);
@@ -245,8 +250,7 @@ it("recovers admitted Template A after creating B while A fails in the backgroun
   await waitForSolid(() => expect(context.agents.state.pendingAgent).toBeUndefined());
   await addTemplateAgent(
     context,
-    source,
-    { ...plan, target: { ...plan.target, agentId: "second-agent", name: "Second agent" } },
+    { ...template, agentId: "second-agent", agentName: "Second agent" },
     false,
   );
   await waitForSolid(() =>
@@ -300,12 +304,7 @@ it("recovers admitted Template A after creating B while A fails in the backgroun
 it.each([false, true])(
   "retires settled partial routing with its Gateway scope (background=%s)",
   async (background) => {
-    const { request, context, setPhase } = createPage({ templatesEnabled: true });
-    const source = {
-      packageName: workflowOperator.packageName,
-      version: workflowOperator.latestVersion,
-    };
-    const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
+    const { request, context, setPhase } = await createLoadedPage({ templatesEnabled: true });
     const original = request.getMockImplementation()!;
     const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
     request.mockImplementation((method, params, options) =>
@@ -319,7 +318,7 @@ it.each([false, true])(
           })
         : original(method, params, options),
     );
-    await addTemplateAgent(context, source, plan, false);
+    await addTemplateAgent(context, template, false);
     const composer = context.chatSubmissions.readCreateFor(saved.sessionKey)!.composer!;
     composer.setMessage("Private retained draft");
     const retry = composer.recovery!.retry;
@@ -353,3 +352,34 @@ it.each([false, true])(
     ).toHaveLength(0);
   },
 );
+
+it("asks for an id its roster does not use and retries the id the Gateway admitted", async () => {
+  const { request, context, navigate } = await createLoadedPage({ templatesEnabled: true });
+  const original = request.getMockImplementation()!;
+  // Another client took harbor-2 first, so the Gateway chose the next unused id.
+  const saved = { agentId: "harbor-3", sessionKey: "agent:harbor-3:team-room" };
+  request.mockImplementation((method, params, options) =>
+    method === "templates.add.apply"
+      ? Promise.resolve({
+          ...saved,
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+          readiness: { ready: false },
+          error: { code: "template_setup_failed", message: "ClawHub is unavailable" },
+        })
+      : original(method, params, options),
+  );
+  // This Template's own agent id belongs to an agent already in the roster.
+  await addTemplateAgent(context, { ...template, agentId: "harbor" }, false);
+  expect(navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ pathname: "/chat/harbor-2" }),
+  );
+  const applies = () => request.mock.calls.filter(([method]) => method === "templates.add.apply");
+  expect(applies()[0]?.[1]).toEqual({ mode: "chat", source, agentId: "harbor-2" });
+  const pendingChat = context.chatSubmissions.readCreateFor("agent:harbor-2:team-room")!;
+  expect(pendingChat.displayName).toBe("Workflow Operator 2");
+  pendingChat.composer!.recovery!.retry();
+  expect(applies()[1]?.[1]).toEqual({ mode: "chat", source, agentId: "harbor-3" });
+});

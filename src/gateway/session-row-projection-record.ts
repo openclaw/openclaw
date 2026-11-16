@@ -556,9 +556,9 @@ export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>
 export function isCurrentGeneration(row: Row, current: Row | undefined): boolean {
   return (
     current?.generation === row.generation &&
-    (!isIncognitoSessionKey(row.key) ||
-      (current.entry?.sessionId === row.entry?.sessionId &&
-        current.entry?.lifecycleRevision === row.entry?.lifecycleRevision))
+    ((current.entry?.sessionId === row.entry?.sessionId &&
+      current.entry?.lifecycleRevision === row.entry?.lifecycleRevision) ||
+      !isIncognitoSessionKey(row.key))
   );
 }
 

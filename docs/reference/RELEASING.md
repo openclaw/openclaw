@@ -88,8 +88,10 @@ including Windows packaged install/upgrade checks in Release Checks. A cancelled
 run still blocks. The selected `openclaw/ci-gate` must succeed unless its
 failed causes are entirely covered by checked-in exact-job grants. Missing,
 skipped, or cancelled required coverage still blocks. Exact failed live-provider
-or Telegram leaves and the operator-accepted `2026.11.5-beta.3` jobs may use
-the checked-in release-tooling policy. FRV itself must
+or Telegram leaves and the operator-accepted `2026.11.5-beta.3` and
+candidate-bound `2026.11.4` jobs may use the checked-in release-tooling policy.
+The exact candidate, job, version, and any attempt restrictions remain mandatory.
+FRV itself must
 conclude **success** before publication; the publisher has no waiver path.
 Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and

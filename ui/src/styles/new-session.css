@@ -801,6 +801,13 @@ span.new-session-page__select {
   border-radius: var(--radius-md);
 }
 
+.new-session-page__start-shortcuts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .new-session-page__start-submit.new-session-page__start-submit--busy svg {
   animation: btn-spinner-spin 2.25s linear infinite;
 }
@@ -1525,12 +1532,9 @@ span.new-session-page__select {
   }
 }
 
-/* Reserve the label track while background catalog metadata supplies the name. */
+/* Bound long names without adding empty space before a short name’s chevron. */
 .new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
-  width: 8.5em;
-  flex: 0 1 8.5em;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 8.5em;
 }
 
 /* Keep catalog arrival inside the space between the fixed footer controls. */
@@ -1546,16 +1550,11 @@ span.new-session-page__select {
     flex: 1;
   }
 
-  /* The picker holds the whole track, so nothing moves when the catalog
-     arrives; the chip inside it hugs its label and chevron. */
-  .new-session-page .chat-controls__model-trigger {
-    width: fit-content;
-  }
-
-  /* Empty catalogs have no effort chip to fill the track. Keep that status by
-     the actions; loading and model selections retain their stable alignment. */
-  .new-session-page [data-chat-model-empty="true"] {
+  /* The picker holds the track while its chip hugs the label. Anchor the
+     chevron beside the actions so background catalog names do not move it. */
+  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger {
     display: flex;
+    width: fit-content;
     margin-inline-start: auto;
   }
 

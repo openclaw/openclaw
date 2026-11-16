@@ -86,13 +86,18 @@ export default defineSingleProviderPluginEntry({
         if (!normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
           const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
           if (directAuth.apiKey) {
+            const baseUrl = configuredBaseUrl?.trim();
             return await buildOpenAICompatibleLiveProviderCatalog({
               discoveryMode: "strict",
               providerId: PROVIDER_ID,
-              providerConfig: buildArceeProvider(),
+              providerConfig: {
+                ...buildArceeProvider(),
+                ...(baseUrl ? { baseUrl } : {}),
+              },
               apiKey: directAuth.apiKey,
               discoveryApiKey: directAuth.discoveryApiKey,
               profileId: directAuth.profileId,
+              signal: ctx.signal,
             });
           }
           if (configuredBaseUrl) {

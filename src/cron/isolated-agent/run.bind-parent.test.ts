@@ -341,9 +341,10 @@ it.each([
     expect(job.operatorSource?.source).toMatchObject({
       agentId: "main",
       sessionKey: SESSION,
-      sessionId: SESSION_ID,
       snapshot: { profileId: profile.id, device: { deviceId: DEVICE.deviceId } },
     });
+    // The source links the conversation by key; edits and resets keep it valid.
+    expect(job.operatorSource?.source).not.toHaveProperty("sessionId");
   } else {
     expect(job.operatorSource).toBeUndefined();
   }

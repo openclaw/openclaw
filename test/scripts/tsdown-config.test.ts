@@ -1271,34 +1271,31 @@ console.log("relocated session card renders with bundled fonts");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      if (worker) {
-        if (process.platform !== "win32") {
-          const result = await runNodeFixture(
-            [
-              path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
-              path.join(root, "dist", `${relay}.${extension}`),
-            ],
-            { timeout: 15_000 },
-          );
-          expect(result.error, result.stderr).toBeNull();
-          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
-        }
-      } else {
-        // Each launch boots both helpers; shared chunks pull unrelated runtime
-        // exports into startup before the durable worker gate can open.
-        // The anchor's lineage writer retains the shared lazy schema catalogs.
-        expect(files.toSorted()).toEqual(
-          [
-            `dist/${relay}.${extension}`,
-            `dist/${anchor}.${extension}`,
+      if (!worker) {
+        expect(files).toEqual(
+          expect.arrayContaining([
             "dist/assets/sqlite-schema/sqlite-agent-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-client-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-daemon-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-memory-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-state-catalogs.json",
-          ].toSorted(),
+          ]),
         );
-        expect(imports).toEqual([]);
+      }
+      if (process.platform !== "win32") {
+        if (!worker) {
+          fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+          fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+        }
+        const result = await runNodeFixture(
+          [
+            path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+            path.join(root, "dist", `${relay}.${extension}`),
+          ],
+          { timeout: 15_000 },
+        );
+        expect(result.error, result.stderr).toBeNull();
+        expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
       }
     },
   );

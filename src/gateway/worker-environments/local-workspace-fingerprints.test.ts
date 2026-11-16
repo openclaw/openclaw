@@ -10,7 +10,7 @@ import {
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 

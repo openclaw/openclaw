@@ -6,23 +6,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   gap: 12px;
 }
 
-.templates-add-consent__item {
-  display: grid;
-  gap: 6px;
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
-}
-
-.templates-add-consent__item > span,
-.templates-add-consent__item li {
-  color: var(--muted);
-}
-
-.templates-add-consent__item ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
 .templates-add-consent__actions {
   display: flex;
   justify-content: flex-end;
@@ -671,6 +654,17 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  pointer-events: none;
+}
+
+.agents-home__template-error {
+  position: relative;
+  z-index: 2;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
   pointer-events: none;
 }
 

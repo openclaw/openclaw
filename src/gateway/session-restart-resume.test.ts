@@ -6,9 +6,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import { addSession } from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
@@ -74,15 +71,12 @@ it("requests original recorded custody only at the actual marked restart admissi
         data: { phase: "start", startedAt: Date.now() },
       },
     });
-    const background = createProcessSessionFixture({
-      id: "restart-source-background",
-      backgrounded: true,
+    const claim = claimAgentRunContext("restart-source-live", target, {
+      trackOwner: true,
+      ownsContext: true,
     });
-    background.agentId = target.agentId;
-    background.sessionKey = target.sessionKey;
-    addSession(background);
     await persistRunningSessionsForRestart({ cfg });
-    resetProcessRegistryForTests();
+    releaseAgentRunContext("restart-source-live", claim);
     expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
     const context = createContext([], () => cfg);
     const admission = vi
@@ -602,6 +596,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
       },
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
+    const claims: Array<[string, string | undefined]> = [];
     try {
       for (const { sessionKey, entry, resumable } of cases) {
         const agentId = resumable ? "other" : "main";
@@ -621,10 +616,15 @@ it("marks ordinary conversations without inheriting cron or external execution o
             }),
           );
         }
-        const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
-        process.agentId = agentId;
-        process.sessionKey = sessionKey;
-        addSession(process);
+        const runId = `live:${sessionKey}`;
+        claims.push([
+          runId,
+          claimAgentRunContext(
+            runId,
+            { agentId, sessionKey, sessionId: sessionKey },
+            { trackOwner: true, ownsContext: true },
+          ),
+        ]);
       }
       await persistRunningSessionsForRestart({ cfg: {} });
       for (const { sessionKey, resumable } of cases) {
@@ -634,16 +634,18 @@ it("marks ordinary conversations without inheriting cron or external execution o
         })?.entry;
         expect(entry).toBeDefined();
         expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          resumable ? { queuedInputIds: [], hadBackgroundExec: true } : undefined,
+          resumable ? { queuedInputIds: [] } : undefined,
         );
       }
     } finally {
+      for (const [runId, claim] of claims) {
+        releaseAgentRunContext(runId, claim);
+      }
       for (const { sessionKey, resumable } of cases) {
         if (resumable) {
           subagentRuns.delete(sessionKey);
         }
       }
-      resetProcessRegistryForTests();
     }
   }));
 
@@ -684,10 +686,10 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
       assertCurrent() {},
     });
     assert(receipt, "Queued fixture input was not admitted");
-    const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
-    process.agentId = target.agentId;
-    process.sessionKey = target.sessionKey;
-    addSession(process);
+    const claim = claimAgentRunContext("revoked-owner-work", target, {
+      trackOwner: true,
+      ownsContext: true,
+    });
     try {
       await persistRunningSessionsForRestart({ cfg });
       receipt.finish("interrupted");
@@ -708,7 +710,7 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
     } finally {
       receipt?.finish("interrupted");
       await receipt?.settled?.();
-      resetProcessRegistryForTests();
+      releaseAgentRunContext("revoked-owner-work", claim);
     }
   }));
 
