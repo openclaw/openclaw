@@ -307,7 +307,9 @@ describe("frozen admission skill library contract", () => {
     const files: Record<string, string> = {
       [doctor]: split ? readFileSync(doctor, "utf8") : "export const oldToolNames = [];",
     };
-    if (split) files[migration] = readFileSync(migration, "utf8");
+    if (split) {
+      files[migration] = readFileSync(migration, "utf8");
+    }
     const f = fixture(files, true);
     const result = f.run(
       { consumers: ["upgrade-survivor"] },
