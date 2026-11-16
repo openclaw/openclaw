@@ -6,7 +6,7 @@
 // --setup writes the profile (Gateway stopped): loopback port, token auth, mock model.
 // Then run the mock and the Gateway (see .agents/skills/ios-e2e/BEHAVIOR.md) and this script.
 // IOS_SIM reuses a paired simulator; otherwise a fresh one is paired and deleted afterwards.
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -95,7 +95,7 @@ if (replaySessions && replaySessions.length < 2) {
 let replayIndex = 0;
 
 // Set once this run creates a simulator, so every exit path deletes it.
-const owned: { simulator?: string } = {};
+const owned: { simulator?: string; recorder?: ChildProcess } = {};
 
 function deleteOwnedSimulator() {
   if (owned.simulator) {
@@ -105,6 +105,8 @@ function deleteOwnedSimulator() {
 }
 
 function fail(message: string): never {
+  // simctl finishes the file on SIGINT by itself; without it, recording outlives the runner.
+  owned.recorder?.kill("SIGINT");
   deleteOwnedSimulator();
   console.error(`ios:behavior: ${message}`);
   process.exit(1);
@@ -513,8 +515,14 @@ async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
   });
 }
 
-/** Lines of transcript text per sample; -1 where no transcript was on screen to judge. */
-function readScreens(watched: ScreenSample[]) {
+type ScreenRead = { png: string; lines: number };
+
+/**
+ * Lines of transcript text per sample, grouped like `windows` (one `watchScreen` call each); -1
+ * where no transcript was on screen to judge.
+ */
+function readScreens(windows: ScreenSample[][]): ScreenRead[][] {
+  const watched = windows.flat();
   const lines = new Map<string, ScreenLine[]>();
   for (let start = 0; start < watched.length; start += 50) {
     const batch = watched.slice(start, start + 50).map((entry) => entry.png);
@@ -525,17 +533,19 @@ function readScreens(watched: ScreenSample[]) {
       }
     }
   }
-  return watched.map((entry) => ({
-    png: entry.png,
-    lines: entry.transcript
-      ? transcriptText(lines.get(entry.png) ?? [], entry.screen, entry.transcript, entry.exclude)
-          .length
-      : -1,
-  }));
+  return windows.map((shots) =>
+    shots.map((entry) => ({
+      png: entry.png,
+      lines: entry.transcript
+        ? transcriptText(lines.get(entry.png) ?? [], entry.screen, entry.transcript, entry.exclude)
+            .length
+        : -1,
+    })),
+  );
 }
 
-function screenGates(read: { png: string; lines: number }[], when: string): Result {
-  const judged = read.filter((entry) => entry.lines >= 0);
+function screenGates(windows: ScreenRead[][], when: string): Result {
+  const judged = windows.flat().filter((entry) => entry.lines >= 0);
   const blank = judged.filter((entry) => entry.lines === 0);
   for (const entry of blank) {
     console.log(`ios:behavior: blank transcript on screen: ${entry.png}`);
@@ -547,7 +557,9 @@ function screenGates(read: { png: string; lines: number }[], when: string): Resu
       minTextLines: judged.length > 0 ? Math.min(...judged.map((entry) => entry.lines)) : undefined,
     },
     gates: {
-      [`transcript on screen to judge ${when} (setup)`]: judged.length >= 3,
+      // Every window: a switch that never shows a transcript must not hide behind the others.
+      [`transcript on screen to judge ${when} (setup)`]:
+        judged.length >= 3 && windows.every((reads) => reads.some((entry) => entry.lines >= 0)),
       [`transcript text on screen ${when}`]: blank.length === 0,
     },
   };
@@ -902,12 +914,12 @@ const cases: Record<string, Case> = {
       const chats = [long, short, long2] as const;
       launch(long);
       await delay(3000);
-      const watched: ScreenSample[] = [];
+      const watched: ScreenSample[][] = [];
       for (const chat of [chats[1], chats[0], chats[1], chats[2], chats[0], chats[2]]) {
         tap(/RootTabs\.Sidebar\.Show/);
         await delay(800);
         tap(new RegExp(`\\|${chat.replace(/-/g, "\\-")}, `));
-        watched.push(...(await watchScreen(`switch-${chat}`, 3000)));
+        watched.push(await watchScreen(`switch-${chat}`, 3000));
       }
       return screenGates(readScreens(watched), "after every switch");
     },
@@ -940,21 +952,21 @@ function blankMatrix(): Record<string, Case> {
             const keyboardAtSend = keyboardShown();
             const focused = await watchScreen("focus", 3000);
             tap(/chat-send-message/);
-            const sent: ScreenSample[] = [];
+            const sent: ScreenSample[][] = [];
             const until = Date.now() + 90_000;
             let replied = false;
             while (!replied && Date.now() < until) {
-              sent.push(...(await watchScreen("send", 2000)));
+              sent.push(await watchScreen("send", 2000));
               // The run footer is static text, which the snapshot's target list leaves out. The
               // app shows it only for a run it watched from its own send.
               replied =
                 axFrame((node) => node.AXLabel?.startsWith("Done in") ?? false) !== undefined;
             }
             if (replied) {
-              sent.push(...(await watchScreen("done", 3000)));
+              sent.push(await watchScreen("done", 3000));
             }
             // A new chat has no text before the send; judge it from the send on.
-            const judged = length === "short" ? sent : [...focused, ...sent];
+            const judged = length === "short" ? sent : [focused, ...sent];
             const result = screenGates(readScreens(judged), "from focus to after the reply");
             result.gates[`keyboard ${keyboard} at send (setup)`] =
               keyboardAtSend === (keyboard === "up");
@@ -993,6 +1005,7 @@ try {
       const video = spawn("xcrun", ["simctl", "io", sim, "recordVideo", "--force", recording], {
         stdio: ["ignore", "ignore", "pipe"],
       });
+      owned.recorder = video;
       // The recording's first frame is drawn when simctl reports the start. Wait for it here: the
       // cases block the event loop with synchronous commands, which would stamp the line late.
       const videoStartedAt = await new Promise<number>((resolve) => {
@@ -1008,7 +1021,7 @@ try {
       });
       const result = await testCase.run(session, file);
       const settled = screenGates(
-        readScreens(await watchScreen(`${name}-end`, 1500)),
+        readScreens([await watchScreen(`${name}-end`, 1500)]),
         "at the end",
       );
       // Both gates: without a transcript to read, the text gate passes on zero samples.
@@ -1020,6 +1033,7 @@ try {
           video.once("exit", resolve);
         });
       }
+      owned.recorder = undefined;
       if (result.drawnMotion) {
         const measured = result.drawnMotion.map(({ from, to, area, screenWidth, ignoreX }) => {
           const args = [area.x, area.y, area.width, area.height, screenWidth, ...(ignoreX ?? [])];
