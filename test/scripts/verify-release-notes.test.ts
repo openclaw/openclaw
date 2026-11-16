@@ -607,27 +607,25 @@ process.exitCode = errors.length ? 1 : 0;
         pageInfo: { hasNextPage: false },
       },
     };
-    const responses = {
-      [JSON.stringify([
-        "graphql",
-        "-f",
-        'query=query { n122: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 122) { __typename } } n123: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 123) { __typename } } }',
-      ])]: {
-        data: { n122: { issueOrPullRequest: issue }, n123: { issueOrPullRequest: pr } },
-      },
-    };
     const evidencePath = join(cwd, "historical.json");
     const evidenceBytes = JSON.stringify({
       schemaVersion: 1,
       repository: "openclaw/openclaw",
       base,
       target: covered,
-      responses,
+      responses: {
+        [JSON.stringify([
+          "graphql",
+          "-f",
+          'query=query { n122: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 122) { __typename } } n123: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 123) { __typename } } }',
+        ])]: {
+          data: { n122: { issueOrPullRequest: issue }, n123: { issueOrPullRequest: pr } },
+        },
+      },
     });
     writeFileSync(evidencePath, evidenceBytes);
-    const gh = join(cwd, "gh");
     writeFileSync(
-      gh,
+      join(cwd, "gh"),
       [
         "#!" + process.execPath,
         'const fs = require("node:fs"), mode = process.env.RECOVERY_CASE;',
@@ -653,8 +651,8 @@ process.exitCode = errors.length ? 1 : 0;
         "console.log(JSON.stringify({ data, errors }));",
         "process.exitCode ||= errors.length ? 1 : 0;",
       ].join("\n"),
+      { mode: 0o755 },
     );
-    chmodSync(gh, 0o755);
     const alias = join(cwd, "evidence-alias.json");
     if (mode === "symlink-collision") {
       symlinkSync(evidencePath, alias);
