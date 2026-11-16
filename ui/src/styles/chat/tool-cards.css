@@ -114,6 +114,11 @@
   color: var(--chat-tool-activity-color);
 }
 
+.chat-tool-msg-summary,
+.chat-activity-group__summary {
+  font-size: var(--chat-text-size);
+}
+
 .chat-tool-msg-summary :where(span, code, button),
 .chat-activity-group__summary :where(span, code, button) {
   font: inherit;

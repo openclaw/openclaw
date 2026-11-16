@@ -37,6 +37,8 @@ const enChatToolLabels = {
       executedCode: "Ran a script",
       executingCode: "Running a script",
       codeExecution: "Script execution",
+      changingFiles: "Changing files",
+      changedFiles: "Changed files",
       viewingImage: "Viewing image",
       viewedImage: "Viewed image",
       viewImage: "View image",

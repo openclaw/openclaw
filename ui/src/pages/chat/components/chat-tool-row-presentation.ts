@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
-import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
+import { PATCH_TOOL_NAMES, resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
@@ -123,6 +123,11 @@ export function resolveToolOperationLabel(
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
+  if (PATCH_TOOL_NAMES.has(name)) {
+    return t(
+      `chat.toolCards.${outcome === "running" ? "changingFiles" : outcome === "succeeded" ? "changedFiles" : "fileChanges"}`,
+    );
+  }
   if (name === "view_image") {
     const key =
       outcome === "running"
