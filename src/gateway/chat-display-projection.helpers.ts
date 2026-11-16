@@ -6,7 +6,6 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
-import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import {
@@ -334,7 +333,7 @@ function hasForwardedMessageProvenance(message: Record<string, unknown>): boolea
  */
 export function projectCompletionReportInput(
   message: Record<string, unknown>,
-  boundary: PendingTurnBoundary,
+  boundary: boolean | string,
 ) {
   const completions = isCompletionReportInputProvenance(message.provenance)
     ? readSubagentCompletions(readRecord(message["__openclaw"])?.subagentCompletions)
@@ -348,7 +347,7 @@ export function projectCompletionReportInput(
 
 export function attachProjectedTurnBoundary(
   message: Record<string, unknown>,
-  boundary: Exclude<PendingTurnBoundary, false>,
+  boundary: true | string,
 ): Record<string, unknown> {
   const metadata = readRecord(message["__openclaw"]);
   return {
