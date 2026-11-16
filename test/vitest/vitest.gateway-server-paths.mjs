@@ -624,6 +624,8 @@ export const gatewayClientTestExclude = [
 export const gatewayServerSerialTestFiles = [
   "src/gateway/server.sessions.fixture-lifecycle.test.ts",
   "src/gateway/server.startup-fixture-lifetime.test.ts",
+  "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+  "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
 ];
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
